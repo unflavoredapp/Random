@@ -1062,15 +1062,15 @@ private struct SourceDetailScreen: View {
             HStack(alignment: .top, spacing: 10) {
                 SourceIcon(url: app.iconURL, side: 50, fallback: app.name)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(app.name).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.accent).lineLimit(1)
-                    Text(app.bundle).font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.subtle).lineLimit(1)
+                    Text(app.name).font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.accent).lineLimit(2).minimumScaleFactor(0.8)
+                    Text(app.bundle).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.subtle).lineLimit(1)
                 }
                 Spacer(minLength: 0)
             }
             HStack(alignment: .top, spacing: 6) {
                 Circle().stroke(Theme.accent, lineWidth: 2).frame(width: 7, height: 7).padding(.top, 5)
                 Text(oneLine(app.description.isEmpty ? app.subtitle : app.description))
-                    .font(.system(size: 13)).foregroundStyle(Theme.text.opacity(0.9)).lineLimit(2).multilineTextAlignment(.leading)
+                    .font(.system(size: 12)).foregroundStyle(Theme.text.opacity(0.9)).lineLimit(3).multilineTextAlignment(.leading)
             }
             Spacer(minLength: 0)
             HStack {
@@ -1090,7 +1090,7 @@ private struct SourceDetailScreen: View {
             }
         }
         .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 150, maxHeight: 150, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 172, maxHeight: 172, alignment: .topLeading)
         .background(Color.black)
         .overlay(alignment: .topTrailing) {
             Button { openGroup = g } label: {
