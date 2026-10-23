@@ -211,7 +211,9 @@ final class DeviceInstallationManager: ObservableObject {
                 .uninstall(bundleID: bundleIdentifier, progress: progress)
         }
         // A removed app must not come back through auto-update.
-        AppAutoUpdater.shared.untrack(bundleID: bundleIdentifier)
+        if let app = AppAutoUpdater.shared.tracked.first(where: { $0.bundleID == bundleIdentifier }) {
+            AppAutoUpdater.shared.untrack(app)
+        }
     }
 
     /// Admission for non-install device work. Same rules as `install`: wait behind exclusive installs
