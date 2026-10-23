@@ -17,6 +17,7 @@ struct BanAppeal {
     var submitted: Bool
     var status: String?       // "pending" | "reviewed"
     var message: String?
+    var gifURL: URL?
     var adminNote: String?
     var at: String?
 
@@ -25,6 +26,7 @@ struct BanAppeal {
         submitted = (json["submitted"] as? Bool) ?? false
         status = json["status"] as? String
         message = json["message"] as? String
+        if let g = json["gif_url"] as? String, !g.isEmpty { gifURL = URL(string: g) }
         adminNote = json["admin_note"] as? String
         at = json["at"] as? String
     }
@@ -100,6 +102,7 @@ struct BanAppealCard: View {
     let username: String
     @State private var password = ""
     @State private var message = ""
+    @State private var gifURL = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -145,6 +148,11 @@ struct BanAppealCard: View {
             if let m = appeal.message, !m.isEmpty {
                 Text("\u{201C}\(m)\u{201D}").font(.system(size: 13)).foregroundStyle(Theme.subtle)
             }
+            if let u = appeal.gifURL {
+                AnimatedImageView(url: u).frame(height: 120).frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.stroke, lineWidth: 1))
+            }
             if let note = appeal.adminNote, !note.isEmpty {
                 Text("Response: \(note)").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accent)
             } else if appeal.status != "reviewed" {
@@ -175,6 +183,18 @@ struct BanAppealCard: View {
             .frame(minHeight: 90)
             .background(Theme.bg).overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.stroke, lineWidth: 1))
             .clipShape(RoundedRectangle(cornerRadius: 10))
+            TextField("GIF link (optional, https://…)", text: $gifURL)
+                .foregroundStyle(Theme.text)
+                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                .keyboardType(.URL)
+                .padding(.horizontal, 12).padding(.vertical, 11)
+                .background(Theme.bg).overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.stroke, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+            if gifURL.lowercased().hasPrefix("https://"), let u = URL(string: gifURL) {
+                AnimatedImageView(url: u).frame(height: 100).frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.stroke, lineWidth: 1))
+            }
             Button(action: submit) {
                 HStack {
                     if account.busy { ProgressView().tint(.black) }
@@ -191,8 +211,8 @@ struct BanAppealCard: View {
 
     private func submit() {
         Task {
-            if await account.submitAppeal(username: username, password: password, message: message) {
-                password = ""; message = ""
+            if await account.submitAppeal(username: username, password: password, message: message, gifURL: gifURL) {
+                password = ""; message = ""; gifURL = ""
             }
         }
     }

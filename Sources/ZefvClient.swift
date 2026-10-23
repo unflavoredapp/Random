@@ -229,10 +229,10 @@ final class ZefvAccount: ObservableObject {
 
     /// One appeal message per ban. Re-sends the credentials that would normally sign in — a banned account has
     /// no working session/token — so submits only from the sign-in form (or wherever the password is in hand).
-    func submitAppeal(username u: String, password p: String, message: String) async -> Bool {
+    func submitAppeal(username u: String, password p: String, message: String, gifURL: String = "") async -> Bool {
         busy = true; appealError = nil; defer { busy = false }
         do {
-            let o = try await post("appeal", ["username": u, "password": p, "message": message])
+            let o = try await post("appeal", ["username": u, "password": p, "message": message, "gif_url": gifURL])
             if let ap = o["appeal"] as? [String: Any] {
                 banInfo = banInfo.map { BanInfo(banned: $0.banned, reason: $0.reason, until: $0.until, appeal: BanAppeal(json: ap)) }
             }
