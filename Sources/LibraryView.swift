@@ -105,7 +105,7 @@ struct LibraryView: View {
             .safeAreaInset(edge: .top, spacing: 0) {
                 VStack(spacing: 0) {
                     header
-                    StorageBar(appsBytes: device.apps.reduce(0) { $0 + ($1.sizeBytes ?? 0) })
+                    LowStorageBanner()
                 }
             }
         }

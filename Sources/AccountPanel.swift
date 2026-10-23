@@ -204,6 +204,10 @@ struct AccountDropdown: View {
 
             Divider().overlay(Theme.stroke)
 
+            StorageRow()
+
+            Divider().overlay(Theme.stroke)
+
             HStack {
                 stat("\(signsToday)", "today")
                 Rectangle().fill(Theme.stroke).frame(width: 1, height: 30)

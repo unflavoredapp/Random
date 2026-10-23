@@ -5,31 +5,42 @@ struct StorageInfo: Equatable {
     var total: Int64
     var free: Int64
     var used: Int64 { max(0, total - free) }
+    var isLow: Bool { Double(free) / Double(total) < 0.1 }
 
     static func read() -> StorageInfo? {
         let url = URL(fileURLWithPath: NSHomeDirectory())
         guard let values = try? url.resourceValues(forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]),
               let total = values.volumeTotalCapacity, total > 0 else { return nil }
         let free = values.volumeAvailableCapacityForImportantUsage ?? 0
-        return StorageInfo(total: Int64(total), free: min(free, Int64(total)))
+        return StorageInfo(total: Int64(total), free: min(max(0, free), Int64(total)))
     }
+
+    static func text(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
 }
 
-/// Fixed strip under the top bar: apps (from the device list), everything else, and free space.
-struct StorageBar: View {
-    var appsBytes: Int64
+/// Storage row for the account dropdown: free space, then Apps / Other / free bar.
+struct StorageRow: View {
+    @ObservedObject private var device = DeviceLibrary.shared
     @State private var info = StorageInfo.read()
     @Environment(\.scenePhase) private var scenePhase
 
-    private func text(_ bytes: Int64) -> String { ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+    private var appsBytes: Int64 { device.apps.reduce(0) { $0 + ($1.sizeBytes ?? 0) } }
 
     var body: some View {
         Group {
             if let info {
                 let apps = min(appsBytes, info.used)
                 let other = max(0, info.used - apps)
-                let low = Double(info.free) / Double(info.total) < 0.1
-                VStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("STORAGE")
+                        .font(.system(size: 9, weight: .heavy, design: .monospaced)).kerning(1.4).foregroundStyle(Theme.subtle)
+                    HStack(alignment: .firstTextBaseline) {
+                        Text("\(StorageInfo.text(info.free)) free")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(info.isLow ? Color.orange : Theme.text)
+                        Spacer(minLength: 4)
+                        Text("of \(StorageInfo.text(info.total))").font(.system(size: 10)).foregroundStyle(Theme.subtle)
+                    }
                     GeometryReader { geo in
                         HStack(spacing: 2) {
                             Capsule().fill(Theme.accent).frame(width: width(apps, info, geo.size.width))
@@ -37,22 +48,17 @@ struct StorageBar: View {
                             Capsule().fill(Theme.stroke)
                         }
                     }
-                    .frame(height: 6)
+                    .frame(height: 8)
                     HStack(spacing: 10) {
-                        legend(Theme.accent, "Apps \(text(apps))")
-                        legend(Theme.subtle.opacity(0.55), "Other \(text(other))")
-                        Spacer(minLength: 4)
-                        Text("\(text(info.free)) free")
-                            .font(.system(size: 11, weight: .bold))
-                            .foregroundStyle(low ? Color.orange : Theme.accent)
+                        legend(Theme.accent, "Apps \(StorageInfo.text(apps))")
+                        legend(Theme.subtle.opacity(0.55), "Other \(StorageInfo.text(other))")
                     }
                 }
-                .padding(.horizontal, 16).padding(.vertical, 8)
-                .background(Theme.bg)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Storage: \(text(info.free)) free of \(text(info.total))")
+                .padding(.horizontal, 14).padding(.vertical, 10)
+                .accessibilityElement(children: .combine)
             }
         }
+        .onAppear { info = StorageInfo.read() }
         .onChange(of: scenePhase) { phase in if phase == .active { info = StorageInfo.read() } }
     }
 
@@ -64,7 +70,35 @@ struct StorageBar: View {
     private func legend(_ color: Color, _ label: String) -> some View {
         HStack(spacing: 4) {
             Circle().fill(color).frame(width: 6, height: 6)
-            Text(label).font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.subtle)
+            Text(label).font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.subtle).lineLimit(1)
         }
+    }
+}
+
+/// Orange pill under the Library header, shown only when free space is under 10%.
+struct LowStorageBanner: View {
+    @State private var info = StorageInfo.read()
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        Group {
+            if let info, info.isLow {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                    Text("Low storage · \(StorageInfo.text(info.free)) free — uninstall apps to make room")
+                        .lineLimit(2)
+                }
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Color.orange)
+                .padding(.horizontal, 12).padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.12))
+                .clipShape(RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.orange.opacity(0.4), lineWidth: 1))
+                .padding(.horizontal, 16).padding(.vertical, 6)
+            }
+        }
+        .onAppear { info = StorageInfo.read() }
+        .onChange(of: scenePhase) { phase in if phase == .active { info = StorageInfo.read() } }
     }
 }
