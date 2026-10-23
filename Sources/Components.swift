@@ -30,6 +30,7 @@ struct TabTitleBar<Trailing: View>: View {
     let title: String
     var center: String? = nil            // second-row caption, e.g. "3 Apps"
     var custom: AnyView? = nil           // replaces the title text (e.g. Decrypt's bot picker)
+    var centerView: AnyView? = nil       // replaces the caption with a control (e.g. Library | Device switch)
     @ViewBuilder var trailing: Trailing
     var body: some View {
         VStack(spacing: 0) {
@@ -50,7 +51,8 @@ struct TabTitleBar<Trailing: View>: View {
             .padding(.horizontal, 12).padding(.vertical, 6)
             // Row 2: caption · account chip (ADID as guest, avatar + name when signed in)
             HStack(spacing: 8) {
-                Text(center ?? "").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                if let centerView { centerView }
+                else { Text(center ?? "").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1) }
                 Spacer(minLength: 6)
                 AccountChip()
             }

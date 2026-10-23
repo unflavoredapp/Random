@@ -42,6 +42,26 @@ final class ZefvAccount: ObservableObject {
     private init() {
         username = Keychain.get(Self.kUsername)
         if let raw = Keychain.get("zefv_role"), let r = UserRole(rawValue: raw) { role = r }
+        migrateKeychainAccessibility()
+    }
+
+    /// Re-read the saved sign-in. If the app was launched while the phone was locked the Keychain was unreadable
+    /// and the account stayed "signed out" for the whole run; this puts it back as soon as the Keychain opens.
+    func restoreFromKeychainIfNeeded() {
+        guard username == nil, let name = Keychain.get(Self.kUsername), !name.isEmpty else { return }
+        username = name
+        if let raw = Keychain.get("zefv_role"), let r = UserRole(rawValue: raw) { role = r }
+        migrateKeychainAccessibility()
+    }
+
+    /// One-time: rewrite existing sign-in items so they stay readable while the phone is locked.
+    private func migrateKeychainAccessibility() {
+        let flag = "zefv_keychain_after_first_unlock_v1"
+        guard !UserDefaults.standard.bool(forKey: flag), Keychain.get(Self.kUsername) != nil else { return }
+        for key in [Self.kSession, Self.kUsername, "zefv_role", Self.kDeviceKey] {
+            if let v = Keychain.get(key), !v.isEmpty { _ = Keychain.set(key, v) }
+        }
+        UserDefaults.standard.set(true, forKey: flag)
     }
 
     // MARK: - Endpoint base — the PHP account API lives on apii (api.zefv.dev is a router)

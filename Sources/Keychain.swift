@@ -19,6 +19,9 @@ nonisolated enum Keychain {
         if value.isEmpty { return true }
         var add = q
         add[kSecValueData as String] = Data(value.utf8)
+        // Readable after the first unlock, so a launch while the phone is locked (background refresh,
+        // VPN) can still see the saved session instead of treating the user as signed out.
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 

@@ -25,6 +25,7 @@ struct LibraryView: View {
     @State private var confirmDeleteAll = false
     @State private var deviceSheet: DeviceApp?
     @State private var uninstallTarget: DeviceApp?
+    @State private var scope: LibraryScope = .library
 
     init() {
         // Whatever was loaded last time shows on the very first frame — the tab opens instantly.
@@ -75,10 +76,10 @@ struct LibraryView: View {
                     if loading {
                         HStack { Spacer(); ProgressView().tint(Theme.accent); Spacer() }.padding(.top, 60)
                     } else {
-                        if items.isEmpty && device.apps.isEmpty {
-                            Card { Text("No apps yet. Download one in Browse, or tap + to import an .ipa.").font(.caption).foregroundStyle(Theme.subtle) }
+                        if scope == .library && items.isEmpty {
+                            Card { Text("No downloaded apps yet. Download one in Browse, or tap + to import an .ipa.").font(.caption).foregroundStyle(Theme.subtle) }
                         }
-                        ForEach(Array(filtered.enumerated()), id: \.element.id) { idx, it in
+                        ForEach(Array((scope == .library ? filtered : []).enumerated()), id: \.element.id) { idx, it in
                             AirShareRow(
                                 icon: it.icon,
                                 title: it.name,
@@ -97,7 +98,7 @@ struct LibraryView: View {
                                 Divider().overlay(Theme.stroke).padding(.leading, 78)
                             }
                         }
-                        deviceSection
+                        if scope == .device { deviceSection }
                     }
                 }
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 20)
@@ -109,7 +110,10 @@ struct LibraryView: View {
                 }
             }
         }
-        .task { await reload(); device.refreshIfStale() }
+        .task {
+            await reload(); device.refreshIfStale()
+            if items.isEmpty && !deviceOnly.isEmpty { scope = .device }
+        }
         .sheet(isPresented: $importing) {
             DocPicker(types: [UTType(filenameExtension: "ipa") ?? .item]) { urls in
                 Task { await importIPAs(urls) }
@@ -207,7 +211,7 @@ struct LibraryView: View {
                 .buttonStyle(.plain)
             }
         }
-        .padding(.top, filtered.isEmpty ? 4 : 22).padding(.bottom, 6)
+        .padding(.top, 4).padding(.bottom, 6)
         if let e = device.error ?? appActions.error { Card { Text(e).font(.caption).foregroundStyle(.orange) }.padding(.bottom, 8) }
         if device.apps.isEmpty && !device.loading {
             Card {
@@ -238,7 +242,9 @@ struct LibraryView: View {
     }
 
     private var header: some View {
-        TabTitleBar(title: "Library", center: "\(items.count + deviceOnly.count) Apps") {
+        TabTitleBar(title: "Library",
+                    center: "\(scope == .library ? items.count : deviceOnly.count) Apps",
+                    custom: AnyView(LibraryTitleSwitch(scope: $scope))) {
             HStack(spacing: 14) {
                 Button {
                     withAnimation(.easeInOut(duration: 0.16)) { showSearch.toggle(); if !showSearch { search = "" } }
@@ -394,5 +400,44 @@ final class LibraryCache {
 
     func removeAll() {
         items = []; memo = [:]; stamps = [:]
+    }
+}
+
+
+enum LibraryScope: Hashable { case library, device }
+
+/// The top-bar title split by a divider: "Library | Device". The active side is bright with an accent underline;
+/// tapping the other side switches the list and the app count underneath.
+struct LibraryTitleSwitch: View {
+    @Binding var scope: LibraryScope
+
+    var body: some View {
+        HStack(spacing: 10) {
+            side("Library", .library)
+            Rectangle().fill(Theme.stroke).frame(width: 1, height: 20)
+            side("Device", .device)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private func side(_ title: String, _ value: LibraryScope) -> some View {
+        let on = scope == value
+        return Button {
+            guard !on else { return }
+            UISelectionFeedbackGenerator().selectionChanged()
+            withAnimation(.easeInOut(duration: 0.15)) { scope = value }
+        } label: {
+            VStack(spacing: 2) {
+                Text(title)
+                    .font(.system(size: 19, weight: .bold))
+                    .foregroundStyle(on ? Theme.text : Theme.subtle)
+                    .lineLimit(1).minimumScaleFactor(0.8)
+                Capsule().fill(on ? Theme.accent : Color.clear).frame(height: 2)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(on ? [.isSelected, .isHeader] : [])
     }
 }

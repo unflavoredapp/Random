@@ -33,7 +33,13 @@ struct UnzipDropApp: App {
                 .onOpenURL { url in session.receiveIncoming(url) }
                 .overlay(alignment: .bottom) { VStack(spacing: 8) { ResumeBatchBanner(); UndoUninstallBanner(); InstallQueuePill(); NativeInstallBanner() } }
                 .onChange(of: scenePhase) { phase in
-                    if phase == .active { Task { await VPNReconnectCoordinator.shared.appBecameActive() } }
+                    if phase == .active {
+                        ZefvAccount.shared.restoreFromKeychainIfNeeded()
+                        Task {
+                            await VPNReconnectCoordinator.shared.appBecameActive()
+                            _ = await ZefvAccount.shared.autoLoginIfNeeded()
+                        }
+                    }
                 }
         }
         .backgroundTask(.appRefresh("com.mrzefv.airshare.source-scan")) {
