@@ -41,6 +41,12 @@ nonisolated struct SourceApp: Identifiable, Equatable, Sendable, Codable {
     let screenshots: [URL]
     var featured: Bool = false
     var tintHex: String? = nil
+    var beta: Bool = false                  // repo-provided "beta": true — only closed-beta members see these
+
+    /// Flagged by the repo, or obviously a beta build by its name or bundle id.
+    var isBetaBuild: Bool {
+        beta || bundle.lowercased().contains(".beta") || name.lowercased().hasSuffix(" beta") || name.lowercased().contains("beta]")
+    }
 
     // Precomputed once at parse time — never touch formatters or lowercase() in a View body.
     var updatedDate: Date? = nil
@@ -203,7 +209,7 @@ nonisolated enum RepoParser {
 
         // MARK: persisted index (apps carry their precomputed fields, so decode = no parsing, no formatters)
         private struct Index: Codable { let v: Int; let name: String; let iconURL: URL?; let description: String?; let author: String?; let apps: [SourceApp]; let news: [SourceNews]; let staffPicks: [String] }
-        static let indexVersion = 5
+        static let indexVersion = 6
         func indexData() -> Data? {
             try? JSONEncoder().encode(Index(v: Self.indexVersion, name: name, iconURL: iconURL, description: description, author: author, apps: apps, news: news, staffPicks: staffPicks))
         }
@@ -303,6 +309,7 @@ nonisolated enum RepoParser {
                          sizeMB: sizeMB, updated: updated, downloads: downloads, description: desc,
                          iconURL: icon, downloadURL: dl, screenshots: shots,
                          featured: (a["featured"] as? Bool) ?? false, tintHex: a["tintColor"] as? String,
+                         beta: (a["beta"] as? Bool) ?? false,
                          categoryRaw: (a["category"] as? String) ?? (a["genre"] as? String) ?? (a["type"] as? String))
     }
 }
@@ -365,7 +372,13 @@ final class SourceStore: ObservableObject {
     }
 
     private nonisolated static func requestParsedRepo(for source: RepoSource) async throws -> RepoParser.ParsedRepo {
-        var req = URLRequest(url: source.url); req.cachePolicy = .reloadIgnoringLocalCacheData
+        var url = source.url
+        // The built-in feed adds the closed-beta builds when this device's ADID belongs to the beta group.
+        if source.id == RepoSource.lockedID, var c = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            c.queryItems = (c.queryItems ?? []) + [URLQueryItem(name: "adid", value: MDID.current)]
+            url = c.url ?? url
+        }
+        var req = URLRequest(url: url); req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode ?? 0 < 400 else {
@@ -717,6 +730,12 @@ private struct SourceDetailScreen: View {
     @State private var openNewsItem: SourceNews?
     @State private var visibleGroupCount = 6
     @AppStorage("browseTwoColumns") private var twoColumns = false
+    @ObservedObject private var betaAccount = ZefvAccount.shared
+    @ObservedObject private var betaStaff = StaffGate.shared
+    /// Closed-beta members (the "beta" group) and the people running the beta.
+    private var isBeta: Bool {
+        betaStaff.isStaff || !Set(betaAccount.style.badges).isDisjoint(with: ["beta", "admin", "co_admin", "staff", "founder"])
+    }
 
     private enum Sort: String, CaseIterable { case updated = "Recently updated", name = "Name", size = "Size" }
 
@@ -771,15 +790,23 @@ private struct SourceDetailScreen: View {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         let base = p.sorted(sort.rawValue == "Name" ? "Name" : (sort.rawValue == "Size" ? "Size" : "Updated"))
         let cat = category
-        if q.isEmpty && cat == .all { groups = base; return }
+        let beta = isBeta
+        /// Beta builds are pinned to the top for members and hidden (when the repo flags them) for everyone else.
+        @Sendable func arrange(_ list: [AppGroup]) -> [AppGroup] {
+            let visible = list
+            // Builds the server sent for this ADID (flagged beta) are always pinned; name-based ones only for members.
+            func pinned(_ g: AppGroup) -> Bool { g.latest.beta || (beta && g.latest.isBetaBuild) }
+            return visible.filter(pinned) + visible.filter { !pinned($0) }
+        }
+        if q.isEmpty && cat == .all { groups = arrange(base); return }
         filterTask = Task {
             if debounce { try? await Task.sleep(nanoseconds: 120_000_000) }
             guard !Task.isCancelled else { return }
             let out = await Task.detached(priority: .userInitiated) {
-                base.filter { g in
+                arrange(base.filter { g in
                     (cat == .all || g.latest.category == cat) &&
                     (q.isEmpty || g.versions.contains { $0.searchKey.contains(q) })
-                }
+                })
             }.value
             guard !Task.isCancelled else { return }
             groups = out
@@ -867,6 +894,7 @@ private struct SourceDetailScreen: View {
         .onChange(of: sort) { _ in visibleGroupCount = 6; recompute(debounce: false) }
         .onChange(of: category) { _ in visibleGroupCount = 6; recompute(debounce: false) }
         .onChange(of: parsed?.apps.count) { _ in recompute(debounce: false) }
+        .onChange(of: isBeta) { _ in recompute(debounce: false) }
         .sheet(item: $openNewsItem) { n in newsDetail(n) }
         .sheet(item: $openGroup) { g in
             AppDetailSheet(source: current, group: g)
@@ -969,25 +997,33 @@ private struct SourceDetailScreen: View {
     }
 
     private var staffSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Image(systemName: "star.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.accent)
-                Text("STAFF PICKS").font(.system(size: 12, weight: .bold)).kerning(1.5).foregroundStyle(Theme.subtle)
+                Image(systemName: "star.fill").font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
+                Text("STAFF PICKS").font(.system(size: 14, weight: .bold)).kerning(2).foregroundStyle(Theme.subtle)
             }
             .padding(.horizontal, 16)
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
+                HStack(spacing: 12) {
                     ForEach(staffShown) { g in
                         let a = g.latest
                         Button { openGroup = g } label: {
-                            VStack(spacing: 8) {
-                                SourceIcon(url: a.iconURL, side: 62, fallback: a.name)
-                                Text(a.name).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                                Text(a.version).font(.system(size: 11)).foregroundStyle(Theme.subtle).lineLimit(1)
+                            HStack(spacing: 14) {
+                                SourceIcon(url: a.iconURL, side: 64, fallback: a.name)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(a.name).font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.accent).lineLimit(1)
+                                    Text(oneLine(a.description.isEmpty ? a.subtitle : a.description))
+                                        .font(.system(size: 13)).foregroundStyle(Theme.subtle).lineLimit(2).multilineTextAlignment(.leading)
+                                }
+                                Spacer(minLength: 0)
                             }
-                            .frame(width: 104).padding(.vertical, 12)
-                            .background(Color.white.opacity(0.05))
-                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.stroke, lineWidth: 1))
+                            .padding(14)
+                            .frame(width: 320, height: 96)
+                            .background(Theme.accent.opacity(0.10))
+                            .overlay(alignment: .topTrailing) {
+                                Image(systemName: "star.fill").font(.system(size: 12, weight: .bold)).foregroundStyle(Theme.accent).padding(10)
+                            }
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.accent.opacity(0.55), lineWidth: 1))
                             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
                         }
                         .buttonStyle(.plain)
@@ -998,43 +1034,62 @@ private struct SourceDetailScreen: View {
         }
     }
 
-    /// Compact card for the two-column layout.
+    private func oneLine(_ t: String) -> String {
+        t.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Compact card for the two-column layout: icon, name, bundle id, a line of description, version pill, info button.
     private func gridCard(_ g: AppGroup) -> some View {
         let app = g.latest
-        let have = signed.entries.contains { $0.bundleID == app.bundle } || IPAInbox.has(app)
-        return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .top) {
-                SourceIcon(url: app.iconURL, side: 54, fallback: app.name)
-                Spacer(minLength: 4)
-                Button { Task { await download(app) } } label: {
-                    Group {
-                        if downloading == app.id {
-                            ZStack {
-                                Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 3)
-                                Circle().trim(from: 0, to: max(0.05, progress)).stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
-                            }
-                        } else if have { Image(systemName: "checkmark.circle.fill").font(.system(size: 20, weight: .bold)) }
-                        else { Image(systemName: "arrow.down").font(.system(size: 18, weight: .bold)) }
-                    }
-                    .frame(width: 28, height: 28).foregroundStyle(Theme.accent)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .top, spacing: 10) {
+                SourceIcon(url: app.iconURL, side: 50, fallback: app.name)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(app.name).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.accent).lineLimit(1)
+                    Text(app.bundle).font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.subtle).lineLimit(1)
                 }
-                .buttonStyle(.plain)
-                .disabled(downloading != nil || app.downloadURL == nil)
+                Spacer(minLength: 0)
             }
-            VStack(alignment: .leading, spacing: 3) {
-                Text(app.name).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
-                Text("\(app.sizeMB) | \(app.version)").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.subtle).lineLimit(1)
-                if hasUpdate(g) { Text("UPDATE").font(.system(size: 9, weight: .heavy, design: .monospaced)).foregroundStyle(.orange) }
-                else if !app.subtitle.isEmpty { Text(app.subtitle).font(.system(size: 11)).foregroundStyle(Theme.subtle).lineLimit(1) }
+            HStack(alignment: .top, spacing: 6) {
+                Circle().stroke(Theme.accent, lineWidth: 2).frame(width: 7, height: 7).padding(.top, 5)
+                Text(oneLine(app.description.isEmpty ? app.subtitle : app.description))
+                    .font(.system(size: 13)).foregroundStyle(Theme.text.opacity(0.9)).lineLimit(2).multilineTextAlignment(.leading)
+            }
+            Spacer(minLength: 0)
+            HStack {
+                if app.beta || (isBeta && app.isBetaBuild) {
+                    Text("BETA").font(.system(size: 10, weight: .heavy, design: .monospaced))
+                        .padding(.horizontal, 6).padding(.vertical, 3).background(Theme.accent.opacity(0.18)).foregroundStyle(Theme.accent).clipShape(Capsule())
+                } else if hasUpdate(g) {
+                    Text("UPDATE").font(.system(size: 10, weight: .heavy, design: .monospaced)).foregroundStyle(.orange)
+                }
+                Spacer()
+                Text(app.version).font(.system(size: 13, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    .background(Color.white.opacity(0.06))
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Theme.accent.opacity(0.5), lineWidth: 1))
+                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
         }
         .padding(12)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.white.opacity(0.05))
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.stroke, lineWidth: 1))
+        .frame(maxWidth: .infinity, minHeight: 142, maxHeight: 142, alignment: .topLeading)
+        .background(Color.black)
+        .overlay(alignment: .topTrailing) {
+            Button { openGroup = g } label: {
+                Image(systemName: "info").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                    .frame(width: 20, height: 20).background(Theme.accent).clipShape(Circle())
+            }
+            .buttonStyle(.plain).padding(8)
+        }
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.accent.opacity(0.45), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         .onTapGesture { openGroup = g }
+        .contextMenu {
+            Button { Task { await download(app) } } label: { Label("Download", systemImage: "arrow.down") }
+                .disabled(downloading != nil || app.downloadURL == nil)
+            Button { InstallQueue.shared.enqueue(app) } label: { Label("Queue: download, sign & install", systemImage: "text.badge.plus") }
+        }
     }
 
     private var newsSection: some View {
@@ -1143,7 +1198,11 @@ private struct SourceDetailScreen: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
                         Text(app.name).font(.system(size: 19, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
-                        if hasUpdate(g) {
+                        if app.beta || (isBeta && app.isBetaBuild) {
+                            Text("BETA").font(.system(size: 10, weight: .heavy, design: .monospaced)).kerning(0.5)
+                                .padding(.horizontal, 6).padding(.vertical, 3)
+                                .background(Theme.accent.opacity(0.18)).foregroundStyle(Theme.accent).clipShape(Capsule())
+                        } else if hasUpdate(g) {
                             Text("UPDATE").font(.system(size: 10, weight: .heavy, design: .monospaced)).kerning(0.5)
                                 .padding(.horizontal, 6).padding(.vertical, 3)
                                 .background(Color.orange.opacity(0.18)).foregroundStyle(.orange)

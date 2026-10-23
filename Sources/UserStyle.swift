@@ -27,6 +27,7 @@ struct UserStyle: Hashable, Sendable {
         "co_admin":   ("CO-ADMIN",   "shield.fill",           Color(red: 1.0, green: 0.55, blue: 0.1)),
         "staff":      ("STAFF",      "person.badge.shield.checkmark.fill", Color(red: 0.45, green: 0.5, blue: 1.0)),
         "sponsor":    ("SPONSOR",    "star.circle.fill",      Color(red: 0.4, green: 0.9, blue: 0.5)),
+        "beta":       ("BETA",       "flask.fill",            Color(red: 0.7, green: 0.45, blue: 1.0)),
     ]
 
     /// Fonts that ship on iOS (no bundling needed). Label → font name ("" = system).

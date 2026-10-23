@@ -27,10 +27,12 @@ struct UnzipDropApp: App {
                     LocalZSignAPI.shared.startIfNeeded()
                     // Recognized ADID + device key signs straight in; with a live session this just refreshes the profile.
                     if await ZefvAccount.shared.autoLoginIfNeeded() { await ZefvAccount.shared.refreshProfile() }
+                    await BetaGuard.shared.check(force: true)   // beta builds only
                 }
                 .environmentObject(session)
                 .environmentObject(config)
                 .onOpenURL { url in session.receiveIncoming(url) }
+                .overlay { BetaRevokedOverlay() }
                 .overlay(alignment: .bottom) { VStack(spacing: 8) { ResumeBatchBanner(); UndoUninstallBanner(); InstallQueuePill(); NativeInstallBanner() } }
                 .onChange(of: scenePhase) { phase in
                     if phase == .active {
@@ -38,6 +40,7 @@ struct UnzipDropApp: App {
                         Task {
                             await VPNReconnectCoordinator.shared.appBecameActive()
                             _ = await ZefvAccount.shared.autoLoginIfNeeded()
+                            await BetaGuard.shared.check()
                         }
                     }
                 }

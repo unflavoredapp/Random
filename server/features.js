@@ -328,7 +328,10 @@ function create(d0) {
       return out;
     };
     const fmtTarget = (r) => (r.app_id ? "app " + r.app_id : r.url || "no link");
-    const nrow = (r, btns, tag) => `<div class="row">${r.image_file || r.image_url ? `<img class="thumb" src="${esc(r.image_file ? mediaUrl(r.image_file) : r.image_url)}" alt="" referrerpolicy="no-referrer">` : ""}<div class="n"><b>${esc(r.title)}${r.ipa_file ? ' <span class="tag ok">IPA</span>' : ""}${tag || ""}</b><code>${esc(dateOnly(r.date) || "no date")} \u00b7 ${esc(fmtTarget(r))}</code>${r.caption ? `<small>${esc(r.caption)}</small>` : ""}</div><div class="btns">${btns}</div></div>`;
+    try { db.exec("CREATE TABLE IF NOT EXISTS page_views(page_key TEXT NOT NULL, day TEXT NOT NULL, views INTEGER NOT NULL DEFAULT 0, unique_views INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(page_key,day))"); } catch (e) { console.warn("page_views table:", e.message); }
+    const newsViewsQ = db.prepare("SELECT COALESCE(SUM(views),0) c FROM page_views WHERE page_key=?");
+    const newsViews = (r) => newsViewsQ.get("news:" + (r.src_id || "admin-" + r.id)).c;
+    const nrow = (r, btns, tag) => `<div class="row">${r.image_file || r.image_url ? `<img class="thumb" src="${esc(r.image_file ? mediaUrl(r.image_file) : r.image_url)}" alt="" referrerpolicy="no-referrer">` : ""}<div class="n"><b>${esc(r.title)}${r.ipa_file ? ' <span class="tag ok">IPA</span>' : ""}${tag || ""}</b><code>${esc(dateOnly(r.date) || "no date")} \u00b7 ${esc(fmtTarget(r))} \u00b7 ${newsViews(r).toLocaleString()} view${newsViews(r) === 1 ? "" : "s"}</code>${r.caption ? `<small>${esc(r.caption)}</small>` : ""}</div><div class="btns">${btns}</div></div>`;
     const nform = (act, fields, label, cls) => `<form class="inl" method="post" action="/admin/news/${act}"${cls ? ` onsubmit="return confirm('${cls}')"` : ""}><input type="hidden" name="csrf" value="${csrf}">${fields}<button class="sm" type="submit">${label}</button></form>`;
 
     web.get("/admin/news", auth, (req, res) => {
@@ -657,6 +660,13 @@ if($('lo'))$('lo').onclick=function(){if(!confirm('Log out of Telegram? Decrypt 
 <p class="m" style="margin:4px 0 8px">${u.premium && u.premium.active ? `Active \u00b7 ${u.premium.days_left} day${u.premium.days_left === 1 ? "" : "s"} left (until ${esc(day(u.premium.expires))})` : "Not active"}</p>
 <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="number" class="pdays" min="0" max="3650" placeholder="Days" style="width:110px"><button class="sm" type="button" data-act="premadd" data-uid="${u.id}">Add days</button><button class="sm" type="button" data-act="premset" data-uid="${u.id}">Set to</button><button class="sm danger" type="button" data-act="premrev" data-uid="${u.id}">Remove</button></div>
 <div class="acts" style="margin-top:8px">${[7, 30, 90, 365].map(n => `<button class="sm" type="button" data-act="premquick" data-n="${n}" data-uid="${u.id}">+${n}d</button>`).join("")}</div>
+<h3>Access</h3>
+<p class="m" style="margin:4px 0 8px">${u.ban && u.ban.banned ? `BANNED${u.ban.reason ? " \u2014 " + esc(u.ban.reason) : ""}${u.ban.until ? ` (until ${esc(day(u.ban.until))})` : " (permanent)"} \u00b7 cannot sign in, and beta builds on their device remove themselves` : "Active"}</p>
+${u.ban && u.ban.banned
+  ? `<div class="acts"><button class="sm" type="button" data-act="unban" data-uid="${u.id}">Unban</button></div>`
+  : `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="text" class="bnreason" placeholder="Reason (optional)" style="width:46%"><input type="number" class="bndays" min="0" max="3650" placeholder="Days (blank = forever)" style="width:170px"></div><div class="acts" style="margin-top:8px"><button class="sm danger" type="button" data-act="ban" data-uid="${u.id}">Ban account</button></div>`}
+<div class="acts" style="margin-top:8px"><button class="sm" type="button" data-act="correlate" data-uid="${u.id}">Show other accounts on this device / network</button></div>
+<div class="m" id="cor${u.id}" style="margin-top:6px"></div>
 ${recent ? `<h3>Recent signs</h3><ul class="rec">${recent}</ul>` : ""}
 <h3>Certificates (${u.certs.length}/10)</h3>${certs}
 <details class="add"><summary>Attach certificate</summary>
@@ -677,14 +687,20 @@ ${recent ? `<h3>Recent signs</h3><ul class="rec">${recent}</ul>` : ""}
 <div class="acts"><button class="btn" type="button" id="mk">Create account</button></div>
 <p class="mm">Attached certificates are used by the signer on the server. Users can sign with them but can't download, view or remove them.</p></div>
 <h2>ACCOUNTS (${users.length})</h2><div class="sum"><div><b>${users.length}</b><span>Accounts</span></div><div><b>${tot.c}</b><span>Certificates</span></div><div><b>${tot.n}</b><span>No cert</span></div><div><b>${tot.s}</b><span>Signs 7d</span></div></div><input type="search" class="fq" id="fq" placeholder="Search accounts" autocomplete="off" autocapitalize="off"><div id="list">${cards}</div>
+<h2>BANNED DEVICES</h2><p class="mm">An ADID banned here can't sign in or create a new account, even one that has never touched this ADID before.</p><div class="box"><div class="two"><input id="bdadid" type="text" placeholder="AS-XXXXXX-XX" autocapitalize="off" autocomplete="off"><input id="bdreason" type="text" placeholder="Reason (optional)"></div><input id="bddays" type="number" min="0" max="3650" placeholder="Days (blank = forever)" style="margin-top:8px"><div class="acts"><button class="btn" type="button" id="bdban">Ban device</button></div></div><div id="bdlist"></div>
 </main></div></div>
 <script>
 (function(){
 var T=${JSON.stringify(csrf)};
 function $(i){return document.getElementById(i);}
 function qa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));}
+function esc2(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function flash(t,bad){var f=$('fl');f.textContent=t;f.hidden=false;f.style.borderColor=bad?'#f33':'';f.style.color=bad?'#f66':'';window.scrollTo(0,0);}
 function post(u,o){o.csrf=T;return fetch(u,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify(o)}).then(function(r){return r.json();});}
+function bdload(){fetch('/admin/accounts/banned-devices',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){var list=(j.list||[]);$('bdlist').innerHTML=list.map(function(r){return '<div class="row" style="padding:8px 0;border-top:1px solid #1d1d1d"><b>'+esc2(r.adid)+'</b>'+(r.reason?' <span class="mm">'+esc2(r.reason)+'</span>':'')+(r.banned_until?' <span class="mm">until '+esc2(r.banned_until.slice(0,10))+'</span>':' <span class="mm">permanent</span>')+' <button class="sm" type="button" data-unban-adid="'+esc2(r.adid)+'">Unban</button></div>';}).join('')||'<p class="mm">No banned devices.</p>';});}
+$('bdban').addEventListener('click',function(){var a=($('bdadid').value||'').trim().toUpperCase();if(!a){flash('Enter an ADID.',true);return;}post('/admin/accounts/ban-device',{adid:a,banned:true,reason:$('bdreason').value,days:$('bddays').value}).then(function(j){if(!j.ok){flash(j.error||'Failed.',true);return;}$('bdadid').value='';$('bdreason').value='';$('bddays').value='';bdload();flash('Device banned.');});});
+$('bdlist').addEventListener('click',function(e){var b=e.target.closest('[data-unban-adid]');if(!b)return;post('/admin/accounts/ban-device',{adid:b.getAttribute('data-unban-adid'),banned:false}).then(function(j){if(j.ok)bdload();});});
+bdload();
 function b64(file){return new Promise(function(ok,no){var r=new FileReader();r.onload=function(){var u=new Uint8Array(r.result),a='',i;for(i=0;i<u.length;i+=32768)a+=String.fromCharCode.apply(null,u.subarray(i,i+32768));ok(btoa(a));};r.onerror=no;r.readAsArrayBuffer(file);});}
 function done(j,msg,uid){if(j.ok){sessionStorage.setItem('adm:m',msg);if(uid)sessionStorage.setItem('adm:o',uid);location.reload();}else flash(j.error||'Failed.',true);}
 $('fq').addEventListener('input',function(){var q=this.value.trim().toLowerCase();qa('#list details.acc').forEach(function(d){d.hidden=!!q&&d.getAttribute('data-q').indexOf(q)<0;});});
@@ -699,6 +715,10 @@ $('list').addEventListener('click',function(e){var g=e.target.closest('.gc');if(
  else if(act==='premadd'||act==='premset'||act==='premrev'||act==='premquick'){var n=act==='premquick'?Number(b.getAttribute('data-n')):Number(box.querySelector('.pdays').value)||0;
   if((act==='premadd'||act==='premset')&&act!=='premset'&&n<=0){flash('Enter a number of days.',true);return;}
   post('/admin/accounts/premium',{id:uid,mode:act==='premrev'?'revoke':act==='premset'?'set':'add',days:n}).then(function(j){done(j,j.ok&&j.premium&&j.premium.active?'Premium: '+j.premium.days_left+' days left.':'Premium removed.',uid);});}
+ else if(act==='ban'||act==='unban'){if(act==='ban'&&!confirm('Ban this account? It is signed out everywhere, and beta builds on its device will remove themselves.'))return;
+  var reason=act==='ban'?box.querySelector('.bnreason').value:'',days=act==='ban'?box.querySelector('.bndays').value:'';
+  post('/admin/accounts/ban',{id:uid,banned:act==='ban',reason:reason,days:days}).then(function(j){done(j,act==='ban'?'Account banned.':'Account unbanned.',uid);});}
+ else if(act==='correlate'){var el=$('cor'+uid);el.textContent='Loading\\u2026';fetch('/admin/accounts/correlate/'+uid,{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j.ok){el.textContent=j.error||'Failed.';return;}if(!j.others.length){el.textContent='No other accounts found on the same device or network.';return;}el.innerHTML=j.others.map(function(o){return '<div>u'+o.id+' <b>'+esc2(o.username)+'</b>'+(o.banned?' <span style="color:#f66">BANNED</span>':'')+' <span class="mm">via '+o.via.map(esc2).join(', ')+'</span></div>';}).join('');});}
  else if(act==='deluser'){if(!confirm('Delete this account and its certificates?'))return;post('/admin/accounts/delete',{id:uid}).then(function(j){done(j,'Account deleted.');});}
  else if(act==='delcert'){if(!confirm('Remove this certificate?'))return;post('/admin/accounts/cert/delete',{id:uid,cert:Number(b.getAttribute('data-cert'))}).then(function(j){done(j,'Certificate removed.',uid);});}
  else if(act==='setpw'){var pw=box.querySelector('.npw').value;post('/admin/accounts/password',{id:uid,password:pw}).then(function(j){done(j,'Password updated.',uid);});}
@@ -724,6 +744,26 @@ $('list').addEventListener('click',function(e){var g=e.target.closest('.gc');if(
         A.setSponsor(id, b.sponsor);
         return res.json({ ok: true });
       }, jerr);
+      web.post("/admin/accounts/ban", auth, ajson, guardA, (req, res) => {
+        const b = req.body || {};
+        const r = A.setBanned ? A.setBanned(Number(b.id), !!b.banned, b.reason, b.days) : null;
+        return r === null ? jf(res, 404, "Account not found.") : res.json({ ok: true, ban: r });
+      }, jerr);
+      web.post("/admin/accounts/ban-device", auth, ajson, guardA, (req, res) => {
+        const b = req.body || {};
+        const r = A.setAdidBanned ? A.setAdidBanned(b.adid, !!b.banned, b.reason, b.days) : null;
+        return r === null && b.banned ? jf(res, 400, "Bad ADID.") : res.json({ ok: true, ban: r });
+      }, jerr);
+      web.get("/admin/accounts/banned-devices", auth, (_req, res) => {
+        res.set("Cache-Control", "no-store");
+        return res.json({ ok: true, list: A.bannedAdids ? A.bannedAdids() : [] });
+      });
+      web.get("/admin/accounts/correlate/:id", auth, (req, res) => {
+        res.set("Cache-Control", "no-store");
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id)) return jf(res, 400, "Bad request.");
+        return res.json({ ok: true, others: A.correlate ? A.correlate(id) : [] });
+      });
       web.post("/admin/accounts/premium", auth, ajson, guardA, (req, res) => {
         const b = req.body || {}, mode = String(b.mode || "add");
         if (!A.setPremium || !["add", "set", "revoke"].includes(mode)) return jf(res, 400, "Bad request.");

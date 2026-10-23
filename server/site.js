@@ -508,7 +508,9 @@ function mountSite(web, d0) {
     if (!safeEq(sig, sign(`${id}.${exp}`))) return null;
     if (id[0] === "u") { // password account
       const r = localGet.get(Number(id.slice(1)));
-      return r ? { id: r.id, tg_id: null, local: true, username: r.username, first_name: r.username, photo_url: "", email: r.email } : null;
+      if (!r) return null;
+      if (acct.isBanned && acct.isBanned(r.id)) return null; // banned: the website session stops working immediately, same as the app
+      return { id: r.id, tg_id: null, local: true, username: r.username, first_name: r.username, photo_url: "", email: r.email };
     }
     return userGet.get(Number(id)) || null;
   }
@@ -764,6 +766,7 @@ function mountSite(web, d0) {
         const row = localFind.get(ident, ident);
         const ok = await checkPw(password, row ? row.pass_hash : null);
         if (!row || !ok) return fail(res, 401, "Incorrect username or password.");
+        if (acct.isBanned && acct.isBanned(row.id)) return fail(res, 403, acct.banMessage(row.id));
         localTouch.run(new Date().toISOString(), row.id);
         setSession(res, "u" + row.id);
         return res.json({ ok: true });
@@ -984,7 +987,7 @@ function mountSite(web, d0) {
       } catch (e) {
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
         j.status = "error"; j.error = String(e.message || "Decrypt failed.").slice(0, 200);
-        if (!j.refunded && acct.decrypt) { j.refunded = true; try { acct.decrypt.refund(j.uid, j.ip); } catch {} } // a failed decrypt doesn't use up the day's allowance
+        if (!j.refunded && acct.decrypt) { j.refunded = true; try { acct.decrypt.refund(j.uid, j.ip, aid || undefined); } catch {} } // a failed decrypt doesn't use up the day's allowance or start the per-app cooldown
         console.warn("Decrypt failed:", j.error);
       }
     }
@@ -1039,7 +1042,8 @@ function mountSite(web, d0) {
     web.get("/api/decrypt/quota", (req, res) => {
       res.set({ "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow" });
       if (!acct.decrypt) return res.json({ ok: true, tier: "guest", limit: null, used: 0, left: null, unlimited: true });
-      return res.json(acct.decrypt.status(actorId(req, res, false), req.ip));
+      const appId = appIdOf(String(req.query.url || ""));
+      return res.json(acct.decrypt.status(actorId(req, res, false), req.ip, appId || undefined));
     });
     web.get("/api/decrypt/history", (req, res) => {
       res.set({ "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow" });
@@ -1068,10 +1072,10 @@ function mountSite(web, d0) {
         if (decBusy().length >= 8) return fail(res, 503, "Decrypt is busy. Try again in a minute.");
         let quota = null;
         if (acct.decrypt) {
-          quota = acct.decrypt.consume(req.uid, req.ip);
+          quota = acct.decrypt.consume(req.uid, req.ip, appIdOf(url) || undefined);
           if (!quota.ok) {
-            const more = quota.tier === "guest" ? " Sign in for more." : "";
-            return res.status(429).json({ ok: false, error: `You've used all ${quota.limit} decrypts for today.${more} It resets at midnight UTC.`, quota });
+            const msg = quota.cooldown ? quota.error : `You've used all ${quota.limit} decrypts for today.${quota.tier === "guest" ? " Sign in for more." : ""} It resets at midnight UTC.`;
+            return res.status(429).json({ ok: false, error: msg, quota });
           }
         }
         const id = crypto.randomBytes(12).toString("hex");
@@ -2601,6 +2605,7 @@ if(form&&inp){
   web.get("/news/:id", (req, res) => {
     const n = newsAll().find(x => x.id === req.params.id);
     if (!n) return notFound(res);
+    recordView(req, "news:" + n.id);
     const st = n.tint ? ` style="--tint:${n.tint}"` : "";
     const dateTxt = n.date ? new Date(n.date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }) : "";
     const body = `
@@ -2754,8 +2759,20 @@ if(vl)vl.addEventListener('click',function(e){var a=e.target.closest('.vr');if(!
       staffPicks: feat ? feat.staffEntries().map(e => { const it = d.byKey(e.key); return it && it.bundleIdentifier ? { bundleIdentifier: it.bundleIdentifier, version: e.version || undefined } : null; }).filter(Boolean) : [],
     });
   }, () => (feat ? feat.newsVer() + ":" + feat.ver() : 0));
-  web.get([FEED, "/source.json"], (_req, res) => {
+  web.get([FEED, "/source.json"], (req, res) => {
     if (!siteUrl) return res.status(404).send("Set SITE_URL or BASE_URL to enable the source feed.");
+    // ?adid=AS-XXXXXX-XX: beta-group devices get the closed-beta builds added; the response is then private.
+    const wantAdid = String(req.query.adid || req.query.mdid || "").trim().toUpperCase();
+    if (wantAdid && acct.beta) {
+      let extra = [];
+      try { extra = acct.beta.appsFor(wantAdid, siteUrl); } catch (e) { console.warn("Beta feed:", e.message); }
+      if (extra.length) {
+        const j = JSON.parse(sourceJson());
+        j.apps = extra.concat(j.apps.filter(x => !extra.some(b => b.bundleIdentifier === x.bundleIdentifier)));
+        res.set({ "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "private, no-store" });
+        return res.send(JSON.stringify(j));
+      }
+    }
     res.set({ "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" });
     return res.send(sourceJson());
   });

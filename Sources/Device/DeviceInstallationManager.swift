@@ -201,9 +201,9 @@ final class DeviceInstallationManager: ObservableObject {
     }
 
     /// Removes an app and its data from this device. `progress` is 0…1 on the main queue.
-    func uninstall(bundleIdentifier: String, mode: DeviceConnectionMode,
+    func uninstall(bundleIdentifier: String, mode: DeviceConnectionMode, allowSelf: Bool = false,
                    progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws {
-        guard bundleIdentifier != Bundle.main.bundleIdentifier else {
+        guard allowSelf || bundleIdentifier != Bundle.main.bundleIdentifier else {
             throw DeviceSetupError("AirShare can't uninstall itself. Delete it from the Home Screen instead.")
         }
         try await withDeviceLease(bundleIdentifier: bundleIdentifier, mode: mode) {
