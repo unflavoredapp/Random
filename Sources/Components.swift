@@ -31,6 +31,7 @@ struct TabTitleBar<Trailing: View>: View {
     var center: String? = nil            // second-row caption, e.g. "3 Apps"
     var custom: AnyView? = nil           // replaces the title text (e.g. Decrypt's bot picker)
     var centerView: AnyView? = nil       // replaces the caption with a control (e.g. Library | Device switch)
+    var showsAccount: Bool = true        // false on full-screen covers, where the account dropdown (hosted in RootView) is hidden
     @ViewBuilder var trailing: Trailing
     var body: some View {
         VStack(spacing: 0) {
@@ -54,7 +55,7 @@ struct TabTitleBar<Trailing: View>: View {
                 if let centerView { centerView }
                 else { Text(center ?? "").font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1) }
                 Spacer(minLength: 6)
-                AccountChip()
+                if showsAccount { AccountChip() }
             }
             .padding(.horizontal, 16).padding(.vertical, 6)
             .background(Color.white.opacity(0.04))

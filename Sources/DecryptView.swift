@@ -73,6 +73,8 @@ final class DecryptClient: ObservableObject {
     @Published var finishedName = ""
     /// Set by other tabs (Library's DRM apps) to prefill the search box; the view consumes it.
     @Published var pendingQuery: String?
+    /// Today's decrypt allowance, as the server counts it.
+    @Published private(set) var quota: DecryptQuota?
 
     private var task: Task<Void, Never>?
     private init() {}
@@ -121,6 +123,10 @@ final class DecryptClient: ObservableObject {
         if let d = v as? Double { return Int64(d) }
         if let s = v as? String, let i = Int64(s) { return i }
         return 0
+    }
+
+    func refreshQuota() async {
+        if let o = try? await send(makeRequest("api/decrypt/quota")), let q = DecryptQuota(json: o) { quota = q }
     }
 
     // MARK: Search / select
@@ -194,6 +200,11 @@ final class DecryptClient: ObservableObject {
 
     func start(url: String, version: String?, display: String) {
         guard !busy else { return }
+        if let q = quota, q.exhausted {
+            phase = .failed
+            error = "You've used all \(q.limit ?? 0) decrypts for today." + (q.tier == "guest" ? " Sign in for more." : "") + " It resets at midnight UTC."
+            return
+        }
         task?.cancel()
         phase = .queued; message = "Queued"; queue = 0; error = nil; finished = nil; finishedName = display
         task = Task { [weak self] in
@@ -203,6 +214,7 @@ final class DecryptClient: ObservableObject {
                 if let version, !version.isEmpty { body["version"] = version }
                 let o = try await self.send(self.makeRequest("api/decrypt", body: body))
                 guard let id = o["id"] as? String else { throw DecryptError("Server didn't start the job.") }
+                if let q = (o["quota"] as? [String: Any]).flatMap({ DecryptQuota(json: $0) }) { self.quota = q }
 
                 var up: String?
                 var name = display, ver = ""
@@ -235,6 +247,7 @@ final class DecryptClient: ObservableObject {
                 if Task.isCancelled { return }
                 self.phase = .failed
                 self.error = error.localizedDescription
+                await self.refreshQuota()      // a failed decrypt is refunded; a refused one shows 0 left
             }
         }
     }
@@ -299,7 +312,7 @@ struct DecryptView: View {
 
     var body: some View {
         ZStack {
-            Theme.bg.ignoresSafeArea()
+            Theme.bg.ignoresSafeArea().task { await c.refreshQuota() }
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 12) {
                     if showSearch {
@@ -316,6 +329,15 @@ struct DecryptView: View {
                     }
                     if c.searching {
                         HStack { Spacer(); ProgressView().tint(Theme.accent); Spacer() }.padding(.vertical, 6)
+                    }
+                    if let q = c.quota {
+                        HStack(spacing: 6) {
+                            Image(systemName: q.unlimited ? "infinity" : "lock.open.fill").font(.system(size: 11))
+                            Text(q.summary).font(.system(size: 12, weight: .semibold))
+                            if q.tier == "guest" { Text("\u{00B7} sign in for more").font(.system(size: 12)).foregroundStyle(Theme.subtle) }
+                        }
+                        .foregroundStyle(q.exhausted ? Color.orange : Theme.subtle)
+                        .frame(maxWidth: .infinity)
                     }
                     if let err = c.error, c.phase != .failed {
                         Card { Text(err).font(.caption).foregroundStyle(.orange) }
