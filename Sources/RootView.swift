@@ -26,6 +26,7 @@ struct RootView: View {
     private struct SignItem: Identifiable {
         let url: URL
         let meta: IPAMeta
+        var pending: PendingIPADownload? = nil
         var id: String { url.path }
     }
 
@@ -86,10 +87,14 @@ struct RootView: View {
             // Signing is a flow, not a tab: open SigningSheet directly over whatever's showing.
             guard t != nil else { return }
             signQueue.requestedTab = nil
-            if let url = signQueue.pending { openSigningSheet(url) }
+            if let d = signQueue.pendingDownload {
+                signQueue.pendingDownload = nil
+                d.start()
+                signItem = SignItem(url: d.url, meta: d.meta, pending: d)
+            } else if let url = signQueue.pending { openSigningSheet(url) }
         }
         .fullScreenCover(item: $signItem) { it in
-            SigningSheet(ipaURL: it.url, meta: it.meta) { _ in }
+            SigningSheet(ipaURL: it.url, meta: it.meta, pending: it.pending) { _ in }
                 .preferredColorScheme(theme.colorScheme)
         }
         .fullScreenCover(isPresented: $hub.isPresented) {

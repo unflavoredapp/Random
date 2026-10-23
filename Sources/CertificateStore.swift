@@ -292,9 +292,16 @@ final class SignQueue: ObservableObject {
     static let shared = SignQueue()
     /// An unsigned IPA waiting in the Sign tab.
     @Published var pending: URL?
+    /// An IPA that is still downloading: the signing sheet opens at once and locks Sign IPA until it lands.
+    @Published var pendingDownload: PendingIPADownload?
     /// Set to ask the shell to switch tabs (RootView observes).
     @Published var requestedTab: Int?
     private init() {}
+
+    func enqueueDownloading(_ download: PendingIPADownload) {
+        pendingDownload = download
+        requestedTab = 0
+    }
 
     func enqueue(_ url: URL, switchToSign: Bool = true) {
         pending = url

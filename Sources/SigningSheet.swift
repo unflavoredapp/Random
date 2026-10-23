@@ -25,8 +25,19 @@ private final class SigningLogSink: @unchecked Sendable {
 struct SigningSheet: View {
     @ObservedObject private var liveTheme = AppTheme.shared   // re-read accent live (auto-cycle) without rebuilding
     let ipaURL: URL
-    let meta: IPAMeta
+    let initialMeta: IPAMeta
     var onSigned: (SignedEntry) -> Void
+    /// Set when the IPA is still downloading: the sheet is usable, but Sign IPA stays locked until it lands.
+    var pending: PendingIPADownload? = nil
+    @State private var fileReady: Bool
+    @State private var signQueued = false
+    @State private var fetchedIcon: Data?
+
+    private var meta: IPAMeta {
+        var m = initialMeta
+        if m.iconPNG == nil { m.iconPNG = fetchedIcon }
+        return m
+    }
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var certs = CertificateStore.shared
@@ -124,8 +135,10 @@ struct SigningSheet: View {
         var replaceIcon = true
     }
 
-    init(ipaURL: URL, meta: IPAMeta, onSigned: @escaping (SignedEntry) -> Void) {
-        self.ipaURL = ipaURL; self.meta = meta; self.onSigned = onSigned
+    init(ipaURL: URL, meta: IPAMeta, pending: PendingIPADownload? = nil, onSigned: @escaping (SignedEntry) -> Void) {
+        self.ipaURL = ipaURL; self.initialMeta = meta; self.onSigned = onSigned
+        self.pending = pending
+        _fileReady = State(initialValue: pending == nil || pending?.ready == true)
         _name = State(initialValue: meta.name)
         _bundle = State(initialValue: meta.bundleID)
         _version = State(initialValue: meta.version)
@@ -135,6 +148,7 @@ struct SigningSheet: View {
         VStack(spacing: 0) {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16.5) {
+                    if let pending, !fileReady { PendingDownloadBanner(download: pending) }
                     signingMethodCard        // AirShare: Saved / Enterprise / Apple ID
                     appIcon
                     identity                 // App metadata: name / bundle / version
@@ -203,6 +217,7 @@ struct SigningSheet: View {
         }
         .task {
             await StaffGate.shared.refresh()
+            guard await waitForFile() else { return }      // the IPA may still be downloading
             parallelSigningPayloadSize = await loadParallelSigningPayloadSize()
             machoDylibs = await currentDylibs()
             await analyzeBinary()
@@ -975,16 +990,16 @@ struct SigningSheet: View {
     // MARK: Sign bar
 
     private var signBar: some View {
-        Button { Task { await sign() } } label: {
+        Button { Task { await signTapped() } } label: {
             HStack(spacing: 7.5) {
-                if signing { ProgressView().tint(.white) } else { Image(systemName: "signature").font(.system(size: 13.5, weight: .bold)) }
-                Text(signing ? "Signing…" : "Sign IPA").font(.system(size: 13.5, weight: .bold))
+                if signing || signQueued { ProgressView().tint(.white) } else { Image(systemName: "signature").font(.system(size: 13.5, weight: .bold)) }
+                Text(signing ? "Signing…" : (signQueued ? "Waiting for download…" : "Sign IPA")).font(.system(size: 13.5, weight: .bold))
             }
             .frame(maxWidth: .infinity).padding(.vertical, 16)
             .background(certs.active == nil || macho?.encrypted == true ? Theme.subtle : accent).foregroundStyle(.white)
             .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         }
-        .disabled(signing || certs.active == nil || macho?.encrypted == true)
+        .disabled(signing || signQueued || certs.active == nil || macho?.encrypted == true)
         .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 4.5)
     }
 
@@ -1182,7 +1197,38 @@ struct SigningSheet: View {
         return String((0..<count).compactMap { _ in chars.randomElement() })
     }
 
+    /// Waits (without blocking the sheet) until the IPA is on the device. False only if the sheet goes away first.
+    private func waitForFile(abortOnFailure: Bool = false) async -> Bool {
+        guard let pending, !fileReady else { return true }
+        while !pending.ready {
+            if abortOnFailure, pending.failure != nil { return false }
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            if Task.isCancelled { return false }
+        }
+        fileReady = true
+        let url = ipaURL
+        if let m = try? await Task.detached(operation: { try IPAMeta.read(url) }).value { fetchedIcon = m.iconPNG }
+        return true
+    }
+
+    /// Sign IPA tapped: signs now, or, while the IPA is still downloading, waits for it and then signs.
+    private func signTapped() async {
+        if !fileReady {
+            signQueued = true; error = nil
+            defer { signQueued = false }
+            guard await waitForFile(abortOnFailure: true) else {
+                if let f = pending?.failure { error = "Download failed: \(f)" }
+                return
+            }
+            // Let the encryption check finish first so a still-encrypted IPA is caught before signing.
+            var waited = 0
+            while macho == nil && machoError == nil && waited < 80 { try? await Task.sleep(nanoseconds: 250_000_000); waited += 1 }
+        }
+        await sign()
+    }
+
     private func sign() async {
+        guard fileReady else { return }
         showTerminal = true
         if let r = macho, r.encrypted {
             error = "This IPA is still FairPlay-encrypted (cryptid ≠ 0). Signing it will produce an app that crashes at launch. Get a decrypted IPA first."

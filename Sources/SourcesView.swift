@@ -1153,6 +1153,7 @@ struct AppDetailSheet: View {
     @State private var downloading = false
     @State private var progress: Double = 0
     @State private var onDevice = false
+    @State private var skipShare = false
     @State private var error: String?
 
     private var blue: Color { Theme.accent }
@@ -1347,46 +1348,109 @@ struct AppDetailSheet: View {
 
     private var bottomBar: some View {
         HStack(spacing: 8) {
+            // Download: fetches the IPA if it isn't on the device yet, then hands it over as "<App name>-<version>.ipa".
             Button {
-                InstallQueue.shared.enqueue(app); dismiss()
+                Task { await downloadAndShare() }
             } label: {
                 VStack(spacing: 4) {
-                    Image(systemName: "bolt.fill").font(.system(size: 26))
-                    Text("Auto Install").font(.system(size: 13, weight: .semibold)).lineLimit(1).minimumScaleFactor(0.8)
+                    ZStack {
+                        if downloading {
+                            Circle().stroke(blue.opacity(0.25), lineWidth: 3)
+                            Circle().trim(from: 0, to: max(0.04, progress)).stroke(blue, style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
+                        } else {
+                            Image(systemName: "arrow.down.circle").font(.system(size: 26))
+                        }
+                    }
+                    .frame(width: 28, height: 28)
+                    Text(downloading ? "\(Int(progress * 100))%" : "Download").font(.system(size: 13, weight: .semibold)).monospacedDigit().lineLimit(1)
                 }
-                .foregroundStyle(app.downloadURL == nil ? Theme.subtle : blue).frame(width: 100)
+                .foregroundStyle(app.downloadURL == nil && !IPAInbox.has(app) ? Theme.subtle : blue).frame(width: 100)
             }
-            .disabled(app.downloadURL == nil)
+            .disabled(downloading || (app.downloadURL == nil && !IPAInbox.has(app)))
             VStack(spacing: 2) {
                 Text("MRZefv").font(.system(size: 14, weight: .bold)).foregroundStyle(.orange).lineLimit(1)
                 Text("Powered by \((source.url.host ?? source.name).uppercased())").font(.system(size: 9, weight: .semibold)).foregroundStyle(blue).lineLimit(1).minimumScaleFactor(0.6)
             }
             .frame(maxWidth: .infinity)
+            // Sign IPA: already on the device -> straight to the signer; otherwise the IPA downloads in the
+            // background and the signer opens by itself when it's ready.
             Button {
-                dismiss(); SignQueue.shared.enqueue(IPAInbox.url(for: app))
+                signTapped()
             } label: {
                 VStack(spacing: 4) {
-                    Image(systemName: "signature").font(.system(size: 26))
-                    Text("Sign IPA").font(.system(size: 13, weight: .semibold))
+                    ZStack {
+                        Image(systemName: "signature").font(.system(size: 26))
+                    }
+                    .frame(width: 28, height: 28)
+                    Text("Sign IPA").font(.system(size: 13, weight: .semibold)).monospacedDigit()
                 }
-                .foregroundStyle(onDevice ? blue : Theme.subtle).frame(width: 100)
+                .foregroundStyle(app.downloadURL == nil && !IPAInbox.has(app) ? Theme.subtle : blue).frame(width: 100)
             }
-            .disabled(!onDevice)
+            .disabled(app.downloadURL == nil && !IPAInbox.has(app))
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
         .overlay(Rectangle().fill(Theme.stroke).frame(height: 1), alignment: .top)
     }
 
+    private func signTapped() {
+        let target = app
+        skipShare = true
+        if IPAInbox.has(target) {
+            dismiss(); SignQueue.shared.enqueue(IPAInbox.url(for: target))
+            return
+        }
+        // Still downloading (or not started): open the signing sheet now and follow the same download. Signing
+        // can be requested there; it starts by itself once the file is on the device.
+        let d = PendingIPADownload.current(for: target)
+        d.start()
+        dismiss()
+        SignQueue.shared.enqueueDownloading(d)
+    }
+
+    private func downloadAndShare() async {
+        let target = app
+        if !IPAInbox.has(target) {
+            await download(target)
+            guard IPAInbox.has(target), !skipShare else { return }
+        }
+        do {
+            CertificateShare.present(try namedCopy(of: target))
+        } catch {
+            self.error = "Couldn't prepare the IPA: \(error.localizedDescription)"
+        }
+    }
+
+    /// A copy of the downloaded IPA named after the app and its version, so the file you save says what it is.
+    private func namedCopy(of target: SourceApp) throws -> URL {
+        let bad = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)
+        func clean(_ t: String) -> String {
+            t.unicodeScalars.map { bad.contains($0) ? "_" : Character($0) }.map(String.init).joined()
+                .trimmingCharacters(in: CharacterSet(charactersIn: " ._"))
+        }
+        let name = clean(target.name).isEmpty ? "App" : clean(target.name)
+        let ver = clean(target.version)
+        let file = name + (ver.isEmpty ? "" : "-\(ver)") + ".ipa"
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ipa-export", isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent(file)
+        do { try FileManager.default.linkItem(at: IPAInbox.url(for: target), to: dest) }
+        catch { try FileManager.default.copyItem(at: IPAInbox.url(for: target), to: dest) }
+        return dest
+    }
+
     private func download(_ target: SourceApp? = nil) async {
         let app = target ?? self.app
         downloading = true; error = nil; progress = 0
-        do {
-            _ = try await IPADownloader.shared.download(app) { p in Task { @MainActor in progress = p } }
-            await IPAInbox.storeIcon(for: app)
-            onDevice = IPAInbox.has(self.app); progress = 1
-            AppStatsStore.shared.noteDownload(app)
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-        } catch { self.error = error.localizedDescription }
+        // The download itself is shared (PendingIPADownload), so the signing sheet can follow it while this page
+        // is closed.
+        let d = PendingIPADownload.current(for: app)
+        d.start()
+        while !d.ready && d.failure == nil {
+            progress = d.progress
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        if d.ready { onDevice = IPAInbox.has(self.app); progress = 1 } else { self.error = d.failure }
         downloading = false
     }
 }
