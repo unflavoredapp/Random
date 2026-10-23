@@ -1,0 +1,407 @@
+import Combine
+import Foundation
+import IDeviceSwift
+
+nonisolated enum DeviceConnectionMode: String, CaseIterable, Identifiable {
+    case builtIn, manual
+    var id: String { rawValue }
+    var title: String { self == .builtIn ? "Built-in Connection" : "Manual Setup" }
+}
+
+@MainActor
+final class DeviceInstallationManager: ObservableObject {
+    static let shared = DeviceInstallationManager()
+    enum Phase: Equatable { case idle, connecting, pairing, ready, configured, failed(String) }
+    @Published private(set) var phase: Phase = .idle
+    @Published private(set) var setupNotice: String?
+    @Published var mode: DeviceConnectionMode {
+        didSet { defaults.set(mode.rawValue, forKey: "AirShare.deviceConnectionMode") }
+    }
+    @Published private(set) var pendingOperations = 0
+    private let vpn: LocalDeviceVPN
+    private let vpnReconnect: VPNReconnectCoordinator
+    private let defaults: UserDefaults
+    private let legacyPairingExists: @MainActor () -> Bool
+    private let canCreatePairing: @MainActor () -> Bool
+    private static let freshPairingKey = "AirShare.needsFreshBuiltInPairing"
+    private var configuredMode: DeviceConnectionMode?
+    private var setupFailure: Error?
+    private var tail: Task<Void, Never>?
+    private var activeOperation: Task<Void, Error>?
+    private var operations: [UUID: Task<Void, Error>] = [:]
+    @Published private var workflows: Set<UUID> = []
+    @Published private var cleanupTask: Task<Void, Never>?
+    private var activeInstallations: Set<UUID> = []
+    private var installingBundles: [String: UUID] = [:]
+    private var exclusiveInstallation: UUID?
+    private var needsConnectionRecovery = false
+
+    init(vpn: LocalDeviceVPN? = nil, defaults: UserDefaults = .standard,
+         vpnReconnect: VPNReconnectCoordinator? = nil,
+         legacyPairingExists: @escaping @MainActor () -> Bool = {
+             FileManager.default.fileExists(atPath: DeviceInstallationManager.legacyPairingPath)
+         },
+         canCreatePairing: @escaping @MainActor () -> Bool = {
+             if #available(iOS 27.0, *) { return true }
+             return false
+         }) {
+        self.vpn = vpn ?? LocalDeviceVPN()
+        self.vpnReconnect = vpnReconnect ?? .shared
+        self.defaults = defaults
+        self.legacyPairingExists = legacyPairingExists
+        self.canCreatePairing = canCreatePairing
+        if let raw = defaults.string(forKey: "AirShare.deviceConnectionMode"),
+           let saved = DeviceConnectionMode(rawValue: raw) { mode = saved }
+        else if canCreatePairing(), LocalDeviceVPN.extensionBundleIdentifier != nil,
+                !legacyPairingExists() { mode = .builtIn }
+        else { mode = .manual }
+        DevicePairingStore.removeWorkingCopy()
+    }
+
+    static var legacyPairingPath: String {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("pairingFile.plist").path
+    }
+
+    var isBusy: Bool { pendingOperations > 0 }
+    var showsSetup: Bool {
+        switch phase { case .connecting, .pairing, .failed: return true; default: return false }
+    }
+
+    func retainWorkflow(_ id: UUID) {
+        vpnReconnect.beginDeviceWork()
+        workflows.insert(id)
+        BackgroundKeepAlive.shared.start(id.uuidString)     // keeps AirShare alive if you leave the app
+    }
+    func releaseWorkflow(_ id: UUID) {
+        workflows.remove(id); cleanUpIfIdle()
+        BackgroundKeepAlive.shared.stop(id.uuidString)
+    }
+    var canReconnectVPN: Bool { pendingOperations == 0 && workflows.isEmpty && cleanupTask == nil }
+
+    func testVPNReconnectShortcut() async {
+        guard canReconnectVPN else { return }
+        await vpnReconnect.testShortcut()
+    }
+    func clearSetupFailure() {
+        setupFailure = nil
+        setupNotice = nil
+        if case .failed = phase { phase = .idle }
+    }
+
+    func setUp() async {
+        guard !isBusy else { return }
+        clearSetupFailure()
+        let selectedMode = mode
+        do { try await enqueue { try await self.prepare(selectedMode) } }
+        catch { phase = .failed(error.localizedDescription) }
+    }
+
+    func cancelSetup() { activeOperation?.cancel(); DevicePairingService.shared.cancel() }
+
+    func resetPairing() async {
+        guard !isBusy, workflows.isEmpty else { return }
+        if let cleanupTask { await cleanupTask.value }
+        vpnReconnect.beginDeviceWork()
+        defer { cleanUpIfIdle() }
+        await HeartbeatManager.shared.resetInstallationConnection()
+        HeartbeatManager.configurePairingPath(nil)
+        vpn.disconnectIfOwned()
+        configuredMode = nil
+        do {
+            try DevicePairingStore.reset()
+            // Do not silently reuse an imported pairing after the user asks to
+            // pair again. Keep that file intact for Manual Setup.
+            defaults.set(canCreatePairing(), forKey: Self.freshPairingKey)
+            clearSetupFailure()
+            phase = .idle
+        }
+        catch { phase = .failed(error.localizedDescription) }
+    }
+
+    func install(at url: URL, viewModel: InstallerStatusViewModel, suspend: Bool,
+                 mode: DeviceConnectionMode, bundleIdentifier: String? = nil, streamed: StreamedIPA? = nil,
+                 isCurrent: @escaping () -> Bool = { true }) async throws {
+        let id = UUID()
+        vpnReconnect.beginDeviceWork()
+        pendingOperations += 1
+        defer {
+            activeInstallations.remove(id)
+            if let bundleIdentifier, installingBundles[bundleIdentifier] == id {
+                installingBundles[bundleIdentifier] = nil
+            }
+            if exclusiveInstallation == id { exclusiveInstallation = nil }
+            pendingOperations -= 1
+            cleanUpIfIdle()
+        }
+        // Serialize preparation and reservation only. Once admitted, each proxy
+        // leases the shared tunnel and owns clients that can upload/install
+        // alongside the other jobs.
+        try await enqueue(countsOperation: false) {
+            while self.exclusiveInstallation != nil ||
+                bundleIdentifier.map({ self.installingBundles[$0] != nil }) == true ||
+                (!self.activeInstallations.isEmpty &&
+                (suspend || self.needsConnectionRecovery || self.configuredMode != mode)) {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            try Task.checkCancellation()
+            guard isCurrent() else { throw CancellationError() }
+            if self.needsConnectionRecovery {
+                self.configuredMode = nil
+                self.needsConnectionRecovery = false
+            }
+            try await self.prepare(mode)
+            try Task.checkCancellation()
+            guard isCurrent() else { throw CancellationError() }
+            self.activeInstallations.insert(id)
+            if let bundleIdentifier { self.installingBundles[bundleIdentifier] = id }
+            if suspend { self.exclusiveInstallation = id }
+        }
+        do {
+            try Task.checkCancellation()
+            let proxy = InstallationProxy(viewModel: viewModel)
+            try await proxy.install(at: url, suspend: suspend, streamed: streamed, isCurrent: isCurrent)
+        } catch {
+            // A rejected app does not invalidate a working device connection.
+            // Other failed attempts must not reset the VPN beneath peers.
+            // The next preparation recovers only after all active leases drain;
+            // never replay an IPA whose commit may already have reached iOS.
+            if !(error is CancellationError), !(error is IDeviceInstallationRejection) {
+                needsConnectionRecovery = true
+            }
+            throw error
+        }
+    }
+
+    // MARK: Installed apps
+
+    /// Apps the user installed on this device (Apple's built-in apps are not listed).
+    func installedApps(mode: DeviceConnectionMode) async throws -> [DeviceApp] {
+        try await withDeviceLease(bundleIdentifier: nil, mode: mode) {
+            try await InstallationProxy(viewModel: InstallerStatusViewModel(isIdevice: true)).listUserApps()
+        }
+    }
+
+    /// Home Screen icons for the given apps (best effort; missing ones are simply absent).
+    func deviceIcons(for bundleIdentifiers: [String], mode: DeviceConnectionMode) async -> [String: Data] {
+        (try? await withDeviceLease(bundleIdentifier: nil, mode: mode) {
+            await InstallationProxy(viewModel: InstallerStatusViewModel(isIdevice: true)).icons(for: bundleIdentifiers)
+        }) ?? [:]
+    }
+
+    /// Deletes IPAs stranded in the device's upload folder. Refused while any install is running.
+    func cleanStaging(mode: DeviceConnectionMode) async throws -> (removed: Int, bytes: Int64) {
+        guard activeInstallations.isEmpty, exclusiveInstallation == nil, !NativeInstaller.shared.isActive,
+              !NativeBatchInstaller.shared.isRunning, !InstallQueue.shared.isRunning else {
+            throw DeviceSetupError("Wait for the running install to finish, then clean up.")
+        }
+        return try await withDeviceLease(bundleIdentifier: nil, mode: mode) {
+            try await InstallationProxy(viewModel: InstallerStatusViewModel(isIdevice: true)).cleanStaging()
+        }
+    }
+
+    /// Removes an app and its data from this device. `progress` is 0…1 on the main queue.
+    func uninstall(bundleIdentifier: String, mode: DeviceConnectionMode,
+                   progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws {
+        guard bundleIdentifier != Bundle.main.bundleIdentifier else {
+            throw DeviceSetupError("AirShare can't uninstall itself. Delete it from the Home Screen instead.")
+        }
+        try await withDeviceLease(bundleIdentifier: bundleIdentifier, mode: mode) {
+            try await InstallationProxy(viewModel: InstallerStatusViewModel(isIdevice: true))
+                .uninstall(bundleID: bundleIdentifier, progress: progress)
+        }
+        // A removed app must not come back through auto-update.
+        AppAutoUpdater.shared.untrack(bundleID: bundleIdentifier)
+    }
+
+    /// Admission for non-install device work. Same rules as `install`: wait behind exclusive installs
+    /// and other work on the same bundle, prepare the connection, and flag recovery after a transport
+    /// failure (never after the device itself rejected the request).
+    private func withDeviceLease<T>(bundleIdentifier: String?, mode: DeviceConnectionMode,
+                                    _ body: () async throws -> T) async throws -> T {
+        let id = UUID()
+        vpnReconnect.beginDeviceWork()
+        pendingOperations += 1
+        defer {
+            activeInstallations.remove(id)
+            if let bundleIdentifier, installingBundles[bundleIdentifier] == id {
+                installingBundles[bundleIdentifier] = nil
+            }
+            pendingOperations -= 1
+            cleanUpIfIdle()
+        }
+        try await enqueue(countsOperation: false) {
+            while self.exclusiveInstallation != nil ||
+                bundleIdentifier.map({ self.installingBundles[$0] != nil }) == true ||
+                (!self.activeInstallations.isEmpty &&
+                 (self.needsConnectionRecovery || self.configuredMode != mode)) {
+                try await Task.sleep(nanoseconds: 100_000_000)
+            }
+            try Task.checkCancellation()
+            if self.needsConnectionRecovery {
+                self.configuredMode = nil
+                self.needsConnectionRecovery = false
+            }
+            try await self.prepare(mode)
+            try Task.checkCancellation()
+            self.activeInstallations.insert(id)
+            if let bundleIdentifier { self.installingBundles[bundleIdentifier] = id }
+        }
+        do {
+            try Task.checkCancellation()
+            return try await body()
+        } catch {
+            if !(error is CancellationError), !(error is IDeviceInstallationRejection) {
+                needsConnectionRecovery = true
+            }
+            throw error
+        }
+    }
+
+    private func enqueue(countsOperation: Bool = true, _ body: @escaping () async throws -> Void) async throws {
+        if countsOperation {
+            vpnReconnect.beginDeviceWork()
+            pendingOperations += 1
+        }
+        let id = UUID()
+        let previous = tail
+        let operation = Task { @MainActor in
+            if let previous { await previous.value }
+            try Task.checkCancellation()
+            if let cleanupTask = self.cleanupTask { await cleanupTask.value }
+            try Task.checkCancellation()
+            self.activeOperation = self.operations[id]
+            try await body()
+        }
+        operations[id] = operation
+        let completion = Task { _ = await operation.result }
+        tail = completion
+        // Preparation is shared by the admitted installs. Cancelling one waiter
+        // must not cancel another waiter's preparation or release its lease.
+        defer {
+            operations[id] = nil
+            if countsOperation { pendingOperations -= 1 }
+            if operations.isEmpty { tail = nil; activeOperation = nil }
+            cleanUpIfIdle()
+        }
+        // Setup is only started by the head of the queue.
+        return try await withTaskCancellationHandler {
+            try await operation.value
+        } onCancel: { operation.cancel() }
+    }
+
+    private func prepare(_ mode: DeviceConnectionMode) async throws {
+        if let setupFailure { throw setupFailure }
+        // VPN status can change when cellular returns even while established
+        // native streams keep working. Preserve that session for later apps,
+        // just as Manual Setup does. An actual install error requests recovery
+        // after active leases drain; status alone must not discard the tunnel.
+        if configuredMode == mode { return }
+        phase = .connecting
+        do {
+            await HeartbeatManager.shared.resetInstallationConnection()
+            try Task.checkCancellation()
+            if mode == .builtIn {
+                try await prepareBuiltInConnection()
+            } else {
+                vpn.disconnectIfOwned()
+                HeartbeatManager.configurePairingPath(nil)
+                guard legacyPairingExists() else {
+                    throw DeviceSetupError("Import a pairing file and connect your local VPN in Manual Setup, or choose Built-in Connection on a supported device.")
+                }
+                try await HeartbeatManager.shared.prepareInstallationConnection()
+            }
+            try Task.checkCancellation()
+            configuredMode = mode
+            setupNotice = nil
+            phase = .ready
+        } catch {
+            configuredMode = nil
+            setupNotice = nil
+            let failure = error is CancellationError ? DeviceSetupError("Device setup was cancelled. Tap Retry Setup when you are ready.") : error
+            setupFailure = failure
+            phase = .failed(failure.localizedDescription)
+            throw failure
+        }
+    }
+
+    private func prepareBuiltInConnection() async throws {
+        let needsFreshPairing = defaults.bool(forKey: Self.freshPairingKey)
+        // Validate VPN provisioning before asking for pairing consent.
+        try await vpn.connect(restarting: needsFreshPairing)
+        try Task.checkCancellation()
+        var record = try DevicePairingStore.load()
+        let usesLegacyPairing = record == nil && legacyPairingExists() && !needsFreshPairing
+        let reusedPairing = record != nil || usesLegacyPairing
+        if record == nil && !usesLegacyPairing { record = try await createPairing() }
+        try configurePairing(record)
+        phase = .connecting
+        do {
+            try await HeartbeatManager.shared.prepareInstallationConnection()
+        } catch {
+            try Task.checkCancellation()
+            if error is CancellationError { throw error }
+            // Retry the handshake, never an installation that may have committed.
+            setupNotice = "Restarting the local VPN to recover the device connection…"
+            await HeartbeatManager.shared.resetInstallationConnection()
+            try Task.checkCancellation()
+            try await vpn.connect(restarting: true)
+            try Task.checkCancellation()
+            do {
+                try await HeartbeatManager.shared.prepareInstallationConnection()
+            } catch {
+                try Task.checkCancellation()
+                if error is CancellationError { throw error }
+                guard reusedPairing else { throw error }
+                guard canCreatePairing() else {
+                    throw DeviceSetupError("The saved pairing could not connect after restarting the local VPN. Import a fresh pairing file in Manual Setup and retry.\n\n\(error.localizedDescription)")
+                }
+                setupNotice = "The saved pairing could not reconnect. Pair with AirShare again in Settings to repair the connection."
+                await HeartbeatManager.shared.resetInstallationConnection()
+                try Task.checkCancellation()
+                // Keep the previous credentials until replacement pairing succeeds.
+                record = try await createPairing()
+                try configurePairing(record)
+                phase = .connecting
+                try await HeartbeatManager.shared.prepareInstallationConnection()
+            }
+        }
+    }
+
+    private func createPairing() async throws -> DevicePairingRecord {
+        try Task.checkCancellation()
+        phase = .pairing
+        let record = try await DevicePairingService.shared.pair()
+        try Task.checkCancellation()
+        try DevicePairingStore.save(record)
+        defaults.set(false, forKey: Self.freshPairingKey)
+        return record
+    }
+
+    private func configurePairing(_ record: DevicePairingRecord?) throws {
+        if let record {
+            HeartbeatManager.configurePairingPath(try DevicePairingStore.materialize(record).path)
+        } else {
+            HeartbeatManager.configurePairingPath(nil)
+        }
+    }
+
+    private func cleanUpIfIdle() {
+        guard pendingOperations == 0, workflows.isEmpty, cleanupTask == nil else { return }
+        cleanupTask = Task { @MainActor in
+            await HeartbeatManager.shared.resetInstallationConnection()
+            self.configuredMode = nil
+            self.needsConnectionRecovery = false
+            HeartbeatManager.configurePairingPath(nil)
+            DevicePairingStore.removeWorkingCopy()
+            let restoreVPN = await self.vpn.finishSession()
+            if case .ready = self.phase { self.phase = .configured }
+            // New work waits for cleanup but can arrive while the tunnel is
+            // stopping. Never reconnect another VPN underneath that work.
+            if self.pendingOperations == 0, self.workflows.isEmpty {
+                await self.vpnReconnect.deviceWorkFinished(restoreVPN: restoreVPN && self.mode == .builtIn)
+            }
+            self.cleanupTask = nil
+        }
+    }
+}
