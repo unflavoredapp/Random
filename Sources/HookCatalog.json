@@ -1,0 +1,44 @@
+[
+  {
+    "id": "objc-runtime",
+    "title": "Objective-C runtime inspection",
+    "triggers": ["objc_getclass", "class_getinstancemethod", "method_gettypeencoding", "selector", "__objc_classlist"],
+    "template": "Objective-C class/selector inventory and method-encoding diagnostics",
+    "notes": "Use verified class and selector metadata; do not infer argument types from selector spelling."
+  },
+  {
+    "id": "storekit-diagnostics",
+    "title": "StoreKit / entitlement diagnostics",
+    "triggers": ["storekit", "skpayment", "transaction", "entitlement", "subscription", "premium", "purchase"],
+    "template": "Purchase lifecycle and entitlement-state logging scaffold",
+    "notes": "Observe and report state transitions without changing entitlement results or granting access."
+  },
+  {
+    "id": "trust-diagnostics",
+    "title": "TLS / trust diagnostics",
+    "triggers": ["trust", "certificate", "pinned", "pinning", "servertrust", "sec_trust"],
+    "template": "Trust-evaluation diagnostics scaffold",
+    "notes": "Record evaluation outcomes in an authorized test target; do not disable validation."
+  },
+  {
+    "id": "loaded-images",
+    "title": "Loaded-image diagnostics",
+    "triggers": ["_dyld_image_count", "dyld", "loaded image", "dlsym", "dlopen"],
+    "template": "Loaded-image enumeration and logging scaffold",
+    "notes": "Read-only runtime inventory for debugging and compatibility checks."
+  },
+  {
+    "id": "capture-diagnostics",
+    "title": "Screen-capture diagnostics",
+    "triggers": ["capturedidchangenotification", "screenshot", "uiscreen", "screen capture", "recording"],
+    "template": "Screen-capture state and notification logging scaffold",
+    "notes": "Observe capture state and notification delivery without suppressing application behavior."
+  },
+  {
+    "id": "objc-swizzle-forward",
+    "title": "Objective-C forwarding instrumentation",
+    "triggers": ["-[", "+[", "method_list_t", "method_setimplementation"],
+    "template": "Log-and-forward swizzle scaffold for a verified Objective-C method",
+    "notes": "Requires a real method encoding and ABI-compatible signature. Preserve and call the original implementation."
+  }
+]
