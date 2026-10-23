@@ -152,6 +152,12 @@ nonisolated struct SourceNews: Identifiable, Equatable, Sendable, Codable {
     let appID: String?
     let date: String
     let tintHex: String?
+    // Admin-built cards: longer text, a bullet list and an optional IPA to download or sign.
+    var description: String = ""
+    var features: [String] = []
+    var ipaURL: URL? = nil
+    var ipaSize: Int = 0
+    var ipaVersion: String = ""
 }
 
 // MARK: - Parser (ported from AirShare's RepoParser; accepts many repo.json dialects)
@@ -171,8 +177,10 @@ nonisolated enum RepoParser {
         let bySize: [AppGroup]
         let featuredNews: [SourceNews]
         let groupIndex: [String: Int]
+        let staffPicks: [String]          // bundle ids, in the order the source lists them
+        let staff: [AppGroup]
 
-        init(name: String, iconURL: URL?, description: String?, author: String?, apps rawApps: [SourceApp], news: [SourceNews], alreadyPrecomputed: Bool = false) {
+        init(name: String, iconURL: URL?, description: String?, author: String?, apps rawApps: [SourceApp], news: [SourceNews], staffPicks: [String] = [], alreadyPrecomputed: Bool = false) {
             self.name = name; self.iconURL = iconURL; self.description = description; self.author = author
             let apps = alreadyPrecomputed ? rawApps : rawApps.map { $0.precomputed() }
             self.apps = apps
@@ -184,6 +192,8 @@ nonisolated enum RepoParser {
             bySize    = g.sorted { $0.latest.sizeValue > $1.latest.sizeValue }
             var idx: [String: Int] = [:]; for (i, x) in g.enumerated() { idx[x.bundle] = i }
             groupIndex = idx
+            self.staffPicks = staffPicks
+            staff = staffPicks.compactMap { bundle in idx[bundle].map { g[$0] } }
             featuredNews = news.isEmpty ? g.filter { $0.latest.featured }.prefix(12).map { grp in
                 let a = grp.latest
                 return SourceNews(id: "feat-" + a.bundle, title: a.name, caption: a.description, imageURL: a.screenshots.first ?? a.iconURL,
@@ -192,14 +202,14 @@ nonisolated enum RepoParser {
         }
 
         // MARK: persisted index (apps carry their precomputed fields, so decode = no parsing, no formatters)
-        private struct Index: Codable { let v: Int; let name: String; let iconURL: URL?; let description: String?; let author: String?; let apps: [SourceApp]; let news: [SourceNews] }
-        static let indexVersion = 4
+        private struct Index: Codable { let v: Int; let name: String; let iconURL: URL?; let description: String?; let author: String?; let apps: [SourceApp]; let news: [SourceNews]; let staffPicks: [String] }
+        static let indexVersion = 5
         func indexData() -> Data? {
-            try? JSONEncoder().encode(Index(v: Self.indexVersion, name: name, iconURL: iconURL, description: description, author: author, apps: apps, news: news))
+            try? JSONEncoder().encode(Index(v: Self.indexVersion, name: name, iconURL: iconURL, description: description, author: author, apps: apps, news: news, staffPicks: staffPicks))
         }
         static func fromIndex(_ data: Data) -> ParsedRepo? {
             guard let i = try? JSONDecoder().decode(Index.self, from: data), i.v == indexVersion else { return nil }
-            return ParsedRepo(name: i.name, iconURL: i.iconURL, description: i.description, author: i.author, apps: i.apps, news: i.news, alreadyPrecomputed: true)
+            return ParsedRepo(name: i.name, iconURL: i.iconURL, description: i.description, author: i.author, apps: i.apps, news: i.news, staffPicks: i.staffPicks, alreadyPrecomputed: true)
         }
 
         func sorted(_ key: String) -> [AppGroup] {
@@ -231,9 +241,21 @@ nonisolated enum RepoParser {
             return SourceNews(id: (n["identifier"] as? String) ?? "news-\(i)", title: title,
                               caption: (n["caption"] as? String) ?? "", imageURL: firstURL(n, ["imageURL", "image"]),
                               url: firstURL(n, ["url"]), appID: n["appID"] as? String,
-                              date: (n["date"] as? String) ?? "", tintHex: n["tintColor"] as? String)
+                              date: (n["date"] as? String) ?? "", tintHex: n["tintColor"] as? String,
+                              description: ((n["description"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                              features: ((n["features"] as? [Any]) ?? []).compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty },
+                              ipaURL: firstURL(n, ["ipaURL"]),
+                              ipaSize: (n["ipaSize"] as? Int) ?? Int((n["ipaSize"] as? Double) ?? 0),
+                              ipaVersion: (n["ipaVersion"] as? String) ?? "")
         }
-        return ParsedRepo(name: name, iconURL: icon, description: desc, author: author, apps: arr.compactMap(mapApp), news: news)
+        // Staff picks: [{"bundleIdentifier": "..."}] or plain bundle id strings.
+        var seenPick = Set<String>()
+        let picks: [String] = ((root["staffPicks"] as? [Any]) ?? []).compactMap { e in
+            let b = (e as? String) ?? ((e as? [String: Any])?["bundleIdentifier"] as? String)
+            guard let b, seenPick.insert(b).inserted else { return nil }
+            return b
+        }
+        return ParsedRepo(name: name, iconURL: icon, description: desc, author: author, apps: arr.compactMap(mapApp), news: news, staffPicks: picks)
     }
 
     private static func firstURL(_ d: [String: Any], _ keys: [String]) -> URL? {
@@ -694,6 +716,7 @@ private struct SourceDetailScreen: View {
     @State private var openGroup: AppGroup?
     @State private var openNewsItem: SourceNews?
     @State private var visibleGroupCount = 6
+    @AppStorage("browseTwoColumns") private var twoColumns = false
 
     private enum Sort: String, CaseIterable { case updated = "Recently updated", name = "Name", size = "Size" }
 
@@ -732,6 +755,15 @@ private struct SourceDetailScreen: View {
     @State private var category: AppCategory = .all
     private var visibleGroups: [AppGroup] { Array(groups.prefix(visibleGroupCount)) }
     private var news: [SourceNews] { parsed?.featuredNews ?? [] }
+    private var pairs: [(AppGroup, AppGroup?)] {
+        let v = visibleGroups
+        return stride(from: 0, to: v.count, by: 2).map { (v[$0], $0 + 1 < v.count ? v[$0 + 1] : nil) }
+    }
+    /// Staff picks follow the category chips; a search hides them so results stay a plain list.
+    private var staffShown: [AppGroup] {
+        guard search.trimmingCharacters(in: .whitespaces).isEmpty, let p = parsed else { return [] }
+        return category == .all ? p.staff : p.staff.filter { $0.latest.category == category }
+    }
 
     private func recompute(debounce: Bool) {
         filterTask?.cancel()
@@ -774,12 +806,29 @@ private struct SourceDetailScreen: View {
                     .listRowBackground(Color.black).listRowSeparator(.hidden)
                     .listRowInsets(EdgeInsets(top: 10, leading: 0, bottom: 14, trailing: 0))
             }
-            ForEach(visibleGroups) { g in
-                appRow(g)
-                    .listRowBackground(Color.black)
-                    .listRowSeparatorTint(Theme.stroke)
-                    .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
-                    .onAppear { loadMoreIfNeeded(current: g) }
+            if !staffShown.isEmpty {
+                staffSection
+                    .listRowBackground(Color.black).listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 10, trailing: 0))
+            }
+            if twoColumns {
+                ForEach(pairs, id: \.0.id) { l, r in
+                    HStack(alignment: .top, spacing: 12) {
+                        gridCard(l)
+                        if let r { gridCard(r) } else { Color.clear.frame(maxWidth: .infinity) }
+                    }
+                    .listRowBackground(Color.black).listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 6, leading: 16, bottom: 6, trailing: 16))
+                    .onAppear { loadMoreIfNeeded(current: r ?? l) }
+                }
+            } else {
+                ForEach(visibleGroups) { g in
+                    appRow(g)
+                        .listRowBackground(Color.black)
+                        .listRowSeparatorTint(Theme.stroke)
+                        .listRowInsets(EdgeInsets(top: 12, leading: 16, bottom: 12, trailing: 16))
+                        .onAppear { loadMoreIfNeeded(current: g) }
+                }
             }
         }
         .listStyle(.plain)
@@ -858,6 +907,9 @@ private struct SourceDetailScreen: View {
                 Menu {
                     ForEach(Sort.allCases, id: \.self) { s in Button(s.rawValue) { sort = s } }
                     Divider()
+                    Button { twoColumns = false } label: { Label("List", systemImage: twoColumns ? "list.bullet" : "checkmark") }
+                    Button { twoColumns = true } label: { Label("Two columns", systemImage: twoColumns ? "checkmark" : "square.grid.2x2") }
+                    Divider()
                     Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     Link(destination: current.url) { Label("Open repo.json", systemImage: "safari") }
                 } label: {
@@ -916,6 +968,75 @@ private struct SourceDetailScreen: View {
         .buttonStyle(.plain)
     }
 
+    private var staffSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "star.fill").font(.system(size: 11, weight: .bold)).foregroundStyle(Theme.accent)
+                Text("STAFF PICKS").font(.system(size: 12, weight: .bold)).kerning(1.5).foregroundStyle(Theme.subtle)
+            }
+            .padding(.horizontal, 16)
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(staffShown) { g in
+                        let a = g.latest
+                        Button { openGroup = g } label: {
+                            VStack(spacing: 8) {
+                                SourceIcon(url: a.iconURL, side: 62, fallback: a.name)
+                                Text(a.name).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
+                                Text(a.version).font(.system(size: 11)).foregroundStyle(Theme.subtle).lineLimit(1)
+                            }
+                            .frame(width: 104).padding(.vertical, 12)
+                            .background(Color.white.opacity(0.05))
+                            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.stroke, lineWidth: 1))
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 16)
+            }
+        }
+    }
+
+    /// Compact card for the two-column layout.
+    private func gridCard(_ g: AppGroup) -> some View {
+        let app = g.latest
+        let have = signed.entries.contains { $0.bundleID == app.bundle } || IPAInbox.has(app)
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                SourceIcon(url: app.iconURL, side: 54, fallback: app.name)
+                Spacer(minLength: 4)
+                Button { Task { await download(app) } } label: {
+                    Group {
+                        if downloading == app.id {
+                            ZStack {
+                                Circle().stroke(Theme.accent.opacity(0.25), lineWidth: 3)
+                                Circle().trim(from: 0, to: max(0.05, progress)).stroke(Theme.accent, style: StrokeStyle(lineWidth: 3, lineCap: .round)).rotationEffect(.degrees(-90))
+                            }
+                        } else if have { Image(systemName: "checkmark.circle.fill").font(.system(size: 20, weight: .bold)) }
+                        else { Image(systemName: "arrow.down").font(.system(size: 18, weight: .bold)) }
+                    }
+                    .frame(width: 28, height: 28).foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+                .disabled(downloading != nil || app.downloadURL == nil)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                Text(app.name).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
+                Text("\(app.sizeMB) | \(app.version)").font(.system(size: 11, weight: .medium)).foregroundStyle(Theme.subtle).lineLimit(1)
+                if hasUpdate(g) { Text("UPDATE").font(.system(size: 9, weight: .heavy, design: .monospaced)).foregroundStyle(.orange) }
+                else if !app.subtitle.isEmpty { Text(app.subtitle).font(.system(size: 11)).foregroundStyle(Theme.subtle).lineLimit(1) }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.white.opacity(0.05))
+        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.stroke, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .onTapGesture { openGroup = g }
+    }
+
     private var newsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(parsed?.news.isEmpty == false ? "NEWS" : "FEATURED")
@@ -945,6 +1066,12 @@ private struct SourceDetailScreen: View {
                 }
                 .padding(12)
             }
+            .overlay(alignment: .topTrailing) {
+                if n.ipaURL != nil {
+                    Image(systemName: "arrow.down.circle.fill").font(.system(size: 18)).foregroundStyle(.white)
+                        .shadow(radius: 3).padding(8)
+                }
+            }
             .frame(width: 250, height: 118)
             .background(tint.opacity(0.2))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -968,6 +1095,24 @@ private struct SourceDetailScreen: View {
                     Text(n.title).font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
                     if !n.date.isEmpty { Text(n.date).font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.subtle) }
                     if !n.caption.isEmpty { Text(n.caption).font(.system(size: 16)).foregroundStyle(Theme.text.opacity(0.9)).fixedSize(horizontal: false, vertical: true) }
+                    if !n.description.isEmpty && n.description != n.caption {
+                        Text(n.description).font(.system(size: 15)).foregroundStyle(Theme.text.opacity(0.85)).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if !n.features.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("FEATURES").font(.system(size: 12, weight: .bold)).kerning(1.5).foregroundStyle(Theme.subtle)
+                            ForEach(Array(n.features.enumerated()), id: \.offset) { _, f in
+                                HStack(alignment: .top, spacing: 10) {
+                                    Image(systemName: "checkmark.circle.fill").font(.system(size: 14)).foregroundStyle(tint)
+                                    Text(f).font(.system(size: 15)).foregroundStyle(Theme.text).fixedSize(horizontal: false, vertical: true)
+                                }
+                            }
+                        }
+                        .padding(.top, 4)
+                    }
+                    if let ipa = n.ipaApp {
+                        NewsIPAButtons(app: ipa) { openNewsItem = nil }.padding(.top, 6)
+                    }
                     if let g = group {
                         Button { openNewsItem = nil; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { openGroup = g } } label: {
                             Text("View \(g.latest.name)").font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
@@ -1153,7 +1298,8 @@ struct AppDetailSheet: View {
     @State private var downloading = false
     @State private var progress: Double = 0
     @State private var onDevice = false
-    @State private var skipShare = false
+    @State private var showDownloadChoice = false
+    @ObservedObject private var signedStore = SignedStore.shared
     @State private var error: String?
 
     private var blue: Color { Theme.accent }
@@ -1350,7 +1496,7 @@ struct AppDetailSheet: View {
         HStack(spacing: 8) {
             // Download: fetches the IPA if it isn't on the device yet, then hands it over as "<App name>-<version>.ipa".
             Button {
-                Task { await downloadAndShare() }
+                downloadTapped()
             } label: {
                 VStack(spacing: 4) {
                     ZStack {
@@ -1390,11 +1536,47 @@ struct AppDetailSheet: View {
         }
         .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
         .overlay(Rectangle().fill(Theme.stroke).frame(height: 1), alignment: .top)
+        .confirmationDialog("Download", isPresented: $showDownloadChoice, titleVisibility: .visible) {
+            Button(IPAInbox.has(app) ? "Original IPA" : "Original IPA (download first)") { originalTapped() }
+            if let signed = signedBuild {
+                Button("Signed IPA (\(signed.certName))") { shareSigned(signed) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("\(app.name) \(app.version)")
+        }
+    }
+
+    /// The newest signed build of this app and version, if there is one.
+    private var signedBuild: SignedEntry? {
+        signedStore.entries
+            .filter { ($0.bundleID == app.bundle || $0.name == app.name) && $0.version == app.version && FileManager.default.fileExists(atPath: $0.ipaURL.path) }
+            .max { $0.signedAt < $1.signedAt }
+    }
+
+    /// Download: nothing opens by itself. A first tap fetches the IPA; once it's on the device a tap hands it over.
+    private func downloadTapped() {
+        if signedBuild != nil { showDownloadChoice = true } else { originalTapped() }
+    }
+
+    private func originalTapped() {
+        let target = app
+        if IPAInbox.has(target) { shareOriginal(target) }
+        else if !downloading { Task { await download(target) } }
+    }
+
+    private func shareOriginal(_ target: SourceApp) {
+        do { CertificateShare.present(try namedCopy(of: target)) }
+        catch { self.error = "Couldn't prepare the IPA: \(error.localizedDescription)" }
+    }
+
+    private func shareSigned(_ entry: SignedEntry) {
+        do { CertificateShare.present(try namedCopy(from: entry.ipaURL, name: app.name, version: app.version, suffix: "-signed")) }
+        catch { self.error = "Couldn't prepare the signed IPA: \(error.localizedDescription)" }
     }
 
     private func signTapped() {
         let target = app
-        skipShare = true
         if IPAInbox.has(target) {
             dismiss(); SignQueue.shared.enqueue(IPAInbox.url(for: target))
             return
@@ -1407,35 +1589,26 @@ struct AppDetailSheet: View {
         SignQueue.shared.enqueueDownloading(d)
     }
 
-    private func downloadAndShare() async {
-        let target = app
-        if !IPAInbox.has(target) {
-            await download(target)
-            guard IPAInbox.has(target), !skipShare else { return }
-        }
-        do {
-            CertificateShare.present(try namedCopy(of: target))
-        } catch {
-            self.error = "Couldn't prepare the IPA: \(error.localizedDescription)"
-        }
-    }
-
     /// A copy of the downloaded IPA named after the app and its version, so the file you save says what it is.
     private func namedCopy(of target: SourceApp) throws -> URL {
+        try namedCopy(from: IPAInbox.url(for: target), name: target.name, version: target.version, suffix: "")
+    }
+
+    private func namedCopy(from source: URL, name rawName: String, version rawVersion: String, suffix: String) throws -> URL {
         let bad = CharacterSet(charactersIn: "/\\:*?\"<>|").union(.controlCharacters)
         func clean(_ t: String) -> String {
             t.unicodeScalars.map { bad.contains($0) ? "_" : Character($0) }.map(String.init).joined()
                 .trimmingCharacters(in: CharacterSet(charactersIn: " ._"))
         }
-        let name = clean(target.name).isEmpty ? "App" : clean(target.name)
-        let ver = clean(target.version)
-        let file = name + (ver.isEmpty ? "" : "-\(ver)") + ".ipa"
+        let name = clean(rawName).isEmpty ? "App" : clean(rawName)
+        let ver = clean(rawVersion)
+        let file = name + (ver.isEmpty ? "" : "-\(ver)") + suffix + ".ipa"
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("ipa-export", isDirectory: true)
         try? FileManager.default.removeItem(at: dir)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let dest = dir.appendingPathComponent(file)
-        do { try FileManager.default.linkItem(at: IPAInbox.url(for: target), to: dest) }
-        catch { try FileManager.default.copyItem(at: IPAInbox.url(for: target), to: dest) }
+        do { try FileManager.default.linkItem(at: source, to: dest) }
+        catch { try FileManager.default.copyItem(at: source, to: dest) }
         return dest
     }
 
