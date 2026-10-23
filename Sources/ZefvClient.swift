@@ -24,6 +24,9 @@ final class ZefvAccount: ObservableObject {
     @Published private(set) var sponsor: String = ""
     @Published private(set) var busy = false
     @Published var lastError: String?
+    /// Set whenever a login/register/autologin attempt reports the account is banned; nil the rest of the time.
+    @Published var banInfo: BanInfo?
+    @Published var appealError: String?
     @Published var panelShown = false
 
     private static let kSession  = "zefv_session_token"
@@ -103,7 +106,13 @@ final class ZefvAccount: ObservableObject {
         let (d, r) = try await URLSession.shared.data(for: req)
         let obj = (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:]
         let code = (r as? HTTPURLResponse)?.statusCode ?? 0
-        if code >= 400 { throw Err.server((obj["error"] as? String) ?? "Server error (\(code))") }
+        if code >= 400 {
+            let msg = (obj["error"] as? String) ?? "Server error (\(code))"
+            if obj["banned"] as? Bool == true, let ban = obj["ban"] as? [String: Any] {
+                throw Err.banned(BanInfo(json: ban, fallbackMessage: msg))
+            }
+            throw Err.server(msg)
+        }
         return obj
     }
 
@@ -147,7 +156,7 @@ final class ZefvAccount: ObservableObject {
     }
 
     private func run(_ call: @escaping () async throws -> [String: Any]) async -> Bool {
-        busy = true; lastError = nil; defer { busy = false }
+        busy = true; lastError = nil; banInfo = nil; defer { busy = false }
         do {
             let o = try await call()
             guard let tok = o["token"] as? String, let name = o["username"] as? String else {
@@ -166,7 +175,11 @@ final class ZefvAccount: ObservableObject {
             WidgetDataManager.shared.refresh()
             await syncCertificates()
             return true
-        } catch { lastError = (error as? Err)?.message ?? error.localizedDescription; return false }
+        } catch {
+            if let e = error as? Err, case .banned(let b) = e { banInfo = b }
+            lastError = (error as? Err)?.message ?? error.localizedDescription
+            return false
+        }
     }
 
     /// Pull username/role/email for the stored session; clears the session if the server rejects it.
@@ -205,11 +218,26 @@ final class ZefvAccount: ObservableObject {
         if let t = sessionToken, !t.isEmpty, username != nil { return true }
         guard let key = Keychain.get(Self.kDeviceKey), !key.isEmpty, MDIDManager.shared.isValid(MDID.current) else { return false }
         let ok = await run { try await self.post("autologin", ["adid": MDID.current, "device_key": key]) }
-        if !ok {
+        if !ok && banInfo == nil {
             if (lastError ?? "").lowercased().contains("recognized") { _ = Keychain.set(Self.kDeviceKey, "") }   // revoked on the server
             lastError = nil                // quiet: the normal sign-in screen simply shows
         }
+        // A ban is the one autologin failure that should NOT stay quiet — it's shown app-wide (see AccountBannedOverlay)
+        // rather than only on the sign-in sheet, since autologin can fire before the person opens Settings at all.
         return ok
+    }
+
+    /// One appeal message per ban. Re-sends the credentials that would normally sign in — a banned account has
+    /// no working session/token — so submits only from the sign-in form (or wherever the password is in hand).
+    func submitAppeal(username u: String, password p: String, message: String) async -> Bool {
+        busy = true; appealError = nil; defer { busy = false }
+        do {
+            let o = try await post("appeal", ["username": u, "password": p, "message": message])
+            if let ap = o["appeal"] as? [String: Any] {
+                banInfo = banInfo.map { BanInfo(banned: $0.banned, reason: $0.reason, until: $0.until, appeal: BanAppeal(json: ap)) }
+            }
+            return true
+        } catch { appealError = (error as? Err)?.message ?? error.localizedDescription; return false }
     }
 
     /// Registered-only cosmetics: username color / rainbow / animated background.
@@ -426,7 +454,13 @@ final class ZefvAccount: ObservableObject {
         syncedMap = [:]
     }
 
-    enum Err: Error { case badURL, server(String)
-        var message: String { switch self { case .badURL: return "Bad URL"; case .server(let m): return m } }
+    enum Err: Error { case badURL, server(String), banned(BanInfo)
+        var message: String {
+            switch self {
+            case .badURL: return "Bad URL"
+            case .server(let m): return m
+            case .banned(let b): return b.message
+            }
+        }
     }
 }

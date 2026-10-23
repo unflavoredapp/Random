@@ -65,8 +65,12 @@ struct SettingsView: View {
                                         subtitle: certs.active?.name ?? "No signing certificate") { screen = .certificates }
                             SettingsRow(icon: "gearshape.fill", title: "Settings",
                                         subtitle: "Local ZSign API · AirShare Domain") { screen = .tableView }
-                            SettingsRow(icon: "chevron.left.forwardslash.chevron.right", title: "GitHub",
-                                        subtitle: githubSubtitle) { screen = .github }
+                            // The "dev" group specifically — not admin, not the developer role. Being an admin
+                            // or having elevated role doesn't put the GitHub repo tools in front of you.
+                            if account.style.badges.contains("dev") {
+                                SettingsRow(icon: "chevron.left.forwardslash.chevron.right", title: "GitHub",
+                                            subtitle: githubSubtitle) { screen = .github }
+                            }
                         }
 
                         SettingsSection("Install") {

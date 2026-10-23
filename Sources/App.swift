@@ -33,6 +33,7 @@ struct UnzipDropApp: App {
                 .environmentObject(config)
                 .onOpenURL { url in session.receiveIncoming(url) }
                 .overlay { BetaRevokedOverlay() }
+                .overlay { AccountBannedOverlay() }
                 .overlay(alignment: .bottom) { VStack(spacing: 8) { ResumeBatchBanner(); UndoUninstallBanner(); InstallQueuePill(); NativeInstallBanner() } }
                 .onChange(of: scenePhase) { phase in
                     if phase == .active {

@@ -41,7 +41,9 @@ struct ZefvAccountScreen: View {
                         field("Password", text: $password, secure: true)
                     }
 
-                    if let e = account.lastError {
+                    if let ban = account.banInfo, ban.banned {
+                        BanAppealCard(ban: ban, username: username)
+                    } else if let e = account.lastError {
                         Text(e).font(.caption).foregroundStyle(.orange).frame(maxWidth: .infinity, alignment: .leading)
                     }
 
