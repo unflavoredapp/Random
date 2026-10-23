@@ -673,6 +673,14 @@ nonisolated enum Signer {
         // Info.plist tweaks
         if let dict = NSMutableDictionary(contentsOf: infoURL) {
             var changed = false
+            // The App Store uses this to decide which device model gets a thinned slice; a resigned
+            // sideload is never thinned per-model, so an unmatched list here only ever blocks an
+            // otherwise-fine install with DeviceNotSupportedByThinning. Always drop it.
+            if dict.object(forKey: "UISupportedDevices") != nil {
+                dict.removeObject(forKey: "UISupportedDevices")
+                changed = true
+                onLog?(">>> removed UISupportedDevices (device-model restriction) so it installs on any device")
+            }
             for (k, v) in o.plistSet {
                 if v == "true" || v == "false" { dict[k] = (v == "true") } else if let n = Int(v) { dict[k] = n } else { dict[k] = v }
                 changed = true
