@@ -732,9 +732,22 @@ private struct SourceDetailScreen: View {
     @AppStorage("browseTwoColumns") private var twoColumns = false
     @ObservedObject private var betaAccount = ZefvAccount.shared
     @ObservedObject private var betaStaff = StaffGate.shared
+    @AppStorage("betaHiddenBundles") private var hiddenBetaRaw = "[]"
+    @State private var showBetaManager = false
     /// Closed-beta members (the "beta" group) and the people running the beta.
     private var isBeta: Bool {
         betaStaff.isStaff || !Set(betaAccount.style.badges).isDisjoint(with: ["beta", "admin", "co_admin", "staff", "founder"])
+    }
+    /// Bundles the member has turned off: still a normal app in the list, just no BETA chip and no pinning.
+    private var hiddenBeta: Set<String> {
+        get { Set((try? JSONDecoder().decode([String].self, from: Data(hiddenBetaRaw.utf8))) ?? []) }
+    }
+    private func setHiddenBeta(_ s: Set<String>) { hiddenBetaRaw = (try? String(data: JSONEncoder().encode(Array(s)), encoding: .utf8)) ?? "[]" }
+    private func isBetaShown(_ g: AppGroup) -> Bool { (g.latest.beta || (isBeta && g.latest.isBetaBuild)) && !hiddenBeta.contains(g.bundle) }
+    /// Every build currently flagged as beta (server-flagged or by name/bundle), for the management sheet.
+    private var allBetaGroups: [AppGroup] {
+        guard let p = parsed, isBeta else { return [] }
+        return p.groups.filter { $0.latest.beta || $0.latest.isBetaBuild }
     }
 
     private enum Sort: String, CaseIterable { case updated = "Recently updated", name = "Name", size = "Size" }
@@ -790,13 +803,11 @@ private struct SourceDetailScreen: View {
         let q = search.trimmingCharacters(in: .whitespaces).lowercased()
         let base = p.sorted(sort.rawValue == "Name" ? "Name" : (sort.rawValue == "Size" ? "Size" : "Updated"))
         let cat = category
-        let beta = isBeta
-        /// Beta builds are pinned to the top for members and hidden (when the repo flags them) for everyone else.
+        let hidden = hiddenBeta, beta = isBeta
+        /// Beta builds you haven't hidden are pinned to the top; everything else (including hidden beta builds) sorts normally.
         @Sendable func arrange(_ list: [AppGroup]) -> [AppGroup] {
-            let visible = list
-            // Builds the server sent for this ADID (flagged beta) are always pinned; name-based ones only for members.
-            func pinned(_ g: AppGroup) -> Bool { g.latest.beta || (beta && g.latest.isBetaBuild) }
-            return visible.filter(pinned) + visible.filter { !pinned($0) }
+            func pinned(_ g: AppGroup) -> Bool { (g.latest.beta || (beta && g.latest.isBetaBuild)) && !hidden.contains(g.bundle) }
+            return list.filter(pinned) + list.filter { !pinned($0) }
         }
         if q.isEmpty && cat == .all { groups = arrange(base); return }
         filterTask = Task {
@@ -895,6 +906,8 @@ private struct SourceDetailScreen: View {
         .onChange(of: category) { _ in visibleGroupCount = 6; recompute(debounce: false) }
         .onChange(of: parsed?.apps.count) { _ in recompute(debounce: false) }
         .onChange(of: isBeta) { _ in recompute(debounce: false) }
+        .onChange(of: hiddenBetaRaw) { _ in recompute(debounce: false) }
+        .sheet(isPresented: $showBetaManager) { BetaBuildManager(groups: allBetaGroups, hidden: hiddenBeta, setHidden: setHiddenBeta) }
         .sheet(item: $openNewsItem) { n in newsDetail(n) }
         .sheet(item: $openGroup) { g in
             AppDetailSheet(source: current, group: g)
@@ -937,6 +950,10 @@ private struct SourceDetailScreen: View {
                     Divider()
                     Button { twoColumns = false } label: { Label("List", systemImage: twoColumns ? "list.bullet" : "checkmark") }
                     Button { twoColumns = true } label: { Label("Two columns", systemImage: twoColumns ? "checkmark" : "square.grid.2x2") }
+                    if isBeta && !allBetaGroups.isEmpty {
+                        Divider()
+                        Button { showBetaManager = true } label: { Label("Manage beta builds (\(allBetaGroups.count))", systemImage: "flask") }
+                    }
                     Divider()
                     Button { Task { await load() } } label: { Label("Refresh", systemImage: "arrow.clockwise") }
                     Link(destination: current.url) { Label("Open repo.json", systemImage: "safari") }
@@ -1057,29 +1074,30 @@ private struct SourceDetailScreen: View {
             }
             Spacer(minLength: 0)
             HStack {
-                if app.beta || (isBeta && app.isBetaBuild) {
+                if isBetaShown(g) {
                     Text("BETA").font(.system(size: 10, weight: .heavy, design: .monospaced))
-                        .padding(.horizontal, 6).padding(.vertical, 3).background(Theme.accent.opacity(0.18)).foregroundStyle(Theme.accent).clipShape(Capsule())
+                        .padding(.horizontal, 6).padding(.vertical, 3).background(Theme.accent.opacity(0.18)).foregroundStyle(Theme.accent).clipShape(Capsule()).lineLimit(1).fixedSize()
                 } else if hasUpdate(g) {
-                    Text("UPDATE").font(.system(size: 10, weight: .heavy, design: .monospaced)).foregroundStyle(.orange)
-                }
-                Spacer()
-                Text(app.version).font(.system(size: 13, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.accent)
-                    .padding(.horizontal, 12).padding(.vertical, 5)
+                    Text("UPDATE").font(.system(size: 10, weight: .heavy, design: .monospaced)).foregroundStyle(.orange).lineLimit(1).fixedSize()
+                } else { Spacer(minLength: 0) }
+                Spacer(minLength: 6)
+                Text(app.version).font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.accent).lineLimit(1)
+                    .padding(.horizontal, 10).padding(.vertical, 5)
                     .background(Color.white.opacity(0.06))
                     .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Theme.accent.opacity(0.5), lineWidth: 1))
                     .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    .layoutPriority(1)
             }
         }
         .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 142, maxHeight: 142, alignment: .topLeading)
+        .frame(maxWidth: .infinity, minHeight: 150, maxHeight: 150, alignment: .topLeading)
         .background(Color.black)
         .overlay(alignment: .topTrailing) {
             Button { openGroup = g } label: {
                 Image(systemName: "info").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
-                    .frame(width: 20, height: 20).background(Theme.accent).clipShape(Circle())
+                    .frame(width: 22, height: 22).background(Theme.accent).clipShape(Circle())
             }
-            .buttonStyle(.plain).padding(8)
+            .buttonStyle(.plain).padding(.top, 10).padding(.trailing, 10)
         }
         .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.accent.opacity(0.45), lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -1198,7 +1216,7 @@ private struct SourceDetailScreen: View {
                 VStack(alignment: .leading, spacing: 5) {
                     HStack(spacing: 8) {
                         Text(app.name).font(.system(size: 19, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
-                        if app.beta || (isBeta && app.isBetaBuild) {
+                        if isBetaShown(g) {
                             Text("BETA").font(.system(size: 10, weight: .heavy, design: .monospaced)).kerning(0.5)
                                 .padding(.horizontal, 6).padding(.vertical, 3)
                                 .background(Theme.accent.opacity(0.18)).foregroundStyle(Theme.accent).clipShape(Capsule())

@@ -65,6 +65,8 @@ struct SettingsView: View {
                                         subtitle: certs.active?.name ?? "No signing certificate") { screen = .certificates }
                             SettingsRow(icon: "gearshape.fill", title: "Settings",
                                         subtitle: "Local ZSign API · AirShare Domain") { screen = .tableView }
+                            SettingsRow(icon: "chevron.left.forwardslash.chevron.right", title: "GitHub",
+                                        subtitle: githubSubtitle) { screen = .github }
                         }
 
                         SettingsSection("Install") {
