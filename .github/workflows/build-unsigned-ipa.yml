@@ -1,0 +1,126 @@
+name: Build Unsigned IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      adhoc_entitlements:
+        description: "Ad-hoc sign with entitlements so re-signers keep packet-tunnel-provider (native install)"
+        type: boolean
+        required: false
+        default: true
+  push:
+    branches: [ main, master ]
+
+permissions:
+  contents: read
+
+jobs:
+  build-unsigned-ipa:
+    runs-on: macos-15
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode environment
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphoneos --show-sdk-path
+
+      - name: Locate project
+        shell: bash
+        run: |
+          BS=$(find . -type f -name build.sh -not -path './.git/*' | head -n1)
+          if [ -z "$BS" ]; then
+            echo "ERROR: build.sh not found anywhere in the repo. Contents:"; ls -la; find . -maxdepth 2 -not -path './.git/*' | head -60
+            exit 1
+          fi
+          ROOT="$(cd "$(dirname "$BS")" && pwd)"
+          echo "ROOT=$ROOT" >> "$GITHUB_ENV"
+          echo "LOG_PATH=$ROOT/build/xcodebuild.log" >> "$GITHUB_ENV"
+          echo "Project root: $ROOT"
+          ls "$ROOT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Native build cache (idevice Rust library)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ROOT }}/.build/device-native
+            ${{ env.ROOT }}/IDeviceKit/.build/IDevice.xcframework
+          key: idevice-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Native/Device/source.json', '**/Native/Device/ksign_pairing.rs', '**/.github/scripts/build_device_native.py') }}
+
+      - name: Verify native cache fingerprint logic
+        working-directory: ${{ env.ROOT }}
+        run: python3 .github/scripts/test_native_cache.py
+
+      - name: Make build script executable
+        working-directory: ${{ env.ROOT }}
+        run: chmod +x ./build.sh
+
+      - name: Build unsigned IPA
+        working-directory: ${{ env.ROOT }}
+        env:
+          APP_NAME: unzip-drop
+          SCHEME: unzip-drop
+          CONFIG: Release
+          ADHOC_ENTITLEMENTS: ${{ inputs.adhoc_entitlements == false && '0' || '1' }}
+        run: ./build.sh
+
+      - name: Locate IPA
+        shell: bash
+        run: |
+          IPA_FOUND=$(find . -path '*/build/ipa/*.ipa' -not -path './.git/*' | head -n1)
+          [ -n "$IPA_FOUND" ] || { echo "ERROR: no IPA produced"; exit 1; }
+          IPA_FOUND="$(cd "$(dirname "$IPA_FOUND")" && pwd)/$(basename "$IPA_FOUND")"
+          echo "IPA_PATH=$IPA_FOUND" >> "$GITHUB_ENV"
+
+      - name: Verify IPA is unsigned
+        shell: bash
+        run: |
+          IPA="$IPA_PATH"
+          test -f "$IPA"
+          rm -rf /tmp/airshare-ipa-check
+          mkdir -p /tmp/airshare-ipa-check
+          unzip -q "$IPA" -d /tmp/airshare-ipa-check
+          APP=$(find /tmp/airshare-ipa-check/Payload -maxdepth 1 -type d -name '*.app' -print -quit)
+          test -n "$APP"
+          test -f "$APP/Info.plist"
+          if [ ! -d "$APP/PlugIns/AirShareDeviceTunnel.appex" ]; then
+            echo "ERROR: AirShareDeviceTunnel.appex missing from IPA (native install would not work)"
+            exit 1
+          fi
+          # Ad-hoc entitlement signing (default) leaves a throw-away _CodeSignature.
+          if [ "${{ inputs.adhoc_entitlements }}" = "false" ] && [ -d "$APP/_CodeSignature" ]; then
+            echo "ERROR: _CodeSignature exists but ad-hoc signing was disabled"
+            exit 1
+          fi
+          if [ -f "$APP/embedded.mobileprovision" ]; then
+            echo "ERROR: embedded.mobileprovision exists in unsigned IPA"
+            exit 1
+          fi
+          echo "Verified unsigned IPA: $IPA"
+          unzip -l "$IPA" | sed -n '1,80p'
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: airshare-unsigned-ipa-${{ github.run_number }}
+          path: ${{ env.IPA_PATH }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: airshare-unsigned-build-log-${{ github.run_number }}
+          path: '**/build/xcodebuild.log'
+          if-no-files-found: ignore
+          retention-days: 14

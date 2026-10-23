@@ -1,0 +1,249 @@
+name: AirShare CLI Runner
+
+run-name: AirShare CLI Runner ${{ inputs.job_id || github.run_id }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      executable:
+        description: Repository-relative executable path
+        required: true
+        type: string
+      arguments:
+        description: Arguments passed to the executable
+        required: false
+        default: ''
+        type: string
+      platform:
+        description: Target platform label
+        required: true
+        default: iOS
+        type: choice
+        options:
+          - iOS
+          - iPadOS
+          - macOS
+      job_id:
+        description: Optional AirShare job identifier
+        required: false
+        default: ''
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Inspect runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          uname -m
+          sw_vers
+
+      - name: Validate executable
+        shell: bash
+        env:
+          EXECUTABLE: ${{ inputs.executable }}
+        run: |
+          set -euo pipefail
+
+          case "$EXECUTABLE" in
+            /*|../*|*/../*|*"/.."*)
+              echo "Executable must be a safe repository-relative path."
+              exit 1
+              ;;
+          esac
+
+          if [[ ! -f "$EXECUTABLE" ]]; then
+            echo "Executable not found: $EXECUTABLE"
+            exit 1
+          fi
+
+          if [[ ! -x "$EXECUTABLE" ]]; then
+            chmod +x "$EXECUTABLE"
+          fi
+
+          mkdir -p .airshare-runner
+          cp "$EXECUTABLE" .airshare-runner/executable
+          chmod +x .airshare-runner/executable
+
+          file .airshare-runner/executable
+          otool -hv .airshare-runner/executable || true
+
+      - name: Run executable
+        shell: bash
+        env:
+          USER_ARGUMENTS: ${{ inputs.arguments }}
+          JOB_ID: ${{ inputs.job_id }}
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          set +e
+
+          node <<'NODE'
+          const fs = require('fs');
+          const cp = require('child_process');
+
+          const input = process.env.USER_ARGUMENTS || '';
+
+          function parseShellWords(s) {
+            const out = [];
+            let cur = '';
+            let quote = null;
+            let escape = false;
+
+            for (const ch of s) {
+              if (escape) {
+                cur += ch;
+                escape = false;
+                continue;
+              }
+
+              if (ch === '\\' && quote !== "'") {
+                escape = true;
+                continue;
+              }
+
+              if (quote) {
+                if (ch === quote) quote = null;
+                else cur += ch;
+                continue;
+              }
+
+              if (ch === "'" || ch === '"') {
+                quote = ch;
+                continue;
+              }
+
+              if (/\s/.test(ch)) {
+                if (cur.length) {
+                  out.push(cur);
+                  cur = '';
+                }
+              } else {
+                cur += ch;
+              }
+            }
+
+            if (escape) cur += '\\';
+            if (quote) throw new Error('Unterminated quote in arguments');
+            if (cur.length) out.push(cur);
+
+            return out;
+          }
+
+          let args;
+
+          try {
+            args = parseShellWords(input);
+          } catch (error) {
+            fs.writeFileSync(
+              'msign-result.json',
+              JSON.stringify({
+                phase: 'argument-parse',
+                jobId: process.env.JOB_ID || '',
+                platform: process.env.PLATFORM || '',
+                error: error.message
+              }, null, 2)
+            );
+            process.exit(2);
+          }
+
+          const started = Date.now();
+
+          const child = cp.spawnSync(
+            './.airshare-runner/executable',
+            args,
+            {
+              env: {
+                ...process.env,
+                MSIGN_JOB_ID: process.env.JOB_ID || '',
+                MSIGN_PLATFORM: process.env.PLATFORM || ''
+              },
+              encoding: 'utf8',
+              timeout: 540000,
+              maxBuffer: 64 * 1024 * 1024
+            }
+          );
+
+          const result = {
+            phase: 'completed',
+            executable: process.env.EXECUTABLE || '',
+            arguments: args,
+            platform: process.env.PLATFORM || '',
+            jobId: process.env.JOB_ID || '',
+            exitCode: child.status,
+            signal: child.signal,
+            timedOut:
+              !!child.error &&
+              child.error.code === 'ETIMEDOUT',
+            stdout: child.stdout || '',
+            stderr: child.stderr || '',
+            error: child.error
+              ? {
+                  code: child.error.code,
+                  message: child.error.message
+                }
+              : null,
+            durationMs: Date.now() - started
+          };
+
+          fs.writeFileSync(
+            'msign-result.json',
+            JSON.stringify(result, null, 2)
+          );
+
+          fs.writeFileSync(
+            '.airshare-runner/stdout.txt',
+            result.stdout
+          );
+
+          fs.writeFileSync(
+            '.airshare-runner/stderr.txt',
+            result.stderr
+          );
+
+          console.log(JSON.stringify(result, null, 2));
+
+          process.exit(
+            result.timedOut
+              ? 124
+              : (typeof result.exitCode === 'number'
+                  ? result.exitCode
+                  : 1)
+          );
+          NODE
+
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: airshare-job-${{ inputs.job_id || github.run_id }}
+          path: |
+            msign-result.json
+            .airshare-runner/stdout.txt
+            .airshare-runner/stderr.txt
+          if-no-files-found: warn
+
+      - name: Write job summary
+        if: always()
+        shell: bash
+        run: |
+          echo "## AirShare CLI Runner" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Job ID:** ${{ inputs.job_id || 'none' }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Platform:** ${{ inputs.platform }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Executable:** ${{ inputs.executable }}" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f msign-result.json ]]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat msign-result.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          fi

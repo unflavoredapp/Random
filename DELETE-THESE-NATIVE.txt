@@ -1,0 +1,6 @@
+Delete these from the repo if present (Ksign IDeviceKit replaces them; both link the same idevice FFI symbols and would collide):
+Native/SideInstallerFFI/
+scripts/build-sideinstaller-native.sh
+Sources/**/DeviceConnection.swift   (SideInstaller version)
+Sources/**/PairingController.swift  (SideInstaller version)
+Any other Swift that does `import SideInstallerFFI`
