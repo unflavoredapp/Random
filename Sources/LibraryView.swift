@@ -102,7 +102,12 @@ struct LibraryView: View {
                 }
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 20)
             }
-            .safeAreaInset(edge: .top, spacing: 0) { header }
+            .safeAreaInset(edge: .top, spacing: 0) {
+                VStack(spacing: 0) {
+                    header
+                    StorageBar(appsBytes: device.apps.reduce(0) { $0 + ($1.sizeBytes ?? 0) })
+                }
+            }
         }
         .task { await reload(); device.refreshIfStale() }
         .sheet(isPresented: $importing) {
