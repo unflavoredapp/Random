@@ -23,7 +23,11 @@ struct UnzipDropApp: App {
     var body: some Scene {
         WindowGroup {
             RootView()
-                .task { LocalZSignAPI.shared.startIfNeeded() }
+                .task {
+                    LocalZSignAPI.shared.startIfNeeded()
+                    // Recognized ADID + device key signs straight in; with a live session this just refreshes the profile.
+                    if await ZefvAccount.shared.autoLoginIfNeeded() { await ZefvAccount.shared.refreshProfile() }
+                }
                 .environmentObject(session)
                 .environmentObject(config)
                 .onOpenURL { url in session.receiveIncoming(url) }

@@ -3,6 +3,7 @@
 //  If iOS killed AirShare in the middle of a batch install or uninstall, offer to carry on where it stopped.
 //
 
+import IDeviceSwift
 import SwiftUI
 
 struct ResumeBatchBanner: View {

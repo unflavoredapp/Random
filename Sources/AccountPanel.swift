@@ -127,7 +127,7 @@ struct AccountDropdown: View {
                     .overlay(Text(String((account.username ?? "?").prefix(1)).uppercased()).font(.system(size: 17, weight: .heavy, design: .rounded)).foregroundStyle(.black))
                 VStack(alignment: .leading, spacing: 3) {
                     StyledUsername(name: account.username ?? "", style: account.style, base: 16)
-                    Text(accountUDID.isEmpty ? staff.mdid : accountUDID)
+                    Text(staff.mdid)
                         .font(.system(size: 9, weight: .semibold, design: .monospaced))
                         .foregroundStyle(Theme.subtle)
                         .lineLimit(1)

@@ -6,6 +6,7 @@
 
 import Combine
 import Foundation
+import IDeviceSwift
 import SwiftUI
 
 struct AppSetApp: Codable, Hashable {
