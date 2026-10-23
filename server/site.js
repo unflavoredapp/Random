@@ -417,7 +417,10 @@ function mountSite(web, d0) {
       const app = n.appID ? d.byKey(String(n.appID)) : null; // news about an app we carry links to its page
       const ext = !app && n.url ? (safeHttps(n.url) || "") : "";
       const tint = /^#?[0-9a-f]{6}$/i.test(String(n.tintColor || "")) ? "#" + String(n.tintColor).replace("#", "") : "";
-      out.push({ id, title: n.title.trim().slice(0, 80), caption: String(n.caption || "").trim().slice(0, 220), image: safeHttps(n.imageURL) || "",
+      const mine = (u) => typeof u === "string" && /^\/news-media\/[a-f0-9]{24}\.(png|jpg|webp|gif|ipa)$/.test(u) ? siteUrl + u : "";
+      const feats = Array.isArray(n.features) ? n.features.filter(x => typeof x === "string" && x.trim()).map(x => x.trim().slice(0, 80)).slice(0, 12) : [];
+      out.push({ id, features: feats, ipa: mine(n.ipaURL), ipaSize: Number(n.ipaSize) || 0, ipaVer: String(n.ipaVersion || "").slice(0, 30),
+        title: n.title.trim().slice(0, 80), caption: String(n.caption || "").trim().slice(0, 220), image: mine(n.imageURL) || safeHttps(n.imageURL) || "",
         desc: String(n.description || n.caption || "").trim().slice(0, 3000), appKey: app ? keyOf(app) : "", appName: app ? String(app.name || "") : "",
         tint, date: Date.parse(n.date) || 0, url: app ? `/app/${enc(keyOf(app))}` : ext, ext: !!ext, appID: app ? app.bundleIdentifier || "" : "" });
     }
@@ -429,6 +432,8 @@ function mountSite(web, d0) {
     title: n.title, identifier: n.id, caption: n.caption || undefined, date: new Date(n.date || Date.now()).toISOString(),
     tintColor: n.tint ? n.tint.slice(1) : undefined, imageURL: n.image || undefined, notify: false,
     url: n.ext ? n.url : undefined, appID: n.appID || undefined,
+    description: n.desc && n.desc !== n.caption ? n.desc : undefined, features: n.features && n.features.length ? n.features : undefined,
+    ipaURL: n.ipa || undefined, ipaSize: n.ipaSize || undefined, ipaVersion: n.ipaVer || undefined,
   }));
   const viewUpsert = db.prepare(`INSERT INTO page_views(page_key,day,views,unique_views) VALUES(?,?,1,?)
     ON CONFLICT(page_key,day) DO UPDATE SET views=views+1, unique_views=unique_views+excluded.unique_views`);
@@ -2603,6 +2608,8 @@ if(form&&inp){
 <div class="nbanner"${st}>${n.image ? `<img src="${esc(n.image)}" alt="" referrerpolicy="no-referrer">` : ""}<div class="nt"><b>${esc(n.title)}</b></div></div>
 ${dateTxt ? `<div class="ndate">${esc(dateTxt)}</div>` : ""}
 ${n.desc ? `<div class="sec"><h2>Description</h2><div class="pre">${esc(n.desc)}</div></div>` : ""}
+${n.features && n.features.length ? `<div class="sec"><h2>Features</h2><ul class="pre" style="padding-left:20px;margin:0">${n.features.map(f => `<li>${esc(f)}</li>`).join("")}</ul></div>` : ""}
+${n.ipa ? `<div class="nbtns"><a class="nbtn" href="${esc(n.ipa)}" download><i class="fa-solid fa-download" aria-hidden="true"></i> Download IPA${n.ipaVer ? " " + esc(n.ipaVer) : ""}${n.ipaSize ? " \u00b7 " + (n.ipaSize / 1e6).toFixed(0) + " MB" : ""}</a></div>` : ""}
 ${n.appKey || n.ext ? `<div class="nbtns">${n.appKey ? `<a class="nbtn" href="/app/${enc(n.appKey)}"><i class="fa-solid fa-mobile-screen" aria-hidden="true"></i> View ${esc(n.appName || "app")}</a>` : ""}${n.ext ? `<a class="nbtn" href="${esc(n.url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open link</a>` : ""}</div>` : ""}
 <script>
 (function(){
@@ -2743,8 +2750,10 @@ if(vl)vl.addEventListener('click',function(e){var a=e.target.closest('.vr');if(!
       name: d.siteName || "AIRSHARE.LOL", identifier: host.split(".").reverse().join("."),
       subtitle: d.tagline || "iOS \u2022 Apps \u2022 Tools", description: `${apps.length} apps from the Airshare catalog.`,
       website: siteUrl, tintColor: "#ff3b14", apps, news: feedNews(),
+      // Staff picks for the app's Browse tab: bundle IDs in pick order, plus the version chosen (if any).
+      staffPicks: feat ? feat.staffEntries().map(e => { const it = d.byKey(e.key); return it && it.bundleIdentifier ? { bundleIdentifier: it.bundleIdentifier, version: e.version || undefined } : null; }).filter(Boolean) : [],
     });
-  }, () => (feat ? feat.newsVer() : 0));
+  }, () => (feat ? feat.newsVer() + ":" + feat.ver() : 0));
   web.get([FEED, "/source.json"], (_req, res) => {
     if (!siteUrl) return res.status(404).send("Set SITE_URL or BASE_URL to enable the source feed.");
     res.set({ "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" });

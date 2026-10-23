@@ -23,12 +23,36 @@ function create(d0) {
   for (const col of ["src_id TEXT", "hidden INTEGER NOT NULL DEFAULT 0"]) {
     try { db.exec("ALTER TABLE admin_news ADD COLUMN " + col); } catch { /* already there */ }
   }
+  for (const col of ["description TEXT", "features TEXT", "image_file TEXT", "ipa_file TEXT", "ipa_name TEXT", "ipa_size INTEGER", "ipa_version TEXT"]) {
+    try { db.exec("ALTER TABLE admin_news ADD COLUMN " + col); } catch { /* already there */ }
+  }
+  // Uploaded pictures and IPAs for news cards live on disk, outside the database.
+  const MEDIA_DIR = process.env.NEWS_MEDIA_DIR || path.join(__dirname, "..", "data", "news-media");
+  try { fs.mkdirSync(MEDIA_DIR, { recursive: true }); } catch (e) { console.warn("News media dir:", e.message); }
+  const MEDIA_RE = /^[a-f0-9]{24}\.(png|jpg|webp|gif|ipa)$/;
+  const IPA_MAX = (Number(process.env.NEWS_IPA_MAX_GB) || 4) * 1e9, IMG_MAX = 8e6;
+  const mediaUrl = (f) => (f ? "/news-media/" + f : "");
+  const featList = (v) => { try { const a = JSON.parse(v || "[]"); return Array.isArray(a) ? a.filter(x => typeof x === "string" && x.trim()).slice(0, 12) : []; } catch { return []; } };
+  function pruneMedia() { // uploads nothing refers to (replaced, removed, or never saved) go after an hour
+    try {
+      const keep = new Set();
+      for (const r of db.prepare("SELECT image_file i, ipa_file p FROM admin_news").all()) { if (r.i) keep.add(r.i); if (r.p) keep.add(r.p); }
+      for (const n of fs.readdirSync(MEDIA_DIR)) {
+        const f = path.join(MEDIA_DIR, n);
+        if (keep.has(n) || Date.now() - fs.statSync(f).mtimeMs < 3600000) continue;
+        fs.rmSync(f, { force: true });
+      }
+    } catch (e) { console.warn("News media prune:", e.message); }
+  }
+  setInterval(pruneMedia, 3600000).unref();
   const newsHiddenQ = db.prepare("SELECT 1 FROM admin_news WHERE hidden=1 AND src_id=?");
   let newsVer = 0;
   const newsRows = () => db.prepare("SELECT * FROM admin_news ORDER BY date DESC, id DESC").all();
   const adminNewsItems = () => newsRows().filter(r => !r.hidden).map(r => ({
-    identifier: r.src_id || "admin-" + r.id, title: r.title, caption: r.caption || "", imageURL: r.image_url || "",
+    identifier: r.src_id || "admin-" + r.id, title: r.title, caption: r.caption || "", imageURL: r.image_file ? mediaUrl(r.image_file) : (r.image_url || ""),
     url: r.url || "", appID: r.app_id || "", tintColor: r.tint || "", date: r.date,
+    description: r.description || "", features: featList(r.features),
+    ipaURL: r.ipa_file ? mediaUrl(r.ipa_file) : "", ipaSize: r.ipa_size || 0, ipaVersion: r.ipa_version || "",
   }));
 
   // ---------- hide / pin / staff picks ----------
@@ -287,7 +311,10 @@ function create(d0) {
     // ----- news editor (admin items + every item from the repo / data file, all editable) -----
     const NCSS = CSS + "label{display:block;margin:12px 0 4px;font-size:13px;color:#9a9a9a}input[type=text],input[type=url],input[type=date],textarea{width:100%;padding:10px 12px;border:1px solid #333;border-radius:11px;background:#0b0b0b;color:#fff;font:16px system-ui;outline:0}" +
       "textarea{min-height:84px;resize:vertical}input:focus,textarea:focus{border-color:var(--acc)}.thumb{flex:none;width:52px;height:52px;border-radius:12px;object-fit:cover;background:#111}.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint{font-size:12px;color:#777;margin-top:4px}.acts{display:flex;gap:8px;margin-top:16px}a.sm{display:inline-flex;align-items:center;text-decoration:none}" +
-      ".row .n small{display:block;color:#888;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.btns{display:flex;gap:6px}";
+      ".row .n small{display:block;color:#888;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.btns{display:flex;gap:6px}" +
+      "h3.fs{margin:22px 0 2px;padding-top:12px;border-top:1px solid #292929;font-size:12px;letter-spacing:1.5px;color:#9a9a9a}.fbtn{display:flex;align-items:center;min-height:44px;padding:0 12px;border:1px dashed #444;border-radius:11px;color:#bbb;cursor:pointer;overflow:hidden}.fbtn.has{border-color:var(--acc);color:#fff}.fbtn input{display:none}.fbtn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
+      ".pv{position:relative;display:flex;align-items:flex-end;height:118px;border-radius:16px;border:1px solid #333;overflow:hidden;background:#161616;margin-bottom:6px}.pvi{position:absolute;inset:0;background-size:cover;background-position:center}.pvt{position:relative;width:100%;padding:12px;background:linear-gradient(transparent,rgba(0,0,0,.85))}.pvt b{display:block;font-size:15px}.pvt span{display:block;font-size:11px;color:#ddd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
+      ".prog{height:8px;border-radius:99px;background:#222;margin-top:12px;overflow:hidden}.prog div{height:100%;width:0;background:var(--acc)}";
     const dateOnly = (iso) => { const t = Date.parse(iso); return t ? new Date(t).toISOString().slice(0, 10) : ""; };
     const nid = (n) => String((n && (n.identifier || n.title)) || "").trim().slice(0, 80);
     // upstream (repo / data file) items, de-duplicated, as admin_news-shaped rows
@@ -301,7 +328,7 @@ function create(d0) {
       return out;
     };
     const fmtTarget = (r) => (r.app_id ? "app " + r.app_id : r.url || "no link");
-    const nrow = (r, btns, tag) => `<div class="row">${r.image_url ? `<img class="thumb" src="${esc(r.image_url)}" alt="" referrerpolicy="no-referrer">` : ""}<div class="n"><b>${esc(r.title)}${tag || ""}</b><code>${esc(dateOnly(r.date) || "no date")} \u00b7 ${esc(fmtTarget(r))}</code>${r.caption ? `<small>${esc(r.caption)}</small>` : ""}</div><div class="btns">${btns}</div></div>`;
+    const nrow = (r, btns, tag) => `<div class="row">${r.image_file || r.image_url ? `<img class="thumb" src="${esc(r.image_file ? mediaUrl(r.image_file) : r.image_url)}" alt="" referrerpolicy="no-referrer">` : ""}<div class="n"><b>${esc(r.title)}${r.ipa_file ? ' <span class="tag ok">IPA</span>' : ""}${tag || ""}</b><code>${esc(dateOnly(r.date) || "no date")} \u00b7 ${esc(fmtTarget(r))}</code>${r.caption ? `<small>${esc(r.caption)}</small>` : ""}</div><div class="btns">${btns}</div></div>`;
     const nform = (act, fields, label, cls) => `<form class="inl" method="post" action="/admin/news/${act}"${cls ? ` onsubmit="return confirm('${cls}')"` : ""}><input type="hidden" name="csrf" value="${csrf}">${fields}<button class="sm" type="submit">${label}</button></form>`;
 
     web.get("/admin/news", auth, (req, res) => {
@@ -323,20 +350,64 @@ function create(d0) {
         `<a class="sm" href="/admin/news?from=${encodeURIComponent(r.src_id)}">Edit</a>` + nform("hide", `<input type="hidden" name="src" value="${esc(r.src_id)}">`, "Hide", "Hide this item from the site and feed?"),
         ` <span class="tag">${esc(r.src)}</span>`)).join("") || '<p class="m">No repo or file news found.</p>';
       const hidden = hid.map(r => nrow(r, nform("delete", `<input type="hidden" name="id" value="${r.id}">`, "Restore"), ' <span class="tag bad">hidden</span>')).join("");
-      res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'unsafe-inline'" });
+      res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'unsafe-inline'" });
       res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="dark"><title>News \u00b7 Admin</title><style>${NCSS}</style></head><body><div class="w"><div class="lay">${menu("/admin/news")}<main class="main">
 <h1>News</h1>${flash}
-<h2>${editing ? "EDIT ITEM" : "ADD ITEM"}</h2><form class="box" method="post" action="/admin/news/save"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="id" value="${v.id || ""}"><input type="hidden" name="src" value="${esc(srcId)}">
+<h2>${editing ? "EDIT ITEM" : "ADD ITEM"}</h2><form class="box" id="nf" method="post" action="/admin/news/save"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="id" value="${v.id || ""}"><input type="hidden" name="src" value="${esc(srcId)}">
+<input type="hidden" name="image_file" id="hif" value=""><input type="hidden" name="ipa_file" id="hpf" value=""><input type="hidden" name="ipa_size" id="hps" value=""><input type="hidden" name="ipa_name" id="hpn" value=""><input type="hidden" name="drop_image" id="hdi" value=""><input type="hidden" name="drop_ipa" id="hdp" value="">
 ${!v.id && srcId ? `<p class="hint" style="margin:0 0 6px">Editing a ${esc(v.src || "repo")} item. Saving makes an edited copy that replaces the original on the site and feed.</p>` : ""}
+<div class="pv" id="pv"><div class="pvi" id="pvi"></div><div class="pvt"><b id="pvt">${esc(v.title || "Title")}</b><span id="pvc">${esc(v.caption || "Caption appears here")}</span></div></div>
+<h3 class="fs">Card</h3>
 <label for="t">Title (required, 80 max)</label><input id="t" type="text" name="title" maxlength="80" required value="${esc(v.title || "")}">
-<label for="c">Caption (220 max)</label><textarea id="c" name="caption" maxlength="220">${esc(v.caption || "")}</textarea>
-<label for="i">Image URL (https)</label><input id="i" type="url" name="image_url" placeholder="https://\u2026/banner.png" value="${esc(v.image_url || "")}">
+<label for="c">Caption (220 max, shown on the card)</label><textarea id="c" name="caption" maxlength="220">${esc(v.caption || "")}</textarea>
+<label for="ds">Description (shown when the card is opened)</label><textarea id="ds" name="description" maxlength="3000" style="min-height:130px" placeholder="Longer text. Line breaks are kept.">${esc(v.description || "")}</textarea>
+<label for="ft">Feature list (one per line, 12 max)</label><textarea id="ft" name="features" maxlength="1500" style="min-height:104px" placeholder="Premium unlocked&#10;No ads&#10;Works on iOS 15+">${esc(featList(v.features).join("\n"))}</textarea>
+<h3 class="fs">Picture</h3>
+<div class="two"><div><label for="i">Image URL (https)</label><input id="i" type="url" name="image_url" placeholder="https://…/banner.png" value="${esc(v.image_url || "")}"></div>
+<div><label for="imgf">…or upload a picture</label><label class="fbtn" id="imgl"><span>Choose image</span><input id="imgf" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label></div></div>
+${v.image_file ? `<p class="hint" id="curimg">Uploaded picture in use (it wins over the URL). <label style="display:inline;color:#f66"><input type="checkbox" id="dropimg"> remove it</label></p>` : `<p class="hint">If you upload a picture and also give a URL, the upload is used. Both are kept so you can switch back.</p>`}
+<h3 class="fs">Link</h3>
 <div class="two"><div><label for="a">Link to an app (bundle ID)</label><input id="a" type="text" name="app" placeholder="com.example.app" value="${esc(v.app_id || "")}" autocapitalize="off" autocorrect="off"></div>
-<div><label for="u">\u2026or external link (https)</label><input id="u" type="url" name="url" placeholder="https://\u2026" value="${esc(v.url || "")}"></div></div>
+<div><label for="u">…or external link (https)</label><input id="u" type="url" name="url" placeholder="https://…" value="${esc(v.url || "")}"></div></div>
 <p class="hint">If both are filled in, the app link wins. Current: ${esc(target)}.</p>
+<h3 class="fs">IPA (optional)</h3>
+<div class="two"><div><label for="ipaf">Attach an IPA (up to ${Math.round(IPA_MAX / 1e9)} GB)</label><label class="fbtn" id="ipal"><span>Choose .ipa</span><input id="ipaf" type="file" accept=".ipa,application/octet-stream"></label></div>
+<div><label for="iv">IPA version</label><input id="iv" type="text" name="ipa_version" maxlength="30" placeholder="1.0.0" value="${esc(v.ipa_version || "")}" autocapitalize="off"></div></div>
+${v.ipa_file ? `<p class="hint">Attached: <b>${esc(v.ipa_name || v.ipa_file)}</b> (${esc(((v.ipa_size || 0) / 1e6).toFixed(1))} MB). Choosing another file replaces it. <label style="display:inline;color:#f66"><input type="checkbox" id="dropipa"> remove it</label></p>` : `<p class="hint">With an IPA attached the card gets Download and Sign buttons in the app, and a download button on the site.</p>`}
+<h3 class="fs">Style</h3>
 <div class="two"><div><label for="k">Accent color</label><input id="k" type="text" name="tint" placeholder="#ff3b14" maxlength="7" autocapitalize="off" value="${esc(v.tint || "")}"></div>
 <div><label for="d">Date</label><input id="d" type="date" name="date" value="${esc(dateOnly(v.date))}"></div></div>
-<div class="acts"><button class="btn" type="submit">${editing ? "Save changes" : "Publish"}</button>${editing ? '<a class="sm" style="height:40px;padding:0 14px" href="/admin/news">Cancel</a>' : ""}</div></form>
+<div class="prog" id="prog" hidden><div id="pbar"></div></div><p class="hint" id="pmsg"></p>
+<div class="acts"><button class="btn" type="submit" id="sv">${editing ? "Save changes" : "Publish"}</button>${editing ? '<a class="sm" style="height:40px;padding:0 14px" href="/admin/news">Cancel</a>' : ""}</div></form>
+<script>
+(function(){
+var T=${JSON.stringify(csrf)};
+function $(i){return document.getElementById(i);}
+var f=$('nf');
+function pv(){$('pvt').textContent=$('t').value||'Title';$('pvc').textContent=$('c').value||'Caption appears here';}
+['t','c'].forEach(function(i){$(i).addEventListener('input',pv);});
+function setImg(src){var e=$('pvi');e.style.backgroundImage=src?'url('+src+')':'none';}
+var ex=${JSON.stringify(v.image_file ? mediaUrl(v.image_file) : (v.image_url || ""))};if(ex)setImg(ex);
+$('i').addEventListener('input',function(){if(!$('imgf').files[0])setImg(this.value.trim());});
+$('imgf').addEventListener('change',function(){var g=this.files[0];$('imgl').className=g?'fbtn has':'fbtn';$('imgl').querySelector('span').textContent=g?g.name:'Choose image';if(g){if(g.size>8e6){alert('Pictures can be 8 MB at most.');this.value='';return;}setImg(URL.createObjectURL(g));}});
+$('ipaf').addEventListener('change',function(){var g=this.files[0];$('ipal').className=g?'fbtn has':'fbtn';$('ipal').querySelector('span').textContent=g?g.name:'Choose .ipa';if(g&&!$('iv').value){var m=/(\\d+(?:\\.\\d+)+)/.exec(g.name);if(m)$('iv').value=m[1];}});
+function up(kind,file,onp){return new Promise(function(ok,no){var x=new XMLHttpRequest();x.open('PUT','/admin/news/upload?kind='+kind+'&name='+encodeURIComponent(file.name));x.setRequestHeader('x-csrf',T);x.setRequestHeader('content-type','application/octet-stream');
+ x.upload.onprogress=function(e){if(e.lengthComputable)onp(e.loaded/e.total);};
+ x.onload=function(){var j;try{j=JSON.parse(x.responseText);}catch(e){no(new Error('Upload failed ('+x.status+')'));return;}if(j.ok)ok(j);else no(new Error(j.error||'Upload failed'));};
+ x.onerror=function(){no(new Error('Network error'));};x.send(file);});}
+f.addEventListener('submit',function(e){
+ if($('dropimg')&&$('dropimg').checked)$('hdi').value='1';
+ if($('dropipa')&&$('dropipa').checked)$('hdp').value='1';
+ var img=$('imgf').files[0],ipa=$('ipaf').files[0];if(!img&&!ipa)return;
+ e.preventDefault();$('sv').disabled=true;$('prog').hidden=false;
+ function bar(p,what){$('pbar').style.width=Math.round(p*100)+'%';$('pmsg').textContent='Uploading '+what+' '+Math.round(p*100)+'%';}
+ var chain=Promise.resolve();
+ if(img)chain=chain.then(function(){return up('image',img,function(p){bar(p,'picture');});}).then(function(j){$('hif').value=j.name;});
+ if(ipa)chain=chain.then(function(){return up('ipa',ipa,function(p){bar(p,'IPA');});}).then(function(j){$('hpf').value=j.name;$('hps').value=j.size;$('hpn').value=ipa.name;});
+ chain.then(function(){$('pmsg').textContent='Saving...';f.submit();}).catch(function(er){$('sv').disabled=false;$('prog').hidden=true;$('pmsg').textContent=er.message;$('pmsg').style.color='#f66';});
+});
+})();
+</script>
 <h2>YOUR ITEMS (${mine.length})</h2><div class="box">${yours}</div>
 <h2>FROM REPO / FILE (${srcItems.length})</h2><div class="box">${fromSrc}</div>
 ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>` : ""}
@@ -354,6 +425,8 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       const title = String(b.title || "").trim().slice(0, 80);
       if (!title) return back("Title is required");
       const caption = String(b.caption || "").trim().slice(0, 220);
+      const description = String(b.description || "").replace(/\r/g, "").trim().slice(0, 3000);
+      const features = JSON.stringify(String(b.features || "").replace(/\r/g, "").split("\n").map(x => x.replace(/^[\s\-\u2022*]+/, "").trim().slice(0, 80)).filter(Boolean).slice(0, 12));
       const imgIn = String(b.image_url || "").trim(), image = imgIn ? safeHttps(imgIn) : "";
       if (imgIn && !image) return back("Image must be an https:// URL");
       let appId = "", url = "";
@@ -364,14 +437,72 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       const tint = /^#?[0-9a-f]{6}$/i.test(tintIn) ? "#" + tintIn.replace("#", "") : "";
       if (tintIn && !tint) return back("Color must look like #ff3b14");
       if (!id && src) { const ex = db.prepare("SELECT id FROM admin_news WHERE src_id=?").get(src); if (ex) id = ex.id; }
-      const old = id ? db.prepare("SELECT date FROM admin_news WHERE id=?").get(id) : null;
+      const old = id ? db.prepare("SELECT date,image_file,ipa_file,ipa_name,ipa_size FROM admin_news WHERE id=?").get(id) : null;
+      // Uploaded files: a freshly uploaded name wins, "remove" clears, otherwise the existing one stays.
+      const okFile = (n, kind) => MEDIA_RE.test(String(n || "")) && (kind === "ipa" ? /\.ipa$/.test(n) : !/\.ipa$/.test(n)) && fs.existsSync(path.join(MEDIA_DIR, n)) ? String(n) : "";
+      const newImg = okFile(b.image_file, "image"), newIpa = okFile(b.ipa_file, "ipa");
+      const imageFile = newImg || (b.drop_image === "1" ? "" : (old && old.image_file) || "");
+      const ipaFile = newIpa || (b.drop_ipa === "1" ? "" : (old && old.ipa_file) || "");
+      const ipaSize = ipaFile ? (() => { try { return fs.statSync(path.join(MEDIA_DIR, ipaFile)).size; } catch { return 0; } })() : 0;
+      const ipaName = newIpa ? String(b.ipa_name || "").slice(0, 120) : (ipaFile && old ? old.ipa_name || "" : "");
+      const ipaVersion = ipaFile ? String(b.ipa_version || "").replace(/[^0-9A-Za-z._-]/g, "").slice(0, 30) : "";
       const t = Date.parse(b.date);
       const date = t ? new Date(t).toISOString() : (old && old.date) || new Date().toISOString();
       const now = new Date().toISOString();
-      if (id && old) { db.prepare("UPDATE admin_news SET title=?,caption=?,image_url=?,url=?,app_id=?,tint=?,date=?,hidden=0 WHERE id=?").run(title, caption, image, url, appId, tint, date, id); newsVer++; return done("Saved \u201c" + title + "\u201d", id); }
-      db.prepare("INSERT INTO admin_news(title,caption,image_url,url,app_id,tint,date,created_at,src_id,hidden) VALUES(?,?,?,?,?,?,?,?,?,0)").run(title, caption, image, url, appId, tint, date, now, src || null);
+      if (id && old) { db.prepare("UPDATE admin_news SET title=?,caption=?,image_url=?,url=?,app_id=?,tint=?,date=?,hidden=0,description=?,features=?,image_file=?,ipa_file=?,ipa_name=?,ipa_size=?,ipa_version=? WHERE id=?").run(title, caption, image, url, appId, tint, date, description, features, imageFile, ipaFile, ipaName, ipaSize, ipaVersion, id); newsVer++; pruneMedia(); return done("Saved \u201c" + title + "\u201d", id); }
+      db.prepare("INSERT INTO admin_news(title,caption,image_url,url,app_id,tint,date,created_at,src_id,hidden,description,features,image_file,ipa_file,ipa_name,ipa_size,ipa_version) VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)").run(title, caption, image, url, appId, tint, date, now, src || null, description, features, imageFile, ipaFile, ipaName, ipaSize, ipaVersion);
       newsVer++;
       return done((src ? "Saved edited copy of \u201c" : "Published \u201c") + title + "\u201d", 0);
+    });
+
+    // Raw-body upload (no base64, no size blow-up): the editor sends the file straight from the browser.
+    web.put("/admin/news/upload", auth, (req, res) => {
+      res.set("Cache-Control", "no-store");
+      const bad = (code, error) => res.status(code).json({ ok: false, error });
+      if (!okCsrf(req.get("x-csrf"))) return bad(403, "Bad token. Reload the page and try again.");
+      const kind = req.query.kind === "ipa" ? "ipa" : req.query.kind === "image" ? "image" : "";
+      if (!kind) return bad(400, "Unknown upload type.");
+      const max = kind === "ipa" ? IPA_MAX : IMG_MAX;
+      if (Number(req.get("content-length") || 0) > max) return bad(413, "File too large (" + Math.round(max / 1e6) + " MB max).");
+      const tmp = path.join(MEDIA_DIR, ".up-" + crypto.randomBytes(8).toString("hex"));
+      const out = fs.createWriteStream(tmp);
+      let got = 0, dead = false;
+      const drop = (code, msg) => { if (dead) return; dead = true; req.unpipe(out); out.destroy(); fs.rm(tmp, { force: true }, () => {}); if (!res.headersSent) bad(code, msg); req.resume(); };
+      req.on("data", (c) => { got += c.length; if (got > max) drop(413, "File too large (" + Math.round(max / 1e6) + " MB max)."); });
+      req.on("aborted", () => drop(499, "Upload cancelled."));
+      out.on("error", () => drop(500, "Could not save the file."));
+      out.on("finish", () => {
+        if (dead) return;
+        try {
+          const fd = fs.openSync(tmp, "r"), h4 = Buffer.alloc(12); fs.readSync(fd, h4, 0, 12, 0); fs.closeSync(fd);
+          let ext = "";
+          if (kind === "ipa") ext = h4[0] === 0x50 && h4[1] === 0x4b && h4[2] === 3 && h4[3] === 4 ? "ipa" : "";
+          else if (h4.slice(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) ext = "png";
+          else if (h4[0] === 0xff && h4[1] === 0xd8 && h4[2] === 0xff) ext = "jpg";
+          else if (h4.slice(0, 4).toString() === "GIF8") ext = "gif";
+          else if (h4.slice(0, 4).toString() === "RIFF" && h4.slice(8, 12).toString() === "WEBP") ext = "webp";
+          if (!got || !ext) { fs.rmSync(tmp, { force: true }); return bad(400, kind === "ipa" ? "That isn't an IPA file." : "Use a PNG, JPG, WebP or GIF picture."); }
+          const name = crypto.randomBytes(12).toString("hex") + "." + ext;
+          fs.renameSync(tmp, path.join(MEDIA_DIR, name));
+          return res.json({ ok: true, name, size: got });
+        } catch (e) { fs.rmSync(tmp, { force: true }); return bad(500, "Could not save the file."); }
+      });
+      req.pipe(out);
+    });
+    // Public: pictures for the cards, and the attached IPAs (named after the card + version when downloaded).
+    web.get("/news-media/:name", (req, res) => {
+      const n = String(req.params.name || "");
+      const file = path.join(MEDIA_DIR, n);
+      if (!MEDIA_RE.test(n) || !fs.existsSync(file)) return res.status(404).type("text").send("Not found");
+      const hdr = { "X-Content-Type-Options": "nosniff", "Access-Control-Allow-Origin": "*" };
+      if (n.endsWith(".ipa")) {
+        const r = db.prepare("SELECT title,ipa_version v FROM admin_news WHERE ipa_file=? ORDER BY id DESC").get(n);
+        const base = String((r && r.title) || "app").replace(/[^A-Za-z0-9._ -]+/g, "_").trim().slice(0, 60) || "app";
+        hdr["Content-Type"] = "application/octet-stream";
+        hdr["Content-Disposition"] = `attachment; filename="${base}${r && r.v ? "-" + r.v : ""}.ipa"`;
+        hdr["Cache-Control"] = "public, max-age=3600";
+      } else hdr["Cache-Control"] = "public, max-age=604800, immutable";
+      return res.sendFile(file, { headers: hdr, dotfiles: "deny" });
     });
 
     web.post("/admin/news/hide", auth, form, (req, res) => {
@@ -390,7 +521,7 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       if (!okCsrf(b.csrf)) return res.status(403).send("Bad token. Reload the page and try again.");
       const row = db.prepare("SELECT src_id,hidden FROM admin_news WHERE id=?").get(parseInt(b.id, 10) || 0);
       db.prepare("DELETE FROM admin_news WHERE id=?").run(parseInt(b.id, 10) || 0);
-      newsVer++;
+      newsVer++; pruneMedia();
       return res.redirect(303, "/admin/news?m=" + encodeURIComponent(row && row.hidden ? "Restored" : row && row.src_id ? "Reverted to original" : "Deleted"));
     });
 
@@ -628,7 +759,7 @@ $('list').addEventListener('click',function(e){var g=e.target.closest('.gc');if(
     return vs ? (vs.find(x => verOf(x) === staffVer.get(key)) || vs[0]) : null;
   };
   return {
-    wrap, floatPinned, mount, runCheck, newsVer: () => newsVer, newsHidden: (id) => !!newsHiddenQ.get(String(id)),
+    wrap, floatPinned, mount, runCheck, newsVer: () => newsVer, ver: () => ver, newsHidden: (id) => !!newsHiddenQ.get(String(id)),
     staffPicks: staffKeys,                                                    // [key, ...]  (unchanged)
     staffVersion: (key) => staffVer.get(key) || "",                           // chosen version string, "" = none
     staffEntries: () => staffKeys().map(k => ({ key: k, version: staffVer.get(k) || "" })),
