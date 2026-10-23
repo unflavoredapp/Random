@@ -1,0 +1,5 @@
+
+IDeviceKit/
+.build/
+build/
+__pycache__/
