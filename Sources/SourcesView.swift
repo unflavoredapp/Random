@@ -97,7 +97,9 @@ nonisolated enum AppCategory: String, CaseIterable, Sendable, Codable {
             if e.contains("tool") || e.contains("util") || e.contains("dev") || e.contains("product") { return .tools }
             if e.contains("paid") { return .paid }
         }
-        let t = text.lowercased()
+        // NFKC first: Delvek writes its tag in Unicode "mathematical bold" letters (「✓𝐏𝐀𝐈𝐃 𝐀𝐏𝐏」) that look like
+        // PAID but are different characters; compatibility mapping turns them back into plain "PAID APP".
+        let t = text.precomposedStringWithCompatibilityMapping.lowercased()
         // Normalise so "「✓PAID APP」", "PAID  APP", "Paid-App", fullwidth spaces etc. all collapse to "paidapp".
         let squashed = t.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.map { Character($0) }
         let flat = String(squashed)
