@@ -22,6 +22,7 @@ struct CertificatesScreen: View {
     @State private var showInfo = false
     @State private var showStepInfo = false
     @State private var removeTarget: Certificate?
+    @State private var showLockedInfo = false
     @State private var collapsed: Set<String> = []
     @State private var error: String?
 
@@ -132,7 +133,12 @@ struct CertificatesScreen: View {
             Text("Apps already signed with it keep working until the profile expires.")
         }
         .fullScreenCover(isPresented: $showHelp) {
-            TutorialsListScreen().preferredColorScheme(.dark)
+            TutorialScreen(tutorial: TutorialLibrary.signingCerts).preferredColorScheme(.dark)
+        }
+        .alert("Provided by your admin", isPresented: $showLockedInfo) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("This certificate was attached to your account by AirShare staff. You can sign with it, but it can't be exported, removed, or included in a local backup on any device.")
         }
     }
 
@@ -269,7 +275,16 @@ struct CertificatesScreen: View {
                 }
             } label: {
                 HStack(spacing: 12) {
-                    CertificateBadge(size: 60)
+                    ZStack(alignment: .bottomTrailing) {
+                        CertificateBadge(size: 60)
+                        if c.isLocked {
+                            Image(systemName: "lock.fill").font(.system(size: 10, weight: .black)).foregroundStyle(.black)
+                                .frame(width: 20, height: 20)
+                                .background(Theme.accent)
+                                .overlay(Circle().stroke(Theme.bg, lineWidth: 2))
+                                .clipShape(Circle())
+                        }
+                    }
                     VStack(alignment: .leading, spacing: 2) {
                         Text(c.name).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
                         if let t = info.team { Text(t).font(.system(size: 12)).foregroundStyle(Theme.subtle).lineLimit(1) }
@@ -281,7 +296,14 @@ struct CertificatesScreen: View {
                                 .font(.system(size: 12)).foregroundStyle(expired ? .orange : Theme.subtle)
                         }
                         if c.isLocked {
-                            Text("PROVIDED BY ADMIN").font(.system(size: 9, weight: .heavy, design: .monospaced)).foregroundStyle(Theme.accent)
+                            HStack(spacing: 4) {
+                                Image(systemName: "lock.fill").font(.system(size: 8, weight: .heavy))
+                                Text("PROVIDED BY ADMIN \u{00B7} CAN'T EXPORT").font(.system(size: 9, weight: .heavy, design: .monospaced)).kerning(0.3)
+                            }
+                            .foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 7).padding(.vertical, 3)
+                            .background(Theme.accent.opacity(0.16)).clipShape(Capsule())
+                            .padding(.top, 2)
                         }
                     }
                     Spacer(minLength: 6)
@@ -302,16 +324,15 @@ struct CertificatesScreen: View {
                 deviceLine(info, certName: c.name)
 
                 HStack(spacing: 10) {
-                    if !c.isLocked && active {
-                        cardAction("Export", icon: "square.and.arrow.up", color: Theme.text) { export(c) }
-                    } else if !active {
+                    if !active {
                         cardAction("Use", icon: "checkmark.circle", color: Theme.accent) { store.activeID = c.id }
+                    } else if !c.isLocked {
+                        cardAction("Export", icon: "square.and.arrow.up", color: Theme.text) { export(c) }
                     }
-                    if !c.isLocked {
+                    if c.isLocked {
+                        lockedAction
+                    } else {
                         cardAction("Remove", icon: "minus.circle", color: Color(red: 1, green: 0.35, blue: 0.3)) { removeTarget = c }
-                    } else if active {
-                        Label("Locked", systemImage: "lock.fill").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.subtle)
-                            .frame(maxWidth: .infinity).padding(.vertical, 13)
                     }
                 }
                 .padding(.top, 16)
@@ -507,6 +528,24 @@ struct CertificatesScreen: View {
             .foregroundStyle(color)
             .frame(maxWidth: .infinity).padding(.vertical, 13)
             .background(Color.white.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Stands in for Export/Remove on an admin-provided cert: visually distinct (dashed, dim, locked icon)
+    /// so the absence of a real export button reads as "blocked on purpose", not a missing feature — and
+    /// explains why when tapped, instead of just not being there.
+    private var lockedAction: some View {
+        Button { showLockedInfo = true } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "lock.fill")
+                Text("Can't export").font(.system(size: 14, weight: .bold))
+            }
+            .foregroundStyle(Theme.subtle)
+            .frame(maxWidth: .infinity).padding(.vertical, 13)
+            .background(Color.white.opacity(0.03))
+            .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [5, 4])).foregroundStyle(Theme.subtle.opacity(0.35)))
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
         }
         .buttonStyle(.plain)

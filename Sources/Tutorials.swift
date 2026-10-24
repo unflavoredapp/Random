@@ -30,7 +30,7 @@ struct TutorialStep: Identifiable {
 // MARK: - Content
 
 enum TutorialLibrary {
-    static let all: [Tutorial] = [phoneOnly, localInstall, certs, flex, hooking, pipeline]
+    static let all: [Tutorial] = [phoneOnly, localInstall, signingCerts, certs, flex, hooking, pipeline]
 
     // 0. Phone-only setup
     static let phoneOnly = Tutorial(
@@ -121,6 +121,39 @@ enum TutorialLibrary {
             TutorialStep(
                 title: "Renewal",
                 body: "Weekly cron re-issues when < 30 days remain (needs repo variable LE_EMAIL for unattended runs), or tap Renew now. The app auto-pulls when within 21 days of expiry at install time."),
+        ])
+
+    // 0c. Signing certificates — what the Certificates screen manages (opened from its Help and Support button)
+    static let signingCerts = Tutorial(
+        id: "signing-certs", icon: "checkmark.seal.fill", title: "Your signing certificates",
+        subtitle: "Get, import and manage the certificate AirShare signs apps with", minutes: 4,
+        steps: [
+            TutorialStep(
+                title: "What a certificate is",
+                body: "A signing certificate is two files plus a password: the .p12 (your signing identity), the .mobileprovision (the profile that says which devices may run what you sign) and the .p12's password. AirShare signs every app with the certificate marked ACTIVE on this screen."),
+            TutorialStep(
+                title: "Get one",
+                body: "With no certificate yet you get two options. Request a Certificate asks AirShare staff for one for this device; requests are reviewed by hand, and when yours is approved it appears here by itself, so you don't need to keep the screen open. Add Certificate imports a certificate you already have.",
+                tip: "You can cancel a pending request from the Activation process card."),
+            TutorialStep(
+                title: "Import your own",
+                body: "In Add Certificate, pick the .p12 and the .mobileprovision together, or a single .zip that contains both. A .txt file in the zip is read as the password (a leading \"password:\" label is fine). Pick exactly one of each; if there are two .p12 files or two profiles, AirShare asks you to choose just one.",
+                code: "MyCert.zip\n├── MyCert.p12\n├── MyCert.mobileprovision\n└── password.txt",
+                codeTitle: "A .zip AirShare can import in one go"),
+            TutorialStep(
+                title: "Make sure it covers this phone",
+                body: "Development and ad-hoc profiles only install on devices listed inside them. Set your UDID on the device card at the top and every certificate shows whether its profile includes this phone. AirShare fills the UDID in for you when the certificate is named after it, or when the profile lists exactly one device.",
+                tip: "\"Unable to Install\" almost always means this phone's UDID isn't in the profile."),
+            TutorialStep(
+                title: "Use, Export, Remove",
+                body: "Use makes a certificate the active one. Export, on the active certificate, saves it as a .zip (.p12, profile and password.txt) that you can import on another device. Remove deletes it from AirShare; apps you already signed with it keep working until its profile expires."),
+            TutorialStep(
+                title: "Certificates provided by your admin",
+                body: "A certificate attached to your account by AirShare staff shows a lock and PROVIDED BY ADMIN · CAN'T EXPORT. You can sign with it like any other, but it can't be exported, removed or included in a backup on any device. Tap Can't export to see why."),
+            TutorialStep(
+                title: "Watch the expiry date",
+                body: "Each certificate shows when its profile expires and how many days are left. Once it expires, apps signed with it stop opening; add or request a new certificate and sign them again.",
+                tip: "Re-sign apps a few days before expiry so nothing stops working."),
         ])
 
     // 1. Capture class names with FLEX
