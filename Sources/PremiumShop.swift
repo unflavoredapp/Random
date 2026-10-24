@@ -1,78 +1,5 @@
 import SwiftUI
 
-/// Shared loading state for remote shop and purchase-history requests.
-enum LoadState: Equatable {
-    case idle
-    case loading
-    case refreshing
-    case loaded
-    case signedOut
-    case failed(String)
-}
-
-/// Compact status and retry control used by the Premium Store and Purchase History.
-struct StateBanner: View {
-    let state: LoadState
-    let retry: () -> Void
-
-    private var message: String {
-        switch state {
-        case .idle: return "Not loaded yet."
-        case .loading: return "Loading…"
-        case .refreshing: return "Refreshing…"
-        case .loaded: return "Up to date."
-        case .signedOut: return "Sign in to view this information."
-        case .failed(let message): return message
-        }
-    }
-
-    private var symbol: String {
-        switch state {
-        case .idle: return "arrow.clockwise"
-        case .loading, .refreshing: return "arrow.triangle.2.circlepath"
-        case .loaded: return "checkmark.circle"
-        case .signedOut: return "person.crop.circle.badge.exclamationmark"
-        case .failed: return "exclamationmark.triangle"
-        }
-    }
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: symbol)
-                .foregroundStyle(stateColor)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(message)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                if case .failed = state {
-                    Button("Try again", action: retry)
-                        .font(.footnote.weight(.semibold))
-                } else if case .signedOut = state {
-                    Button("Retry", action: retry)
-                        .font(.footnote.weight(.semibold))
-                }
-            }
-            Spacer(minLength: 0)
-            if state == .loading || state == .refreshing {
-                ProgressView()
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(12)
-        .background(Color.secondary.opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
-    }
-
-    private var stateColor: Color {
-        switch state {
-        case .failed: return .orange
-        case .signedOut: return .yellow
-        case .loaded: return .green
-        case .idle, .loading, .refreshing: return .secondary
-        }
-    }
-}
-
 struct PremiumPlan: Identifiable, Decodable, Equatable {
     let id: String
     let name: String
@@ -186,10 +113,10 @@ final class PremiumShop: ObservableObject {
 
     @Published private(set) var plans: [PremiumPlan] = []
     @Published private(set) var perks: [PremiumPerk] = []
-    @Published private(set) var plansState: LoadState = .idle
+    @Published private(set) var plansState: PremiumLoadState = .idle
     @Published private(set) var cryptoEnabled = true
     @Published private(set) var purchases: [PurchaseRecord] = []
-    @Published private(set) var purchasesState: LoadState = .idle
+    @Published private(set) var purchasesState: PremiumLoadState = .idle
     @Published private(set) var phase: CheckoutPhase = .idle
     @Published private(set) var order: LTCOrder?
     @Published private(set) var watchNote: String?       // e.g. "Can't reach AirShare right now. Still watching."

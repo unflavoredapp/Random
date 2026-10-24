@@ -12,7 +12,7 @@ struct LTCPayPanel: View {
 
     var body: some View {
         VStack(spacing: 14) {
-            if let image = QRCode.image(for: order.uri) {
+            if let image = LTCQRCode.image(for: order.uri) {
                 Image(uiImage: image)
                     .interpolation(.none)
                     .resizable()
@@ -93,7 +93,7 @@ struct LTCPayPanel: View {
     }
 }
 
-enum QRCode {
+enum LTCQRCode {
     private static let context = CIContext()
 
     static func image(for text: String) -> UIImage? {
