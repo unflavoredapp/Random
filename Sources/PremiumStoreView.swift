@@ -1,14 +1,13 @@
 import SwiftUI
 
-/// Two-step premium checkout. Step 1: pick a length of premium. Step 2: review and pay on Stripe's page.
+/// Two-step premium checkout. Step 1: pick a length of premium. Step 2: review and pay in Litecoin inside the app.
 struct PremiumStoreView: View {
     @ObservedObject private var shop = PremiumShop.shared
     @ObservedObject private var certs = CertificateRequestClient.shared
     @State private var selectedID: String?
     @State private var showConfirm = false
-
-    // Flip to true once the premium badge actually shows next to usernames, so the sheet only promises what exists.
-    private let showsBadgePerk = false
+    @State private var showHistory = false
+    @Environment(\.scenePhase) private var scenePhase
 
     private var selected: PremiumPlan? {
         shop.plans.first { $0.id == selectedID } ?? shop.plans.first
@@ -23,11 +22,15 @@ struct PremiumStoreView: View {
                     header
 
                     if shop.plans.isEmpty {
-                        if let e = shop.error {
-                            Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).font(.footnote)
-                        } else {
+                        if shop.plansState == .loading || shop.plansState == .idle {
                             ProgressView().padding(.vertical, 30)
+                        } else {
+                            StateBanner(state: shop.plansState) { Task { await shop.loadPlans() } }
+                                .padding(.vertical, 20)
                         }
+                    } else if case .failed = shop.plansState {
+                        // Old prices stay on screen, but say they may be out of date.
+                        StateBanner(state: shop.plansState) { Task { await shop.loadPlans() } }
                     }
 
                     ForEach(shop.plans) { plan in
@@ -39,7 +42,7 @@ struct PremiumStoreView: View {
 
                     VStack(alignment: .leading, spacing: 14) {
                         PerkRow(icon: "crown.fill", text: "Premium status on your account")
-                        if showsBadgePerk { PerkRow(icon: "checkmark.seal.fill", text: "Premium badge") }
+                        ForEach(shop.perks) { perk in PerkRow(icon: perk.icon, text: perk.text) }
                         PerkRow(icon: "plus.circle.fill", text: "Days stack if you buy more")
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -63,17 +66,24 @@ struct PremiumStoreView: View {
                         .padding(.horizontal, 28).padding(.vertical, 14)
                         .background(.white, in: RoundedRectangle(cornerRadius: 16))
                 }
-                .disabled(selected == nil)
+                .disabled(selected == nil || !shop.cryptoEnabled || shop.plansState.isWorking && shop.plans.isEmpty)
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
             .background(Color(white: 0.12))
         }
         .background(Color(white: 0.09).ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .task { await shop.loadPlans() }
-        .sheet(isPresented: $showConfirm) {
+        .task {
+            await shop.loadPlans()
+            await shop.reconcilePending()
+        }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { Task { await shop.reconcilePending(); await certs.refreshStatus() } }
+        }
+        .sheet(isPresented: $showConfirm, onDismiss: { Task { await certs.refreshStatus() } }) {
             if let plan = selected { PremiumConfirmView(plan: plan) }
         }
+        .sheet(isPresented: $showHistory) { PurchaseHistoryView() }
     }
 
     private var header: some View {
@@ -83,8 +93,13 @@ struct PremiumStoreView: View {
                 let d = certs.server?.premiumDaysLeft ?? 0
                 Text("\(d) day\(d == 1 ? "" : "s") left").font(.subheadline).foregroundStyle(.secondary)
             } else {
-                Text("One-time payment, no subscription").font(.subheadline).foregroundStyle(.secondary)
+                Text("One-time payment in Litecoin, no subscription").font(.subheadline).foregroundStyle(.secondary)
+                if !shop.cryptoEnabled { Text("Litecoin payments aren't available yet.").font(.footnote).foregroundStyle(.orange) }
             }
+            Button { showHistory = true } label: {
+                Label("Purchase history", systemImage: "clock.arrow.circlepath").font(.footnote)
+            }
+            .padding(.top, 4)
         }
         .padding(.top, 8)
     }
@@ -102,7 +117,7 @@ private struct PlanRow: View {
                 .overlay(Image(systemName: "crown.fill").font(.title3).foregroundStyle(.white))
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(plan.days) days").font(.headline)
-                Text("one-time payment").font(.caption).foregroundStyle(.secondary)
+                Text("one-time, paid in LTC").font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             Text(plan.priceText)
@@ -129,7 +144,7 @@ private struct PerkRow: View {
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: icon).foregroundStyle(.green).frame(width: 28)
-            Text(text)
+            Text(text).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
     }
@@ -142,7 +157,9 @@ struct PremiumConfirmView: View {
 
     @ObservedObject private var shop = PremiumShop.shared
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @State private var showInfo = false
+    @State private var closeTask: Task<Void, Never>?
 
     // Replace with your real terms page.
     private let termsURL = URL(string: "https://airshare.lol/terms")!
@@ -164,7 +181,7 @@ struct PremiumConfirmView: View {
                         .padding(.horizontal, 10).padding(.vertical, 4)
                         .background(.yellow, in: Capsule())
                 }
-                .card()
+                .payCard()
 
                 Button { withAnimation { showInfo.toggle() } } label: {
                     HStack(spacing: 12) {
@@ -174,48 +191,32 @@ struct PremiumConfirmView: View {
                         Image(systemName: showInfo ? "chevron.down" : "chevron.right").foregroundStyle(.secondary)
                     }
                     .foregroundStyle(.white)
-                    .card(stroke: .gray.opacity(0.4))
+                    .payCard(stroke: .gray.opacity(0.4))
                 }
                 if showInfo {
                     // Edit this to match your real refund and support policy.
-                    Text("Premium days are added to your account right after payment and stack on top of any days you already have. Payment is a one-time charge, not a subscription. Contact support if something looks wrong.")
+                    Text("Premium days are added to your account once your payment has enough confirmations (a few minutes) and stack on top of any days you already have. Payment is a one-time Litecoin transfer, not a subscription, and it can't be reversed once confirmed. Contact support if something looks wrong.")
                         .font(.footnote).foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .card()
+                        .payCard()
                 }
 
                 HStack(spacing: 10) {
-                    Image(systemName: "largecircle.fill.circle").foregroundStyle(.white)
-                    Badge(text: "Apple Pay", fg: .black, bg: .white)
-                    Badge(text: "Mastercard", fg: .white, bg: Color(red: 0.8, green: 0.2, blue: 0.2))
-                    Badge(text: "VISA", fg: .white, bg: Color(red: 0.1, green: 0.2, blue: 0.6))
-                    Badge(text: "AMEX", fg: .white, bg: Color(red: 0.2, green: 0.45, blue: 0.75))
+                    Badge(text: "Litecoin \u{00B7} LTC", fg: .white, bg: Color(red: 0.2, green: 0.36, blue: 0.62))
+                    Text("Paid on the Litecoin network").font(.footnote).foregroundStyle(.secondary)
                     Spacer(minLength: 0)
                 }
-                .card()
+                .payCard()
 
                 HStack(spacing: 12) {
                     Image(systemName: "lock.shield.fill").font(.title2).foregroundStyle(.green)
-                    Text("You'll pay on a secure Stripe page. Your card details never pass through AirShare.")
+                    Text("You pay from your own wallet, right here in the app. No card, no account with a payment company. The price is fixed in US dollars and quoted in LTC when you start.")
                         .font(.footnote)
                     Spacer(minLength: 0)
                 }
-                .card()
+                .payCard()
 
-                Button { Task { await shop.startCheckout(plan) } } label: {
-                    HStack {
-                        if shop.busy { ProgressView().tint(.black) } else { Image(systemName: "arrow.right.circle.fill") }
-                        Text("Purchase")
-                    }
-                    .font(.headline).foregroundStyle(.black)
-                    .frame(maxWidth: .infinity).padding(.vertical, 16)
-                    .background(.white, in: RoundedRectangle(cornerRadius: 16))
-                }
-                .disabled(shop.busy)
-
-                if let e = shop.error {
-                    Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.red).font(.footnote)
-                }
+                actionArea
 
                 VStack(spacing: 4) {
                     Text("By paying, you confirm that you accept the")
@@ -228,14 +229,76 @@ struct PremiumConfirmView: View {
         }
         .background(Color(white: 0.09).ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .fullScreenCover(item: $shop.page, onDismiss: {
-            Task {
-                await shop.refreshAfterPurchase()
-                dismiss()
+        .onAppear { shop.beginVisit(planID: plan.id) }
+        .onChange(of: shop.phase) { phase in
+            // Close only once the server has confirmed payment. Anything else keeps this sheet up with an honest message.
+            if phase == .confirmed {
+                closeTask?.cancel()
+                closeTask = Task {
+                    try? await Task.sleep(nanoseconds: 1_800_000_000)
+                    if !Task.isCancelled { dismiss() }
+                }
             }
-        }) { page in
-            SafariView(url: page.url).ignoresSafeArea()
         }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { shop.foregrounded() }
+        }
+        .onDisappear { closeTask?.cancel(); shop.endVisit() }
+    }
+
+    @ViewBuilder
+    private var actionArea: some View {
+        switch shop.phase {
+        case .awaiting:
+            if let order = shop.order { LTCPayPanel(order: order, note: shop.watchNote) { shop.checkNow() } }
+
+        case .confirmed:
+            Label("Payment confirmed. Premium is active.", systemImage: "checkmark.seal.fill")
+                .font(.headline).foregroundStyle(.green)
+                .frame(maxWidth: .infinity).padding(.vertical, 12)
+
+        case .expired:
+            VStack(spacing: 10) {
+                Label("This quote expired before a payment was seen.", systemImage: "clock.badge.exclamationmark.fill")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.yellow)
+                Text("If you already sent the coins, tap Check now. A payment that arrives late is reviewed by our team. Otherwise get a fresh quote.")
+                    .font(.footnote).foregroundStyle(.secondary)
+                actionButton("Check now", icon: "arrow.clockwise") { shop.checkNow() }
+                Button("Get a new quote") { Task { await shop.startCheckout(plan) } }.font(.footnote)
+            }
+
+        case .needsReview:
+            VStack(spacing: 10) {
+                Label("We received a payment that needs a quick manual check.", systemImage: "person.fill.questionmark")
+                    .font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                Text("It arrived after the quote expired or was less than the price. Contact support and mention order #\(shop.order?.orderID ?? 0); nothing is lost.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+
+        case let .failed(message):
+            VStack(spacing: 10) {
+                Label(message, systemImage: "exclamationmark.triangle.fill").font(.footnote).foregroundStyle(.red)
+                actionButton("Try again", icon: "arrow.right.circle.fill") { Task { await shop.startCheckout(plan) } }
+            }
+
+        case .idle, .creating:
+            actionButton("Pay with Litecoin", icon: "arrow.right.circle.fill", working: shop.phase == .creating) {
+                Task { await shop.startCheckout(plan) }
+            }
+        }
+    }
+
+    private func actionButton(_ title: String, icon: String, working: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                if working { ProgressView().tint(.black) } else { Image(systemName: icon) }
+                Text(title)
+            }
+            .font(.headline).foregroundStyle(.black)
+            .frame(maxWidth: .infinity).padding(.vertical, 16)
+            .background(.white, in: RoundedRectangle(cornerRadius: 16))
+        }
+        .disabled(working)
     }
 }
 
@@ -249,16 +312,5 @@ private struct Badge: View {
             .padding(.horizontal, 8).padding(.vertical, 8)
             .background(bg, in: RoundedRectangle(cornerRadius: 6))
             .lineLimit(1).minimumScaleFactor(0.6)
-    }
-}
-
-private extension View {
-    func card(stroke: Color? = nil) -> some View {
-        self.padding(14)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(white: 0.14), in: RoundedRectangle(cornerRadius: 18))
-            .overlay {
-                if let stroke { RoundedRectangle(cornerRadius: 18).strokeBorder(stroke, lineWidth: 1) }
-            }
     }
 }

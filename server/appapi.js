@@ -25,6 +25,7 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const PERKS = require("./perks");
 
 const ADID_RE = /^(AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$/;
 const NAME_RE = /^[A-Za-z0-9_]{3,20}$/;
@@ -102,6 +103,7 @@ function mount(web, c) {
     const r = roleOf(u);
     if (r === "admin" && !b.includes("founder")) b.unshift("founder");
     if (r === "developer" && !b.includes("dev")) b.unshift("dev");
+    if (PERKS.badge && premiumOf(u).active && !b.includes("premium")) b.push("premium");
     return Array.from(new Set(b));
   }
   function styleOf(u) { try { const s = JSON.parse(u.style || "{}"); return s && typeof s === "object" ? s : {}; } catch { return {}; } }
@@ -277,6 +279,8 @@ function mount(web, c) {
     bannedAdids: () => db.prepare("SELECT * FROM banned_adids ORDER BY banned_at DESC LIMIT 200").all(),
     correlate: (id) => correlate(id),
     setPremium: (id, mode, days) => setPremium(id, String(mode), days),
+    isPremium: (uid) => premiumUid(uid),
+    perks: PERKS,
     setGroups: (id, groups) => { if (!byId.get(Number(id))) return null; const g = cleanGroups(groups); setGroupsQ.run(JSON.stringify(g), Number(id)); return g; },
     setSponsor: (id, sponsor) => { if (!byId.get(Number(id))) return null; const v = cleanSponsor(sponsor); setSponsorQ.run(v, Number(id)); return v; },
     setRole: (id, role) => { if (!ROLES.includes(String(role)) || !byId.get(Number(id))) return false; db.prepare("UPDATE local_users SET role=? WHERE id=?").run(String(role), Number(id)); return true; },
@@ -316,6 +320,7 @@ function mount(web, c) {
       const role = roleOf(u), g = badgesOf(u);
       if (role === "admin" || g.some(x => UNLIMITED_GROUPS.includes(x))) return { tier: "staff", limit: null };
       if (role === "developer" || g.includes("dev")) return { tier: "developer", limit: DEC.developer };
+      if (premiumOf(u).active) return { tier: "member", limit: Math.max(DEC.member, PERKS.decryptLimit) };
       return { tier: "member", limit: DEC.member };
     }
     if (/^\d+$/.test(String(uid || ""))) return { tier: "member", limit: DEC.member }; // Telegram-login website account
@@ -330,7 +335,7 @@ function mount(web, c) {
 
   // Premium rollover: a small amount of yesterday's unused daily quota carries into today, for premium members only.
   // Computed once per day per account and stashed on the row, so repeated status checks agree on the same number.
-  const DEC_CARRY_MAX = envN("DEC_CARRY_MAX", 3);
+  const DEC_CARRY_MAX = envN("DEC_CARRY_MAX", PERKS.carryMax);
   const setCarryQ = db.prepare("UPDATE local_users SET dec_carry=?, dec_carry_day=? WHERE id=?");
   function carryFor(uid, tier) {
     const m = /^u(\d+)$/.exec(String(uid || ""));
@@ -349,6 +354,8 @@ function mount(web, c) {
   const coolQ = db.prepare("SELECT until FROM dec_cooldown WHERE k=?");
   const coolSetQ = db.prepare("INSERT INTO dec_cooldown(k,app_id,until) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET app_id=excluded.app_id, until=excluded.until");
   const coolClearQ = db.prepare("DELETE FROM dec_cooldown WHERE k=?");
+  const premiumUid = (uid) => { const m = /^u(\d+)$/.exec(String(uid || "")); const u = m ? byId.get(Number(m[1])) : null; return !!(u && premiumOf(u).active); };
+  const cooldownMsFor = (uid) => (premiumUid(uid) ? Math.min(DEC_APP_COOLDOWN_MS, PERKS.cooldownMin * 60000) : DEC_APP_COOLDOWN_MS);
   function appCooldownLeft(uid, appId) {
     if (!appId || DEC_APP_COOLDOWN_MS <= 0) return 0;
     const r = coolQ.get(uid + "|" + appId);
@@ -372,7 +379,7 @@ function mount(web, c) {
     if (!st.unlimited && st.left <= 0) return { ...st, ok: false };
     if (uid) qUp.run(uid, day());
     if (st.tier === "guest" && ip) qUp.run("ip|" + ip, day());
-    if (appId) coolSetQ.run(uid + "|" + appId, appId, Date.now() + DEC_APP_COOLDOWN_MS);
+    if (appId) coolSetQ.run(uid + "|" + appId, appId, Date.now() + cooldownMsFor(uid));
     return decStatus(uid, ip, appId);
   }
   function decRefund(uid, ip, appId) { // a decrypt that failed doesn't cost anything, and doesn't start the cooldown either
@@ -505,6 +512,10 @@ function mount(web, c) {
             font: String(b.font || "").replace(/[^A-Za-z0-9\-_ ]/g, "").slice(0, 40),
             size: Math.min(4, Math.max(1, parseInt(b.size, 10) || 2)),
           };
+          if (PERKS.fancyStyles && !premiumOf(u).active && roleOf(u) === "member" && !storedBadges(u).length) {
+            const cur = styleOf(u); // styles a user already had stay editable; only NEW rainbow / GIF needs Premium
+            if ((st.rainbow && !cur.rainbow) || (st.gif && st.gif !== cur.gif)) return fail(res, 403, "Rainbow and GIF styles are a Premium perk.");
+          }
           db.prepare("UPDATE local_users SET style=? WHERE id=?").run(JSON.stringify(st), u.id);
           return res.json({ ok: true, style: st });
         }
@@ -601,7 +612,7 @@ function mount(web, c) {
   web.get("/app/v1/style", base, (req, res) => {
     if (limited("st|" + req.ip, 300, 600000)) return fail(res, 429, "Too many requests.");
     const names = String(req.query.usernames || "").split(",").map(s => s.trim()).filter(s => /^[A-Za-z0-9_.]{3,32}$/.test(s)).slice(0, 50);
-    const out = {}, q = db.prepare("SELECT id,username,adid,role,style,badges FROM local_users WHERE username=?");
+    const out = {}, q = db.prepare("SELECT id,username,adid,role,style,badges,premium_until FROM local_users WHERE username=?");
     for (const n of names) { const u = q.get(n); if (u) out[n.toLowerCase()] = { style: styleOf(u), role: roleOf(u), badges: badgesOf(u), sponsor: String(u.sponsor || "") }; }
     return res.json(out);
   });
@@ -716,7 +727,9 @@ function mount(web, c) {
       .map(u => ({ id: u.id, username: u.username, adid: u.adid, created_at: u.created_at, last_login: u.last_login,
         email: /@accounts\.invalid$/.test(u.email) ? "" : u.email, role: roleOf(u), groups: storedBadges(u), sponsor: String(u.sponsor || ""), premium: premiumOf(u), ban: banInfo(u) }));
     const sender = db.prepare("SELECT id,username,adid,role,badges,premium_until,created_at FROM local_users WHERE id=?");
-    const requests = db.prepare("SELECT * FROM cert_requests ORDER BY (status='pending') DESC, id DESC LIMIT 200").all().map(r => {
+    const requests = db.prepare(PERKS.priorityReview
+      ? "SELECT * FROM cert_requests ORDER BY (status='pending') DESC, (status='pending' AND COALESCE((SELECT premium_until FROM local_users WHERE id=cert_requests.user_id),'') > ?) DESC, id DESC LIMIT 200"
+      : "SELECT * FROM cert_requests ORDER BY (status='pending') DESC, id DESC LIMIT ?").all(PERKS.priorityReview ? new Date().toISOString() : 200).map(r => {
       const u = r.user_id ? sender.get(r.user_id) : null;
       return { ...r, sender: u ? { id: u.id, username: u.username, adid: u.adid || "", role: roleOf(u), groups: storedBadges(u), premium: premiumOf(u), joined: u.created_at } : null };
     });
@@ -927,9 +940,16 @@ bdload();
 </script></body></html>`);
   });
 
-  // Stripe payments for premium days (see payments.js). Stays off unless STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are set.
-  try { require("./payments").mount(web, { db, express, base, jsonBody, jsonErr, needAuth, fail, limited, setPremium }); }
+  // Litecoin payments for premium days (see payments.js and ltc-hd.js). Stays off unless LTC_XPUB (an extended PUBLIC key) is set.
+  try { require("./payments").mount(web, { db, express, base, jsonBody, jsonErr, needAuth, fail, limited, setPremium, auth,
+    describePerks: () => PERKS.describe({ memberLimit: DEC.member, cooldownMin: Math.round(DEC_APP_COOLDOWN_MS / 60000) }) }); }
   catch (e) { console.warn("Payments disabled:", e.message); }
+  // Priority support tickets and "early look" posts (Premium sees early posts first).
+  const canSeeEarly = (u) => premiumOf(u).active || roleOf(u) !== "member" || storedBadges(u).some(g => ["admin", "co_admin", "staff", "founder", "dev"].includes(g));
+  try { require("./support").mount(web, { db, express, base, jsonBody, jsonErr, needAuth, fail, limited, auth, isPremiumUser: (u) => premiumOf(u).active, priorityOn: PERKS.prioritySupport }); }
+  catch (e) { console.warn("Support disabled:", e.message); }
+  try { require("./early").mount(web, { db, express, base, needAuth, auth, canSeeEarly, earlyOn: PERKS.earlyLooks }); }
+  catch (e) { console.warn("Early looks disabled:", e.message); }
 
   // Used by site.js actorId(): lets the iOS app reuse the website's decrypt / search / download routes.
   // Bearer token -> the account ("u<id>", same owner as the website session); otherwise the device ADID header -> a guest actor.
