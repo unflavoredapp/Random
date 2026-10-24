@@ -41,7 +41,7 @@ function mount(web, c) {
   const APP_ADMINS = csv(process.env.APP_ADMINS), APP_DEVS = csv(process.env.APP_DEVS);
 
   // ---------- schema ----------
-  for (const col of ["adid TEXT", "role TEXT NOT NULL DEFAULT 'member'", "style TEXT", "badges TEXT", "tv INTEGER NOT NULL DEFAULT 0", "sponsor TEXT", "premium_until TEXT", "banned INTEGER NOT NULL DEFAULT 0", "banned_reason TEXT", "banned_until TEXT", "dec_carry INTEGER NOT NULL DEFAULT 0", "dec_carry_day TEXT"]) {
+  for (const col of ["adid TEXT", "role TEXT NOT NULL DEFAULT 'member'", "style TEXT", "badges TEXT", "tv INTEGER NOT NULL DEFAULT 0", "sponsor TEXT", "premium_until TEXT", "banned INTEGER NOT NULL DEFAULT 0", "banned_reason TEXT", "banned_until TEXT", "banned_at TEXT", "dec_carry INTEGER NOT NULL DEFAULT 0", "dec_carry_day TEXT"]) {
     try { db.exec("ALTER TABLE local_users ADD COLUMN " + col); } catch { /* already there */ }
   }
   try { db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_local_users_adid ON local_users(adid) WHERE adid IS NOT NULL"); } catch (e) { console.warn("adid index:", e.message); }
@@ -57,14 +57,19 @@ function mount(web, c) {
     CREATE INDEX IF NOT EXISTS login_events_user ON login_events(user_id, at);
     CREATE INDEX IF NOT EXISTS login_events_adid ON login_events(adid);
     CREATE INDEX IF NOT EXISTS login_events_ip ON login_events(ip_hash);
-    CREATE TABLE IF NOT EXISTS dec_cooldown(k TEXT PRIMARY KEY, app_id TEXT NOT NULL, until INTEGER NOT NULL);`);
+    CREATE TABLE IF NOT EXISTS dec_cooldown(k TEXT PRIMARY KEY, app_id TEXT NOT NULL, until INTEGER NOT NULL);
+    CREATE TABLE IF NOT EXISTS ban_appeals(
+      id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL, banned_at TEXT, message TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending', admin_note TEXT, created_at TEXT NOT NULL, reviewed_at TEXT, reviewed_by TEXT);
+    CREATE INDEX IF NOT EXISTS ban_appeals_user ON ban_appeals(user_id, created_at);
+    CREATE INDEX IF NOT EXISTS ban_appeals_status ON ban_appeals(status, created_at);`);
   for (const col of ["device_name TEXT", "eta_days INTEGER", "reviewed_by TEXT"]) {
     try { db.exec("ALTER TABLE cert_requests ADD COLUMN " + col); } catch { /* already there */ }
   }
 
-  const byId = db.prepare("SELECT id,username,email,pass_hash,adid,role,style,badges,tv,sponsor,premium_until,banned,banned_reason,banned_until,dec_carry,dec_carry_day,created_at FROM local_users WHERE id=?");
-  const byName = db.prepare("SELECT id,username,email,pass_hash,adid,role,style,badges,tv,sponsor,premium_until,banned,banned_reason,banned_until,created_at FROM local_users WHERE username=? OR email=?");
-  const byAdid = db.prepare("SELECT id,username,adid,role,badges,banned,banned_reason,banned_until FROM local_users WHERE adid=?");
+  const byId = db.prepare("SELECT id,username,email,pass_hash,adid,role,style,badges,tv,sponsor,premium_until,banned,banned_reason,banned_until,banned_at,dec_carry,dec_carry_day,created_at FROM local_users WHERE id=?");
+  const byName = db.prepare("SELECT id,username,email,pass_hash,adid,role,style,badges,tv,sponsor,premium_until,banned,banned_reason,banned_until,banned_at,created_at FROM local_users WHERE username=? OR email=?");
+  const byAdid = db.prepare("SELECT id,username,adid,role,badges,banned,banned_reason,banned_until,banned_at FROM local_users WHERE adid=?");
   const setAdid = db.prepare("UPDATE local_users SET adid=? WHERE id=?");
 
   // ---------- helpers ----------
@@ -102,7 +107,7 @@ function mount(web, c) {
   function styleOf(u) { try { const s = JSON.parse(u.style || "{}"); return s && typeof s === "object" ? s : {}; } catch { return {}; } }
   // Premium is a number of days on the account: it counts down from the moment it is granted, and more days stack on top.
   // A ban with banned_until in the past has lapsed; isBanned() is the single source of truth everywhere.
-  const clearBanQ = db.prepare("UPDATE local_users SET banned=0, banned_reason=NULL, banned_until=NULL WHERE id=?");
+  const clearBanQ = db.prepare("UPDATE local_users SET banned=0, banned_reason=NULL, banned_until=NULL, banned_at=NULL WHERE id=?");
   function isBanned(u) {
     if (!u || !u.banned) return false;
     if (u.banned_until) {
@@ -111,15 +116,67 @@ function mount(web, c) {
     }
     return true;
   }
+  // One appeal per ban "window" (banned_at): a fresh ban always gets a fresh banned_at, so a user who was
+  // banned, appealed, got unbanned and was later banned again can appeal again — but can't spam the same ban.
+  const appealForQ = db.prepare("SELECT id,message,status,admin_note,created_at,reviewed_at FROM ban_appeals WHERE user_id=? AND banned_at IS ? ORDER BY id DESC LIMIT 1");
+  const latestAppealQ = db.prepare("SELECT id,message,status,admin_note,created_at,reviewed_at FROM ban_appeals WHERE user_id=? ORDER BY id DESC LIMIT 1");
+  function appealFor(userId, bannedAt) { return appealForQ.get(Number(userId), bannedAt || null); }
+  const appealJSON = (ap) => ap ? { id: ap.id, submitted: true, status: ap.status, message: ap.message, admin_note: String(ap.admin_note || ""), at: ap.created_at } : { submitted: false };
+  // For admin display, the appeal (and the admin's note on it) stays visible after an unban — that history is
+  // exactly what an appeal inbox is for. appealFor() (ban-window-scoped) is still what gates a new submission.
   function banInfo(u) {
-    if (!isBanned(u)) return { banned: false, reason: "", until: null };
-    return { banned: true, reason: String(u.banned_reason || ""), until: u.banned_until || null };
+    const banned = isBanned(u);
+    const appeal = appealJSON(banned ? appealFor(u.id, u.banned_at || null) : latestAppealQ.get(u.id));
+    if (!banned) return { banned: false, reason: "", until: null, appeal };
+    return { banned: true, reason: String(u.banned_reason || ""), until: u.banned_until || null, appeal };
   }
   function banMessage(u) {
     let m = "This account has been banned.";
     if (u.banned_reason) m += " Reason: " + u.banned_reason;
     if (u.banned_until) m += " It lifts " + new Date(u.banned_until).toLocaleString("en-US", { timeZone: "UTC" }) + " UTC.";
     return m;
+  }
+  // Verifies the same credentials login/autologin would accept, without minting a session — used so a banned
+  // user (who has no working token) can still prove it's their own account before an appeal is recorded.
+  async function submitAppeal({ username, password, adid, deviceKey, message }) {
+    const msg = String(message || "").trim().replace(/[\u0000-\u001f]/g, " ").slice(0, 1000);
+    if (msg.length < 10) return { ok: false, code: 400, error: "Tell us a bit more — at least 10 characters." };
+    let u = null;
+    const ident = String(username || "").trim();
+    const pw = typeof password === "string" ? password.slice(0, 128) : "";
+    const a = String(adid || "").trim().toUpperCase();
+    const dk = typeof deviceKey === "string" ? deviceKey : "";
+    if (ident && pw) {
+      const row = byName.get(ident, ident);
+      if (row && (await checkPw(pw, row.pass_hash))) u = byId.get(row.id);
+    } else if (ADID_RE.test(a) && dk.length >= 20) {
+      const dev = db.prepare("SELECT user_id,key_hash FROM app_devices WHERE adid=?").get(a);
+      if (dev && eq(dev.key_hash, sha(dk))) u = byId.get(dev.user_id);
+    }
+    if (!u) return { ok: false, code: 401, error: "Couldn't verify that account." };
+    if (!isBanned(u)) return { ok: false, code: 400, error: "This account isn't banned." };
+    if (appealFor(u.id, u.banned_at || null)) return { ok: false, code: 409, error: "An appeal has already been submitted for this ban." };
+    db.prepare("INSERT INTO ban_appeals(user_id,banned_at,message,status,created_at) VALUES(?,?,?,?,?)")
+      .run(u.id, u.banned_at || null, msg, "pending", new Date().toISOString());
+    return { ok: true, appeal: { submitted: true, status: "pending" } };
+  }
+  function listAppeals(status) {
+    const rows = status
+      ? db.prepare("SELECT a.*, u.username, u.banned, u.banned_reason, u.banned_until FROM ban_appeals a JOIN local_users u ON u.id=a.user_id WHERE a.status=? ORDER BY a.id DESC LIMIT 300").all(String(status))
+      : db.prepare("SELECT a.*, u.username, u.banned, u.banned_reason, u.banned_until FROM ban_appeals a JOIN local_users u ON u.id=a.user_id ORDER BY (a.status='pending') DESC, a.id DESC LIMIT 300").all();
+    return rows.map(r => ({
+      id: r.id, user_id: r.user_id, username: r.username, message: r.message, status: r.status, admin_note: r.admin_note || "",
+      created_at: r.created_at, reviewed_at: r.reviewed_at, reviewed_by: r.reviewed_by || "",
+      currently_banned: !!r.banned, ban_reason: r.banned_reason || "", ban_until: r.banned_until || null,
+    }));
+  }
+  function reviewAppeal(id, note, unban) {
+    const a = db.prepare("SELECT * FROM ban_appeals WHERE id=?").get(Number(id));
+    if (!a) return null;
+    db.prepare("UPDATE ban_appeals SET status='reviewed', admin_note=?, reviewed_at=?, reviewed_by=? WHERE id=?")
+      .run(String(note || "").replace(/[\u0000-\u001f<>]/g, " ").trim().slice(0, 500) || null, new Date().toISOString(), "admin", a.id);
+    if (unban) setBanned(a.user_id, false);
+    return { ok: true };
   }
   function premiumOf(u) {
     const t = u && u.premium_until ? Date.parse(u.premium_until) : NaN;
@@ -153,8 +210,8 @@ function mount(web, c) {
     if (!u) return null;
     if (flag) {
       const until = Number(days) > 0 ? new Date(Date.now() + Math.min(3650, Math.floor(Number(days))) * 86400000).toISOString() : null;
-      db.prepare("UPDATE local_users SET banned=1, banned_reason=?, banned_until=?, tv=COALESCE(tv,0)+1 WHERE id=?")
-        .run(String(reason || "").replace(/[\u0000-\u001f<>]/g, " ").trim().slice(0, 200) || null, until, id);
+      db.prepare("UPDATE local_users SET banned=1, banned_reason=?, banned_until=?, banned_at=?, tv=COALESCE(tv,0)+1 WHERE id=?")
+        .run(String(reason || "").replace(/[\u0000-\u001f<>]/g, " ").trim().slice(0, 200) || null, until, new Date().toISOString(), id);
       db.prepare("DELETE FROM app_devices WHERE user_id=?").run(id);
     } else {
       clearBanQ.run(id);
@@ -212,7 +269,10 @@ function mount(web, c) {
     extra: (id) => { const u = byId.get(Number(id)); return u ? { role: roleOf(u), groups: storedBadges(u), sponsor: String(u.sponsor || ""), premium: premiumOf(u), ban: banInfo(u) } : {}; },
     isBanned: (id) => isBanned(byId.get(Number(id))),
     banMessage: (id) => { const u = byId.get(Number(id)); return u ? banMessage(u) : ""; },
+    banInfo: (id) => { const u = byId.get(Number(id)); return u ? banInfo(u) : { banned: false, reason: "", until: null }; },
     setBanned: (id, flag, reason, days) => setBanned(id, !!flag, reason, days),
+    submitAppeal: (args) => submitAppeal(args),
+    reviewAppeal: (id, note, unban) => reviewAppeal(id, note, !!unban),
     setAdidBanned: (adid, flag, reason, days) => setAdidBanned(adid, !!flag, reason, days),
     bannedAdids: () => db.prepare("SELECT * FROM banned_adids ORDER BY banned_at DESC LIMIT 200").all(),
     correlate: (id) => correlate(id),
@@ -373,7 +433,7 @@ function mount(web, c) {
       const row = byName.get(ident, ident);
       const ok = await checkPw(password, row ? row.pass_hash : null);
       if (!row || !ok) return fail(res, 401, "Incorrect username or password.");
-      if (isBanned(row)) return fail(res, 403, banMessage(row));
+      if (isBanned(row)) return res.status(403).json({ ok: false, error: banMessage(row), banned: true, ban: banInfo(row) });
       const reqAdid = String(b.adid || b.mdid || "").toUpperCase();
       const adidBan0 = reqAdid ? adidBanInfo(reqAdid) : null;
       if (adidBan0) return fail(res, 403, "This device can't sign in." + (adidBan0.reason ? " Reason: " + adidBan0.reason : ""));
@@ -393,7 +453,7 @@ function mount(web, c) {
       const row = db.prepare("SELECT user_id,key_hash FROM app_devices WHERE adid=?").get(adid);
       if (!row || !eq(row.key_hash, sha(key))) return fail(res, 401, "This device isn't recognized. Sign in once.");
       const u = byId.get(row.user_id);
-      if (u && isBanned(u)) return fail(res, 403, banMessage(u));
+      if (u && isBanned(u)) return res.status(403).json({ ok: false, error: banMessage(u), banned: true, ban: banInfo(u) });
       if (!u || u.adid !== adid) return fail(res, 401, "This device isn't recognized. Sign in once.");
       const adb = adidBanInfo(adid);
       if (adb) return fail(res, 403, "This device can't sign in." + (adb.reason ? " Reason: " + adb.reason : ""));
@@ -403,6 +463,17 @@ function mount(web, c) {
       logLogin(u.id, adid, req.ip, "autologin");
       return res.json({ ...profile(u), token: mint(u) });
     } catch (e) { console.warn("App autologin failed:", e.message); return fail(res, 500, "Something went wrong. Please try again."); }
+  }, jsonErr);
+
+  // One appeal message per ban. No session needed (a banned account has none) — re-proves identity with the
+  // same username/password login would accept, or the device's adid + device_key (autologin's credentials).
+  web.post("/app/v1/appeal", base, jsonBody, async (req, res) => {
+    try {
+      if (limited("ap|" + req.ip, 8, 3600000)) return fail(res, 429, "Too many attempts. Try again later.");
+      const b = req.body || {};
+      const r = await submitAppeal({ username: b.username, password: b.password, adid: b.adid || b.mdid, deviceKey: b.device_key, message: b.message });
+      return r.ok ? res.json(r) : fail(res, r.code || 400, r.error);
+    } catch (e) { console.warn("App appeal failed:", e.message); return fail(res, 500, "Something went wrong. Please try again."); }
   }, jsonErr);
 
   // ---------- account ----------
@@ -649,7 +720,7 @@ function mount(web, c) {
       const u = r.user_id ? sender.get(r.user_id) : null;
       return { ...r, sender: u ? { id: u.id, username: u.username, adid: u.adid || "", role: roleOf(u), groups: storedBadges(u), premium: premiumOf(u), joined: u.created_at } : null };
     });
-    res.json({ users, groups: GROUPS, requests, bannedAdids: db.prepare("SELECT * FROM banned_adids ORDER BY banned_at DESC LIMIT 200").all() });
+    res.json({ users, groups: GROUPS, requests, bannedAdids: db.prepare("SELECT * FROM banned_adids ORDER BY banned_at DESC LIMIT 200").all(), appeals: listAppeals() });
   });
   web.get("/admin/app/correlate/:id", auth, (req, res) => {
     res.set("Cache-Control", "no-store");
@@ -693,6 +764,10 @@ function mount(web, c) {
     const b = req.body || {};
     const r = setBanned(b.user_id, !!b.banned, b.reason, b.days);
     return r === null ? fail(res, 404, "Not found.") : res.json({ ok: true, ban: r });
+  });
+  web.post("/admin/app/appeal-review", auth, aj, (req, res) => {
+    const b = req.body || {}, r = reviewAppeal(b.id, b.note, !!b.unban);
+    return r === null ? fail(res, 404, "Not found.") : res.json({ ok: true, appeals: listAppeals() });
   });
   web.post("/admin/app/premium", auth, aj, (req, res) => {
     const b = req.body || {}, mode = String(b.mode || "add");
@@ -774,6 +849,7 @@ select,button{background:#1b1b1b;color:#eee;border:1px solid #333;border-radius:
 <div class="row"><b id="bft">Add a build</b><input id="bn" placeholder="Name" style="width:46%"><input id="bi" placeholder="Bundle ID" style="width:46%"><input id="bv" placeholder="Version" style="width:30%"><input id="bs" placeholder="Subtitle" style="width:62%"><input id="bc" placeholder="Icon URL (https, optional)" style="width:100%;box-sizing:border-box"><textarea id="bd" placeholder="Description / what to test" style="width:100%;box-sizing:border-box;min-height:70px;background:#1b1b1b;color:#eee;border:1px solid #333;border-radius:9px;padding:8px;margin-top:6px"></textarea><textarea id="ba" placeholder="Only these ADIDs (one per line, AS-XXXXXX-XX). Leave empty for every beta member." style="width:100%;box-sizing:border-box;min-height:56px;background:#1b1b1b;color:#eee;border:1px solid #333;border-radius:9px;padding:8px;margin-top:6px"></textarea><div class="m" style="margin-top:6px">IPA: <input id="bf" type="file" accept=".ipa" style="margin:0"></div><div class="m" id="bm"></div><button class="ok" onclick="bsave()">Save build</button><button onclick="breset()">Clear</button></div>
 <h2>CERTIFICATE REQUESTS</h2><div id="rq">Loading…</div>
 <h2>ACCOUNTS, GROUPS &amp; SPONSORS</h2><input id="q" placeholder="Search username, ADID or sponsor" oninput="draw()" style="width:100%;box-sizing:border-box"><div id="us"></div>
+<h2>BAN APPEALS</h2><div id="ap_list"></div>
 <h2>BANNED DEVICES (ADID banned outright, even on a new account)</h2><div id="bd_list"></div>
 <div class="row"><input id="bdadid" placeholder="AS-XXXXXX-XX" style="width:170px" autocapitalize="off"><input id="bdreason" placeholder="Reason (optional)" style="width:46%"><input id="bddays" type="number" min="0" max="3650" placeholder="Days (blank = forever)" style="width:170px"><button class="no" onclick="bdban()">Ban device</button></div>
 <h2>CORRELATION</h2><div class="row"><input id="corid" type="number" placeholder="User ID (u#)" style="width:150px"><button onclick="corload()">Show other accounts on the same device / network</button><div id="cor" class="m" style="margin-top:8px"></div></div>
@@ -797,7 +873,18 @@ function prc(id){var n=parseInt(document.getElementById('pd'+id).value,10)||0;pr
 function prs(id){var n=parseInt(document.getElementById('pd'+id).value,10)||0;pr(id,'set',n);}
 function load(){fetch('/admin/app/data',{credentials:'same-origin'}).then(function(r){return r.json()}).then(function(d){D=d;
  document.getElementById('rq').innerHTML=d.requests.map(rqRow).join('')||'<p class="m">No requests.</p>';
+ window.AP=d.appeals||[];apdraw();
  draw();});}
+function apRow(a){return '<div class="row"><b>'+e(a.username)+'</b> <span class="m">u'+a.user_id+' · '+e((a.created_at||'').slice(0,16).replace('T',' '))+'</span> '
+ +(a.status==='pending'?'<span class="tag" style="border-color:#ff9a1f;color:#ff9a1f">PENDING</span>':'<span class="tag">reviewed</span>')
+ +(a.currently_banned?' <span class="tag ban">'+e(bm({banned:true,reason:a.ban_reason,until:a.ban_until}))+'</span>':' <span class="m">no longer banned</span>')
+ +'<p>'+e(a.message)+'</p>'+(a.admin_note?'<div class="m">Admin note: '+e(a.admin_note)+'</div>':'')
+ +(a.status==='pending'?('<input id="apn'+a.id+'" placeholder="Note (optional)" style="width:60%"><button class="ok" onclick="apreview('+a.id+',false)">Mark reviewed</button>'
+   +(a.currently_banned?'<button class="no" onclick="apreview('+a.id+',true)">Unban &amp; mark reviewed</button>':''))
+   :'<div class="m">Reviewed '+e((a.reviewed_at||'').slice(0,16).replace('T',' '))+'</div>')
+ +'</div>';}
+function apreview(id,unban){var n=document.getElementById('apn'+id);post('/admin/app/appeal-review',{id:id,note:n?n.value:'',unban:unban}).then(ck).then(function(j){if(j.ok){window.AP=j.appeals;apdraw();load();}});}
+function apdraw(){var list=window.AP||[];document.getElementById('ap_list').innerHTML=list.map(apRow).join('')||'<p class="m">No appeals.</p>';}
 function draw(){var q=(document.getElementById('q').value||'').toLowerCase();
  document.getElementById('us').innerHTML=D.users.filter(function(u){return !q||(u.username+' '+(u.adid||'')+' '+(u.sponsor||'')).toLowerCase().indexOf(q)>=0}).map(function(u){
   var chips=D.groups.map(function(g){var on=u.groups.indexOf(g)>=0;return '<button class="chip'+(on?' on':'')+'" onclick="tg('+u.id+',\\''+g+'\\')">'+(on?'✓ ':'')+e(TITLE[g]||g)+'</button>'}).join('');
@@ -839,6 +926,10 @@ load();
 bdload();
 </script></body></html>`);
   });
+
+  // Stripe payments for premium days (see payments.js). Stays off unless STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are set.
+  try { require("./payments").mount(web, { db, express, base, jsonBody, jsonErr, needAuth, fail, limited, setPremium }); }
+  catch (e) { console.warn("Payments disabled:", e.message); }
 
   // Used by site.js actorId(): lets the iOS app reuse the website's decrypt / search / download routes.
   // Bearer token -> the account ("u<id>", same owner as the website session); otherwise the device ADID header -> a guest actor.

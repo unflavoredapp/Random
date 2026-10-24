@@ -25,6 +25,7 @@ struct CertificatesScreen: View {
     @State private var showLockedInfo = false
     @State private var collapsed: Set<String> = []
     @State private var error: String?
+    @State private var showPremiumStore = false
 
     private var udid: String? {
         _ = udidTick
@@ -438,6 +439,25 @@ struct CertificatesScreen: View {
                         Spacer()
                     }
                 }
+            }
+            Button { showPremiumStore = true } label: {
+                panel {
+                    HStack(spacing: 14) {
+                        AssetIcon(name: "PremiumAccess", size: 56, fallback: "crown.fill")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(hasPremium ? "Add Premium days" : "Get Premium")
+                                .font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
+                            Text("One-time payment \u{00B7} days stack")
+                                .font(.system(size: 12)).foregroundStyle(Theme.subtle)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right").foregroundStyle(Theme.subtle)
+                    }
+                }
+            }
+            .buttonStyle(.plain)
+            .sheet(isPresented: $showPremiumStore, onDismiss: { Task { await requests.refreshStatus() } }) {
+                PremiumStoreView()
             }
             Button {
                 dismiss()
