@@ -30,7 +30,7 @@ struct TutorialStep: Identifiable {
 // MARK: - Content
 
 enum TutorialLibrary {
-    static let all: [Tutorial] = [phoneOnly, localInstall, signingCerts, certs, flex, hooking, pipeline]
+    static let all: [Tutorial] = [phoneOnly, nativeInstall, localInstall, signingCerts, installErrors, launchErrors, certs, flex, hooking, pipeline]
 
     // 0. Phone-only setup
     static let phoneOnly = Tutorial(
@@ -156,6 +156,115 @@ enum TutorialLibrary {
                 tip: "Re-sign apps a few days before expiry so nothing stops working."),
         ])
 
+    // 0d. Install errors — what "integrity could not be verified" and friends actually mean
+    static let installErrors = Tutorial(
+        id: "install-errors", icon: "exclamationmark.triangle.fill", title: "Fix \u{201C}Unable to Install\u{201D}",
+        subtitle: "Why iOS rejects a sideloaded app, and the fix for each cause", minutes: 6,
+        steps: [
+            TutorialStep(
+                title: "What the integrity error really means",
+                body: "\u{201C}This app cannot be installed because its integrity could not be verified\u{201D} is iOS's catch-all. Before installing, iOS checks four things: the certificate is still valid, the profile belongs to that certificate, the profile lists this phone, and the app only asks for permissions (entitlements) the profile allows. If any one fails you get the same message. Work through the next steps in order; the first ones are the most common.",
+                tip: "If every app fails, it's the certificate or the profile. If only one app fails, it's that app's entitlements or extensions."),
+            TutorialStep(
+                title: "1 \u{00B7} This phone isn't in the profile",
+                body: "Development and ad-hoc profiles only install on devices whose UDID is listed inside them. On the Certificates screen, set your UDID once; each certificate then shows whether its profile includes this phone. If it doesn't, no setting in AirShare can fix it: use a certificate whose profile includes this phone, or have the UDID added and get a new profile.",
+                tip: "This is the cause most of the time."),
+            TutorialStep(
+                title: "2 \u{00B7} The certificate was revoked",
+                body: "Apple can revoke a certificate at any time, and shared certificates get revoked often. After that, new installs fail with the integrity error and apps already signed with it stop opening. Re-signing with the same certificate won't help, because iOS checks revocation online. You need a different certificate: add or request one, make it active, and sign again."),
+            TutorialStep(
+                title: "3 \u{00B7} The app asks for permissions the profile doesn't allow",
+                body: "Apps carry entitlements such as push notifications, App Groups, iCloud and Siri. If the profile doesn't grant one the app asks for, iOS refuses it. In the sign sheet, turn on Auto-fix entitlements, which strips anything your certificate's team can't grant. If it still fails, turn on Disable Push Notifications and Disable App Groups as well.",
+                tip: "Certificates from free or limited accounts usually lack push and App Groups. The app installs, but features that need them (notifications, widgets sharing data) won't work."),
+            TutorialStep(
+                title: "4 \u{00B7} The .p12 and profile don't belong together",
+                body: "A .mobileprovision is issued for one specific certificate. If the .p12 came from one account and the profile from another, or the profile was made for an older certificate, every install fails. Check the Team shown on the certificate card, and re-import a .p12 and profile that were issued together."),
+            TutorialStep(
+                title: "5 \u{00B7} Extensions or a Watch app break the signature",
+                body: "Many apps bundle extensions (widgets, share sheet, notification service) and sometimes a Watch app, each signed separately. One that can't be signed for your profile fails the whole install. In the sign sheet, turn on Strip PlugIns and Remove Watch apps, then sign again.",
+                tip: "Stripping extensions removes widgets and share-sheet entries for that app; the main app still works."),
+            TutorialStep(
+                title: "6 \u{00B7} The same app is already installed",
+                body: "If an app with the same bundle ID is already on the phone, signed by a different team (for example the App Store version), the install is rejected. Delete the existing app first, or turn on Randomize bundle ID in the sign sheet so both can be installed side by side.",
+                tip: "Randomize bundle ID gives the copy separate data, so it won't see the original's logins or files."),
+            TutorialStep(
+                title: "7 \u{00B7} The app doesn't support this phone or iOS version",
+                body: "Some IPAs limit which device models may install them; AirShare removes that limit automatically every time it signs. If the message says the app needs a newer iOS, Force min iOS 12.0 in the sign sheet lowers the requirement, but an app that really uses newer iOS features can still crash on launch.",
+                tip: "Still failing after all of this? Download the IPA again. A partly downloaded file fails the same integrity check."),
+        ])
+
+    // 0e. Launch problems — the app installed, but won't open or closes immediately
+    static let launchErrors = Tutorial(
+        id: "launch-errors", icon: "xmark.app.fill", title: "Fix apps that won't open",
+        subtitle: "Untrusted developer, Developer Mode, revoked or expired, instant crashes", minutes: 5,
+        steps: [
+            TutorialStep(
+                title: "\u{201C}Untrusted Developer\u{201D}",
+                body: "The first time you open an app signed with a new certificate, iOS asks you to trust its developer. Go to Settings \u{203A} General \u{203A} VPN & Device Management, tap the developer under Enterprise App or Developer App, and tap Trust. You only do this once per certificate.",
+                tip: "The phone needs internet the first time so iOS can check the certificate."),
+            TutorialStep(
+                title: "\u{201C}Developer Mode required\u{201D}",
+                body: "On iOS 16 and later, apps signed with a development certificate won't open until Developer Mode is on. Go to Settings \u{203A} Privacy & Security \u{203A} Developer Mode, turn it on, let the phone restart, and tap Turn On when asked. Ad-hoc and enterprise certificates don't need it.",
+                tip: "The Developer Mode switch only appears after a development-signed app has been installed."),
+            TutorialStep(
+                title: "\u{201C}No longer available\u{201D} or it closes right away",
+                body: "If apps that worked yesterday stop opening, the certificate was revoked or its profile expired. Nothing on the phone can bring them back; sign them again with a valid certificate. The Certificates screen shows each profile's expiry date and days left.",
+                tip: "Free Apple ID certificates last only 7 days and allow 3 sideloaded apps at once."),
+            TutorialStep(
+                title: "Crashes the instant it opens",
+                body: "Apps taken straight from the App Store are encrypted (FairPlay) and can only run with Apple's own signature. AirShare checks this when you sign: if the sign sheet says FairPlay ENCRYPTED, the app will crash after re-signing. Get a decrypted copy from the Decrypt tab, then sign that.",
+                tip: "Check the encryption line in the sign sheet before signing any IPA whose source you don't know."),
+            TutorialStep(
+                title: "Crashes after injecting a tweak",
+                body: "If an app crashes only after you added a tweak or dylib, the tweak is usually missing a library it depends on, or doesn't match this app version. Turn on Weak dylib references, which lets the app start even if a library is missing, and make sure the tweak is built for this app version.",
+                tip: "Sign once without the tweak. If that copy opens, the problem is the tweak, not the certificate."),
+            TutorialStep(
+                title: "Features missing after signing",
+                body: "If the app opens but notifications, widgets, iCloud sync or Sign in with Apple don't work, that's the cost of the entitlements that were stripped so it could install. Those features need a certificate whose profile grants them; with most sideloading certificates they can't be brought back."),
+        ])
+
+    // 0f. Native installs — the recommended way on iOS 27
+    static let nativeInstall = Tutorial(
+        id: "native-install", icon: "iphone.and.arrow.forward", title: "Native installs on iOS 27",
+        subtitle: "Why to update, how to set it up, and what you get", minutes: 6,
+        steps: [
+            TutorialStep(
+                title: "Why we recommend iOS 27",
+                body: "On iOS 27 AirShare can pair with your iPhone and install apps directly over a private VPN that runs only on the phone. Nothing goes through a website, there's no install link or \u{201C}Would like to install\u{201D} prompt, and installs keep going in the background. On older iOS versions AirShare can only use the classic install-link method (OTA). Native installs need iOS 27 because that's where pairing can be created on the phone itself.",
+                tip: "Everything you already have keeps working after you update; your certificates and signed apps stay where they are."),
+            TutorialStep(
+                title: "1 \u{00B7} Update to iOS 27",
+                body: "Go to Settings \u{203A} General \u{203A} Software Update and install iOS 27. Back up first and keep the phone charging. If iOS 27 doesn't appear, check that your iPhone model supports it."),
+            TutorialStep(
+                title: "2 \u{00B7} Turn on Developer Mode",
+                body: "Go to Settings \u{203A} Privacy & Security \u{203A} Developer Mode, turn it on, let the phone restart, then tap Turn On when asked. Pairing lives under this setting, so it has to be on.",
+                tip: "If Developer Mode is ever turned off or reset, pair again (step 5)."),
+            TutorialStep(
+                title: "3 \u{00B7} Allow Local Network and connect to Wi-Fi",
+                body: "AirShare finds the phone's pairing service over the local network. When iOS asks whether AirShare may find devices on your local network, tap Allow. If you said no earlier, turn it back on in Settings \u{203A} Privacy & Security \u{203A} Local Network \u{203A} AirShare. Stay on Wi-Fi during setup."),
+            TutorialStep(
+                title: "4 \u{00B7} Run Setup",
+                body: "In AirShare, open Settings \u{203A} Install Method to get to the Connection Controller, then tap Setup. When iOS asks to add a VPN configuration, tap Allow. This VPN never leaves the phone; it's the private road installs travel on.",
+                tip: "iOS runs one VPN at a time, so this can turn off another VPN while AirShare is installing."),
+            TutorialStep(
+                title: "5 \u{00B7} Enter the pairing code",
+                body: "AirShare shows a pairing code. Go to Settings \u{203A} Privacy & Security \u{203A} Developer Mode \u{203A} Pair with AirShare and type it in. Back in AirShare, the Pairing, VPN, Tunnel and Device lights turn green and it says Connected."),
+            TutorialStep(
+                title: "6 \u{00B7} Switch to Native",
+                body: "In the Connection Controller, set Install method to Native. From now on, Install sends apps straight to the phone. AirShare reconnects by itself before each install, so you don't need to open this screen again.",
+                tip: "If setup can't create the VPN, your copy of AirShare wasn't signed with VPN permission. Reinstall the official AirShare build."),
+            TutorialStep(
+                title: "What you get",
+                body: "\u{2022} No install link, no domain and no HTTPS certificate: apps go straight onto the phone.\n\u{2022} Installs finish in the background, with progress in a notification, so you can leave AirShare.\n\u{2022} Automatic app updates, optionally only on Wi-Fi or while charging, with Skip and Roll back if an update misbehaves.\n\u{2022} Batch installs and app sets: pick several signed apps and install them in one go.\n\u{2022} Uninstall apps from the phone right inside AirShare.\n\u{2022} The install queue (download, sign and install) runs hands-free, because no install prompt has to be tapped.\n\u{2022} Restore VPN reconnects in one tap, or from a Shortcut, if the connection drops."),
+            TutorialStep(
+                title: "Can't update yet?",
+                body: "Keep using OTA, the classic install-link method; it works on older iOS versions. Advanced users can also choose the Manual connection in the Connection Controller, which uses a pairing file made on a computer plus their own local VPN.",
+                tip: "Re-pair (Forget pairing, then Setup) if you switch phones or the tunnel stops responding."),
+        ])
+
+    /// The guides behind Certificates › Help and Support, in reading order.
+    static let certHelp: [Tutorial] = [signingCerts, installErrors, launchErrors, nativeInstall]
+
     // 1. Capture class names with FLEX
     static let flex = Tutorial(
         id: "flex", icon: "scope", title: "Capture class names with FLEX",
@@ -262,6 +371,10 @@ enum TutorialLibrary {
 // MARK: - Tutorials list (table) — tap a row to open the tutorial
 
 struct TutorialsListScreen: View {
+    /// Which guides to list (defaults to all of them), the title in the bar, and the note under the list.
+    var tutorials: [Tutorial] = TutorialLibrary.all
+    var title: String = "Tutorials"
+    var footer: String = "Everything here is done from the phone: GitHub sign-in, one linked repo, and this app. Check steps off as you go."
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -273,7 +386,7 @@ struct TutorialsListScreen: View {
                         Text("UNZIP DROP").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
                         Spacer()
                     }
-                    Text("Tutorials").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.subtle)
+                    Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.subtle)
                     HStack {
                         Spacer()
                         Button { dismiss() } label: {
@@ -288,7 +401,7 @@ struct TutorialsListScreen: View {
 
                 List {
                     Section {
-                        ForEach(TutorialLibrary.all) { t in
+                        ForEach(tutorials) { t in
                             NavigationLink(value: t.id) {
                                 HStack(spacing: 14) {
                                     ZStack {
@@ -308,7 +421,7 @@ struct TutorialsListScreen: View {
                     } header: {
                         Text("GUIDES").font(.system(size: 12, weight: .semibold)).kerning(1.1).foregroundStyle(Theme.subtle)
                     } footer: {
-                        Text("Everything here is done from the phone: GitHub sign-in, one linked repo, and this app. Check steps off as you go.")
+                        Text(footer)
                             .font(.caption2).foregroundStyle(Theme.subtle)
                     }
                 }
@@ -319,7 +432,7 @@ struct TutorialsListScreen: View {
             .background(Theme.bg.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: String.self) { id in
-                TutorialScreen(tutorial: TutorialLibrary.all.first { $0.id == id } ?? TutorialLibrary.phoneOnly, pushed: true)
+                TutorialScreen(tutorial: tutorials.first { $0.id == id } ?? TutorialLibrary.all.first { $0.id == id } ?? TutorialLibrary.phoneOnly, pushed: true)
                     .toolbar(.hidden, for: .navigationBar)
             }
         }

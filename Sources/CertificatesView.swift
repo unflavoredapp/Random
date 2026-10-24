@@ -133,7 +133,9 @@ struct CertificatesScreen: View {
             Text("Apps already signed with it keep working until the profile expires.")
         }
         .fullScreenCover(isPresented: $showHelp) {
-            TutorialScreen(tutorial: TutorialLibrary.signingCerts).preferredColorScheme(.dark)
+            TutorialsListScreen(tutorials: TutorialLibrary.certHelp, title: "Certificate help",
+                                footer: "Start with the first guide if you're new. If an app won't install or won't open, the next two go through every cause and its fix. The last one sets up native installs on iOS 27.")
+                .preferredColorScheme(.dark)
         }
         .alert("Provided by your admin", isPresented: $showLockedInfo) {
             Button("OK", role: .cancel) {}

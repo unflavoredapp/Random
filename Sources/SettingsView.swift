@@ -1752,9 +1752,12 @@ private struct NativeInstallScreen: View {
     @ObservedObject private var keepAliveEngine = BackgroundKeepAlive.shared
     @State private var songError: String?
     @State private var confirmReset = false
+    @State private var showNativeGuide = false
     @Environment(\.dismiss) private var dismiss
 
     private var busy: Bool { manager.isBusy || installer.isActive }
+    /// Pairing can only be created on the phone from iOS 27, so older versions get a nudge to update.
+    private static let onIOS27 = ProcessInfo.processInfo.isOperatingSystemAtLeast(OperatingSystemVersion(majorVersion: 27, minorVersion: 0, patchVersion: 0))
 
     var body: some View {
         NavigationStack {
@@ -1764,6 +1767,29 @@ private struct NativeInstallScreen: View {
                 } message: {
                     Text("The next native install will ask you to pair again.")
                 }
+                .fullScreenCover(isPresented: $showNativeGuide) {
+                    TutorialScreen(tutorial: TutorialLibrary.nativeInstall).preferredColorScheme(.dark)
+                }
+        }
+    }
+
+    /// Shown below the device card when this phone is older than iOS 27.
+    private var upgradeCard: some View {
+        panelBox(stroke: Theme.accent.opacity(0.6), glow: true) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.up.circle.fill").font(.system(size: 22)).foregroundStyle(Theme.accent)
+                    Text("Update to iOS 27 for native installs").font(.system(size: 16, weight: .bold, design: .rounded)).foregroundStyle(Theme.text)
+                }
+                Text("This phone is on iOS \(UIDevice.current.systemVersion). On iOS 27, AirShare installs apps straight to the phone with no install link or prompt, finishes in the background, and keeps your apps updated automatically.")
+                    .font(.footnote).foregroundStyle(Theme.subtle).fixedSize(horizontal: false, vertical: true)
+                Button { showNativeGuide = true } label: {
+                    Text("See how to set it up").font(.system(size: 14, weight: .bold)).foregroundStyle(.black)
+                        .frame(maxWidth: .infinity).padding(.vertical, 11)
+                        .background(Theme.accent).clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+                .buttonStyle(.plain)
+            }
         }
     }
 
@@ -1802,6 +1828,7 @@ private struct NativeInstallScreen: View {
             VStack(spacing: 14) {
                 header
                 heroCard
+                if !Self.onIOS27 { upgradeCard }
                 if !linked || manager.setupNotice != nil || installer.job != nil { setupCard }
                 methodCard
                 chunkCard
