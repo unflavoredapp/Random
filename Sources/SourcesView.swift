@@ -1065,53 +1065,49 @@ private struct SourceDetailScreen: View {
         t.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// Compact card for the two-column layout: icon, name, bundle id, a line of description, version pill, info button.
+    /// Compact rectangular card for the two-column layout. Top row: small icon on the left; BETA/UPDATE and the info button on the right. The plain version number sits lower-right.
+    /// Name and bundle id each get their own full-width single line (shrunk to fit, never cut with "…"), then a short description.
     private func gridCard(_ g: AppGroup) -> some View {
         let app = g.latest
-        return VStack(alignment: .leading, spacing: 6) {
-            HStack(alignment: .top, spacing: 10) {
-                SourceIcon(url: app.iconURL, side: 50, fallback: app.name)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(app.name).font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.accent).lineLimit(2).minimumScaleFactor(0.8)
-                    Text(app.bundle).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.subtle).lineLimit(1)
+        return VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 6) {
+                SourceIcon(url: app.iconURL, side: 32, fallback: app.name)
+                Spacer(minLength: 2)
+                if isBetaShown(g) {
+                    Text("BETA").font(.system(size: 9, weight: .heavy, design: .monospaced))
+                        .padding(.horizontal, 5).padding(.vertical, 2).background(Theme.accent.opacity(0.18)).foregroundStyle(Theme.accent).clipShape(Capsule()).lineLimit(1).fixedSize()
+                } else if hasUpdate(g) {
+                    Text("UPDATE").font(.system(size: 9, weight: .heavy, design: .monospaced)).foregroundStyle(.orange).lineLimit(1).fixedSize()
+                }
+                Button { openGroup = g } label: {
+                    Image(systemName: "info").font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                        .frame(width: 20, height: 20).background(Theme.accent).clipShape(Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            Text(app.name).font(.system(size: 13, weight: .bold)).foregroundStyle(Theme.accent)
+                .lineLimit(1).minimumScaleFactor(0.4).frame(maxWidth: .infinity, alignment: .leading)
+            Text(app.bundle).font(.system(size: 10, design: .monospaced)).foregroundStyle(Theme.subtle)
+                .lineLimit(1).minimumScaleFactor(0.4).frame(maxWidth: .infinity, alignment: .leading)
+            HStack(alignment: .bottom, spacing: 6) {
+                HStack(alignment: .top, spacing: 5) {
+                    Circle().stroke(Theme.accent, lineWidth: 1.5).frame(width: 6, height: 6).padding(.top, 4)
+                    Text(oneLine(app.description.isEmpty ? app.subtitle : app.description))
+                        .font(.system(size: 11)).foregroundStyle(Theme.text.opacity(0.9)).lineLimit(2).multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
-            }
-            HStack(alignment: .top, spacing: 6) {
-                Circle().stroke(Theme.accent, lineWidth: 2).frame(width: 7, height: 7).padding(.top, 5)
-                Text(oneLine(app.description.isEmpty ? app.subtitle : app.description))
-                    .font(.system(size: 12)).foregroundStyle(Theme.text.opacity(0.9)).lineLimit(3).multilineTextAlignment(.leading)
+                // Plain version number, lower-right corner of the card.
+                Text(app.version).font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.accent)
+                    .lineLimit(1).minimumScaleFactor(0.6).fixedSize(horizontal: true, vertical: false)
             }
             Spacer(minLength: 0)
-            HStack {
-                if isBetaShown(g) {
-                    Text("BETA").font(.system(size: 10, weight: .heavy, design: .monospaced))
-                        .padding(.horizontal, 6).padding(.vertical, 3).background(Theme.accent.opacity(0.18)).foregroundStyle(Theme.accent).clipShape(Capsule()).lineLimit(1).fixedSize()
-                } else if hasUpdate(g) {
-                    Text("UPDATE").font(.system(size: 10, weight: .heavy, design: .monospaced)).foregroundStyle(.orange).lineLimit(1).fixedSize()
-                } else { Spacer(minLength: 0) }
-                Spacer(minLength: 6)
-                Text(app.version).font(.system(size: 12, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.accent).lineLimit(1)
-                    .padding(.horizontal, 10).padding(.vertical, 5)
-                    .background(Color.white.opacity(0.06))
-                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous).stroke(Theme.accent.opacity(0.5), lineWidth: 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
-                    .layoutPriority(1)
-            }
         }
-        .padding(12)
-        .frame(maxWidth: .infinity, minHeight: 172, maxHeight: 172, alignment: .topLeading)
+        .padding(10)
+        .frame(maxWidth: .infinity, minHeight: 118, maxHeight: 118, alignment: .topLeading)
         .background(Color.black)
-        .overlay(alignment: .topTrailing) {
-            Button { openGroup = g } label: {
-                Image(systemName: "info").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
-                    .frame(width: 22, height: 22).background(Theme.accent).clipShape(Circle())
-            }
-            .buttonStyle(.plain).padding(.top, 10).padding(.trailing, 10)
-        }
-        .overlay(RoundedRectangle(cornerRadius: 16, style: .continuous).stroke(Theme.accent.opacity(0.45), lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(Theme.accent.opacity(0.45), lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .onTapGesture { openGroup = g }
         .contextMenu {
             Button { Task { await download(app) } } label: { Label("Download", systemImage: "arrow.down") }
