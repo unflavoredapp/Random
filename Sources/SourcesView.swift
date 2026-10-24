@@ -187,6 +187,7 @@ nonisolated enum RepoParser {
         let groupIndex: [String: Int]
         let staffPicks: [String]          // bundle ids, in the order the source lists them
         let staff: [AppGroup]
+        let categoryCounts: [AppCategory: Int]   // apps per chip (one per app, not per version); .all = every app
 
         init(name: String, iconURL: URL?, description: String?, author: String?, apps rawApps: [SourceApp], news: [SourceNews], staffPicks: [String] = [], alreadyPrecomputed: Bool = false) {
             self.name = name; self.iconURL = iconURL; self.description = description; self.author = author
@@ -202,6 +203,9 @@ nonisolated enum RepoParser {
             groupIndex = idx
             self.staffPicks = staffPicks
             staff = staffPicks.compactMap { bundle in idx[bundle].map { g[$0] } }
+            var counts: [AppCategory: Int] = [.all: g.count]
+            for x in g { counts[x.latest.category, default: 0] += 1 }
+            categoryCounts = counts
             featuredNews = news.isEmpty ? g.filter { $0.latest.featured }.prefix(12).map { grp in
                 let a = grp.latest
                 return SourceNews(id: "feat-" + a.bundle, title: a.name, caption: a.description, imageURL: a.screenshots.first ?? a.iconURL,
@@ -211,7 +215,7 @@ nonisolated enum RepoParser {
 
         // MARK: persisted index (apps carry their precomputed fields, so decode = no parsing, no formatters)
         private struct Index: Codable { let v: Int; let name: String; let iconURL: URL?; let description: String?; let author: String?; let apps: [SourceApp]; let news: [SourceNews]; let staffPicks: [String] }
-        static let indexVersion = 6
+        static let indexVersion = 7   // 7: categories re-derived (Unicode-aware Paid check) instead of reusing saved ones
         func indexData() -> Data? {
             try? JSONEncoder().encode(Index(v: Self.indexVersion, name: name, iconURL: iconURL, description: description, author: author, apps: apps, news: news, staffPicks: staffPicks))
         }
@@ -1003,6 +1007,10 @@ private struct SourceDetailScreen: View {
             HStack(spacing: 4) {
                 Image(systemName: c.icon).font(.system(size: 9, weight: .bold))
                 Text(c.title).font(.system(size: 10, weight: .heavy, design: .monospaced)).kerning(0.2)
+                if let n = parsed?.categoryCounts[c] {
+                    Text("\u{00B7} \(n)").font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .opacity(on ? 0.8 : 0.55)
+                }
             }
             .lineLimit(1)
             .fixedSize()
