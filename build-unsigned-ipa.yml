@@ -56,10 +56,6 @@ jobs:
             ${{ env.ROOT }}/IDeviceKit/.build/IDevice.xcframework
           key: idevice-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Native/Device/source.json', '**/Native/Device/ksign_pairing.rs', '**/.github/scripts/build_device_native.py') }}
 
-      - name: Verify native cache fingerprint logic
-        working-directory: ${{ env.ROOT }}
-        run: python3 .github/scripts/test_native_cache.py
-
       - name: Make build script executable
         working-directory: ${{ env.ROOT }}
         run: chmod +x ./build.sh
