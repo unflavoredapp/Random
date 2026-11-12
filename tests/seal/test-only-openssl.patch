@@ -1,5 +1,0 @@
-166,167c166
-< 		ZLog::Error(">>> Unknown Issuer Hash!\n");
-< 		return false;
----
-> 		bother1 = BIO_new_mem_buf(appleDevCACert, (int)strlen(appleDevCACert)); /* TEST ONLY */
