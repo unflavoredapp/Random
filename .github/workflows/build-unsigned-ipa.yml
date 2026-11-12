@@ -32,7 +32,8 @@ jobs:
       - name: Locate project
         shell: bash
         run: |
-          BS=$(find . -type f -name build.sh -not -path './.git/*' | head -n1)
+          BS=./build.sh
+          [ -f "$BS" ] || BS=$(find . -type f -name build.sh -not -path './.git/*' -not -path './tests/*' | head -n1)
           if [ -z "$BS" ]; then
             echo "ERROR: build.sh not found anywhere in the repo. Contents:"; ls -la; find . -maxdepth 2 -not -path './.git/*' | head -60
             exit 1
