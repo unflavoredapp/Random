@@ -941,7 +941,11 @@ bdload();
   });
 
   // Litecoin payments for premium days (see payments.js and ltc-hd.js). Stays off unless LTC_XPUB (an extended PUBLIC key) is set.
-  try { require("./payments").mount(web, { db, express, base, jsonBody, jsonErr, needAuth, fail, limited, setPremium, auth,
+  // Card payments (Stripe PaymentSheet). Stays off unless STRIPE_SECRET_KEY and STRIPE_PUBLISHABLE_KEY are set. Mounted first so the shop and purchase list can include it.
+  let card = null;
+  try { require("./payments"); card = require("./stripe").mount(web, { db, express, base, jsonBody, jsonErr, needAuth, fail, limited, setPremium }); }
+  catch (e) { console.warn("Card payments disabled:", e.message); }
+  try { require("./payments").mount(web, { db, express, base, jsonBody, jsonErr, needAuth, fail, limited, setPremium, auth, card,
     describePerks: () => PERKS.describe({ memberLimit: DEC.member, cooldownMin: Math.round(DEC_APP_COOLDOWN_MS / 60000) }) }); }
   catch (e) { console.warn("Payments disabled:", e.message); }
   // Priority support tickets and "early look" posts (Premium sees early posts first).

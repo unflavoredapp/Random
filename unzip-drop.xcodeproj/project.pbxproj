@@ -10,6 +10,7 @@
 		93CC6A3E34EC4349BBFC60C4 /* AVX512ObjcInternal.m in Sources */ = {isa = PBXBuildFile; fileRef = 8C7D82082434432C835A5512 /* AVX512ObjcInternal.m */; };
 		6D6D6D6D0000000000000001 /* Crypto in Frameworks */ = {isa = PBXBuildFile; productRef = 6D6D6D6D0000000000000002 /* Crypto */; };
 		03865B4A66EB71AAB92A0450 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = E09A20DE3775398EFC274454 /* ZIPFoundation */; };
+		5354524950450000000000A1 /* StripePaymentSheet in Frameworks */ = {isa = PBXBuildFile; productRef = 5354524950450000000000A2 /* StripePaymentSheet */; };
 		424653534C00000000000001 /* OpenSSL in Frameworks */ = {isa = PBXBuildFile; productRef = 50524F4453534C0000000001 /* OpenSSL */; };
 		5641504F520000000000001 /* Vapor in Frameworks */ = {isa = PBXBuildFile; productRef = 5641504F52500000000001 /* Vapor */; };
 		A403726B2E112543E3434DCA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7682B969F8DF974AA9306D80 /* Assets.xcassets */; };
@@ -85,6 +86,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				03865B4A66EB71AAB92A0450 /* ZIPFoundation in Frameworks */,
+				5354524950450000000000A1 /* StripePaymentSheet in Frameworks */,
 				6D6D6D6D0000000000000001 /* Crypto in Frameworks */,
 				424653534C00000000000001 /* OpenSSL in Frameworks */,
 				5641504F520000000000001 /* Vapor in Frameworks */,
@@ -180,6 +182,7 @@
 			name = "unzip-drop";
 			packageProductDependencies = (
 				E09A20DE3775398EFC274454 /* ZIPFoundation */,
+				5354524950450000000000A2 /* StripePaymentSheet */,
 				6D6D6D6D0000000000000002 /* Crypto */,
 				50524F4453534C0000000001 /* OpenSSL */,
 				5641504F52500000000001 /* Vapor */,
@@ -268,6 +271,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				61EDEC30A5F63ED366D136AF /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
+				5354524950450000000000A3 /* XCRemoteSwiftPackageReference "stripe-ios-spm" */,
 				6D6D6D6D0000000000000003 /* XCRemoteSwiftPackageReference "swift-crypto" */,
 				504B4753534C000000000001 /* XCRemoteSwiftPackageReference "OpenSSL-Swift-Package" */,
 				5641504F52504B4700000001 /* XCRemoteSwiftPackageReference "vapor" */,
@@ -660,6 +664,14 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCRemoteSwiftPackageReference section */
+		5354524950450000000000A3 /* XCRemoteSwiftPackageReference "stripe-ios-spm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stripe/stripe-ios-spm";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 24.0.0;
+			};
+		};
 		61EDEC30A5F63ED366D136AF /* XCRemoteSwiftPackageReference "ZIPFoundation" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/weichsel/ZIPFoundation";
@@ -695,6 +707,11 @@
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
+		5354524950450000000000A2 /* StripePaymentSheet */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 5354524950450000000000A3 /* XCRemoteSwiftPackageReference "stripe-ios-spm" */;
+			productName = StripePaymentSheet;
+		};
 		E09A20DE3775398EFC274454 /* ZIPFoundation */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 61EDEC30A5F63ED366D136AF /* XCRemoteSwiftPackageReference "ZIPFoundation" */;

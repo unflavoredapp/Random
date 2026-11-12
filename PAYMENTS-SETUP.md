@@ -73,3 +73,26 @@ payments, explorer outages, grant/refund, Premium effects, and a 401/403 matrix 
     node tests/live/run.js
 
 `ltc-hd.js` is checked against the official BIP84 test vectors in the same run.
+
+## 7. Cards (Stripe)
+
+Premium can also be paid by card with Stripe's PaymentSheet inside the app. It sits beside Litecoin and uses the same plans and the
+same Premium days. Card data goes from the app straight to Stripe; the server never sees it.
+
+1. In the Stripe dashboard copy your **secret key** (`sk_live_…`) and **publishable key** (`pk_live_…`). Use `sk_test_` / `pk_test_` first.
+2. Add a webhook endpoint `https://decrypt.team/app/v1/stripe/webhook` for `payment_intent.succeeded`, `payment_intent.payment_failed`
+   and `charge.refunded`. Copy its **signing secret** (`whsec_…`).
+3. Put these in the server environment and restart PM2:
+
+       STRIPE_SECRET_KEY=sk_live_...
+       STRIPE_PUBLISHABLE_KEY=pk_live_...
+       STRIPE_WEBHOOK_SECRET=whsec_...
+
+4. Open `https://decrypt.team/app/v1/shop`. `"card":{"enabled":true}` means the app will show **Pay by card**.
+
+How it works: `POST /app/v1/stripe/intent` creates a PaymentIntent at the plan's fixed USD price. After the sheet completes, the app calls
+`POST /app/v1/stripe/verify` and the server asks Stripe itself (amount and currency must match the plan). The webhook does the same if the
+app is closed first. An order flips to paid with one UPDATE, so the days are added exactly once. A refund in Stripe removes the days.
+
+Notes: Apple Pay isn't offered (it needs an entitlement a sideloaded build can't have); cards and Link work. If the app is ever listed on
+the App Store, Apple requires In-App Purchase for Premium. Test with `node --experimental-sqlite tests/live/stripe-test.js`.

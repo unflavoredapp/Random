@@ -153,7 +153,7 @@ const listen = (srv) => new Promise((r) => srv.listen(0, "127.0.0.1", () => r(sr
   r = await api("GET", "/app/v1/shop");
   eq([r.code, r.json.plans.map((x) => x.id), r.json.crypto.enabled, r.json.crypto.coin, r.json.crypto.confirmations], [200, ["premium_30", "premium_90", "premium_365"], true, "LTC", 2], "shop is public, lists plans and says LTC with 2 confirmations");
   ok(r.json.perks.some((x) => /Priority support: your tickets are flagged and shown to our team first/.test(x.text)), "priority-support wording is the corrected one");
-  ok(!/stripe/i.test(r.text), "shop mentions no Stripe");
+  ok(r.json.card && r.json.card.enabled === false && !/sk_|pk_/.test(r.text), "card payments show as off until Stripe keys are set, and no keys leak");
   eq((await api("POST", "/app/v1/checkout", { body: { plan: "premium_30" } })).code, 401, "checkout without a session is 401");
   eq((await order(buyer, "premium_999")).code, 400, "unknown plan is 400");
   eq((await order(buyer, "__proto__")).code, 400, "prototype-key plan is 400");

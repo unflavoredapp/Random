@@ -189,7 +189,8 @@ function mount(web, c) {
   // ---------- app routes ----------
   web.get("/app/v1/shop", base, (_req, res) => {
     res.json({ ok: true, plans: Object.entries(PLANS).map(([id, p]) => ({ id, name: p.name, days: p.days, amount: p.amount, currency: p.currency })), perks: describePerks(),
-      crypto: { coin: "LTC", enabled, confirmations: CONFS, quote_minutes: Math.round(QUOTE_MS / 60000) } });
+      crypto: { coin: "LTC", enabled, confirmations: CONFS, quote_minutes: Math.round(QUOTE_MS / 60000) },
+      card: { enabled: !!(c.card && c.card.enabled), provider: "stripe" } });
   });
 
   web.post("/app/v1/checkout", base, jsonBody, needAuth, async (req, res) => {
@@ -232,7 +233,9 @@ function mount(web, c) {
   }, jsonErr);
 
   web.get("/app/v1/purchases", base, needAuth, (req, res) => {
-    res.json({ ok: true, purchases: q.mine.all(req.me.id).map((o) => { const v = view(o); return { session_id: String(o.id), order_id: o.id, name: v.name, amount: o.usd_cents, currency: "usd", amount_ltc: v.amount_ltc, status: o.status, created_at: o.created_at }; }) });
+    const ltc = q.mine.all(req.me.id).map((o) => { const v = view(o); return { session_id: String(o.id), order_id: o.id, name: v.name, amount: o.usd_cents, currency: "usd", amount_ltc: v.amount_ltc, method: "ltc", status: o.status, created_at: o.created_at }; });
+    const card = c.card ? c.card.purchases(req.me.id) : [];
+    res.json({ ok: true, purchases: [...ltc, ...card].sort((x, y) => String(y.created_at).localeCompare(String(x.created_at))) });
   });
 
   // ---------- admin (Basic auth) ----------

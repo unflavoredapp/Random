@@ -66,7 +66,7 @@ struct PremiumStoreView: View {
                         .padding(.horizontal, 28).padding(.vertical, 14)
                         .background(.white, in: RoundedRectangle(cornerRadius: 16))
                 }
-                .disabled(selected == nil || !shop.cryptoEnabled || shop.plansState.isWorking && shop.plans.isEmpty)
+                .disabled(selected == nil || (!shop.cryptoEnabled && !shop.cardEnabled) || shop.plansState.isWorking && shop.plans.isEmpty)
             }
             .padding(.horizontal, 20).padding(.vertical, 12)
             .background(Color(white: 0.12))
@@ -93,8 +93,8 @@ struct PremiumStoreView: View {
                 let d = certs.server?.premiumDaysLeft ?? 0
                 Text("\(d) day\(d == 1 ? "" : "s") left").font(.subheadline).foregroundStyle(.secondary)
             } else {
-                Text("One-time payment in Litecoin, no subscription").font(.subheadline).foregroundStyle(.secondary)
-                if !shop.cryptoEnabled { Text("Litecoin payments aren't available yet.").font(.footnote).foregroundStyle(.orange) }
+                Text(shop.cardEnabled ? "One-time payment by card or Litecoin, no subscription" : "One-time payment in Litecoin, no subscription").font(.subheadline).foregroundStyle(.secondary)
+                if !shop.cryptoEnabled && !shop.cardEnabled { Text("Payments aren't available yet.").font(.footnote).foregroundStyle(.orange) }
             }
             Button { showHistory = true } label: {
                 Label("Purchase history", systemImage: "clock.arrow.circlepath").font(.footnote)
@@ -156,13 +156,14 @@ struct PremiumConfirmView: View {
     let plan: PremiumPlan
 
     @ObservedObject private var shop = PremiumShop.shared
+    @ObservedObject private var card = CardCheckout.shared
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     @State private var showInfo = false
     @State private var closeTask: Task<Void, Never>?
 
     // Replace with your real terms page.
-    private let termsURL = URL(string: "https://airshare.lol/terms")!
+    private let termsURL = URL(string: "https://decrypt.team/terms")!
 
     var body: some View {
         ScrollView {
@@ -210,7 +211,7 @@ struct PremiumConfirmView: View {
 
                 HStack(spacing: 12) {
                     Image(systemName: "lock.shield.fill").font(.title2).foregroundStyle(.green)
-                    Text("You pay from your own wallet, right here in the app. No card, no account with a payment company. The price is fixed in US dollars and quoted in LTC when you start.")
+                    Text(shop.cardEnabled ? "Pay by card in a secure Stripe sheet, or from your own wallet with Litecoin. The price is fixed in US dollars." : "You pay from your own wallet, right here in the app. No card, no account with a payment company. The price is fixed in US dollars and quoted in LTC when you start.")
                         .font(.footnote)
                     Spacer(minLength: 0)
                 }
@@ -229,7 +230,16 @@ struct PremiumConfirmView: View {
         }
         .background(Color(white: 0.09).ignoresSafeArea())
         .preferredColorScheme(.dark)
-        .onAppear { shop.beginVisit(planID: plan.id) }
+        .onAppear { shop.beginVisit(planID: plan.id); card.reset() }
+        .onChange(of: card.confirmed) { done in
+            if done {
+                closeTask?.cancel()
+                closeTask = Task {
+                    try? await Task.sleep(nanoseconds: 1_800_000_000)
+                    if !Task.isCancelled { dismiss() }
+                }
+            }
+        }
         .onChange(of: shop.phase) { phase in
             // Close only once the server has confirmed payment. Anything else keeps this sheet up with an honest message.
             if phase == .confirmed {
@@ -282,8 +292,26 @@ struct PremiumConfirmView: View {
             }
 
         case .idle, .creating:
-            actionButton("Pay with Litecoin", icon: "arrow.right.circle.fill", working: shop.phase == .creating) {
-                Task { await shop.startCheckout(plan) }
+            VStack(spacing: 10) {
+                if shop.cardEnabled {
+                    if card.confirmed {
+                        Label(card.message ?? "Payment confirmed. Premium is active.", systemImage: "checkmark.seal.fill")
+                            .font(.headline).foregroundStyle(.green)
+                            .frame(maxWidth: .infinity).padding(.vertical, 12)
+                    } else {
+                        actionButton("Pay by card \(plan.priceText)", icon: "creditcard.fill", working: card.working) {
+                            Task { await card.start(plan: plan) }
+                        }
+                        if let m = card.message {
+                            Text(m).font(.footnote).foregroundStyle(card.isError ? Color.red : Color.secondary).multilineTextAlignment(.center)
+                        }
+                    }
+                }
+                if shop.cryptoEnabled && !card.confirmed {
+                    actionButton("Pay with Litecoin", icon: "arrow.right.circle.fill", working: shop.phase == .creating) {
+                        Task { await shop.startCheckout(plan) }
+                    }
+                }
             }
         }
     }

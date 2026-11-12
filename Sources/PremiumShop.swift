@@ -115,6 +115,7 @@ final class PremiumShop: ObservableObject {
     @Published private(set) var perks: [PremiumPerk] = []
     @Published private(set) var plansState: PremiumLoadState = .idle
     @Published private(set) var cryptoEnabled = true
+    @Published private(set) var cardEnabled = false
     @Published private(set) var purchases: [PurchaseRecord] = []
     @Published private(set) var purchasesState: PremiumLoadState = .idle
     @Published private(set) var phase: CheckoutPhase = .idle
@@ -146,6 +147,7 @@ final class PremiumShop: ObservableObject {
             plans = decoded
             if let list = o["perks"] { perks = (try? AirShareAPI.decodeList(PremiumPerk.self, list)) ?? perks }
             if let crypto = o["crypto"] as? [String: Any] { cryptoEnabled = (crypto["enabled"] as? Bool) ?? true }
+            cardEnabled = ((o["card"] as? [String: Any])?["enabled"] as? Bool) ?? false
             plansState = decoded.isEmpty ? .failed("No plans are available right now.") : .loaded
         } catch {
             guard mine == plansGeneration else { return }
