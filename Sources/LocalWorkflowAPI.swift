@@ -103,7 +103,7 @@ actor LocalWorkflowStore {
                 }
                 flows[w.id] = w
             }
-            persist()
+            if let data = try? JSONEncoder().encode(Array(flows.values)) { try? data.write(to: fileURL, options: .atomic) }
         }
     }
 
@@ -270,7 +270,9 @@ nonisolated enum LocalWorkflowAPI {
             try authorize(req)
             let b = try req.content.decode(LocalWorkflowRequest.self)
             guard LocalDecryptBridge.isStoreLink(b.url) else { throw Abort(.badRequest, reason: "Send an apps.apple.com link (use /v1/decrypt/search to find one).") }
-            if await store.hasActive() || (await LocalDecryptAPI.jobs.hasActive()) { throw Abort(.conflict, reason: "A decrypt is already running.") }
+            let busyFlow = await store.hasActive()
+            let busyDecrypt = await LocalDecryptAPI.jobs.hasActive()
+            if busyFlow || busyDecrypt { throw Abort(.conflict, reason: "A decrypt is already running.") }
             return await response(await store.create(b))
         }
 
@@ -296,7 +298,9 @@ nonisolated enum LocalWorkflowAPI {
         app.post("v1", "workflows", ":id", "retry") { req async throws -> LocalWorkflowResponse in
             try authorize(req)
             guard let raw = req.parameters.get("id"), let id = UUID(uuidString: raw), await store.get(id) != nil else { throw Abort(.notFound) }
-            if await store.hasActive() || (await LocalDecryptAPI.jobs.hasActive()) { throw Abort(.conflict, reason: "Another workflow or decrypt is already running.") }
+            let busyFlow = await store.hasActive()
+            let busyDecrypt = await LocalDecryptAPI.jobs.hasActive()
+            if busyFlow || busyDecrypt { throw Abort(.conflict, reason: "Another workflow or decrypt is already running.") }
             guard let w = await store.retry(id) else { throw Abort(.conflict, reason: "Only failed, cancelled or interrupted workflows can be retried.") }
             return await response(w)
         }
