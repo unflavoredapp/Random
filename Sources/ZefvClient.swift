@@ -29,7 +29,7 @@ final class ZefvAccount: ObservableObject {
     @Published var appealError: String?
     @Published var panelShown = false
 
-    private static let kSession  = "zefv_session_token"
+    nonisolated private static let kSession  = "zefv_session_token"
     private static let kUsername = "zefv_username"
     private static let kDeviceKey = "zefv_device_key"      // issued at sign-in; with the ADID it signs this device in automatically
     private static let kLastAuthenticatedAt = "zefv_last_authenticated_at"
@@ -41,6 +41,8 @@ final class ZefvAccount: ObservableObject {
 
     var isLoggedIn: Bool { username != nil }
     var sessionToken: String? { Keychain.get(Self.kSession) }
+    /// Same value, readable from nonisolated code (it only reads the Keychain, which is not main-actor bound).
+    nonisolated static var currentSessionToken: String? { Keychain.get(kSession) }
 
     private init() {
         username = Keychain.get(Self.kUsername)

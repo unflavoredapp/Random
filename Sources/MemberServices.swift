@@ -33,12 +33,12 @@ enum AirShareAPI {
 
     /// Identifies whose data a screen is holding, so one account's tickets or purchases are never shown to the next.
     static var ownerTag: String? {
-        guard let t = ZefvAccount.shared.sessionToken, !t.isEmpty else { return nil }
+        guard let t = ZefvAccount.currentSessionToken, !t.isEmpty else { return nil }
         return String(t.suffix(16))
     }
 
     static func request(_ method: String, _ path: String, body: [String: Any]? = nil, requiresAuth: Bool = true) async throws -> [String: Any] {
-        let token = ZefvAccount.shared.sessionToken ?? ""
+        let token = ZefvAccount.currentSessionToken ?? ""
         if requiresAuth && token.isEmpty { throw Failure.signedOut }
         guard let base = URL(string: ZefvAccount.apiBase) else { throw Failure.http(0, "The server address is invalid.") }
         var req = URLRequest(url: base.appendingPathComponent(path))
