@@ -29,15 +29,19 @@
 
 bool IsRegularFile(const char *file)
 {
+    // stat() failing left `info` uninitialised, so a missing path could randomly look like a file.
     struct stat info;
-    stat(file, &info);
+    if (NULL == file || 0 != stat(file, &info))
+    {
+        return false;
+    }
     return S_ISREG(info.st_mode);
 }
 
 void *MapFile(const char *path, size_t offset, size_t size, size_t *psize, bool ro)
 {
     int fd = open(path, ro ? O_RDONLY : O_RDWR);
-    if (fd <= 0)
+    if (fd < 0)
     {
         return NULL;
     }
@@ -45,7 +49,15 @@ void *MapFile(const char *path, size_t offset, size_t size, size_t *psize, bool 
     if (0 == size)
     {
         struct stat stat;
-        fstat(fd, &stat);
+        if (0 != fstat(fd, &stat) || stat.st_size <= 0)
+        {
+            close(fd);
+            if (NULL != psize)
+            {
+                *psize = 0;
+            }
+            return NULL;
+        }
         size = stat.st_size;
     }
 
@@ -88,8 +100,14 @@ bool WriteFile(const char *szFile, const char *szData, size_t sLen)
                 towrite -= nwrite;
             }
         }
-        fclose(fp);
-        return (towrite > 0) ? false : true;
+        // fclose flushes the stdio buffer; on a full disk that is where the write actually fails.
+        bool bClosed = (0 == fclose(fp));
+        if (!bClosed || towrite > 0)
+        {
+            ZLog::ErrorV("WriteFile: write failed! %s, %s\n", szFile, strerror(errno));
+            return false;
+        }
+        return true;
     }
     else
     {
@@ -170,8 +188,13 @@ bool AppendFile(const char *szFile, const char *szData, size_t sLen)
             towrite -= nwrite;
         }
 
-        fclose(fp);
-        return (towrite > 0) ? false : true;
+        bool bClosed = (0 == fclose(fp));
+        if (!bClosed || towrite > 0)
+        {
+            ZLog::ErrorV("AppendFile: write failed! %s, %s\n", szFile, strerror(errno));
+            return false;
+        }
+        return true;
     }
     else
     {
@@ -187,8 +210,13 @@ bool AppendFile(const char *szFile, const string &strData)
 
 bool IsFolder(const char *szFolder)
 {
+    // Same bug: a just-deleted folder (e.g. _CodeSignature) could randomly read as "exists",
+    // CreateFolder then skipped mkdir and writing CodeResources failed intermittently.
     struct stat st;
-    stat(szFolder, &st);
+    if (NULL == szFolder || 0 != stat(szFolder, &st))
+    {
+        return false;
+    }
     return S_ISDIR(st.st_mode);
 }
 
@@ -200,15 +228,15 @@ bool IsFolderV(const char *szFormatPath, ...)
 
 bool CreateFolder(const char *szFolder)
 {
-    if (!IsFolder(szFolder))
+    if (IsFolder(szFolder))
     {
-#if defined(WINDOWS)
-        return (0 == mkdir(szFolder));
-#else
-        return (0 == mkdir(szFolder, 0755));
-#endif
+        return true;
     }
-    return false;
+#if defined(WINDOWS)
+    return (0 == mkdir(szFolder)) || IsFolder(szFolder);
+#else
+    return (0 == mkdir(szFolder, 0755)) || (EEXIST == errno && IsFolder(szFolder));
+#endif
 }
 
 bool CreateFolderV(const char *szFormatPath, ...)
@@ -234,7 +262,7 @@ bool RemoveFolder(const char *szFolder)
         RemoveFile(szFolder);
         return true;
     }
-    return nftw(szFolder, RemoveFolderCallBack, 64, FTW_DEPTH | FTW_PHYS);
+    return (0 == nftw(szFolder, RemoveFolderCallBack, 64, FTW_DEPTH | FTW_PHYS));
 }
 
 bool RemoveFolderV(const char *szFormatPath, ...)
@@ -594,17 +622,72 @@ bool SHASum(const string &strData, string &strSHA1, string &strSHA256)
 
 bool SHASumFile(const char *szFile, string &strSHA1, string &strSHA256)
 {
-    size_t sSize = 0;
-    uint8_t *pBase = (uint8_t *)MapFile(szFile, 0, 0, &sSize, true);
+    // Streamed hashing: a fixed 1 MiB buffer no matter how big the file is.
+    // (The old version mmap'd the whole file; for multi-GB assets a failed map
+    // returned NULL and SHA1(NULL, size) crashed the whole app mid-sign.)
+    strSHA1.clear();
+    strSHA256.clear();
 
-    SHASum(E_SHASUM_TYPE_1, pBase, sSize, strSHA1);
-    SHASum(E_SHASUM_TYPE_256, pBase, sSize, strSHA256);
-
-    if (NULL != pBase && sSize > 0)
+    int fd = open(szFile, O_RDONLY);
+    if (fd < 0)
     {
-        munmap(pBase, sSize);
+        ZLog::ErrorV("SHASumFile: open failed! %s, %s\n", szFile, strerror(errno));
+        return false;
     }
-    return (!strSHA1.empty() && !strSHA256.empty());
+#ifdef F_NOCACHE
+    fcntl(fd, F_NOCACHE, 1); // big sequential read: don't evict everything else from the page cache
+#endif
+
+    SHA_CTX c1;
+    SHA256_CTX c256;
+    SHA1_Init(&c1);
+    SHA256_Init(&c256);
+
+    static const size_t kChunk = 1 << 20;
+    uint8_t *buf = (uint8_t *)malloc(kChunk);
+    if (NULL == buf)
+    {
+        close(fd);
+        ZLog::ErrorV("SHASumFile: out of memory! %s\n", szFile);
+        return false;
+    }
+
+    bool ok = true;
+    for (;;)
+    {
+        ssize_t n = read(fd, buf, kChunk);
+        if (n < 0)
+        {
+            if (EINTR == errno)
+            {
+                continue;
+            }
+            ZLog::ErrorV("SHASumFile: read failed! %s, %s\n", szFile, strerror(errno));
+            ok = false;
+            break;
+        }
+        if (0 == n)
+        {
+            break;
+        }
+        SHA1_Update(&c1, buf, (size_t)n);
+        SHA256_Update(&c256, buf, (size_t)n);
+    }
+    free(buf);
+    close(fd);
+
+    if (!ok)
+    {
+        return false;
+    }
+
+    uint8_t h1[20];
+    uint8_t h256[32];
+    SHA1_Final(h1, &c1);
+    SHA256_Final(h256, &c256);
+    strSHA1.append((const char *)h1, 20);
+    strSHA256.append((const char *)h256, 32);
+    return true;
 }
 
 bool SHASumBase64(const string &strData, string &strSHA1Base64, string &strSHA256Base64)
@@ -623,7 +706,12 @@ bool SHASumBase64File(const char *szFile, string &strSHA1Base64, string &strSHA2
     ZBase64 b64;
     string strSHA1;
     string strSHA256;
-    SHASumFile(szFile, strSHA1, strSHA256);
+    if (!SHASumFile(szFile, strSHA1, strSHA256))
+    {
+        strSHA1Base64.clear();
+        strSHA256Base64.clear();
+        return false;
+    }
     strSHA1Base64 = b64.Encode(strSHA1);
     strSHA256Base64 = b64.Encode(strSHA256);
     return (!strSHA1Base64.empty() && !strSHA256Base64.empty());

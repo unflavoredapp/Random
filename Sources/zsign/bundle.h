@@ -13,6 +13,7 @@ public:
 
 private:
 	bool SignNode(JValue &jvNode);
+	bool VerifyResourceSeal(JValue &jvNode);
 	void GetNodeChangedFiles(JValue &jvNode, bool dontGenerateEmbeddedMobileProvision);
 	void GetChangedFiles(JValue &jvNode, vector<string> &arrChangedFiles);
 	void GetPlugIns(const string &strFolder, vector<string> &arrPlugIns);

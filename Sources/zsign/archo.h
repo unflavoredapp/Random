@@ -39,4 +39,5 @@ public:
 	uint32_t m_uLoadCommandsFreeSpace;
 	mach_header *m_pHeader;
 	uint32_t m_uHeaderSize;
+	uint64_t m_uExecSegLimit; // per-slice (was a file-global shared by every binary and thread)
 };

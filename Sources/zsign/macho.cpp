@@ -14,6 +14,10 @@ ZMachO::ZMachO()
 
 ZMachO::~ZMachO()
 {
+	if (NULL != m_pBase && m_sSize > 0)
+	{
+		munmap((void *)m_pBase, m_sSize); // a failed sign used to leak the whole mapping
+	}
 	FreeArchOes();
 }
 
@@ -70,6 +74,11 @@ bool ZMachO::OpenFile(const char *szPath)
 
 	m_sSize = 0;
 	m_pBase = (uint8_t *)MapFile(szPath, 0, 0, &m_sSize, false);
+	if (NULL != m_pBase && m_sSize < sizeof(fat_header) + sizeof(fat_arch))
+	{
+		ZLog::ErrorV(">>> File too small to be a Mach-O! %s\n", szPath);
+		return false;
+	}
 	if (NULL != m_pBase)
 	{
 		uint32_t magic = *((uint32_t *)m_pBase);
@@ -77,11 +86,22 @@ bool ZMachO::OpenFile(const char *szPath)
 		{
 			fat_header *pFatHeader = (fat_header *)m_pBase;
 			int nFatArch = (FAT_MAGIC == magic) ? pFatHeader->nfat_arch : LE(pFatHeader->nfat_arch);
+			if (nFatArch <= 0 || nFatArch > 32 || sizeof(fat_header) + sizeof(fat_arch) * (size_t)nFatArch > m_sSize)
+			{
+				ZLog::ErrorV(">>> Corrupt fat header! %s\n", szPath);
+				return false;
+			}
 			for (int i = 0; i < nFatArch; i++)
 			{
 				fat_arch *pFatArch = (fat_arch *)(m_pBase + sizeof(fat_header) + sizeof(fat_arch) * i);
-				uint8_t *pArchBase = m_pBase + ((FAT_MAGIC == magic) ? pFatArch->offset : LE(pFatArch->offset));
+				uint32_t uArchOffset = (FAT_MAGIC == magic) ? pFatArch->offset : LE(pFatArch->offset);
 				uint32_t uArchLength = (FAT_MAGIC == magic) ? pFatArch->size : LE(pFatArch->size);
+				if ((uint64_t)uArchOffset + (uint64_t)uArchLength > (uint64_t)m_sSize)
+				{
+					ZLog::ErrorV(">>> Fat slice %d runs past the end of the file! %s\n", i, szPath);
+					return false;
+				}
+				uint8_t *pArchBase = m_pBase + uArchOffset;
 				if (!NewArchO(pArchBase, uArchLength))
 				{
 					ZLog::ErrorV(">>> Invalid Arch File In Fat Macho File!\n");
@@ -91,6 +111,11 @@ bool ZMachO::OpenFile(const char *szPath)
 		}
 		else if (MH_MAGIC == magic || MH_CIGAM == magic || MH_MAGIC_64 == magic || MH_CIGAM_64 == magic)
 		{
+			if ((uint64_t)m_sSize > 0xFFFFF000ULL)
+			{
+				ZLog::ErrorV(">>> Mach-O larger than 4 GB is not supported! %s\n", szPath);
+				return false;
+			}
 			if (!NewArchO(m_pBase, (uint32_t)m_sSize))
 			{
 				ZLog::ErrorV(">>> Invalid Macho File!\n");
@@ -114,12 +139,33 @@ bool ZMachO::CloseFile()
 		return false;
 	}
 
+	// Flush the in-place signature to disk and FAIL if that can't happen (e.g. APFS out of space).
+	// Without this a write-back failure is silent and the binary keeps a stale/partial seal.
+	bool bSynced = (0 == msync((void *)m_pBase, m_sSize, MS_SYNC));
+	if (!bSynced)
+	{
+		ZLog::ErrorV(">>> CodeSign Write(msync) Failed! %s, %s\n", m_strFile.c_str(), strerror(errno));
+	}
 	if ((munmap((void *)m_pBase, m_sSize)) < 0)
 	{
 		ZLog::ErrorV(">>> CodeSign Write(munmap) Failed! Error: %p, %lu, %s\n", m_pBase, m_sSize, strerror(errno));
+		m_pBase = NULL;
 		return false;
 	}
-	return true;
+	m_pBase = NULL;
+	return bSynced;
+}
+
+bool ZMachO::IsEncrypted()
+{
+	for (size_t i = 0; i < m_arrArchOes.size(); i++)
+	{
+		if (m_arrArchOes[i]->m_bEncrypted)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 void ZMachO::PrintInfo()
@@ -258,8 +304,11 @@ bool ZMachO::ReallocCodeSignSpace()
 		string strPadding1;
 		strPadding1.append(uPadding1, 0);
 
-		AppendFile(strNewFatMachOFile.c_str(), strFatHeader);
-		AppendFile(strNewFatMachOFile.c_str(), strPadding1);
+		if (!AppendFile(strNewFatMachOFile.c_str(), strFatHeader) || !AppendFile(strNewFatMachOFile.c_str(), strPadding1))
+		{
+			RemoveFile(strNewFatMachOFile.c_str());
+			return false;
+		}
 
 		for (size_t i = 0; i < arrArches.size(); i++)
 		{
@@ -274,11 +323,16 @@ bool ZMachO::ReallocCodeSignSpace()
 			string strPadding;
 			strPadding.append((uAlign - sSize % uAlign), 0);
 
-			AppendFile(strNewFatMachOFile.c_str(), (const char *)pData, sSize);
-			AppendFile(strNewFatMachOFile.c_str(), strPadding);
+			bool bWrote = AppendFile(strNewFatMachOFile.c_str(), (const char *)pData, sSize) && AppendFile(strNewFatMachOFile.c_str(), strPadding);
 
 			munmap((void *)pData, sSize);
 			RemoveFile(strNewArchOFile.c_str());
+			if (!bWrote)
+			{
+				ZLog::ErrorV(">>> Failed writing the rebuilt fat binary (out of space?) %s\n", m_strFile.c_str());
+				RemoveFile(strNewFatMachOFile.c_str());
+				return false;
+			}
 		}
 
 		RemoveFile(m_strFile.c_str());

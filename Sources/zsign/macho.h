@@ -17,6 +17,7 @@ public:
 	bool ChangeDylibPath(const char *oldPath, const char *newPath);
 	std::vector<std::string> ListDylibs();
 	bool RemoveDylib(const std::set<std::string> &dylibNames);
+	bool IsEncrypted();
 private:
 	bool OpenFile(const char *szPath);
 	bool CloseFile();

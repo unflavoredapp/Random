@@ -221,7 +221,7 @@ int zsignWithOptions(NSString *app,
 		return -1;
 	}
 	
-	bool bEnableCache = true;
+	bool bEnableCache = false; // the cache was written to the process CWD ("/" on iOS) and never used: TrustCore always force-signs
 	string strFolder = strPath;
 	
 	timer.Reset();

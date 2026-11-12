@@ -162,10 +162,11 @@ protocol IPAArchiver {
 
 enum SignEngineError: Error, LocalizedError, Sendable {
     case failed(String)
+    case storage(String)
 
     var errorDescription: String? {
         switch self {
-        case .failed(let message): return message
+        case .failed(let message), .storage(let message): return message
         }
     }
 }
@@ -398,12 +399,18 @@ nonisolated enum Signer {
         onLog: (@Sendable (String) -> Void)? = nil,
         captureOutput: Bool = true
     ) async throws -> SignOutcome {
-        let cacheKey = SignCache.key(ipa: ipaURL, material: material, options: o)
+        // Multi-GB builds skip the cache: copying them costs more than it saves and they'd be trimmed at once.
+        let cacheable = SignGuard.ipaSize(ipaURL) < SignGuard.cacheCeilingBytes
+        let cacheKey = cacheable ? SignCache.key(ipa: ipaURL, material: material, options: o) : nil
         if let k = cacheKey, let hit = SignCache.lookup(k) {
             onLog?(">>> Same IPA, certificate and options as before — using the cached signed build (instant)")
             return hit
         }
-        let outcome = try await signDetachedUncached(ipaURL: ipaURL, material: material, options: o, onLog: onLog, captureOutput: captureOutput)
+        let outcome = try await SignGuard.runHardened(ipa: ipaURL, onLog: onLog) { safe in
+            var attempt = o
+            if safe { attempt.parallelSigning = false }
+            return try await signDetachedUncached(ipaURL: ipaURL, material: material, options: attempt, onLog: onLog, captureOutput: captureOutput, safeProfile: safe)
+        }
         if let k = cacheKey { SignCache.store(k, outcome: outcome) }      // APFS clone: instant, and must finish before the caller moves the file
         return outcome
     }
@@ -413,14 +420,16 @@ nonisolated enum Signer {
         material: CertMaterial,
         options o: SignOptions,
         onLog: (@Sendable (String) -> Void)? = nil,
-        captureOutput: Bool = true
+        captureOutput: Bool = true,
+        safeProfile: Bool = false
     ) async throws -> SignOutcome {
         let fm = FileManager.default
         let totalStart = ContinuousClock.now
         var signingSeconds: Double = 0
         let work = fm.temporaryDirectory.appendingPathComponent("sign-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
-        defer { try? fm.removeItem(at: work) }
+        SignGuard.registerWork(work)
+        defer { SignGuard.unregisterWork(work); try? fm.removeItem(at: work) }
 
         // 1. Stage cert + profile — zsign takes file paths.
         let p12URL  = work.appendingPathComponent("cert.p12")
@@ -434,7 +443,7 @@ nonisolated enum Signer {
         onLog?(">>> Extracting IPA…")
         let extractionStart = ContinuousClock.now
         var fastUnpacked = false
-        let useFast = ZipFast.begin()
+        let useFast = safeProfile ? false : ZipFast.begin()
         defer { if useFast { ZipFast.end() } }
         if useFast {
             do { try ZipFast.extract(ipa: ipaURL, to: extractDir); fastUnpacked = true }
@@ -499,14 +508,12 @@ nonisolated enum Signer {
             throw error
         }
 
-        // Deterministic safety net: installd refuses an app with no profile. If for
-        // any reason zsign didn't write embedded.mobileprovision, write it ourselves
-        // from the same provisioning file we signed with, then re-seal is unneeded
-        // (the profile isn't part of the code signature).
+        // embedded.mobileprovision IS listed in _CodeSignature/CodeResources, so it must exist before the
+        // seal is built. Writing it afterwards (the old safety net) produced an unsealed file and a broken
+        // resource seal. If it's missing now the seal is wrong — fail instead of shipping it.
         let embeddedProv = appURL.appendingPathComponent("embedded.mobileprovision")
         if !fm.fileExists(atPath: embeddedProv.path) {
-            try? material.provision.write(to: embeddedProv)
-            onLog?(">>> embedded.mobileprovision was missing — wrote it from the signing profile")
+            throw SignEngineError.failed("TrustCore: embedded.mobileprovision was not sealed into the app — refusing to package a bad signature.")
         }
 
         // 4. Read identifiers back from the SIGNED app's own Info.plist — this is
@@ -535,8 +542,14 @@ nonisolated enum Signer {
             do { try ZipFast.packDelta(root: extractDir, original: ipaURL, to: signed); packedFast = true }
             catch { try? fm.removeItem(at: signed) }
         }
-        if !packedFast {
-            try fm.zipItem(at: payload, to: signed, shouldKeepParent: true, compressionMethod: .none)
+        do {
+            if !packedFast {
+                try fm.zipItem(at: payload, to: signed, shouldKeepParent: true, compressionMethod: .none)
+            }
+            try SignGuard.verifyPackaged(signed, appFolderName: appURL.lastPathComponent)
+        } catch {
+            try? fm.removeItem(at: signed)          // never leave a half-written multi-GB file behind
+            throw error
         }
         let packagingSeconds = Double(packagingStart.duration(to: ContinuousClock.now).components.attoseconds) / 1e18 + Double(packagingStart.duration(to: ContinuousClock.now).components.seconds)
         let totalSeconds = Double(totalStart.duration(to: ContinuousClock.now).components.attoseconds) / 1e18 + Double(totalStart.duration(to: ContinuousClock.now).components.seconds)
@@ -574,7 +587,8 @@ nonisolated enum Signer {
         onLog: (@Sendable (String) -> Void)? = nil
     ) async -> [BulkSignResult] {
         guard !ipaURLs.isEmpty else { return [] }
-        let limit = max(1, min(maxConcurrency ?? recommendedBulkConcurrency(parallelSigning: options.parallelSigning), ipaURLs.count))
+        let anyHeavy = ipaURLs.contains { SignGuard.isHeavy($0) }
+        let limit = anyHeavy ? 1 : max(1, min(maxConcurrency ?? recommendedBulkConcurrency(parallelSigning: options.parallelSigning), ipaURLs.count))
         let state = BulkProgressState(total: ipaURLs.count)
         var results = Array<BulkSignResult?>(repeating: nil, count: ipaURLs.count)
         await withTaskGroup(of: BulkSignResult.self) { group in
@@ -739,9 +753,11 @@ nonisolated enum Signer {
             onLog?(">>> injected Mcrypted-512 payload (\(blob.count) bytes) → mcrypted.dat")
             // Secondary (belt-and-suspenders): append to the binary too. zsign may
             // rewrite __LINKEDIT, so this copy isn't guaranteed, but costs nothing.
-            if fm.fileExists(atPath: binURL.path), var bin = fm.contents(atPath: binURL.path) {
-                bin.append(blob)
-                try? bin.write(to: binURL)
+            // Streamed append: the old code loaded the whole executable into RAM (fatal for very large binaries).
+            if fm.fileExists(atPath: binURL.path), let h = try? FileHandle(forWritingTo: binURL) {
+                _ = try? h.seekToEnd()
+                try? h.write(contentsOf: blob)
+                try? h.close()
             }
         }
         if !o.injectDylibs.isEmpty, fm.fileExists(atPath: binURL.path) {

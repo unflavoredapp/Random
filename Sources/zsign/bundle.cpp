@@ -6,6 +6,7 @@
 #include "common/common.h"
 #include <vector>
 #include <dispatch/dispatch.h>
+#include "verify.h"
 
 ZAppBundle::ZAppBundle()
 {
@@ -199,7 +200,11 @@ bool ZAppBundle::GenerateCodeResources(const string &strFolder, JValue &jvCodeRe
         string strFile = strFolder + "/" + strKey;
         string strFileSHA1Base64;
         string strFileSHA256Base64;
-        SHASumBase64File(strFile.c_str(), strFileSHA1Base64, strFileSHA256Base64);
+        if (!SHASumBase64File(strFile.c_str(), strFileSHA1Base64, strFileSHA256Base64))
+        {
+            ZLog::ErrorV(">>> Can't hash file for CodeResources: %s\n", strFile.c_str());
+            return false;
+        }
 
         bool bomit1 = false;
         bool bomit2 = false;
@@ -371,6 +376,13 @@ bool ZAppBundle::SignNode(JValue &jvNode)
                 ZMachO macho;
                 if (!macho.InitV("%s/%s", self->m_strAppFolder.c_str(), szFile.c_str())) { okp->store(false, std::memory_order_relaxed); return; }
                 if (!macho.Sign(self->m_pSignAsset, self->m_bForceSign, "", "", "", "")) { okp->store(false, std::memory_order_relaxed); return; }
+                string strVerifyErr;
+                if (!TCVerifyMachOFile(self->m_strAppFolder + "/" + szFile, "", "", strVerifyErr))
+                {
+                    ZLog::ErrorV(">>> TrustCore verify FAILED: %s: %s\n", szFile.c_str(), strVerifyErr.c_str());
+                    okp->store(false, std::memory_order_relaxed);
+                    return;
+                }
             });
             if (!ok.load()) return false;
         }
@@ -383,6 +395,12 @@ bool ZAppBundle::SignNode(JValue &jvNode)
                 ZMachO macho;
                 if (!macho.InitV("%s/%s", m_strAppFolder.c_str(), szFile.c_str())) return false;
                 if (!macho.Sign(m_pSignAsset, m_bForceSign, "", "", "", "")) return false;
+                string strVerifyErr;
+                if (!TCVerifyMachOFile(m_strAppFolder + "/" + szFile, "", "", strVerifyErr))
+                {
+                    ZLog::ErrorV(">>> TrustCore verify FAILED: %s: %s\n", szFile.c_str(), strVerifyErr.c_str());
+                    return false;
+                }
             }
         }
     }
@@ -417,9 +435,22 @@ bool ZAppBundle::SignNode(JValue &jvNode)
         ZLog::ErrorV(">>> Can't Parse BundleExecute File! %s\n", strExePath.c_str());
         return false;
     }
+    if (macho.IsEncrypted())
+    {
+        if ("/" == strFolder)
+        {
+            ZLog::ErrorV(">>> Main executable is still FairPlay-encrypted (cryptid=1). Use a decrypted IPA. %s\n", strExePath.c_str());
+            return false;
+        }
+        ZLog::WarnV(">>> Warning: %s is still FairPlay-encrypted; that extension/framework will not run.\n", strExePath.c_str());
+    }
     
     RemoveFolderV("%s/_CodeSignature", strBaseFolder.c_str());
-    CreateFolderV("%s/_CodeSignature", strBaseFolder.c_str());
+    if (!CreateFolderV("%s/_CodeSignature", strBaseFolder.c_str()))
+    {
+        ZLog::ErrorV(">>> Can't create _CodeSignature in %s (%s)\n", strBaseFolder.c_str(), strerror(errno));
+        return false;
+    }
     string strCodeResFile = strBaseFolder + "/_CodeSignature/CodeResources";
 
     JValue jvCodeRes;
@@ -483,6 +514,61 @@ bool ZAppBundle::SignNode(JValue &jvNode)
         return false;
     }
 
+    // Prove the seal we just wrote is the seal on disk: page hashes, Info.plist slot, CodeResources slot.
+    string strVerifyErr;
+    if (!TCVerifyMachOFile(strExePath, strBaseFolder + "/Info.plist", strCodeResFile, strVerifyErr))
+    {
+        ZLog::ErrorV(">>> TrustCore verify FAILED: %s: %s\n", strExePath.c_str(), strVerifyErr.c_str());
+        return false;
+    }
+
+    return true;
+}
+
+bool ZAppBundle::VerifyResourceSeal(JValue &jvNode)
+{
+    if (jvNode.has("folders"))
+    {
+        for (size_t i = 0; i < jvNode["folders"].size(); i++)
+        {
+            if (!VerifyResourceSeal(jvNode["folders"][i]))
+            {
+                return false;
+            }
+        }
+    }
+
+    string strFolder = jvNode["path"];
+    string strBaseFolder = m_strAppFolder;
+    if ("/" != strFolder)
+    {
+        strBaseFolder += "/";
+        strBaseFolder += strFolder;
+    }
+    string strCodeResFile = strBaseFolder + "/_CodeSignature/CodeResources";
+
+    string strOnDisk;
+    if (!ReadFile(strCodeResFile.c_str(), strOnDisk) || strOnDisk.empty())
+    {
+        ZLog::ErrorV(">>> TrustCore verify FAILED: missing %s\n", strCodeResFile.c_str());
+        return false;
+    }
+
+    // Re-hash every sealed file as it is NOW (after all nested signing finished) and rebuild the seal.
+    // Any file added, removed or changed after it was sealed makes the bytes differ.
+    JValue jvFresh;
+    if (!GenerateCodeResources(strBaseFolder, jvFresh))
+    {
+        ZLog::ErrorV(">>> TrustCore verify FAILED: can't re-hash resources in %s\n", strBaseFolder.c_str());
+        return false;
+    }
+    string strFresh;
+    jvFresh.writePList(strFresh);
+    if (strFresh != strOnDisk)
+    {
+        ZLog::ErrorV(">>> TrustCore verify FAILED: resource seal is stale in %s (a file changed after sealing)\n", strBaseFolder.c_str());
+        return false;
+    }
     return true;
 }
 
@@ -703,6 +789,12 @@ bool ZAppBundle::SignFolder(ZSignAsset *pSignAsset,
 
     if (SignNode(jvRoot))
     {
+        ZLog::Print(">>> TrustCore: verifying resource seals...\n");
+        if (!VerifyResourceSeal(jvRoot))
+        {
+            return false;
+        }
+        ZLog::Print(">>> TrustCore: signature and resource seals verified\n");
         if (bEnableCache)
         {
             CreateFolder("./.zsign_cache");

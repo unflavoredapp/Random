@@ -3,7 +3,6 @@
 #include "archo.h"
 #include "signing.h"
 
-static uint64_t execSegLimit = 0;
 
 ZArchO::ZArchO()
 {
@@ -21,6 +20,7 @@ ZArchO::ZArchO()
 	m_pCodeSignSegment = NULL;
 	m_pLinkEditSegment = NULL;
 	m_uLoadCommandsFreeSpace = 0;
+	m_uExecSegLimit = 0;
 }
 
 bool ZArchO::Init(uint8_t *pBase, uint32_t uLength)
@@ -54,7 +54,7 @@ bool ZArchO::Init(uint8_t *pBase, uint32_t uLength)
 			segment_command *seglc = (segment_command *)pLoadCommand;
 			if (0 == strcmp("__TEXT", seglc->segname))
 			{
-				execSegLimit = seglc->vmsize;
+				m_uExecSegLimit = seglc->vmsize;
 				for (uint32_t j = 0; j < BO(seglc->nsects); j++)
 				{
 					section *sect = (section *)((pLoadCommand + sizeof(segment_command)) + sizeof(section) * j);
@@ -82,7 +82,7 @@ bool ZArchO::Init(uint8_t *pBase, uint32_t uLength)
 			segment_command_64 *seglc = (segment_command_64 *)pLoadCommand;
 			if (0 == strcmp("__TEXT", seglc->segname))
 			{
-				execSegLimit = seglc->vmsize;
+				m_uExecSegLimit = seglc->vmsize;
 				for (uint32_t j = 0; j < BO(seglc->nsects); j++)
 				{
 					section_64 *sect = (section_64 *)((pLoadCommand + sizeof(segment_command_64)) + sizeof(section_64) * j);
@@ -430,12 +430,12 @@ bool ZArchO::BuildCodeSignature(ZSignAsset *pSignAsset, bool bForce, const strin
 	string strCMSSignatureSlot;
 	string strCodeDirectorySlot;
 	string strAltnateCodeDirectorySlot;
-	SlotBuildCodeDirectory(false,
+	bool bCDOk = SlotBuildCodeDirectory(false,
 						   m_pBase,
 						   m_uCodeLength,
 						   pCodeSlots1Data,
 						   uCodeSlots1DataLength,
-						   execSegLimit,
+						   m_uExecSegLimit,
 						   execSegFlags,
 						   strBundleId,
 						   pSignAsset->m_strTeamId,
@@ -446,12 +446,12 @@ bool ZArchO::BuildCodeSignature(ZSignAsset *pSignAsset, bool bForce, const strin
 						   strDerEntitlementsSlotSHA1,
 						   IsExecute(),
 						   strCodeDirectorySlot);
-	SlotBuildCodeDirectory(true,
+	bCDOk = bCDOk && SlotBuildCodeDirectory(true,
 						   m_pBase,
 						   m_uCodeLength,
 						   pCodeSlots256Data,
 						   uCodeSlots256DataLength,
-						   execSegLimit,
+						   m_uExecSegLimit,
 						   execSegFlags,
 						   strBundleId,
 						   pSignAsset->m_strTeamId,
@@ -462,10 +462,23 @@ bool ZArchO::BuildCodeSignature(ZSignAsset *pSignAsset, bool bForce, const strin
 						   strDerEntitlementsSlotSHA256,
 						   IsExecute(),
 						   strAltnateCodeDirectorySlot);
-	SlotBuildCMSSignature(pSignAsset,
+	if (!bCDOk || strCodeDirectorySlot.empty() || strAltnateCodeDirectorySlot.empty())
+	{
+		ZLog::Error(">>> TrustCore: CodeDirectory build failed (missing team ID / bundle ID?) — not writing a signature\n");
+		strOutput.clear();
+		return false;
+	}
+	// Without the CMS blob the binary is effectively unsigned. The old code silently wrote the
+	// signature anyway and reported success; installd / AMFI would then reject or kill the app.
+	if (!SlotBuildCMSSignature(pSignAsset,
 						  strCodeDirectorySlot,
 						  strAltnateCodeDirectorySlot,
-						  strCMSSignatureSlot);
+						  strCMSSignatureSlot) || strCMSSignatureSlot.empty())
+	{
+		ZLog::Error(">>> TrustCore: CMS signature failed (certificate / private key / chain) — not writing a signature\n");
+		strOutput.clear();
+		return false;
+	}
 
 	uint32_t uCodeDirectorySlotLength = (uint32_t)strCodeDirectorySlot.size();
 	uint32_t uRequirementsSlotLength = (uint32_t)strRequirementsSlot.size();
@@ -600,11 +613,11 @@ bool ZArchO::Sign(ZSignAsset *pSignAsset, bool bForce, const string &strBundleId
 		return false;
 	}
 
-	int nSpaceLength = (int)m_uLength - (int)m_uCodeLength - (int)strCodeSignBlob.size();
+	int64_t nSpaceLength = (int64_t)m_uLength - (int64_t)m_uCodeLength - (int64_t)strCodeSignBlob.size();
 	if (nSpaceLength < 0)
 	{
 		m_bEnoughSpace = false;
-		ZLog::WarnV(">>> No Enough CodeSignature Space. Length => Now: %d, Need: %d\n", (int)m_uLength - (int)m_uCodeLength, (int)strCodeSignBlob.size());
+		ZLog::WarnV(">>> No Enough CodeSignature Space. Length => Now: %lld, Need: %lld\n", (long long)((int64_t)m_uLength - (int64_t)m_uCodeLength), (long long)strCodeSignBlob.size());
 		return false;
 	}
 
@@ -617,7 +630,13 @@ uint32_t ZArchO::ReallocCodeSignSpace(const string &strNewFile)
 {
 	RemoveFile(strNewFile.c_str());
 
-	uint32_t uNewLength = m_uCodeLength + ByteAlign(((m_uCodeLength / 4096) + 1) * (20 + 32), 4096) + 16384; //16K May Be Enough
+	uint64_t uWanted = (uint64_t)m_uCodeLength + ByteAlign(((m_uCodeLength / 4096) + 1) * (20 + 32), 4096) + 65536; // 64K: entitlements + DER + CMS chain
+	if (uWanted > 0xFFFFF000ULL)
+	{
+		ZLog::Error(">>> Binary too large to grow its CodeSignature space!\n");
+		return 0;
+	}
+	uint32_t uNewLength = (uint32_t)uWanted;
 	if (NULL == m_pLinkEditSegment || uNewLength <= m_uLength)
 	{
 		return 0;
