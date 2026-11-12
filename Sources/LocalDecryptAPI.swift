@@ -227,7 +227,7 @@ nonisolated enum LocalDecryptAPI {
         return Response(status: .ok, headers: h, body: .init(data: data))
     }
 
-    private static func response(_ j: LocalDecryptJob) -> LocalDecryptJobResponse {
+    static func response(_ j: LocalDecryptJob) -> LocalDecryptJobResponse {
         .init(id: j.id.uuidString, status: j.status, message: j.message, queue: j.queue, name: j.name, version: j.appVersion,
               output: j.output?.lastPathComponent, path: j.output?.path, error: j.error)
     }

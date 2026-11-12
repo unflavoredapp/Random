@@ -296,6 +296,10 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
                 guard let self else { throw Abort(.serviceUnavailable) }
                 try self.requireAuthorization(req)
             }
+            LocalWorkflowAPI.register(on: app) { [weak self] req in
+                guard let self else { throw Abort(.serviceUnavailable) }
+                try self.requireAuthorization(req)
+            }
 
             try app.server.start()
             lock.lock()
@@ -486,6 +490,26 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
         return response(await jobs.get(id)!)
     }
 
+    // MARK: Used by the workflow orchestrator (parent workflow ID over a decrypt job + a sign job)
+
+    func startWorkflowSign(path: String, name: String?, bundleID: String?, version: String?, parallelSigning: Bool?, publishOTA: Bool) async throws -> UUID {
+        let r = try await submit(LocalZSignSignRequest(path: path, name: name, bundleID: bundleID, version: version, parallelSigning: parallelSigning), publishOTA: publishOTA)
+        guard let id = UUID(uuidString: r.id) else { throw Abort(.internalServerError) }
+        return id
+    }
+
+    func signJob(_ id: UUID) async -> LocalZSignJobResponse? {
+        guard let j = await jobs.get(id) else { return nil }
+        return response(j)
+    }
+
+    /// Same behaviour as POST /v1/jobs/:id/cancel, without the HTTP layer.
+    func requestSignCancel(_ id: UUID) async {
+        guard let j = await jobs.get(id), j.status == "queued" || j.status == "signing" else { return }
+        context(for: id)?.cancel()
+        await jobs.update(id, mutate: { $0.status = "cancelling" })
+    }
+
     private static func elapsed(_ started: ContinuousClock.Instant) -> Double {
         let d = started.duration(to: .now)
         return Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
@@ -590,7 +614,7 @@ struct LocalZSignAPISettingsView: SwiftUI.View {
                         Text("ENDPOINTS")
                             .font(.system(size: 11, weight: .heavy, design: .monospaced))
                             .foregroundStyle(Theme.subtle)
-                        Text("POST /v1/sign\nGET /v1/jobs/:id\nPOST /v1/jobs/:id/cancel\nPOST /v1/jobs/:id/retry\nGET /v1/jobs/:id/download\nGET /v1/status\nGET /v1/decrypt/search?q=\nPOST /v1/decrypt\nGET /v1/decrypt/jobs/:id")
+                        Text("POST /v1/sign\nGET /v1/jobs/:id\nPOST /v1/jobs/:id/cancel\nPOST /v1/jobs/:id/retry\nGET /v1/jobs/:id/download\nGET /v1/status\nGET /v1/decrypt/search?q=\nPOST /v1/decrypt\nGET /v1/decrypt/jobs/:id\nPOST /v1/workflows\nGET /v1/workflows/:id\nPOST /v1/workflows/:id/cancel")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(Theme.text)
                             .padding(.top, 6)
