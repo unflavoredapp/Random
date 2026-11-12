@@ -292,6 +292,11 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
                 return req.fileio.streamFile(at: output.path)
             }
 
+            LocalDecryptAPI.register(on: app) { [weak self] req in
+                guard let self else { throw Abort(.serviceUnavailable) }
+                try self.requireAuthorization(req)
+            }
+
             try app.server.start()
             lock.lock()
             application = app
@@ -585,7 +590,7 @@ struct LocalZSignAPISettingsView: SwiftUI.View {
                         Text("ENDPOINTS")
                             .font(.system(size: 11, weight: .heavy, design: .monospaced))
                             .foregroundStyle(Theme.subtle)
-                        Text("POST /v1/sign\nGET /v1/jobs/:id\nPOST /v1/jobs/:id/cancel\nPOST /v1/jobs/:id/retry\nGET /v1/jobs/:id/download\nGET /v1/status")
+                        Text("POST /v1/sign\nGET /v1/jobs/:id\nPOST /v1/jobs/:id/cancel\nPOST /v1/jobs/:id/retry\nGET /v1/jobs/:id/download\nGET /v1/status\nGET /v1/decrypt/search?q=\nPOST /v1/decrypt\nGET /v1/decrypt/jobs/:id")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(Theme.text)
                             .padding(.top, 6)
