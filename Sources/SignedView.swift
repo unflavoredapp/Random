@@ -233,7 +233,7 @@ struct AppActionSheet: View {
             }
             .padding(.horizontal, 20)
 
-            Text("Made by ᴹᴿZEFv").font(.system(size: 13, weight: .semibold))
+            Text("Made by ᴍƦᴢᴇꜰΛ").font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.subtle).padding(.top, 18).padding(.bottom, 8)
 
             Spacer(minLength: 0)

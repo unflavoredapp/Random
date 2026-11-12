@@ -284,7 +284,7 @@ final class ZefvAccount: ObservableObject {
         guard role == .admin || StaffGate.shared.role == .admin, let tok = sessionToken else { return false }
         let value = requested.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
         guard MDIDManager.shared.isValid(value) else {
-            lastError = "ADID must look like AS-XXXXXX-XX"
+            lastError = "ADID must look like TC-XXXXXX-XX"
             return false
         }
         busy = true; lastError = nil; defer { busy = false }

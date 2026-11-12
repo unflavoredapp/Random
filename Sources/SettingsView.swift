@@ -55,16 +55,16 @@ struct SettingsView: View {
                         SettingsSection("Account") {
                             SettingsRow(icon: account.isLoggedIn ? "person.crop.circle.fill" : "person.crop.circle.badge.plus",
                                         title: "User Settings",
-                                        subtitle: account.isLoggedIn ? "\(account.username ?? "") · account and device settings" : "Sign in or register") { screen = .account }
+                                        subtitle: account.isLoggedIn ? "\(DisplayName.username(account.username ?? "")) · account and device settings" : "Sign in or register") { screen = .account }
                             SettingsRow(icon: "plus.app.fill", title: "Request Certificate",
                                         subtitle: "Submit or review your certificate requests") { screen = .signingRequestCertificate }
                         }
 
                         SettingsSection("Signing") {
-                            SettingsRow(icon: "checkmark.seal.fill", title: "Certificates",
+                            SettingsRow(icon: "checkmark.seal.fill", imageName: "CertSeal", title: "Certificates",
                                         subtitle: certs.active?.name ?? "No signing certificate") { screen = .certificates }
                             SettingsRow(icon: "gearshape.fill", title: "Settings",
-                                        subtitle: "Local ZSign API · Decrypt.Team Domain") { screen = .tableView }
+                                        subtitle: "TrustCore API · Decrypt.Team Domain") { screen = .tableView }
                             // The "dev" group specifically — not admin, not the developer role. Being an admin
                             // or having elevated role doesn't put the GitHub repo tools in front of you.
                             if account.style.badges.contains("dev") {
@@ -80,8 +80,8 @@ struct SettingsView: View {
 
                         SettingsSection("Support") {
                             SettingsLink(icon: "globe", imageName: "airshare_logo", title: "Decrypt.Team",
-                                         subtitle: "airshare.lol | Official site",
-                                         url: URL(string: "https://airshare.lol")!)
+                                         subtitle: "decrypt.team | Official site",
+                                         url: URL(string: "https://decrypt.team")!)
                             SettingsLink(icon: "network", imageName: "delvek_logo", imageURL: URL(string: "https://delvek.net/img/delvek4.png"), title: "Delvek.net",
                                          subtitle: "delvek.net | Repo and support",
                                          url: URL(string: "https://delvek.net")!)
@@ -95,8 +95,9 @@ struct SettingsView: View {
                     .padding(.bottom, 20)
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                TabTitleBar(title: "Settings") {
-                    Text("\(Theme.appName.uppercased()) \(Theme.appVersion)").font(.caption.monospaced()).foregroundStyle(Theme.subtle)
+                TabTitleBar(title: "Settings",
+                            centerView: AnyView(Text("\(Theme.appName.uppercased()) \(Theme.appVersion)").font(.caption.monospaced()).foregroundStyle(Theme.subtle))) {
+                    EmptyView()
                 }
             }
             .task { await StaffGate.shared.refresh(); await ZefvAccount.shared.refreshProfile() }
@@ -346,13 +347,14 @@ private struct RowBody: View {
 
 private struct SettingsRow: View {
     let icon: String
+    var imageName: String? = nil
     let title: String
     let subtitle: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            RowBody(icon: icon, title: title, subtitle: subtitle)
+            RowBody(icon: icon, imageName: imageName, title: title, subtitle: subtitle)
         }
         .buttonStyle(RowPressStyle())
     }
@@ -451,6 +453,7 @@ private struct StatusFooter: View {
                     mdidPill
                     rolePill
                 }
+                trustCoreLabel
             } else {
                 // Guest: create-account CTA, then role + ADID underneath
                 Button { showAccount = true } label: {
@@ -466,11 +469,18 @@ private struct StatusFooter: View {
                     rolePill
                     refreshButton
                 }
+                trustCoreLabel
             }
         }
         .frame(maxWidth: .infinity, alignment: .center)
         .multilineTextAlignment(.center)
         .sheet(isPresented: $showAccount) { ZefvAccountScreen(mode: .register) }
+    }
+
+    private var trustCoreLabel: some View {
+        Text("TrustCore v\(Theme.trustCoreVersion)")
+            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+            .foregroundStyle(Theme.subtle)
     }
 
     private var rolePill: some View {
@@ -528,7 +538,7 @@ private struct TableViewSettingsScreen: View {
         DetailScreen(title: "Settings") {
             VStack(alignment: .leading, spacing: 0) {
                 SettingsSection("Signing tools") {
-                    SettingsRow(icon: "bolt.horizontal.circle.fill", title: "Local ZSign API",
+                    SettingsRow(icon: "bolt.horizontal.circle.fill", title: "TrustCore API",
                                 subtitle: "127.0.0.1:\(LocalZSignAPI.shared.port) · loopback signing control") { showAPI = true }
                     SettingsRow(icon: "network", title: "Decrypt.Team Domain",
                                 subtitle: "\(ServerConfig.installHost) · certbot via Actions") { showDomain = true }
@@ -1390,7 +1400,7 @@ private struct OTAFilesScreen: View {
     var body: some View {
         TableScreen(title: "Exported files") {
             Section {
-                TRow(k: "Folder", v: "Files › On My iPhone › Decrypt.Team › Decrypt.Team Certs")
+                TRow(k: "Folder", v: "Files › On My iPhone › \(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Decrypt.Team") › Decrypt.Team Certs")
                 if let u = OTAFiles.filesAppURL {
                     TButton(title: "Open in Files", icon: "folder") { openURL(u) }
                 }

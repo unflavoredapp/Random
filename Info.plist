@@ -19,7 +19,7 @@
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>com.mrzefv.airshare.source-scan</string>
+		<string>team.decrypt.yg12yoccq4.scan</string>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).userTask.*</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
@@ -71,9 +71,9 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>CFBundleDisplayName</key>
-	<string>Decrypt.Team</string>
+	<string>06•∆B682</string>
 	<key>CFBundleName</key>
-	<string>Decrypt.Team</string>
+	<string>06•∆B682</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

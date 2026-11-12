@@ -186,6 +186,11 @@ struct RemoteStyledName: View {
 // MARK: - Styled username
 
 /// Renders a username in the user's chosen color/font/size, or as a full animated rainbow.
+/// How a username is shown. The owner's handle is always written ᴍƦᴢᴇꜰΛ; every other name is shown as it is.
+enum DisplayName {
+    static func username(_ name: String) -> String { name.lowercased() == "mrzefv" ? "ᴍƦᴢᴇꜰΛ" : name }
+}
+
 struct StyledUsername: View {
     let name: String
     var style: UserStyle
@@ -201,13 +206,13 @@ struct StyledUsername: View {
 
     var body: some View {
         if style.rainbow {
-            Text(name).font(resolvedFont)
+            Text(DisplayName.username(name)).font(resolvedFont)
                 .foregroundStyle(LinearGradient(colors: Self.spectrum, startPoint: .leading, endPoint: .trailing))
                 .hueRotation(.degrees(hue))
                 .fixedSize()
                 .onAppear { withAnimation(.linear(duration: 4).repeatForever(autoreverses: false)) { hue = 360 } }
         } else {
-            Text(name).font(resolvedFont).foregroundStyle(style.color ?? fallback).fixedSize()
+            Text(DisplayName.username(name)).font(resolvedFont).foregroundStyle(style.color ?? fallback).fixedSize()
         }
     }
 }

@@ -46,7 +46,7 @@ struct UnzipDropApp: App {
                     }
                 }
         }
-        .backgroundTask(.appRefresh("com.mrzefv.airshare.source-scan")) {
+        .backgroundTask(.appRefresh("team.decrypt.yg12yoccq4.scan")) {
             await LocalSourceUpdateWatcher.shared.scanAllSources(reason: "background")
         }
     }

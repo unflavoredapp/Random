@@ -28,7 +28,9 @@ nonisolated enum Theme {
     static var accent: Color { Color(hex: accentHex) }
 
     static let appName    = "Decrypt.Team"
-    static let appVersion = "1.0"
+    static let appVersion = "3.7"
+    /// Version of the local signing engine, shown under the ADID in Settings.
+    static let trustCoreVersion = "1.6"
     static let owner      = "ᴍƦᴢᴇꜰΛ · mrzefv.com"
 }
 

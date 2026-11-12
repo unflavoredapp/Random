@@ -71,7 +71,7 @@ struct AccountScreen: View {
                     ZStack {
                         Circle().fill(role.color.opacity(0.18)).frame(width: 84, height: 84)
                         Circle().stroke(role.color.opacity(0.5), lineWidth: 2).frame(width: 84, height: 84)
-                        Text(String((account.username ?? "?").prefix(1)).uppercased())
+                        Text(String(DisplayName.username(account.username ?? "?").prefix(1)).uppercased())
                             .font(.system(size: 34, weight: .heavy, design: .rounded)).foregroundStyle(role.color)
                     }
                     StyledUsername(name: account.username ?? "", style: account.style, base: 24)
@@ -301,7 +301,7 @@ struct AccountScreen: View {
                         Text("Assign a new ADID to this admin account. The server updates the account and role mapping first; Decrypt.Team changes its local ADID only after the server accepts the new value.")
                             .font(.system(size: 11)).foregroundStyle(Theme.subtle)
                         HStack(spacing: 10) {
-                            field("AS-XXXXXX-XX", text: $adminMDID, secure: false, keyboard: .asciiCapable)
+                            field("TC-XXXXXX-XX", text: $adminMDID, secure: false, keyboard: .asciiCapable)
                             Button("Update") {
                                 let requested = adminMDID
                                 Task {
@@ -436,7 +436,7 @@ struct AccountScreen: View {
                 Text("USER SETTINGS").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
                 Spacer()
             }
-            Text(account.username ?? "").font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.subtle)
+            Text(DisplayName.username(account.username ?? "")).font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.subtle)
             HStack {
                 Spacer()
                 Button { dismiss() } label: {

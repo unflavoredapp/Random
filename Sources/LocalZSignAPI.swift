@@ -258,7 +258,7 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
             host: host,
             port: port,
             apiVersion: "v1",
-            engine: running ? "ZSign" : "Stopped",
+            engine: running ? "TrustCore" : "Stopped",
             otaServerCount: otaCount,
             totalJobs: jobs.count,
             activeJobs: active,
@@ -431,7 +431,7 @@ struct LocalZSignAPISettingsView: SwiftUI.View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     Card {
-                        Text("LOCAL ZSIGN API")
+                        Text("TRUSTCORE API")
                             .font(.system(size: 12, weight: .heavy, design: .monospaced))
                             .kerning(1.2)
                             .foregroundStyle(Theme.subtle)
@@ -439,7 +439,7 @@ struct LocalZSignAPISettingsView: SwiftUI.View {
                             .font(.system(size: 18, weight: .bold, design: .monospaced))
                             .foregroundStyle(Theme.accent)
                             .padding(.top, 4)
-                        Text("Loopback only. The API controls the same local ZSign engine used by Decrypt.Team; no signing request leaves this device.")
+                        Text("Loopback only. The API controls the same TrustCore engine used by Decrypt.Team; no signing request leaves this device.")
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.subtle)
                             .padding(.top, 4)
@@ -456,7 +456,7 @@ struct LocalZSignAPISettingsView: SwiftUI.View {
                         HStack {
                             Text("Engine").foregroundStyle(Theme.subtle)
                             Spacer()
-                            Text("ZSign")
+                            Text("TrustCore")
                                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
                                 .foregroundStyle(Theme.text)
                         }
@@ -501,7 +501,7 @@ struct LocalZSignAPISettingsView: SwiftUI.View {
             }
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            TabTitleBar(title: "Local ZSign API") { Text("LOOPBACK").font(.caption.monospaced()).foregroundStyle(Theme.subtle) }
+            TabTitleBar(title: "TrustCore API") { Text("LOOPBACK").font(.caption.monospaced()).foregroundStyle(Theme.subtle) }
         }
         .task { api.startIfNeeded() }
     }

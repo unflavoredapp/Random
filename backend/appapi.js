@@ -8,7 +8,7 @@
 //   POST /app/v1/account             {action,token,...}                       -> set_style|set_username|set_email|
 //                                                                               change_password|admin_set_mdid|logout
 //   GET  /app/v1/status                                                       -> {ok,db,users}
-//   GET  /app/v1/roles               ?adid=AS-XXXXXX-XX                       -> {role,staff}
+//   GET  /app/v1/roles               ?adid=TC-XXXXXX-XX                       -> {role,staff}
 //   GET  /app/v1/quota               ?adid=                                   -> {today,total}
 //   POST /app/v1/quota               {adid,action:"consume"}                  -> {today,total}
 //   GET  /app/v1/style               ?usernames=a,b,c                         -> {name:{style,role,badges}}
@@ -20,10 +20,10 @@
 //   POST /app/v1/account  (ADMIN role only):  admin_list_users {q?} | admin_set_groups {username,groups:[...]} | admin_set_sponsor {username,sponsor}
 //
 // Roles: member (default) | developer | admin.  Bootstrap with env APP_ADMINS / APP_DEVS (usernames or ADIDs,
-// comma separated); after that manage them from /admin/app.  ADIDs look like AS-XXXXXX-XX (legacy MS- accepted).
+// comma separated); after that manage them from /admin/app.  ADIDs look like TC-XXXXXX-XX (legacy MS- accepted).
 const crypto = require("crypto");
 
-const ADID_RE = /^(AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$/;
+const ADID_RE = /^(TC|AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$/;
 const NAME_RE = /^[A-Za-z0-9_]{3,20}$/;
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(?:\.[^\s@.]+)+$/;
 const RESERVED = new Set(["admin", "administrator", "root", "system", "support", "staff", "moderator", "airshare", "owner"]);
@@ -260,7 +260,7 @@ function mount(web, c) {
         case "admin_set_mdid": {
           if (roleOf(u) !== "admin") return fail(res, 403, "Admins only.");
           const v = String(b.mdid || b.adid || "").trim().toUpperCase();
-          if (!ADID_RE.test(v)) return fail(res, 400, "ADID must look like AS-XXXXXX-XX.");
+          if (!ADID_RE.test(v)) return fail(res, 400, "ADID must look like TC-XXXXXX-XX.");
           const owner = byAdid.get(v);
           if (owner && owner.id !== u.id) return fail(res, 409, "ADID already belongs to another account");
           setAdid.run(v, u.id);

@@ -8,7 +8,7 @@
 //   POST /app/v1/account             {action,token,...}                       -> set_style|set_username|set_email|
 //                                                                               change_password|admin_set_mdid|logout
 //   GET  /app/v1/status                                                       -> {ok,db,users}
-//   GET  /app/v1/roles               ?adid=AS-XXXXXX-XX                       -> {role,staff}
+//   GET  /app/v1/roles               ?adid=TC-XXXXXX-XX                       -> {role,staff}
 //   GET  /app/v1/quota               ?adid=                                   -> {today,total}
 //   POST /app/v1/quota               {adid,action:"consume"}                  -> {today,total}
 //   GET  /app/v1/style               ?usernames=a,b,c                         -> {name:{style,role,badges}}
@@ -21,13 +21,13 @@
 //   POST /app/v1/account  (ADMIN role only):  admin_list_users {q?} | admin_set_groups {username,groups:[...]} | admin_set_sponsor {username,sponsor}
 //
 // Roles: member (default) | developer | admin.  Bootstrap with env APP_ADMINS / APP_DEVS (usernames or ADIDs,
-// comma separated); after that manage them from /admin/app.  ADIDs look like AS-XXXXXX-XX (legacy MS- accepted).
+// comma separated); after that manage them from /admin/app.  ADIDs look like TC-XXXXXX-XX (legacy MS- accepted).
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const PERKS = require("./perks");
 
-const ADID_RE = /^(AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$/;
+const ADID_RE = /^(TC|AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$/;
 const NAME_RE = /^[A-Za-z0-9_]{3,20}$/;
 const EMAIL_RE = /^[^\s@]{1,64}@[^\s@.]+(?:\.[^\s@.]+)+$/;
 const RESERVED = new Set(["admin", "administrator", "root", "system", "support", "staff", "moderator", "airshare", "owner"]);
@@ -547,7 +547,7 @@ function mount(web, c) {
         case "admin_set_mdid": {
           if (roleOf(u) !== "admin") return fail(res, 403, "Admins only.");
           const v = String(b.mdid || b.adid || "").trim().toUpperCase();
-          if (!ADID_RE.test(v)) return fail(res, 400, "ADID must look like AS-XXXXXX-XX.");
+          if (!ADID_RE.test(v)) return fail(res, 400, "ADID must look like TC-XXXXXX-XX.");
           const owner = byAdid.get(v);
           if (owner && owner.id !== u.id) return fail(res, 409, "ADID already belongs to another account");
           setAdid.run(v, u.id);
@@ -830,7 +830,7 @@ function mount(web, c) {
     const name = txt(b.name, 60), bundle = txt(b.bundle_id, 120), version = String(b.version || "").replace(/[^0-9A-Za-z._-]/g, "").slice(0, 30);
     if (!name || !/^[A-Za-z0-9.-]{3,120}$/.test(bundle) || !version) return fail(res, 400, "Name, bundle ID and version are required.");
     const adids = Array.from(new Set((Array.isArray(b.adids) ? b.adids : String(b.adids || "").split(/[\s,]+/)).map(x => String(x).trim().toUpperCase()).filter(Boolean)));
-    if (adids.some(a => !ADID_RE.test(a))) return fail(res, 400, "Every ADID must look like AS-XXXXXX-XX.");
+    if (adids.some(a => !ADID_RE.test(a))) return fail(res, 400, "Every ADID must look like TC-XXXXXX-XX.");
     const icon = /^https:\/\/[^\s"'<>]{4,400}$/.test(String(b.icon_url || "")) ? String(b.icon_url) : "";
     const tint = /^#?[0-9a-f]{6}$/i.test(String(b.tint || "")) ? String(b.tint).replace("#", "") : "";
     const old = id ? db.prepare("SELECT ipa_file,ipa_size FROM beta_builds WHERE id=?").get(id) : null;
@@ -859,12 +859,12 @@ function mount(web, c) {
 select,button{background:#1b1b1b;color:#eee;border:1px solid #333;border-radius:9px;padding:7px 10px;font-size:14px;margin:6px 6px 0 0}button.ok{border-color:#2f8f4a}button.no{border-color:#7a2318}
 .tag{font-size:11px;border:1px solid #444;border-radius:99px;padding:1px 8px;color:#bbb}.tag.ban{border-color:#7a2318;color:#ff6b57}input{background:#1b1b1b;color:#eee;border:1px solid #333;border-radius:9px;padding:8px 10px;font-size:14px;margin:6px 6px 0 0}.chip{border-radius:99px;padding:5px 11px;font-size:13px}.chip.on{border-color:#ff9a1f;color:#ff9a1f}</style></head><body>
 <h1>App admin</h1><h2>BETA BUILDS (only ADIDs in the beta group can list or download)</h2><div id="bb"></div>
-<div class="row"><b id="bft">Add a build</b><input id="bn" placeholder="Name" style="width:46%"><input id="bi" placeholder="Bundle ID" style="width:46%"><input id="bv" placeholder="Version" style="width:30%"><input id="bs" placeholder="Subtitle" style="width:62%"><input id="bc" placeholder="Icon URL (https, optional)" style="width:100%;box-sizing:border-box"><textarea id="bd" placeholder="Description / what to test" style="width:100%;box-sizing:border-box;min-height:70px;background:#1b1b1b;color:#eee;border:1px solid #333;border-radius:9px;padding:8px;margin-top:6px"></textarea><textarea id="ba" placeholder="Only these ADIDs (one per line, AS-XXXXXX-XX). Leave empty for every beta member." style="width:100%;box-sizing:border-box;min-height:56px;background:#1b1b1b;color:#eee;border:1px solid #333;border-radius:9px;padding:8px;margin-top:6px"></textarea><div class="m" style="margin-top:6px">IPA: <input id="bf" type="file" accept=".ipa" style="margin:0"></div><div class="m" id="bm"></div><button class="ok" onclick="bsave()">Save build</button><button onclick="breset()">Clear</button></div>
+<div class="row"><b id="bft">Add a build</b><input id="bn" placeholder="Name" style="width:46%"><input id="bi" placeholder="Bundle ID" style="width:46%"><input id="bv" placeholder="Version" style="width:30%"><input id="bs" placeholder="Subtitle" style="width:62%"><input id="bc" placeholder="Icon URL (https, optional)" style="width:100%;box-sizing:border-box"><textarea id="bd" placeholder="Description / what to test" style="width:100%;box-sizing:border-box;min-height:70px;background:#1b1b1b;color:#eee;border:1px solid #333;border-radius:9px;padding:8px;margin-top:6px"></textarea><textarea id="ba" placeholder="Only these ADIDs (one per line, TC-XXXXXX-XX). Leave empty for every beta member." style="width:100%;box-sizing:border-box;min-height:56px;background:#1b1b1b;color:#eee;border:1px solid #333;border-radius:9px;padding:8px;margin-top:6px"></textarea><div class="m" style="margin-top:6px">IPA: <input id="bf" type="file" accept=".ipa" style="margin:0"></div><div class="m" id="bm"></div><button class="ok" onclick="bsave()">Save build</button><button onclick="breset()">Clear</button></div>
 <h2>CERTIFICATE REQUESTS</h2><div id="rq">Loading…</div>
 <h2>ACCOUNTS, GROUPS &amp; SPONSORS</h2><input id="q" placeholder="Search username, ADID or sponsor" oninput="draw()" style="width:100%;box-sizing:border-box"><div id="us"></div>
 <h2>BAN APPEALS</h2><div id="ap_list"></div>
 <h2>BANNED DEVICES (ADID banned outright, even on a new account)</h2><div id="bd_list"></div>
-<div class="row"><input id="bdadid" placeholder="AS-XXXXXX-XX" style="width:170px" autocapitalize="off"><input id="bdreason" placeholder="Reason (optional)" style="width:46%"><input id="bddays" type="number" min="0" max="3650" placeholder="Days (blank = forever)" style="width:170px"><button class="no" onclick="bdban()">Ban device</button></div>
+<div class="row"><input id="bdadid" placeholder="TC-XXXXXX-XX" style="width:170px" autocapitalize="off"><input id="bdreason" placeholder="Reason (optional)" style="width:46%"><input id="bddays" type="number" min="0" max="3650" placeholder="Days (blank = forever)" style="width:170px"><button class="no" onclick="bdban()">Ban device</button></div>
 <h2>CORRELATION</h2><div class="row"><input id="corid" type="number" placeholder="User ID (u#)" style="width:150px"><button onclick="corload()">Show other accounts on the same device / network</button><div id="cor" class="m" style="margin-top:8px"></div></div>
 <script>
 var D={users:[],groups:[],requests:[]};

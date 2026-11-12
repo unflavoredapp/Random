@@ -116,7 +116,7 @@ nonisolated enum MachOInspector {
         if let m = slices.compactMap(\.minOS).first, let v = Double(m.split(separator: ".").prefix(2).joined(separator: ".")), v >= 26 {
             warnings.append("Declares minimum iOS \(m) — won't install on older devices.")
         }
-        for s in slices where !s.hasCodeSignature { warnings.append("\(s.arch): no LC_CODE_SIGNATURE (unsigned or stripped) — zsign will add one.") }
+        for s in slices where !s.hasCodeSignature { warnings.append("\(s.arch): no LC_CODE_SIGNATURE (unsigned or stripped) — TrustCore will add one.") }
 
         return MachOReport(path: url.path, isFat: isFat, slices: slices, warnings: warnings)
     }

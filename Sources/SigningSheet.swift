@@ -4889,7 +4889,7 @@ private struct TurboBulkSigningView: View {
                     Image(systemName: "speedometer")
                         .font(.system(size: 30, weight: .bold))
                         .foregroundStyle(Theme.accent)
-                    Text("ZSign Turbo")
+                    Text("TrustCore Turbo")
                         .font(.title2.bold())
                     Text("Local bulk signing · adaptive workers · per-job parallelism")
                         .font(.caption)

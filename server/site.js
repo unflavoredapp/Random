@@ -600,7 +600,7 @@ function mountSite(web, d0) {
   }
   // The iOS app identifies itself with its ADID (header X-AS-ADID): one visitor per device instead of per IP,
   // so website + app activity are counted side by side in the same tables.
-  const appAdid = (req) => { const a = String(req.get("x-as-adid") || "").trim().toUpperCase(); return /^(AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$/.test(a) ? a : ""; };
+  const appAdid = (req) => { const a = String(req.get("x-as-adid") || "").trim().toUpperCase(); return /^(TC|AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$/.test(a) ? a : ""; };
   function visitorHash(req) {
     const adid = appAdid(req);
     return crypto.createHash("sha256").update(adid ? `${viewSalt}|app|${adid}` : `${viewSalt}|${req.ip}`).digest("hex").slice(0, 32); // never stored raw
@@ -2944,7 +2944,7 @@ if(vl)vl.addEventListener('click',function(e){var a=e.target.closest('.vr');if(!
   }, () => (feat ? feat.newsVer() + ":" + feat.ver() : 0) + ":" + catalogApps().length + ":" + catVer + ":" + (feat && feat.catOverVer ? feat.catOverVer() : 0)); // app count in the key: an empty feed from a cold start is replaced as soon as the catalog loads
   web.get([FEED, "/source.json"], (req, res) => {
     if (!siteUrl) return res.status(404).send("Set SITE_URL or BASE_URL to enable the source feed.");
-    // ?adid=AS-XXXXXX-XX: beta-group devices get the closed-beta builds added; the response is then private.
+    // ?adid=TC-XXXXXX-XX: beta-group devices get the closed-beta builds added; the response is then private.
     const wantAdid = String(req.query.adid || req.query.mdid || "").trim().toUpperCase();
     if (wantAdid && acct.beta) {
       let extra = [];

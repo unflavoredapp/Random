@@ -188,7 +188,7 @@ struct OnboardingView: View {
                         infoRow(icon: "clock.arrow.circlepath", title: "LOCAL HISTORY",
                                 text: "Your signing history stays on this device.", tint: Color(red: 1, green: 0.84, blue: 0.62))
                         Divider().overlay(Color.white.opacity(0.14))
-                        infoRow(icon: "bolt.fill", title: "LOCAL ZSIGN ENGINE",
+                        infoRow(icon: "bolt.fill", title: "TRUSTCORE ENGINE",
                                 text: "No signing request leaves this device.", tint: Color(red: 1, green: 0.84, blue: 0.62))
                         Divider().overlay(Color.white.opacity(0.14))
                         infoRow(icon: "checkmark.circle", title: "PROTECTED CERTIFICATES",
@@ -519,7 +519,7 @@ struct OnboardingView: View {
                 VStack(spacing: 4) {
                     HStack(spacing: 4) {
                         Text("Made by").foregroundStyle(.white.opacity(0.5))
-                        Text("ᴹᴿ𝐙𝐄𝐅𝐯").foregroundStyle(.white)
+                        Text("ᴍƦᴢᴇꜰΛ").foregroundStyle(.white)
                     }
                     .font(.system(size: 13))
 

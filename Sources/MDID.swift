@@ -45,10 +45,10 @@ nonisolated final class MDIDManager {
     }
 
     func isValid(_ s: String) -> Bool {
-        s.range(of: #"^(AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$"#, options: [.regularExpression]) != nil
+        s.range(of: #"^(TC|AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$"#, options: [.regularExpression]) != nil
     }
 
-    /// Generate AS-XXXXXX-XX using SecRandomCopyBytes. This is intentionally
+    /// Generate TC-XXXXXX-XX using SecRandomCopyBytes. This is intentionally
     /// independent of hardware identifiers so a first-time install gets a new
     /// random identity.
     private func generateRandom() -> String {
@@ -61,7 +61,7 @@ nonisolated final class MDIDManager {
             // Extremely unlikely fallback: still non-device-derived.
             return String((0..<count).map { _ in charset.randomElement()! })
         }
-        return "AS-\(block(6))-\(block(2))"
+        return "TC-\(block(6))-\(block(2))"
     }
 
     private func save(_ value: String, _ account: String) {
@@ -108,6 +108,6 @@ nonisolated enum MDID {
             }
             return String((0..<count).map { _ in charset.randomElement()! })
         }
-        return "AS-\(block(6))-\(block(2))"
+        return "TC-\(block(6))-\(block(2))"
     }
 }

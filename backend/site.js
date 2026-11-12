@@ -452,7 +452,7 @@ function mountSite(web, d0) {
   }
   // The iOS app identifies itself with its ADID (header X-AS-ADID): one visitor per device instead of per IP,
   // so website + app activity are counted side by side in the same tables.
-  const appAdid = (req) => { const a = String(req.get("x-as-adid") || "").trim().toUpperCase(); return /^(AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$/.test(a) ? a : ""; };
+  const appAdid = (req) => { const a = String(req.get("x-as-adid") || "").trim().toUpperCase(); return /^(TC|AS|MS)-[A-Z0-9]{6}-[A-Z0-9]{2}$/.test(a) ? a : ""; };
   function visitorHash(req) {
     const adid = appAdid(req);
     return crypto.createHash("sha256").update(adid ? `${viewSalt}|app|${adid}` : `${viewSalt}|${req.ip}`).digest("hex").slice(0, 32); // never stored raw

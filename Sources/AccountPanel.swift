@@ -27,7 +27,7 @@ struct AccountChip: View {
             HStack(spacing: 6) {
                 if account.isLoggedIn {
                     Circle().fill(Theme.accent).frame(width: 24, height: 24)
-                        .overlay(Text(String((account.username ?? "?").prefix(1)).uppercased())
+                        .overlay(Text(String(DisplayName.username(account.username ?? "?").prefix(1)).uppercased())
                             .font(.system(size: 11, weight: .heavy, design: .rounded)).foregroundStyle(.black))
                     VStack(alignment: .leading, spacing: 1) {
                         StyledUsername(name: account.username ?? "", style: account.style, base: 11)
@@ -124,7 +124,7 @@ struct AccountDropdown: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .top, spacing: 10) {
                 Circle().fill(Theme.accent).frame(width: 42, height: 42)
-                    .overlay(Text(String((account.username ?? "?").prefix(1)).uppercased()).font(.system(size: 17, weight: .heavy, design: .rounded)).foregroundStyle(.black))
+                    .overlay(Text(String(DisplayName.username(account.username ?? "?").prefix(1)).uppercased()).font(.system(size: 17, weight: .heavy, design: .rounded)).foregroundStyle(.black))
                 VStack(alignment: .leading, spacing: 3) {
                     StyledUsername(name: account.username ?? "", style: account.style, base: 16)
                     Text(staff.mdid)

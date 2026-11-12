@@ -21,8 +21,8 @@ nonisolated struct RepoSource: Codable, Identifiable, Equatable, Hashable, Senda
     var appCount: Int?
     var lastFetched: Date?
 
-    /// The built-in AirShare source is locked: it can't be removed or reordered.
-    static let lockedID = "airshare"
+    /// The built-in Delvek source is locked: it can't be removed or reordered.
+    static let lockedID = "delvek"
     var isLocked: Bool { id == Self.lockedID }
 }
 
@@ -331,8 +331,8 @@ final class SourceStore: ObservableObject {
     private var prefetchingIDs: Set<String> = []
 
     static let defaults: [RepoSource] = [
-        RepoSource(id: "airshare", name: "Decrypt.Team", url: URL(string: "https://airshare.lol/air.json")!,
-                   iconURL: nil, description: "Decrypt.Team catalog", author: "Decrypt.Team"),
+        RepoSource(id: "delvek", name: "Delvek", url: URL(string: "https://delvek.net/repo.json")!,
+                   iconURL: URL(string: "https://delvek.net/img/delvek4.png"), description: "Delvek repo", author: "Delvek"),
     ]
 
     private init() {
@@ -342,10 +342,11 @@ final class SourceStore: ObservableObject {
         } else {
             list = Self.defaults
         }
-        // DELvEK is retired from the default sources; AirShare is always present, first and locked.
-        let retired = list.filter { $0.id == "delvek" || $0.url.host == "delvek.net" }
-        list.removeAll { $0.id == "delvek" || $0.url.host == "delvek.net" }
-        if !list.contains(where: { $0.isLocked }) { list.insert(contentsOf: Self.defaults, at: 0) }
+        // Delvek is the only built-in source: always present, first and locked. The old Decrypt.Team / AirShare
+        // catalog is retired, and any older Delvek entry is replaced by the built-in one.
+        let retired = list.filter { $0.id == "airshare" || $0.url.host == "airshare.lol" }
+        list.removeAll { $0.id == "airshare" || $0.url.host == "airshare.lol" || $0.id == "delvek" || $0.url.host == "delvek.net" }
+        list.insert(contentsOf: Self.defaults, at: 0)
         sources = list
         save()
         for r in retired {
@@ -378,12 +379,7 @@ final class SourceStore: ObservableObject {
     }
 
     private nonisolated static func requestParsedRepo(for source: RepoSource) async throws -> RepoParser.ParsedRepo {
-        var url = source.url
-        // The built-in feed adds the closed-beta builds when this device's ADID belongs to the beta group.
-        if source.id == RepoSource.lockedID, var c = URLComponents(url: url, resolvingAgainstBaseURL: false) {
-            c.queryItems = (c.queryItems ?? []) + [URLQueryItem(name: "adid", value: MDID.current)]
-            url = c.url ?? url
-        }
+        let url = source.url
         var req = URLRequest(url: url); req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)

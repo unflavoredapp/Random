@@ -24,11 +24,11 @@ enum ZsignError: Error, LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .fileNotFound(let p):           return "zsign: file not found at \(p)"
-        case .signingFailed(let c):          return "zsign: signing failed (code \(c))"
+        case .fileNotFound(let p):           return "TrustCore: file not found at \(p)"
+        case .signingFailed(let c):          return "TrustCore: signing failed (code \(c))"
         case .dylibInjectionFailed(let m, let d):
-                                             return "zsign: failed to inject \(d) into \(m)"
-        case .appBundleNotFound(let ipa):    return "zsign: no Payload/*.app inside \(ipa)"
+                                             return "TrustCore: failed to inject \(d) into \(m)"
+        case .appBundleNotFound(let ipa):    return "TrustCore: no Payload/*.app inside \(ipa)"
         }
     }
 }
@@ -314,14 +314,14 @@ nonisolated enum Signer {
         var noteText: String {
             switch self {
             case .enabled, .disabledByUser:
-                return "Signs sibling frameworks and binaries concurrently inside zsign"
+                return "Signs sibling frameworks and binaries concurrently inside TrustCore"
             case .disabledByDylibInjection:
-                return "Signs sibling frameworks and binaries concurrently inside zsign — currently auto-disabled because dylib injection is selected"
+                return "Signs sibling frameworks and binaries concurrently inside TrustCore — currently auto-disabled because dylib injection is selected"
             case .disabledByUnknownIPASize:
-                return "Signs sibling frameworks and binaries concurrently inside zsign — currently auto-disabled because the payload size could not be determined safely"
+                return "Signs sibling frameworks and binaries concurrently inside TrustCore — currently auto-disabled because the payload size could not be determined safely"
             case .disabledByIPASize:
                 let limitText = ByteCountFormatter.string(fromByteCount: Signer.parallelSigningMaxIPABytes, countStyle: .file)
-                return "Signs sibling frameworks and binaries concurrently inside zsign — currently auto-disabled because this payload exceeds the \(limitText) safety cap"
+                return "Signs sibling frameworks and binaries concurrently inside TrustCore — currently auto-disabled because this payload exceeds the \(limitText) safety cap"
             }
         }
     }
