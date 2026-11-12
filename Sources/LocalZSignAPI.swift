@@ -273,7 +273,7 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
         lock.lock()
         guard application != nil, started else {
             lock.unlock()
-            throw Abort(.serviceUnavailable, reason: "AirShare HTTPS service is not running.")
+            throw Abort(.serviceUnavailable, reason: "Decrypt.Team HTTPS service is not running.")
         }
         otaServers[server.id] = server
         lock.unlock()
@@ -399,7 +399,7 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
             FileManager.default.temporaryDirectory.standardizedFileURL
         ]
         guard allowedRoots.contains(where: { raw.path.hasPrefix($0.path.hasSuffix("/") ? $0.path : $0.path + "/") }) else {
-            throw Abort(.forbidden, reason: "The local API can only access AirShare Documents or temporary files.")
+            throw Abort(.forbidden, reason: "The local API can only access Decrypt.Team Documents or temporary files.")
         }
         return raw
     }
@@ -439,7 +439,7 @@ struct LocalZSignAPISettingsView: SwiftUI.View {
                             .font(.system(size: 18, weight: .bold, design: .monospaced))
                             .foregroundStyle(Theme.accent)
                             .padding(.top, 4)
-                        Text("Loopback only. The API controls the same local ZSign engine used by AirShare; no signing request leaves this device.")
+                        Text("Loopback only. The API controls the same local ZSign engine used by Decrypt.Team; no signing request leaves this device.")
                             .font(.system(size: 12))
                             .foregroundStyle(Theme.subtle)
                             .padding(.top, 4)

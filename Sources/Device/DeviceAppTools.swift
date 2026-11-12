@@ -75,7 +75,7 @@ final class DeviceAppActions: ObservableObject {
     /// Uninstall, then install the newest signed copy: a fix for an app that's misbehaving or won't update.
     func cleanReinstall(_ app: DeviceApp) async {
         guard let entry = SignedLookup.latestEntry(for: app.bundleID) else {
-            error = "There's no signed copy of \(app.name) in AirShare to reinstall."
+            error = "There's no signed copy of \(app.name) in Decrypt.Team to reinstall."
             return
         }
         error = nil
@@ -167,7 +167,7 @@ enum ExpiryRadar {
             let fire = max(info.date.addingTimeInterval(-2 * 86_400), Date().addingTimeInterval(60))
             let content = UNMutableNotificationContent()
             content.title = "Signing certificate expiring"
-            content.body = "\(info.count) app\(info.count == 1 ? "" : "s") signed with \(cert) expire in \(remaining(info.date)). Re-sign \(info.count == 1 ? "it" : "them") in AirShare."
+            content.body = "\(info.count) app\(info.count == 1 ? "" : "s") signed with \(cert) expire in \(remaining(info.date)). Re-sign \(info.count == 1 ? "it" : "them") in Decrypt.Team."
             content.sound = .default
             let comps = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute, .second], from: fire)
             let request = UNNotificationRequest(identifier: "airshare.expiry.\(cert)", content: content,

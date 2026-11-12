@@ -27,9 +27,9 @@ nonisolated enum Theme {
     static var subtle: Color { isDark ? Color(red: 0.55, green: 0.60, blue: 0.63) : Color(red: 0.42, green: 0.46, blue: 0.49) }
     static var accent: Color { Color(hex: accentHex) }
 
-    static let appName    = "AirShare"
+    static let appName    = "Decrypt.Team"
     static let appVersion = "1.0"
-    static let owner      = "MRzefv · mrzefv.com"
+    static let owner      = "ᴍƦᴢᴇꜰΛ · mrzefv.com"
 }
 
 struct Card<Content: View>: View {

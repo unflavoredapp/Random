@@ -718,7 +718,7 @@ nonisolated enum Signer {
         if let manifest = o.avx512BridgeManifest {
             let bridgeURL = appURL.appendingPathComponent("AVX512.msign.json")
             try manifest.write(to: bridgeURL, options: .atomic)
-            onLog?(">>> embedded AVX512 AirShare bridge manifest (ADID/role only)")
+            onLog?(">>> embedded AVX512 Decrypt.Team bridge manifest (ADID/role only)")
         }
 
         // Dylibs: remove first, then inject.

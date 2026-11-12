@@ -120,7 +120,7 @@ final class VPNReconnectCoordinator: ObservableObject {
         if isForeground() {
             await runPendingShortcut()
         } else {
-            notice = "Tap the reconnect notification, or return to AirShare and tap Reconnect VPN."
+            notice = "Tap the reconnect notification, or return to Decrypt.Team and tap Reconnect VPN."
             let delivered = await notify(name, id)
             // New work may have invalidated this request while notification
             // delivery was in flight. Remove that stale notification too.
@@ -129,7 +129,7 @@ final class VPNReconnectCoordinator: ObservableObject {
                 return
             }
             if !delivered {
-                notice = "Return to AirShare and tap Reconnect VPN. Enable AirShare notifications for a reminder when installation finishes in the background."
+                notice = "Return to Decrypt.Team and tap Reconnect VPN. Enable Decrypt.Team notifications for a reminder when installation finishes in the background."
             }
         }
     }
@@ -251,7 +251,7 @@ final class VPNReconnectCoordinator: ObservableObject {
                 settings.authorizationStatus == .ephemeral else { return false }
         let content = UNMutableNotificationContent()
         content.title = "Reconnect your VPN"
-        content.body = "AirShare has finished using its local VPN. Tap to reconnect using \(name)."
+        content.body = "Decrypt.Team has finished using its local VPN. Tap to reconnect using \(name)."
         content.sound = .default
         content.userInfo = ["ksignVPNReconnectID": id]
         do {

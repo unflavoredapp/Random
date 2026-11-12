@@ -30,7 +30,7 @@ enum ProjectTemplate {
         \(name)_CFLAGS = -fobjc-arc -Wno-deprecated-declarations
         \(name)_FRAMEWORKS = UIKit Foundation
         # No libsubstrate: hooks below use the ObjC runtime directly so the dylib
-        # also works when sideloaded (AirShare / DELvEK inject it as an extra dylib).
+        # also works when sideloaded (Decrypt.Team / DELvEK inject it as an extra dylib).
         \(name)_LOGOSFLAGS = -c generator=internal
 
         include $(THEOS)/makefiles/tweak.mk
@@ -201,7 +201,7 @@ enum ProjectTemplate {
 
         Runtime overlay dylib for `\(target)`. Built by GitHub Actions (Theos, arm64,
         no Substrate) — download `\(name)-dylib` from the workflow run, then inject it
-        with AirShare / DELvEK as an extra dylib, or drop it into a jailbroken device.
+        with Decrypt.Team / DELvEK as an extra dylib, or drop it into a jailbroken device.
 
         ## Files
         - `Tweak.xm` — swizzle helper + hooks. Replace the example class/selector with
@@ -211,7 +211,7 @@ enum ProjectTemplate {
         - `.github/workflows/build.yml` — builds on push and on manual dispatch.
 
         ## Capture class names
-        1. Inject FLEX.dylib into the target IPA (AirShare › extra dylibs), sideload.
+        1. Inject FLEX.dylib into the target IPA (Decrypt.Team › extra dylibs), sideload.
         2. Shake → FLEX › Select → tap the view → note the class in the breadcrumb.
         3. Tap the class → Methods → find the selector you want to hook.
         4. `objc_getClass("TheClass")` + `\(lower)_swizzle(...)` in `\(lower)_init`.
@@ -387,7 +387,7 @@ enum ProjectTemplate {
                         Card {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text("Hello from \(name)").font(.title2.bold()).foregroundStyle(Theme.text)
-                                Text("Built unsigned by GitHub Actions. Sign with AirShare and install.")
+                                Text("Built unsigned by GitHub Actions. Sign with Decrypt.Team and install.")
                                     .font(.caption).foregroundStyle(Theme.subtle)
                             }
                         }
@@ -496,7 +496,7 @@ enum ProjectTemplate {
 
         SwiftUI iOS app, bundle id `\(bundle)`. The Xcode project is generated on the
         runner with XcodeGen from `project.yml`, built unsigned, and uploaded as
-        `\(name)-ipa`. Download from the Build tab, sign with AirShare, install.
+        `\(name)-ipa`. Download from the Build tab, sign with Decrypt.Team, install.
 
         Add Swift files under `Sources/` — they're picked up automatically.
 

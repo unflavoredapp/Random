@@ -113,7 +113,7 @@ struct OnboardingView: View {
                     .font(.system(size: 23, weight: .semibold))
                     .foregroundStyle(.white)
 
-                Text(deviceDescription.isEmpty ? "Preparing your local AirShare identity…" : deviceDescription)
+                Text(deviceDescription.isEmpty ? "Preparing your local Decrypt.Team identity…" : deviceDescription)
                     .font(.system(size: 13))
                     .foregroundStyle(.gray)
                     .multilineTextAlignment(.center)
@@ -132,7 +132,7 @@ struct OnboardingView: View {
 
             Spacer()
 
-            Text("AirShare · MRzefv · DELvEK.net")
+            Text("Decrypt.Team · ᴍƦᴢᴇꜰΛ · DELvEK.net")
                 .font(.system(size: 12))
                 .foregroundStyle(.gray.opacity(0.55))
                 .padding(.bottom, 38)
@@ -151,7 +151,7 @@ struct OnboardingView: View {
                         HStack(spacing: 12) {
                             brandMark(side: 40, radius: 12)
                                 .scaleEffect(logoScale)
-                            Text("AirShare")
+                            Text("Decrypt.Team")
                                 .font(.system(size: 22, weight: .bold))
                                 .foregroundStyle(.white)
                         }
@@ -418,7 +418,7 @@ struct OnboardingView: View {
                 .scaleEffect(1.5)
                 .tint(accent)
 
-            Text("Preparing AirShare…")
+            Text("Preparing Decrypt.Team…")
                 .font(.system(size: 18, weight: .medium))
                 .foregroundStyle(.white.opacity(0.85))
 
@@ -478,7 +478,7 @@ struct OnboardingView: View {
                     .foregroundStyle(.white)
                     .padding(.top, 26)
 
-                Text("AirShare is ready to sign, package and install apps locally.")
+                Text("Decrypt.Team is ready to sign, package and install apps locally.")
                     .font(.system(size: 16))
                     .foregroundStyle(.white.opacity(0.62))
                     .multilineTextAlignment(.center)
@@ -641,7 +641,7 @@ struct OnboardingView: View {
 
     private func completeSetup() {
         guard !mdid.isEmpty else {
-            errorMessage = "AirShare could not create a local device identity."
+            errorMessage = "Decrypt.Team could not create a local device identity."
             withAnimation { phase = .error }
             return
         }

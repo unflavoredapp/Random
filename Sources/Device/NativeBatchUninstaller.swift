@@ -98,7 +98,7 @@ final class NativeBatchUninstaller: ObservableObject {
         DeviceLibrary.shared.reloadAfterBatch()
         if doneCount > 0 || failedCount > 0 {
             let c = UNMutableNotificationContent()
-            c.title = "AirShare"
+            c.title = "Decrypt.Team"
             c.body = failedCount == 0
                 ? "Uninstalled \(doneCount) app\(doneCount == 1 ? "" : "s")"
                 : "Uninstalled \(doneCount), \(failedCount) failed"
@@ -193,10 +193,10 @@ struct BatchUninstallSheet: View {
 
             if batch.isRunning {
                 if BackgroundKeepAlive.enabled {
-                    Label("You can leave AirShare. Uninstalls continue in the background.", systemImage: "checkmark.shield.fill")
+                    Label("You can leave Decrypt.Team. Uninstalls continue in the background.", systemImage: "checkmark.shield.fill")
                         .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(green)
                 } else {
-                    Label("Keep AirShare open until every app is uninstalled.", systemImage: "exclamationmark.triangle.fill")
+                    Label("Keep Decrypt.Team open until every app is uninstalled.", systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color(red: 1, green: 0.8, blue: 0.3))
                 }
             } else if batch.failedCount > 0 {

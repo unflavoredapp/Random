@@ -151,7 +151,7 @@ struct InstalledAppsScreen: View {
                 Section {
                     ForEach(filtered) { app in row(app) }
                 } footer: {
-                    Text("\(model.apps.count) apps\(model.totalBytes > 0 ? " · " + ByteCountFormatter.string(fromByteCount: model.totalBytes, countStyle: .file) : ""). Swipe left or long-press an app to uninstall it, or tap Select to remove several at once. Uninstalling also deletes the app's data, and AirShare stops auto-updating it. System apps and AirShare itself aren't listed.")
+                    Text("\(model.apps.count) apps\(model.totalBytes > 0 ? " · " + ByteCountFormatter.string(fromByteCount: model.totalBytes, countStyle: .file) : ""). Swipe left or long-press an app to uninstall it, or tap Select to remove several at once. Uninstalling also deletes the app's data, and Decrypt.Team stops auto-updating it. System apps and Decrypt.Team itself aren't listed.")
                         .font(.caption).foregroundStyle(Theme.subtle)
                 }
             }
@@ -171,7 +171,7 @@ struct InstalledAppsScreen: View {
                     }
                     .tint(Theme.accent).listRowBackground(Theme.card)
                 } footer: {
-                    Text((model.cleanupNote.map { $0 + " " } ?? "") + "Interrupted installs can leave IPAs in the device's upload folder. Expiry labels and reminders cover apps you signed in AirShare.")
+                    Text((model.cleanupNote.map { $0 + " " } ?? "") + "Interrupted installs can leave IPAs in the device's upload folder. Expiry labels and reminders cover apps you signed in Decrypt.Team.")
                         .font(.caption).foregroundStyle(Theme.subtle)
                 }
             }
@@ -221,7 +221,7 @@ struct InstalledAppsScreen: View {
             Button("Uninstall and reinstall", role: .destructive) { if let app = reinstallTarget { model.cleanReinstall(app) }; reinstallTarget = nil }
             Button("Cancel", role: .cancel) { reinstallTarget = nil }
         } message: {
-            Text("Deletes the app and its data, then installs the newest copy you signed in AirShare.")
+            Text("Deletes the app and its data, then installs the newest copy you signed in Decrypt.Team.")
         }
         .confirmationDialog("Uninstall \(selected.count) app\(selected.count == 1 ? "" : "s")?",
                             isPresented: $confirmBatch, titleVisibility: .visible) {

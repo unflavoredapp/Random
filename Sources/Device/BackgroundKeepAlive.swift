@@ -117,7 +117,7 @@ final class BackgroundKeepAlive: ObservableObject {
             Task { @MainActor in self?.tick() }
         }
         isHolding = true
-        InstallLiveActivity.shared.update(.init(title: "AirShare", detail: "Starting…", progress: 0.02, symbol: "arrow.down.circle.fill"))
+        InstallLiveActivity.shared.update(.init(title: "Decrypt.Team", detail: "Starting…", progress: 0.02, symbol: "arrow.down.circle.fill"))
     }
 
     func stop(_ id: String) {
@@ -301,7 +301,7 @@ final class BackgroundKeepAlive: ObservableObject {
     private func updateNowPlaying() {
         guard Self.songURL != nil else { return }
         var info: [String: Any] = [
-            MPMediaItemPropertyTitle: UserDefaults.standard.string(forKey: Self.songTitleKey) ?? "AirShare",
+            MPMediaItemPropertyTitle: UserDefaults.standard.string(forKey: Self.songTitleKey) ?? "Decrypt.Team",
             MPMediaItemPropertyArtist: installSubtitle(),
             MPNowPlayingInfoPropertyPlaybackRate: (userPaused ? 0.0 : 1.0),
             MPNowPlayingInfoPropertyElapsedPlaybackTime: songPlayer?.currentTime ?? 0,
@@ -319,7 +319,7 @@ final class BackgroundKeepAlive: ObservableObject {
         if q.isRunning { return q.compact }
         let n = NativeInstaller.shared
         if n.isActive { return "Installing \(Int((min(max(n.progress, 0), 1) * 100).rounded()))%" }
-        return "AirShare"
+        return "Decrypt.Team"
     }
 
     private func userPause() {

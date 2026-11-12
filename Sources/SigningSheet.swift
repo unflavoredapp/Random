@@ -1344,10 +1344,10 @@ struct SigningSheet: View {
         for k in keys { if let v = ents[k] { out.append("§child|\(k.replacingOccurrences(of: "com.apple.developer.", with: "").replacingOccurrences(of: "com.apple.security.", with: "")) = \(v)"); n += 1 } }
         if n == 0 { out.append("§child|\(ents.count) entitlement\(ents.count == 1 ? "" : "s")") }
         out.append("§done|Inspect entitlements (\(ents.count))")
-        out.append("§step|antenna.radiowaves.left.and.right|Generate AirShare manifest")
+        out.append("§step|antenna.radiowaves.left.and.right|Generate Decrypt.Team manifest")
         out.append("§child|host \(ServerConfig.installHost) · \(entry.name).ipa")
         out.append("§child|\(entry.bundleID) · v\(entry.version)")
-        out.append("§done|AirShare manifest ready")
+        out.append("§done|Decrypt.Team manifest ready")
         return out
     }
 
@@ -3546,7 +3546,7 @@ struct DeveloperToolSheet: View {
                     } header: {
                         Text("References — strings it touches")
                     } footer: {
-                        Text("Resolved statically from the file's adrp+ldr/add pairs — not a live-process read, so this works on any IPA, not just AirShare's own code. Tap one to find every other function that references it.")
+                        Text("Resolved statically from the file's adrp+ldr/add pairs — not a live-process read, so this works on any IPA, not just Decrypt.Team's own code. Tap one to find every other function that references it.")
                     }.listRowBackground(Color(white: 0.08))
 
                     Section {
@@ -5153,7 +5153,7 @@ struct SigningTerminalView: View {
                             AgentStepRow(step: st, isActive: !done && i == steps.count - 1, forceExpanded: showAll || done && i == steps.count - 1, now: now)
                         }
                         if !done {
-                            AgentWorkingRow(text: "AirShare is working…", since: lineTimes.first, now: now).padding(.top, 6)
+                            AgentWorkingRow(text: "Decrypt.Team is working…", since: lineTimes.first, now: now).padding(.top, 6)
                         } else if error == nil {
                             AgentStepRow(step: AgentStep(icon: "checkmark.circle", title: "Ready to install", kind: .done, startedAt: lineTimes.last, endedAt: lineTimes.last))
                             if NativeInstaller.isSelected, let result {
@@ -5216,7 +5216,7 @@ struct SigningTerminalView: View {
                 .disabled(result == nil)
 
                 VStack(spacing: 2) {
-                    Text("MRZefV")
+                    Text("ᴍƦᴢᴇꜰΛ")
                         .font(.system(size: 14, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.92))
                     Text("Powered by DELvEK.NET")
@@ -5339,7 +5339,7 @@ struct InstallPromptOverlay: View {
                             }
                             if appGroups.isEmpty && keychainGroups.isEmpty { Text("None").font(.caption).foregroundStyle(Theme.subtle) }
                         }
-                        Text("\(source) | ᴍʀZefv").font(.system(size: 12, weight: .semibold)).foregroundStyle(blue).padding(.vertical, 12)
+                        Text("\(source) | ᴍƦᴢᴇꜰΛ").font(.system(size: 12, weight: .semibold)).foregroundStyle(blue).padding(.vertical, 12)
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)
@@ -5519,7 +5519,7 @@ struct NativeInstallTile: View {
             if !done && failed == nil {
                 if BackgroundKeepAlive.enabled {
                     VStack(spacing: 4) {
-                        Label("You can leave AirShare", systemImage: "checkmark.shield.fill")
+                        Label("You can leave Decrypt.Team", systemImage: "checkmark.shield.fill")
                             .font(.system(size: 14, weight: .bold)).foregroundStyle(Color(red: 0.2, green: 1.0, blue: 0.45))
                         Text("The install keeps going in the background and you'll get a notification when it's done.")
                             .font(.system(size: 12.5)).foregroundStyle(.white.opacity(0.7)).multilineTextAlignment(.center)
@@ -5530,9 +5530,9 @@ struct NativeInstallTile: View {
                     .padding(.top, 4)
                 } else {
                 VStack(spacing: 4) {
-                    Label("Keep AirShare open", systemImage: "exclamationmark.triangle.fill")
+                    Label("Keep Decrypt.Team open", systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 14, weight: .bold)).foregroundStyle(Color(red: 1, green: 0.8, blue: 0.3))
-                    Text("Please stay on this screen until the app finishes installing. Leaving AirShare may interrupt the installation process.")
+                    Text("Please stay on this screen until the app finishes installing. Leaving Decrypt.Team may interrupt the installation process.")
                         .font(.system(size: 12.5)).foregroundStyle(.white.opacity(0.7)).multilineTextAlignment(.center)
                 }
                 .padding(12).frame(maxWidth: .infinity)

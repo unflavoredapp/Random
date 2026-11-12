@@ -173,7 +173,7 @@ final class LocalSourceUpdateWatcher: ObservableObject {
             if notificationsEnabled {
                 // SignedStore already schedules the install-ready notification.
                 // This message records the reason for the automatic signing event.
-                lastMessage = "Auto-signed \(app.name) \(app.version) and published AirShare"
+                lastMessage = "Auto-signed \(app.name) \(app.version) and published Decrypt.Team"
             }
             try? FileManager.default.removeItem(at: ipaURL)
         } catch {

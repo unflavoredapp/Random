@@ -111,7 +111,7 @@ jobs:
       - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: airshare-unsigned-ipa-${{ github.run_number }}
+          name: decrypt-team-unsigned-ipa-${{ github.run_number }}
           path: ${{ env.IPA_PATH }}
           if-no-files-found: error
           retention-days: 14
@@ -120,7 +120,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: airshare-unsigned-build-log-${{ github.run_number }}
+          name: decrypt-team-unsigned-build-log-${{ github.run_number }}
           path: '**/build/xcodebuild.log'
           if-no-files-found: ignore
           retention-days: 14

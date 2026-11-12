@@ -30,7 +30,7 @@ struct OnboardingLogo: View {
                 .stroke(Color.green.opacity(0.30), lineWidth: 1)
         }
         .shadow(color: Color.green.opacity(0.22), radius: size * 0.22, y: size * 0.08)
-        .accessibilityLabel("AirShare")
+        .accessibilityLabel("Decrypt.Team")
     }
 
     private static func logoImage() -> UIImage? {

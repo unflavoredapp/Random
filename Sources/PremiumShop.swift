@@ -119,7 +119,7 @@ final class PremiumShop: ObservableObject {
     @Published private(set) var purchasesState: PremiumLoadState = .idle
     @Published private(set) var phase: CheckoutPhase = .idle
     @Published private(set) var order: LTCOrder?
-    @Published private(set) var watchNote: String?       // e.g. "Can't reach AirShare right now. Still watching."
+    @Published private(set) var watchNote: String?       // e.g. "Can't reach Decrypt.Team right now. Still watching."
     @Published private(set) var restoring = false
     @Published private(set) var restoreMessage: String?
     @Published private(set) var restoreIsError = false
@@ -280,7 +280,7 @@ final class PremiumShop: ObservableObject {
                 stopWatching()
             case .message:
                 if case let AirShareAPI.Failure.http(code, _) = error, code == 404 { watchNote = "This order was not found." }
-                else { watchNote = "Can't reach AirShare right now. Still trying; your payment is safe." }
+                else { watchNote = "Can't reach Decrypt.Team right now. Still trying; your payment is safe." }
             }
         }
     }

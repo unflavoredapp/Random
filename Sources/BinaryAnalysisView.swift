@@ -72,7 +72,7 @@ struct BinaryAnalysisView: View {
                     stat("Metadata source", r.swiftMetadata.source, true)
                 }
                 evidenceCard(title: "Evidence policy", icon: "checkmark.shield.fill") {
-                    Text("Counts and names above come from sections in this binary. Missing metadata is shown as Unavailable; AirShare does not invent classes, methods, symbols, or types.")
+                    Text("Counts and names above come from sections in this binary. Missing metadata is shown as Unavailable; Decrypt.Team does not invent classes, methods, symbols, or types.")
                         .font(.caption).foregroundStyle(Theme.subtle)
                 }
             }.padding(12)
@@ -193,7 +193,7 @@ struct BinaryAnalysisView: View {
             segments = ctx.segments
         }
         loading = false
-        if report == nil { error = "AirShare could not extract a readable Mach-O from this IPA." }
+        if report == nil { error = "Decrypt.Team could not extract a readable Mach-O from this IPA." }
         if let report, let text = report.textRange { selectedVA = text.lowerBound; decodeSelected(report) }
     }
 

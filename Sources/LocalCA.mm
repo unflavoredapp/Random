@@ -36,8 +36,8 @@ static EVP_PKEY *makeECKey(void) {
 }
 
 static void setName(X509_NAME *name, const char *cn, const char *org) {
-    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC, (const unsigned char *)cn, -1, -1, 0);
-    X509_NAME_add_entry_by_txt(name, "O",  MBSTRING_ASC, (const unsigned char *)org, -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_UTF8, (const unsigned char *)cn, -1, -1, 0);
+    X509_NAME_add_entry_by_txt(name, "O",  MBSTRING_UTF8, (const unsigned char *)org, -1, -1, 0);
 }
 
 static void addExt(X509 *cert, X509 *issuer, int nid, const char *value) {
@@ -70,7 +70,7 @@ static void randSerial(X509 *cert) {
     X509_gmtime_adj(X509_getm_notAfter(x), (long)years * 365 * 24 * 3600);
     X509_set_pubkey(x, key);
     X509_NAME *nm = X509_get_subject_name(x);
-    setName(nm, cn.UTF8String, "MRvEK Local CA");
+    setName(nm, cn.UTF8String, "ᴍƦᴢᴇꜰΛ Local CA");
     X509_set_issuer_name(x, nm); // self-signed
     addExt(x, x, NID_basic_constraints, "critical,CA:TRUE");
     addExt(x, x, NID_key_usage, "critical,keyCertSign,cRLSign");
@@ -109,7 +109,7 @@ static void randSerial(X509 *cert) {
     X509_gmtime_adj(X509_getm_notBefore(x), -3600);
     X509_gmtime_adj(X509_getm_notAfter(x), (long)days * 24 * 3600);   // iOS rejects leaves > 398 days
     X509_set_pubkey(x, leafKey);
-    setName(X509_get_subject_name(x), host.UTF8String, "MRvEK AirShare");
+    setName(X509_get_subject_name(x), host.UTF8String, "ᴍƦᴢᴇꜰΛ Decrypt.Team");
     X509_set_issuer_name(x, X509_get_subject_name(root));
     addExt(x, root, NID_basic_constraints, "critical,CA:FALSE");
     addExt(x, root, NID_key_usage, "critical,digitalSignature,keyEncipherment");

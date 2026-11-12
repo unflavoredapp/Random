@@ -23,7 +23,7 @@
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).userTask.*</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>AirShare uses the local network to pair with this device for native app installation.</string>
+	<string>Decrypt.Team uses the local network to pair with this device for native app installation.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_remotepairing-pairable-host._tcp</string>
@@ -71,9 +71,9 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>CFBundleDisplayName</key>
-	<string>AirShare</string>
+	<string>Decrypt.Team</string>
 	<key>CFBundleName</key>
-	<string>AirShare</string>
+	<string>Decrypt.Team</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

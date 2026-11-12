@@ -86,7 +86,7 @@ final class NativeBatchInstaller: ObservableObject {
         persist()
         if doneCount > 0 {
             let c = UNMutableNotificationContent()
-            c.title = "AirShare"
+            c.title = "Decrypt.Team"
             c.body = failedCount == 0 ? "Installed \(doneCount) apps" : "Installed \(doneCount) apps, \(failedCount) failed"
             c.sound = .default
             let request = UNNotificationRequest(identifier: "airshare.batch", content: c,
@@ -196,10 +196,10 @@ struct BatchInstallSheet: View {
 
             if batch.isRunning {
                 if BackgroundKeepAlive.enabled {
-                    Label("You can leave AirShare. Installs continue in the background.", systemImage: "checkmark.shield.fill")
+                    Label("You can leave Decrypt.Team. Installs continue in the background.", systemImage: "checkmark.shield.fill")
                         .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color(red: 0.2, green: 1.0, blue: 0.45))
                 } else {
-                    Label("Keep AirShare open until every app is installed.", systemImage: "exclamationmark.triangle.fill")
+                    Label("Keep Decrypt.Team open until every app is installed.", systemImage: "exclamationmark.triangle.fill")
                         .font(.system(size: 12.5, weight: .semibold)).foregroundStyle(Color(red: 1, green: 0.8, blue: 0.3))
                 }
             } else if batch.failedCount > 0 {

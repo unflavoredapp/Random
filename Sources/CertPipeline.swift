@@ -20,13 +20,13 @@ nonisolated enum CertPipeline {
     }
 
     static let certsYML = #"""
-name: AirShare certs (certbot)
+name: Decrypt.Team certs (certbot)
 
-# Hand-rolled TLS for the on-device AirShare server (*.airshare.lol → 127.0.0.1).
+# Hand-rolled TLS for the on-device Decrypt.Team server (*.airshare.lol → 127.0.0.1).
 #
 # Manual DNS-01: certbot hands us two TXT values for _acme-challenge.airshare.lol
 # (wildcard + apex). Each is published to challenge.json on the `certs`
-# branch (visible in the app's AirShare screen and on GitHub); the auth hook then
+# branch (visible in the app's Decrypt.Team screen and on GitHub); the auth hook then
 # polls DNS-over-HTTPS and only returns once the record is live, so Let's
 # Encrypt is never asked to validate early. Result → server.crt / server.pem /
 # pack.json on `certs`; Build.yml bakes them into every IPA.
@@ -112,7 +112,7 @@ jobs:
           else
             git worktree add --detach "$CERTS_WT"
             ( cd "$CERTS_WT" && git checkout --orphan "$CERTS_BRANCH" && git rm -rfq . \
-              && echo "# AirShare certs" > README.md && git add README.md && git commit -qm "init certs branch" \
+              && echo "# Decrypt.Team certs" > README.md && git add README.md && git commit -qm "init certs branch" \
               && git push -q origin "$CERTS_BRANCH" )
           fi
           ( cd "$CERTS_WT" && git branch --set-upstream-to="origin/$CERTS_BRANCH" "$CERTS_BRANCH" 2>/dev/null || true )
@@ -125,7 +125,7 @@ jobs:
               | python3 -c 'import json,sys; print(" ".join(a.get("data","") for a in json.load(sys.stdin).get("Answer",[])))' || true)
           echo "*.${CERT_DOMAIN} → ${A:-<no A record>}"
           case "$A" in *127.*) echo "OK: resolves to loopback";;
-            *) echo "::warning title=DNS::*.${CERT_DOMAIN} does not resolve to 127.0.0.1 — the cert will issue, but AirShare installs won't work until the wildcard A record points at loopback.";; esac
+            *) echo "::warning title=DNS::*.${CERT_DOMAIN} does not resolve to 127.0.0.1 — the cert will issue, but Decrypt.Team installs won't work until the wildcard A record points at loopback.";; esac
 
       - name: Decide whether to renew
         id: decide
@@ -273,7 +273,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## AirShare cert"
+            echo "## Decrypt.Team cert"
             if [ -f "$CERTS_WT/server.crt" ]; then echo '```'; openssl x509 -in "$CERTS_WT/server.crt" -noout -subject -enddate; echo '```'; else echo "no cert on branch yet"; fi
             echo "renewed this run: **${{ steps.decide.outputs.need }}** (mode: $DNS_MODE)"
             if [ -f "$CERTS_WT/challenge.json" ]; then echo '```json'; cat "$CERTS_WT/challenge.json"; echo '```'; fi

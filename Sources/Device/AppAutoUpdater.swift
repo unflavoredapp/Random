@@ -247,7 +247,7 @@ final class AppAutoUpdater: ObservableObject {
             status = parts.joined(separator: " · ")
         } else if updated + refreshed > 0 { status = "Done \(updated + refreshed), \(failed) failed" }
         // single failure keeps its specific message
-        if updated + refreshed > 0 { notify("Updated \(updated + refreshed) app\(updated + refreshed == 1 ? "" : "s") in AirShare") }
+        if updated + refreshed > 0 { notify("Updated \(updated + refreshed) app\(updated + refreshed == 1 ? "" : "s") in Decrypt.Team") }
     }
 
     /// Bundle ID the sources list for this app (differs from the installed one if it was renamed / randomized when signed).
@@ -334,7 +334,7 @@ final class AppAutoUpdater: ObservableObject {
 
     private func notify(_ text: String) {
         let c = UNMutableNotificationContent()
-        c.title = "AirShare"; c.body = text; c.sound = .default
+        c.title = "Decrypt.Team"; c.body = text; c.sound = .default
         let request = UNNotificationRequest(identifier: "airshare.appupdates", content: c,
                                             trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false))
         Task { try? await UNUserNotificationCenter.current().add(request) }

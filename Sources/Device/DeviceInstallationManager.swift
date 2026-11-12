@@ -204,7 +204,7 @@ final class DeviceInstallationManager: ObservableObject {
     func uninstall(bundleIdentifier: String, mode: DeviceConnectionMode, allowSelf: Bool = false,
                    progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws {
         guard allowSelf || bundleIdentifier != Bundle.main.bundleIdentifier else {
-            throw DeviceSetupError("AirShare can't uninstall itself. Delete it from the Home Screen instead.")
+            throw DeviceSetupError("Decrypt.Team can't uninstall itself. Delete it from the Home Screen instead.")
         }
         try await withDeviceLease(bundleIdentifier: bundleIdentifier, mode: mode) {
             try await InstallationProxy(viewModel: InstallerStatusViewModel(isIdevice: true))
@@ -358,7 +358,7 @@ final class DeviceInstallationManager: ObservableObject {
                 guard canCreatePairing() else {
                     throw DeviceSetupError("The saved pairing could not connect after restarting the local VPN. Import a fresh pairing file in Manual Setup and retry.\n\n\(error.localizedDescription)")
                 }
-                setupNotice = "The saved pairing could not reconnect. Pair with AirShare again in Settings to repair the connection."
+                setupNotice = "The saved pairing could not reconnect. Pair with Decrypt.Team again in Settings to repair the connection."
                 await HeartbeatManager.shared.resetInstallationConnection()
                 try Task.checkCancellation()
                 // Keep the previous credentials until replacement pairing succeeds.

@@ -331,8 +331,8 @@ final class SourceStore: ObservableObject {
     private var prefetchingIDs: Set<String> = []
 
     static let defaults: [RepoSource] = [
-        RepoSource(id: "airshare", name: "AirShare", url: URL(string: "https://airshare.lol/air.json")!,
-                   iconURL: nil, description: "AirShare catalog", author: "AirShare"),
+        RepoSource(id: "airshare", name: "Decrypt.Team", url: URL(string: "https://airshare.lol/air.json")!,
+                   iconURL: nil, description: "Decrypt.Team catalog", author: "Decrypt.Team"),
     ]
 
     private init() {
@@ -649,7 +649,7 @@ struct SourcesView: View {
             TextField("https://example.com/repo.json", text: $newURL).textInputAutocapitalization(.never).autocorrectionDisabled()
             Button("Add") { add() }
             Button("Cancel", role: .cancel) { newURL = "" }
-        } message: { Text(addError ?? "Paste a repo.json URL (AltStore, Feather, DELvEK, AirShare formats).") }
+        } message: { Text(addError ?? "Paste a repo.json URL (AltStore, Feather, DELvEK, Decrypt.Team formats).") }
         .task { await store.prefetchSources() }
         .onChange(of: search) { _ in runSearch() }
         .sheet(item: $openHit) { hit in

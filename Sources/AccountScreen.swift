@@ -280,7 +280,7 @@ struct AccountScreen: View {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(role.isElevated ? "Staff tools unlocked" : "Standard access")
                                 .font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.text)
-                            Text("Roles are assigned by AirShare staff. Pull to re-check after a change.")
+                            Text("Roles are assigned by Decrypt.Team staff. Pull to re-check after a change.")
                                 .font(.system(size: 12)).foregroundStyle(Theme.subtle)
                         }
                         Spacer()
@@ -298,7 +298,7 @@ struct AccountScreen: View {
                 if role == .admin {
                     Card {
                         section("Admin ADID")
-                        Text("Assign a new ADID to this admin account. The server updates the account and role mapping first; AirShare changes its local ADID only after the server accepts the new value.")
+                        Text("Assign a new ADID to this admin account. The server updates the account and role mapping first; Decrypt.Team changes its local ADID only after the server accepts the new value.")
                             .font(.system(size: 11)).foregroundStyle(Theme.subtle)
                         HStack(spacing: 10) {
                             field("AS-XXXXXX-XX", text: $adminMDID, secure: false, keyboard: .asciiCapable)

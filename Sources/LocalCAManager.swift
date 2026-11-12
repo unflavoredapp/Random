@@ -91,7 +91,7 @@ nonisolated enum LocalCAManager {
 
     /// Create the root once (idempotent unless force). Key → Keychain only; cert → file.
     @discardableResult
-    static func ensureRoot(commonName: String = "AirShare Local Root CA", years: Int = 10, force: Bool = false) throws -> Bool {
+    static func ensureRoot(commonName: String = "Decrypt.Team Local Root CA", years: Int = 10, force: Bool = false) throws -> Bool {
         rehydrateIfNeeded()
         if hasRoot && !force { return false }
         guard let pair = LocalCA.generateRootCA(withCommonName: commonName, validYears: Int32(years)),
@@ -249,7 +249,7 @@ nonisolated enum LocalCAManager {
         let payloadUUID = UUID().uuidString
         let profileUUID = UUID().uuidString
         let certB64 = der.base64EncodedString()
-        let host = meta?.host ?? "AirShare"
+        let host = meta?.host ?? "Decrypt.Team"
         let xml = """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -262,7 +262,7 @@ nonisolated enum LocalCAManager {
               <key>PayloadVersion</key><integer>1</integer>
               <key>PayloadIdentifier</key><string>ms.mrvek.localca.\(payloadUUID)</string>
               <key>PayloadUUID</key><string>\(payloadUUID)</string>
-              <key>PayloadDisplayName</key><string>AirShare Local Root CA</string>
+              <key>PayloadDisplayName</key><string>Decrypt.Team Local Root CA</string>
               <key>PayloadContent</key>
               <data>\(certB64)</data>
             </dict>
@@ -271,8 +271,8 @@ nonisolated enum LocalCAManager {
           <key>PayloadVersion</key><integer>1</integer>
           <key>PayloadIdentifier</key><string>ms.mrvek.localca.profile.\(profileUUID)</string>
           <key>PayloadUUID</key><string>\(profileUUID)</string>
-          <key>PayloadDisplayName</key><string>MRvEK AirShare Trust (\(host))</string>
-          <key>PayloadDescription</key><string>Installs the AirShare local root so on-device AirShare installs are trusted. After installing, enable it in Settings › General › About › Certificate Trust Settings.</string>
+          <key>PayloadDisplayName</key><string>ᴍƦᴢᴇꜰΛ Decrypt.Team Trust (\(host))</string>
+          <key>PayloadDescription</key><string>Installs the Decrypt.Team local root so on-device Decrypt.Team installs are trusted. After installing, enable it in Settings › General › About › Certificate Trust Settings.</string>
           <key>PayloadRemovalDisallowed</key><false/>
         </dict>
         </plist>
@@ -282,7 +282,7 @@ nonisolated enum LocalCAManager {
 
     static func writeMobileConfig() -> URL? {
         guard let data = mobileConfig() else { return nil }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("AirShare-Trust.mobileconfig")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Decrypt.Team-Trust.mobileconfig")
         try? data.write(to: url)
         return url
     }
@@ -297,7 +297,7 @@ nonisolated enum LocalCAManager {
 nonisolated enum OTAFiles {
     static var folder: URL {
         let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("AirShare Certs", isDirectory: true)
+            .appendingPathComponent("Decrypt.Team Certs", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }
@@ -316,16 +316,16 @@ nonisolated enum OTAFiles {
     static func exportLocalCA() -> [URL] {
         var out: [URL] = []
         func put(_ name: String, _ data: Data?) { guard let data else { return }; let u = folder.appendingPathComponent(name); if (try? data.write(to: u, options: .atomic)) != nil { out.append(u) } }
-        put("AirShare-Root-CA.crt", try? Data(contentsOf: LocalCAManager.rootCertURL))
-        put("AirShare-Root-CA.cer", LocalCAManager.rootDER())
+        put("Decrypt.Team-Root-CA.crt", try? Data(contentsOf: LocalCAManager.rootCertURL))
+        put("Decrypt.Team-Root-CA.cer", LocalCAManager.rootDER())
         if let host = LocalCAManager.meta?.host { put("leaf-\(host).crt", try? Data(contentsOf: LocalCAManager.leafCertURL)) }
-        put("AirShare-Trust.mobileconfig", LocalCAManager.mobileConfig())
+        put("Decrypt.Team-Trust.mobileconfig", LocalCAManager.mobileConfig())
         put("README.txt", Data("""
-        AirShare Certs — exported by unzip-drop
+        Decrypt.Team Certs — exported by unzip-drop
 
-        AirShare-Root-CA.crt / .cer     your on-device root CA (PEM / DER). Public — safe to share.
+        Decrypt.Team-Root-CA.crt / .cer     your on-device root CA (PEM / DER). Public — safe to share.
         leaf-<host>.crt              the leaf + chain the on-device HTTPS server presents.
-        AirShare-Trust.mobileconfig the trust profile. Open it to install the root, then enable it in
+        Decrypt.Team-Trust.mobileconfig the trust profile. Open it to install the root, then enable it in
                                      Settings › General › About › Certificate Trust Settings.
 
         Private keys are NOT here — they live in the Keychain (ThisDeviceOnly) and never touch disk.

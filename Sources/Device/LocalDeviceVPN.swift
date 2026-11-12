@@ -27,7 +27,7 @@ final class LocalDeviceVPN {
     func connect(restarting: Bool = false) async throws {
         try Task.checkCancellation()
         guard let extensionID = extensionIdentifier() else {
-            throw DeviceSetupError("This AirShare build does not include the local VPN extension. Update AirShare, or select Manual Setup.")
+            throw DeviceSetupError("This Decrypt.Team build does not include the local VPN extension. Update Decrypt.Team, or select Manual Setup.")
         }
         do {
             let configurations: [NETunnelProviderManager] = try await withCheckedThrowingContinuation { continuation in
@@ -53,7 +53,7 @@ final class LocalDeviceVPN {
                 while manager.connection.status != .disconnected && manager.connection.status != .invalid {
                     try Task.checkCancellation()
                     guard Date() < deadline else {
-                        throw DeviceSetupError("The previous local VPN did not disconnect. Turn off AirShare Local Installation in VPN settings and retry setup.")
+                        throw DeviceSetupError("The previous local VPN did not disconnect. Turn off Decrypt.Team Local Installation in VPN settings and retry setup.")
                     }
                     try await Task.sleep(nanoseconds: 200_000_000)
                 }
@@ -63,7 +63,7 @@ final class LocalDeviceVPN {
                 config.serverAddress = "On this device"
                 config.disconnectOnSleep = false
                 manager.protocolConfiguration = config
-                manager.localizedDescription = "AirShare Local Installation"
+                manager.localizedDescription = "Decrypt.Team Local Installation"
                 manager.isEnabled = true
                 manager.isOnDemandEnabled = false
                 try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -97,7 +97,7 @@ final class LocalDeviceVPN {
                 try Task.checkCancellation()
                 guard Date() < deadline else { throw DeviceSetupError("The local VPN did not connect. Check VPN permission and this build's signing profiles, then try again.") }
                 if manager.connection.status == .invalid {
-                    throw DeviceSetupError("The local VPN configuration is invalid. Reinstall AirShare with profiles that authorize Network Extensions.")
+                    throw DeviceSetupError("The local VPN configuration is invalid. Reinstall Decrypt.Team with profiles that authorize Network Extensions.")
                 }
                 try await Task.sleep(nanoseconds: 200_000_000)
             }
@@ -106,7 +106,7 @@ final class LocalDeviceVPN {
             throw CancellationError()
         } catch {
             disconnectIfOwned()
-            throw DeviceSetupError("Cannot start AirShare's local VPN. Allow the VPN configuration when asked. AirShare and its VPN extension must both be signed with profiles authorizing packet-tunnel-provider.\n\n\(error.localizedDescription)")
+            throw DeviceSetupError("Cannot start Decrypt.Team's local VPN. Allow the VPN configuration when asked. Decrypt.Team and its VPN extension must both be signed with profiles authorizing packet-tunnel-provider.\n\n\(error.localizedDescription)")
         }
     }
 
