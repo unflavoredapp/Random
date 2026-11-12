@@ -80,6 +80,7 @@ nonisolated struct ProfileInfo: Sendable {
     var team: String? = nil
     var expires: Date? = nil
     var udids: [String] = []
+    var created: Date? = nil          // CreationDate: start of the validity window (for the PPQ timer bar)
 
     var expirationDate: Date? { expires }
     var daysUntilExpiry: Int? {
@@ -192,7 +193,8 @@ final class CertificateStore: ObservableObject {
               let plist = try? PropertyListSerialization.propertyList(from: d, format: nil) as? [String: Any] else { return ProfileInfo() }
         let team = (plist["TeamName"] as? String) ?? (plist["TeamIdentifier"] as? [String])?.first
         return ProfileInfo(name: plist["Name"] as? String, team: team, expires: plist["ExpirationDate"] as? Date,
-                           udids: plist["ProvisionedDevices"] as? [String] ?? [])
+                           udids: plist["ProvisionedDevices"] as? [String] ?? [],
+                           created: plist["CreationDate"] as? Date)
     }
 
     func cachedProfileInfo(for cert: Certificate) -> ProfileInfo {

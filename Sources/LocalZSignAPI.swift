@@ -43,6 +43,8 @@ nonisolated struct LocalZSignJobResponse: Content, Sendable {
     var otaDownload: String?
     var installURL: String?
     var otaPublished: Bool
+    var stage: String?
+    var progress: Double?
 }
 
 nonisolated struct LocalZSignStatusResponse: Content, Sendable {
@@ -70,7 +72,7 @@ nonisolated struct LocalZSignDashboardSnapshot: Sendable {
     let uptime: TimeInterval?
 }
 
-private struct LocalZSignJob: Sendable {
+private struct LocalZSignJob: Sendable, Codable {
     let id: UUID
     let input: URL
     var status: String
@@ -84,12 +86,56 @@ private struct LocalZSignJob: Sendable {
     var packagingSeconds: Double?
     var error: String?
     var otaPublished: Bool
+    var stage: String? = nil
+    var progress: Double? = nil
+    var request: LocalZSignSignRequest? = nil      // kept so an interrupted / failed job can be retried
+    var publishOTA: Bool = false
+    var createdAt: Date = Date()
 }
 
 private actor LocalZSignJobStore {
     private var jobs: [UUID: LocalZSignJob] = [:]
+    private let fileURL: URL
 
-    func insert(_ job: LocalZSignJob) { jobs[job.id] = job }
+    /// Jobs are saved to disk so they survive the app being killed. Anything that was queued or
+    /// signing when the app died comes back as "interrupted" instead of silently vanishing.
+    init() {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("TrustCore", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        fileURL = dir.appendingPathComponent("jobs.json")
+        if let data = try? Data(contentsOf: fileURL),
+           let saved = try? JSONDecoder().decode([LocalZSignJob].self, from: data) {
+            let cutoff = Date().addingTimeInterval(-7 * 86_400)
+            for var j in saved where j.createdAt > cutoff {
+                if j.status == "queued" || j.status == "signing" || j.status == "cancelling" {
+                    j.status = "interrupted"
+                    j.error = "TrustCore was closed while this job was running. Retry it with POST /v1/jobs/\(j.id.uuidString)/retry."
+                    j.stage = nil
+                }
+                jobs[j.id] = j
+            }
+            persist()
+        }
+    }
+
+    private func persist() {
+        let newest = jobs.values.sorted { $0.createdAt > $1.createdAt }.prefix(100)
+        if let data = try? JSONEncoder().encode(Array(newest)) { try? data.write(to: fileURL, options: .atomic) }
+    }
+
+    private static let terminal: Set<String> = ["completed", "failed", "cancelled", "interrupted"]
+
+    /// Progress ticks arrive from background threads and can land after the final status; never let them undo it.
+    func progress(_ id: UUID, stage: String, fraction: Double) {
+        guard var job = jobs[id], !Self.terminal.contains(job.status), job.status != "cancelling" else { return }
+        job.stage = stage
+        job.progress = fraction
+        job.status = (stage == "queued") ? "queued" : "signing"
+        jobs[id] = job
+    }
+
+    func insert(_ job: LocalZSignJob) { jobs[job.id] = job; persist() }
 
     func update(_ id: UUID, status: String, output: URL? = nil, name: String? = nil, bundleID: String? = nil, version: String? = nil, elapsedSeconds: Double? = nil, extractionSeconds: Double? = nil, signingSeconds: Double? = nil, packagingSeconds: Double? = nil, error: String? = nil) {
         guard var job = jobs[id] else { return }
@@ -103,7 +149,9 @@ private actor LocalZSignJobStore {
         if let signingSeconds { job.signingSeconds = signingSeconds }
         if let packagingSeconds { job.packagingSeconds = packagingSeconds }
         if let error { job.error = error }
+        if Self.terminal.contains(status) { job.stage = nil; if status == "completed" { job.progress = 1 } }
         jobs[id] = job
+        persist()
     }
 
     func get(_ id: UUID) -> LocalZSignJob? { jobs[id] }
@@ -112,6 +160,7 @@ private actor LocalZSignJobStore {
         guard var job = jobs[id] else { return }
         mutate(&job)
         jobs[id] = job
+        persist()
     }
 }
 
@@ -127,6 +176,7 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
     private let lock = NSLock()
     private var application: Application?
     private var otaServers: [UUID: LocalOTAServer] = [:]
+    private var contexts: [UUID: SignContext] = [:]
     private var started = false
     private var startedAt: Date?
 
@@ -200,6 +250,32 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
                 return self.response(job)
             }
 
+            app.post("v1", "jobs", ":id", "cancel") { [weak self] req async throws -> LocalZSignJobResponse in
+                guard let self else { throw Abort(.serviceUnavailable) }
+                try self.requireAuthorization(req)
+                guard let raw = req.parameters.get("id"), let id = UUID(uuidString: raw), let job = await self.jobs.get(id) else {
+                    throw Abort(.notFound)
+                }
+                guard job.status == "queued" || job.status == "signing" else {
+                    throw Abort(.conflict, reason: "Job is already \(job.status).")
+                }
+                self.context(for: id)?.cancel()
+                await self.jobs.update(id, mutate: { $0.status = "cancelling" })
+                return self.response(await self.jobs.get(id) ?? job)
+            }
+
+            app.post("v1", "jobs", ":id", "retry") { [weak self] req async throws -> LocalZSignJobResponse in
+                guard let self else { throw Abort(.serviceUnavailable) }
+                try self.requireAuthorization(req)
+                guard let raw = req.parameters.get("id"), let id = UUID(uuidString: raw), let job = await self.jobs.get(id) else {
+                    throw Abort(.notFound)
+                }
+                guard ["failed", "interrupted", "cancelled"].contains(job.status), let original = job.request else {
+                    throw Abort(.conflict, reason: "Only failed, cancelled or interrupted jobs can be retried.")
+                }
+                return try await self.submit(original, publishOTA: job.publishOTA)
+            }
+
             app.post("v1", "sign-and-install") { [weak self] req async throws -> LocalZSignJobResponse in
                 guard let self else { throw Abort(.serviceUnavailable) }
                 try self.requireAuthorization(req)
@@ -246,7 +322,7 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
         let uptime = state.uptime
         let otaCount = state.otaCount
 
-        let active = jobs.filter { $0.status == "queued" || $0.status == "signing" }.count
+        let active = jobs.filter { $0.status == "queued" || $0.status == "signing" || $0.status == "cancelling" }.count
         let completed = jobs.filter { $0.status == "completed" }
         let failed = jobs.filter { $0.status == "failed" || $0.error != nil }.count
         let durations = completed.compactMap(\.elapsedSeconds)
@@ -283,6 +359,15 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
         lock.lock()
         otaServers.removeValue(forKey: id)
         lock.unlock()
+    }
+
+    private func context(for id: UUID) -> SignContext? {
+        lock.lock(); defer { lock.unlock() }
+        return contexts[id]
+    }
+
+    private func setContext(_ ctx: SignContext?, for id: UUID) {
+        lock.lock(); contexts[id] = ctx; lock.unlock()
     }
 
     private func otaServer(id: UUID) -> LocalOTAServer? {
@@ -335,12 +420,18 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
         let id = UUID()
         let job = LocalZSignJob(id: id, input: input, status: "queued", output: nil,
                                 name: nil, bundleID: nil, version: nil, elapsedSeconds: nil,
-                                extractionSeconds: nil, signingSeconds: nil, packagingSeconds: nil, error: nil, otaPublished: false)
+                                extractionSeconds: nil, signingSeconds: nil, packagingSeconds: nil, error: nil, otaPublished: false,
+                                stage: "queued", progress: 0, request: request, publishOTA: publishOTA)
         await jobs.insert(job)
+
+        let ctx = SignContext { [jobs] stage, fraction in
+            Task { await jobs.progress(id, stage: stage, fraction: fraction) }
+        }
+        setContext(ctx, for: id)
 
         Task.detached(priority: .userInitiated) { [weak self, jobs] in
             guard let self else { return }
-            await jobs.update(id, status: "signing")
+            defer { self.setContext(nil, for: id) }
             let started = ContinuousClock.now
             do {
                 let material = try await MainActor.run { try CertificateStore.shared.activeMaterial() }
@@ -349,7 +440,9 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
                 options.bundleID = request.bundleID
                 options.version = request.version
                 options.parallelSigning = request.parallelSigning ?? true
-                let outcome = try await Signer.signDetached(ipaURL: input, material: material, options: options, captureOutput: false)
+                let outcome = try await SignContext.$current.withValue(ctx) {
+                    try await Signer.signDetached(ipaURL: input, material: material, options: options, captureOutput: false)
+                }
 
                 let icon = (try? IPAMeta.read(outcome.ipaURL).iconPNG) ?? nil
                 let entry = try await MainActor.run {
@@ -380,7 +473,8 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
                     await jobs.update(id, mutate: { $0.otaPublished = true })
                 }
             } catch {
-                await jobs.update(id, status: "failed", elapsedSeconds: Self.elapsed(started), error: error.localizedDescription)
+                let wasCancelled = (error as? SignEngineError).map { if case .cancelled = $0 { return true } else { return false } } ?? (error is CancellationError)
+                await jobs.update(id, status: wasCancelled ? "cancelled" : "failed", elapsedSeconds: Self.elapsed(started), error: error.localizedDescription)
             }
         }
 
@@ -416,7 +510,7 @@ nonisolated final class LocalZSignAPI: @unchecked Sendable {
                      extractionSeconds: job.extractionSeconds, signingSeconds: job.signingSeconds,
                      packagingSeconds: job.packagingSeconds, error: job.error,
                      otaManifest: manifest, otaDownload: download, installURL: install,
-                     otaPublished: job.otaPublished)
+                     otaPublished: job.otaPublished, stage: job.stage, progress: job.progress)
     }
 }
 
@@ -491,7 +585,7 @@ struct LocalZSignAPISettingsView: SwiftUI.View {
                         Text("ENDPOINTS")
                             .font(.system(size: 11, weight: .heavy, design: .monospaced))
                             .foregroundStyle(Theme.subtle)
-                        Text("POST /v1/sign\nGET /v1/jobs/:id\nGET /v1/jobs/:id/download\nGET /v1/status")
+                        Text("POST /v1/sign\nGET /v1/jobs/:id\nPOST /v1/jobs/:id/cancel\nPOST /v1/jobs/:id/retry\nGET /v1/jobs/:id/download\nGET /v1/status")
                             .font(.system(size: 12, design: .monospaced))
                             .foregroundStyle(Theme.text)
                             .padding(.top, 6)

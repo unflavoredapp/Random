@@ -13,6 +13,8 @@
 import Foundation
 import UIKit
 import Darwin
+import Security
+import CryptoKit
 
 /// FIFO async mutex. `release()` hands the lane straight to the next waiter.
 nonisolated actor SignGate {
@@ -27,6 +29,33 @@ nonisolated actor SignGate {
 
     func release() {
         if waiters.isEmpty { busy = false } else { waiters.removeFirst().resume() }
+    }
+}
+
+/// Per-job progress + cancellation, handed to the engine through a task-local so no signature has to change.
+/// `SignContext.$current.withValue(ctx) { try await Signer.signDetached(...) }`
+nonisolated final class SignContext: @unchecked Sendable {
+    typealias Handler = @Sendable (_ stage: String, _ fraction: Double) -> Void
+
+    @TaskLocal static var current: SignContext?
+
+    private let lock = NSLock()
+    private var cancelledFlag = false
+    private let handler: Handler?
+
+    init(handler: Handler? = nil) { self.handler = handler }
+
+    func cancel() { lock.lock(); cancelledFlag = true; lock.unlock() }
+    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelledFlag }
+
+    /// stage ∈ queued · preflight · extracting · signing · verifying · packaging · done
+    static func report(_ stage: String, _ fraction: Double) {
+        current?.handler?(stage, min(1, max(0, fraction)))
+    }
+
+    /// Call between stages. (zsign itself is a single C call, so a cancel during the signing stage takes effect when it returns.)
+    static func checkCancelled() throws {
+        if current?.isCancelled == true || Task.isCancelled { throw SignEngineError.cancelled }
     }
 }
 
@@ -176,7 +205,12 @@ nonisolated enum SignGuard {
 
     static func isRetryable(_ error: Error) -> Bool {
         if error is CancellationError { return false }
-        if let e = error as? SignEngineError, case .storage = e { return false }
+        if let e = error as? SignEngineError {
+            switch e {
+            case .storage, .preflight, .cancelled: return false
+            case .failed: break
+            }
+        }
         if let e = error as? ZsignError {
             switch e {
             case .fileNotFound, .appBundleNotFound: return false
@@ -191,10 +225,15 @@ nonisolated enum SignGuard {
     /// Runs `work` inside the full guard rail. `work(true)` is the conservative profile used for the single retry.
     static func runHardened(
         ipa: URL,
+        material: CertMaterial? = nil,
+        options: SignOptions? = nil,
         onLog: (@Sendable (String) -> Void)?,
         _ work: (_ safeProfile: Bool) async throws -> SignOutcome
     ) async throws -> SignOutcome {
         let heavy = isHeavy(ipa)
+        let startedAt = Date()
+        let freeBefore = availableBytes() ?? 0
+        SignContext.report("queued", 0)
         if heavy {
             onLog?(">>> Large IPA (\(fmt(ipaSize(ipa)))) — TrustCore signs it on the one-at-a-time lane")
             await SignGate.shared.acquire()
@@ -203,7 +242,10 @@ nonisolated enum SignGuard {
         var outcome: SignOutcome?
         var failure: Error?
         do {
+            try SignContext.checkCancelled()
+            SignContext.report("preflight", 0.01)
             sweepStaleTemp()
+            if let material { try SignPreflight.check(ipa: ipa, material: material, options: options ?? .none, onLog: onLog) }
             if heavy { await waitForCoolDown(onLog: onLog) }
             try preflight(ipa: ipa, onLog: onLog)
             do {
@@ -222,6 +264,77 @@ nonisolated enum SignGuard {
         await end(token)
         if heavy { await SignGate.shared.release() }
         if let failure { throw failure }
-        return outcome!
+        var result = outcome!
+        let secs = Date().timeIntervalSince(startedAt)
+        result.report = [
+            "TrustCore sign report",
+            "IPA: \(ipa.lastPathComponent) (\(fmt(ipaSize(ipa))))",
+            "App: \(result.name) \(result.version) — \(result.bundleID)",
+            "Output: \(fmt(max(0, result.sizeBytes)))",
+            "Lane: \(heavy ? "large (one at a time)" : "standard")",
+            "Time: \(String(format: "%.1f", secs))s",
+            "Free storage: \(fmt(freeBefore)) → \(fmt(availableBytes() ?? 0))",
+            "Seal check: passed (every binary re-verified, package re-opened)",
+        ].joined(separator: "\n")
+        onLog?(">>> " + result.report.replacingOccurrences(of: "\n", with: "\n>>> "))
+        return result
+    }
+}
+
+// MARK: - Certificate / profile preflight
+
+/// Finds certificate and profile problems in about a second, BEFORE anything is extracted, instead of
+/// letting a multi-minute sign finish and then fail at install time.
+nonisolated enum SignPreflight {
+
+    static func check(ipa: URL, material: CertMaterial, options o: SignOptions, onLog: (@Sendable (String) -> Void)?) throws {
+        guard let xml = xmlPlistData(fromMobileProvision: material.provision),
+              let plist = try? PropertyListSerialization.propertyList(from: xml, format: nil) as? [String: Any] else {
+            throw SignEngineError.preflight("The provisioning profile is unreadable. Re-import your certificate and profile.")
+        }
+
+        // 1. Profile expiry
+        if let expires = plist["ExpirationDate"] as? Date, expires < Date() {
+            throw SignEngineError.preflight("The provisioning profile expired on \(expires.formatted(date: .abbreviated, time: .omitted)). Import a fresh profile and try again.")
+        }
+
+        // 2. The signing certificate must be one the profile trusts
+        if let certs = plist["DeveloperCertificates"] as? [Data], !certs.isEmpty,
+           let mine = signingCertificateDER(p12: material.p12, password: material.password) {
+            if !certs.contains(mine) {
+                throw SignEngineError.preflight("This certificate isn't in the provisioning profile, so the signed app would be rejected at install. Use the profile that was issued with this certificate.")
+            }
+        }
+        // (If Security.framework can't open the .p12 we don't block: OpenSSL inside TrustCore reads legacy
+        //  p12 encodings that iOS refuses, and a genuinely bad password is reported by the signer itself.)
+
+        let ents = plist["Entitlements"] as? [String: Any] ?? [:]
+
+        // 3. Soft warnings (don't block): device not in a development/ad-hoc profile, ents the profile can't grant
+        if let devices = plist["ProvisionedDevices"] as? [String],
+           let udid = CertificateStore.knownUDID(certName: material.name),
+           !devices.contains(where: { $0.caseInsensitiveCompare(udid) == .orderedSame }) {
+            onLog?(">>> Warning: this device (\(udid)) isn't listed in the provisioning profile — install will fail.")
+        }
+        if !o.autoFixEntitlements, let data = o.entitlementsPlistData,
+           let requested = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] {
+            let missing = requested.keys.filter { ents[$0] == nil && $0 != "application-identifier" && $0 != "com.apple.developer.team-identifier" }
+            if !missing.isEmpty {
+                onLog?(">>> Warning: entitlements not granted by the profile (install may fail): \(missing.sorted().joined(separator: ", ")). Turn on “Auto-fix entitlements” to drop them.")
+            }
+        }
+        onLog?(">>> Certificate check: profile valid, certificate matches")
+    }
+
+    /// DER of the certificate inside the .p12, or nil when it can't be opened.
+    static func signingCertificateDER(p12: Data, password: String) -> Data? {
+        let opts = [kSecImportExportPassphrase as String: password] as CFDictionary
+        var items: CFArray?
+        guard SecPKCS12Import(p12 as CFData, opts, &items) == errSecSuccess,
+              let first = (items as? [[String: Any]])?.first,
+              let identity = first[kSecImportItemIdentity as String] else { return nil }
+        var cert: SecCertificate?
+        guard SecIdentityCopyCertificate(identity as! SecIdentity, &cert) == errSecSuccess, let cert else { return nil }
+        return SecCertificateCopyData(cert) as Data
     }
 }

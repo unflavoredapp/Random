@@ -163,10 +163,13 @@ protocol IPAArchiver {
 enum SignEngineError: Error, LocalizedError, Sendable {
     case failed(String)
     case storage(String)
+    case preflight(String)       // certificate / profile problem found before extraction
+    case cancelled
 
     var errorDescription: String? {
         switch self {
-        case .failed(let message), .storage(let message): return message
+        case .failed(let message), .storage(let message), .preflight(let message): return message
+        case .cancelled: return "Signing was cancelled."
         }
     }
 }
@@ -178,6 +181,7 @@ nonisolated struct SignOutcome: Sendable {
     let version: String
     var entitlements: [String: String] = [:]
     var sizeBytes: Int64 = 0
+    var report: String = ""   // copyable sign report (timings, storage, result)
 }
 
 nonisolated struct SignPerformance: Sendable {
@@ -406,7 +410,7 @@ nonisolated enum Signer {
             onLog?(">>> Same IPA, certificate and options as before — using the cached signed build (instant)")
             return hit
         }
-        let outcome = try await SignGuard.runHardened(ipa: ipaURL, onLog: onLog) { safe in
+        let outcome = try await SignGuard.runHardened(ipa: ipaURL, material: material, options: o, onLog: onLog) { safe in
             var attempt = o
             if safe { attempt.parallelSigning = false }
             return try await signDetachedUncached(ipaURL: ipaURL, material: material, options: attempt, onLog: onLog, captureOutput: captureOutput, safeProfile: safe)
@@ -440,6 +444,8 @@ nonisolated enum Signer {
         // 2. Unzip → locate Payload/*.app
         let extractDir = work.appendingPathComponent("x", isDirectory: true)
         try fm.createDirectory(at: extractDir, withIntermediateDirectories: true)
+        try SignContext.checkCancelled()
+        SignContext.report("extracting", 0.05)
         onLog?(">>> Extracting IPA…")
         let extractionStart = ContinuousClock.now
         var fastUnpacked = false
@@ -454,7 +460,16 @@ nonisolated enum Signer {
                 try fm.unzipItem(at: ipaURL, to: extractDir)
             }
         } else {
-            try fm.unzipItem(at: ipaURL, to: extractDir)
+            // Slow path reports real progress: ZIPFoundation fills a Progress while it extracts.
+            let progress = Progress()
+            let poll = Task {
+                while !Task.isCancelled {
+                    SignContext.report("extracting", 0.05 + 0.30 * progress.fractionCompleted)
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                }
+            }
+            defer { poll.cancel() }
+            try fm.unzipItem(at: ipaURL, to: extractDir, progress: progress)
         }
         let extractionSeconds = Double(extractionStart.duration(to: ContinuousClock.now).components.attoseconds) / 1e18 + Double(extractionStart.duration(to: ContinuousClock.now).components.seconds)
         let payload = extractDir.appendingPathComponent("Payload", isDirectory: true)
@@ -463,8 +478,12 @@ nonisolated enum Signer {
             throw ZsignError.appBundleNotFound(inIPA: ipaURL.lastPathComponent)
         }
 
+        try SignContext.checkCancelled()
+        SignContext.report("preparing", 0.36)
         // 2b. Pre-sign mutations (strip content, plist tweaks, icon, dylibs).
         try applyPreSign(appURL: appURL, options: o, onLog: onLog)
+        try SignContext.checkCancelled()
+        SignContext.report("signing", 0.40)
 
         // 3. Sign in place — capture the engine's real stdout, AirShare-style.
         // stdout capture redirects the process-wide file descriptor, so it is
@@ -534,6 +553,8 @@ nonisolated enum Signer {
             .appendingPathComponent("\(name)-signed-\(UUID().uuidString)")
             .appendingPathExtension("ipa")
         try? fm.removeItem(at: signed)
+        try SignContext.checkCancelled()
+        SignContext.report("packaging", 0.82)
         onLog?(">>> Packaging signed IPA…")
         let packagingStart = ContinuousClock.now
         var packedFast = false
@@ -544,7 +565,15 @@ nonisolated enum Signer {
         }
         do {
             if !packedFast {
-                try fm.zipItem(at: payload, to: signed, shouldKeepParent: true, compressionMethod: .none)
+                let progress = Progress()
+                let poll = Task {
+                    while !Task.isCancelled {
+                        SignContext.report("packaging", 0.82 + 0.16 * progress.fractionCompleted)
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                    }
+                }
+                defer { poll.cancel() }
+                try fm.zipItem(at: payload, to: signed, shouldKeepParent: true, compressionMethod: .none, progress: progress)
             }
             try SignGuard.verifyPackaged(signed, appFolderName: appURL.lastPathComponent)
         } catch {
@@ -555,6 +584,7 @@ nonisolated enum Signer {
         let totalSeconds = Double(totalStart.duration(to: ContinuousClock.now).components.attoseconds) / 1e18 + Double(totalStart.duration(to: ContinuousClock.now).components.seconds)
         onLog?(String(format: ">>> Turbo timing: extract %.2fs · sign %.2fs · package %.2fs · total %.2fs", extractionSeconds, signingSeconds, packagingSeconds, totalSeconds))
         onLog?(">>> Done.")
+        SignContext.report("done", 1.0)
 
         let ents = Signer.readEntitlements(appURL: appURL)
         let sz = (try? fm.attributesOfItem(atPath: signed.path)[.size] as? Int64) ?? 0

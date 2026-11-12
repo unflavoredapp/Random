@@ -1,0 +1,22 @@
+name: TrustCore seal tests
+
+on:
+  push:
+    paths: [ 'Sources/zsign/**', 'tests/seal/**' ]
+  pull_request:
+    paths: [ 'Sources/zsign/**', 'tests/seal/**' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  seal:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang libssl-dev libblocksruntime-dev
+      - name: Sign synthetic apps and verify every seal
+        run: tests/seal/run-ci.sh

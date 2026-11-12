@@ -529,25 +529,27 @@ struct SigningSheet: View {
         if let c = certs.active {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(alignment: .top, spacing: 12) {
-                    ZStack {
-                        Circle().fill(accentTint)
-                        Image(systemName: "checkmark.circle.fill").foregroundStyle(accentSoft).font(.system(size: 18, weight: .bold))
+                    Group {
+                        if let ui = UIImage(named: "CertSeal") {
+                            Image(uiImage: ui).resizable().scaledToFit()
+                        } else {
+                            Image(systemName: "checkmark.seal.fill").resizable().scaledToFit().foregroundStyle(accentSoft)
+                        }
                     }
-                    .frame(width: 34, height: 34)
+                    .frame(width: 46, height: 46)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("USING YOUR SAVED CERTIFICATE").font(.system(size: 8.5, weight: .heavy)).kerning(1.1).foregroundStyle(accentSoft)
                         Text(c.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
-                        Text(certSubtitle(c)).font(.system(size: 12.5, weight: .medium)).foregroundStyle(Theme.subtle).lineLimit(1)
                     }
                     Spacer(minLength: 0)
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 18, weight: .bold))
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 20, weight: .semibold))
                         .foregroundStyle(.white)
-                        .frame(width: 48, height: 48)
-                        .background(Color.white.opacity(0.08))
-                        .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        .frame(width: 44, height: 44)
                 }
                 .padding(.horizontal, 6)
+                PPQTimerView(info: certs.cachedProfileInfo(for: c), accent: success)
+                    .padding(.horizontal, 6)
                 HiddenWhenNative {
                 HStack(alignment: .top, spacing: 0) {
                     Button { settingsJump = .ota } label: {
@@ -599,14 +601,6 @@ struct SigningSheet: View {
     private var certDaysLeft: Int? {
         if ServerConfig.certMode == "local" { return LocalCAManager.leafDaysLeft }
         return ZefvCert.effectiveNotAfter.map { Calendar.current.dateComponents([.day], from: Date(), to: $0).day ?? 0 }
-    }
-
-    private func certSubtitle(_ c: Certificate) -> String {
-        let info = (try? Data(contentsOf: c.provisionURL)).map(CertificateStore.profileInfo) ?? ProfileInfo()
-        var parts: [String] = []
-        if let t = info.team { parts.append("Team \(t)") }
-        if let e = info.expires { parts.append("Expires " + e.formatted(date: .abbreviated, time: .omitted)) }
-        return parts.isEmpty ? "On-device certificate" : parts.joined(separator: " · ")
     }
 
     private var certStatusTitle: String {
@@ -5601,5 +5595,51 @@ struct SentToHomeOverlay: View {
             else { RoundedRectangle(cornerRadius: side * 0.22).fill(blue.opacity(0.15)).overlay(Image(systemName: "app.fill").foregroundStyle(blue)) }
         }
         .frame(width: side, height: side).clipShape(RoundedRectangle(cornerRadius: side * 0.22, style: .continuous))
+    }
+}
+
+// MARK: - PPQ timer
+
+/// Live "PPQ TIMER" for the active certificate: time left until its provisioning profile expires,
+/// with a progress bar of how much of the validity window remains. Ticks every 30 seconds.
+struct PPQTimerView: View {
+    let info: ProfileInfo
+    let accent: Color
+
+    private func parts(_ remaining: TimeInterval) -> String {
+        let total = max(0, Int(remaining))
+        let d = total / 86_400, h = (total % 86_400) / 3_600, m = (total % 3_600) / 60
+        if d > 0 { return "\(d)d \(h)h \(m)m" }
+        if h > 0 { return "\(h)h \(m)m" }
+        return "\(m)m"
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { ctx in
+            if let expires = info.expires {
+                let remaining = expires.timeIntervalSince(ctx.date)
+                let expired = remaining <= 0
+                let window = max(1, expires.timeIntervalSince(info.created ?? expires.addingTimeInterval(-365 * 86_400)))
+                let fraction = expired ? 0 : min(1, max(0, remaining / window))
+                let tint: Color = expired ? .red : (remaining < 14 * 86_400 ? .orange : accent)
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("PPQ TIMER").font(.system(size: 12, weight: .heavy)).kerning(0.8).foregroundStyle(tint)
+                        Spacer()
+                        Text(expired ? "Expired" : parts(remaining))
+                            .font(.system(size: 17, weight: .semibold, design: .rounded))
+                            .monospacedDigit()
+                            .foregroundStyle(.white)
+                    }
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(Color.white.opacity(0.14))
+                            Capsule().fill(tint).frame(width: g.size.width * fraction)
+                        }
+                    }
+                    .frame(height: 4)
+                }
+            }
+        }
     }
 }

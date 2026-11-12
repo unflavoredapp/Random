@@ -197,7 +197,6 @@ nonisolated enum ZipFast {
         guard let walker = fm.enumerator(atPath: rootPath + "/Payload") else { throw Failure("Nothing to pack.") }
         var rel: [String] = ["Payload"]
         for case let p as String in walker { rel.append("Payload/" + p) }
-        guard rel.count < 65_000 else { throw Failure("Too many files for the simple zip writer.") }
 
         try? fm.removeItem(at: out)
         fm.createFile(atPath: out.path, contents: nil)
@@ -210,7 +209,6 @@ nonisolated enum ZipFast {
         let (nowDate, nowTime) = dos(Date())
 
         for name in rel {
-            guard pos < 3_500_000_000 else { throw Failure("IPA too large for the simple zip writer.") }
             let path = rootPath + "/" + name
             var st = stat()
             guard lstat(path, &st) == 0 else { throw Failure("Could not read \(name)") }
@@ -279,25 +277,14 @@ nonisolated enum ZipFast {
                 }
             }
 
-            central.append(ZipDelta.le32(0x0201_4b50))
-            central.append(ZipDelta.le16((3 << 8) | 20)); central.append(ZipDelta.le16(20))
-            central.append(ZipDelta.le16(0x0800)); central.append(ZipDelta.le16(method))
-            central.append(ZipDelta.le16(time)); central.append(ZipDelta.le16(date))
-            central.append(ZipDelta.le32(crc)); central.append(ZipDelta.le32(comp)); central.append(ZipDelta.le32(uncomp))
-            central.append(ZipDelta.le16(UInt16(nameData.count))); central.append(ZipDelta.le16(0)); central.append(ZipDelta.le16(0))
-            central.append(ZipDelta.le16(0)); central.append(ZipDelta.le16(0)); central.append(ZipDelta.le32(extAttr))
-            central.append(ZipDelta.le32(UInt32(headerOffset)))
-            central.append(nameData)
+            ZipDelta.appendCentralRecord(&central, versionMade: (3 << 8) | 20, flags: 0x0800, method: method, time: time, date: date,
+                                         crc: crc, comp: comp, uncomp: uncomp, name: nameData, intAttr: 0, extAttr: extAttr,
+                                         headerOffset: headerOffset)
         }
 
         let cdOffset = pos
-        guard cdOffset < 0xFFFF_FFFF else { throw Failure("IPA too large for the simple zip writer.") }
         try output.write(contentsOf: central)
-        var eocd = Data()
-        eocd.append(ZipDelta.le32(0x0605_4b50)); eocd.append(ZipDelta.le16(0)); eocd.append(ZipDelta.le16(0))
-        eocd.append(ZipDelta.le16(UInt16(rel.count))); eocd.append(ZipDelta.le16(UInt16(rel.count)))
-        eocd.append(ZipDelta.le32(UInt32(central.count))); eocd.append(ZipDelta.le32(UInt32(cdOffset))); eocd.append(ZipDelta.le16(0))
-        try output.write(contentsOf: eocd)
+        try output.write(contentsOf: ZipDelta.endOfCentralDirectory(count: rel.count, cdSize: UInt64(central.count), cdOffset: cdOffset))
     }
 
     // MARK: Helpers
