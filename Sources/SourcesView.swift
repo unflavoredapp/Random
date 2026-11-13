@@ -1383,24 +1383,6 @@ struct AppDetailSheet: View {
 
     private var blue: Color { Theme.accent }
 
-    private var detailTitleBar: some View {
-        ZStack {
-            HStack(spacing: 8) {
-                SourceIcon(url: source.iconURL, side: 22, fallback: source.name, locked: source.isLocked)
-                Text(source.name.uppercased()).font(.system(size: 15, weight: .bold)).kerning(1).foregroundStyle(Theme.text)
-            }
-            HStack {
-                Spacer()
-                Button { dismiss() } label: {
-                    Image(systemName: "xmark").font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.text)
-                        .frame(width: 32, height: 32).background(Color.white.opacity(0.12)).clipShape(Circle())
-                }
-            }
-        }
-        .padding(.horizontal, 16).padding(.vertical, 10)
-        .floatingGlassBar(edge: .top)
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             ScrollView(showsIndicators: false) {
@@ -1432,7 +1414,7 @@ struct AppDetailSheet: View {
                 }
                 .padding(16)
             }
-            .safeAreaInset(edge: .top, spacing: 0) { detailTitleBar }
+            .safeAreaInset(edge: .top, spacing: 0) { Color.black.frame(height: 22) }   // pinned space under the grab handle; no floating bar
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 bottomBar.floatingGlassBar(edge: .bottom)
             }

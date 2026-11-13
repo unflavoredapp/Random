@@ -31,6 +31,7 @@ struct SigningSheet: View {
     var pending: PendingIPADownload? = nil
     @State private var fileReady: Bool
     @State private var signQueued = false
+    @State private var repackaging = false
     @State private var fetchedIcon: Data?
 
     private var meta: IPAMeta {
@@ -174,7 +175,7 @@ struct SigningSheet: View {
                 .padding(12)
             }
             .safeAreaInset(edge: .top, spacing: 0) { titleBar }
-            .safeAreaInset(edge: .bottom, spacing: 0) { signBar.floatingGlassBar(edge: .bottom) }
+            .safeAreaInset(edge: .bottom, spacing: 0) { signBar }
         }
         .background(Color.black.ignoresSafeArea())
         .sheet(isPresented: $showBulkSigning) {
@@ -313,10 +314,15 @@ struct SigningSheet: View {
 
     // MARK: Title
 
+    /// Pinned (not floating) header: a grab handle (tap or swipe down to close), then the app's icon, name and bundle ID.
     private var titleBar: some View {
-        HStack(spacing: 12) {
-            titleBarButton("chevron.left")
-            Spacer(minLength: 0)
+        VStack(spacing: 6) {
+            Capsule().fill(Color.white.opacity(0.35)).frame(width: 40, height: 5)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .onTapGesture { dismiss() }
+                .gesture(DragGesture(minimumDistance: 10).onEnded { if $0.translation.height > 50 { dismiss() } })
             HStack(spacing: 10) {
                 iconThumb(iconPNG ?? meta.iconPNG, side: 30)
                 VStack(alignment: .leading, spacing: 1) {
@@ -324,23 +330,11 @@ struct SigningSheet: View {
                     Text(bundle).font(.system(size: 12)).foregroundStyle(accent).lineLimit(1)
                 }
             }
-            Spacer(minLength: 0)
-            titleBarButton("xmark")
+            .padding(.bottom, 8)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        // Floating Liquid Glass header — the sheet scrolls underneath it.
-        .floatingGlassBar(edge: .top, cornerRadius: 30)
-    }
-
-    private func titleBarButton(_ icon: String) -> some View {
-        Button { dismiss() } label: {
-            Image(systemName: icon)
-                .font(.system(size: 16, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: 34, height: 34)
-                .background(Color.white.opacity(0.12))
-                .clipShape(Circle())
-        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity)
+        .background(Color.black)
     }
 
     // MARK: Bundle info (AirShare: Entitlements · Info.plist)
@@ -584,10 +578,7 @@ struct SigningSheet: View {
                 .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
                 }
             }
-            .padding(12)
-            .background(surfaceRaised)
-            .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).stroke(accent.opacity(0.45), lineWidth: 1.2))
+            .padding(.vertical, 12).padding(.horizontal, 6)      // no card background or border
         } else {
             HStack(spacing: 7.5) {
                 Image(systemName: "exclamationmark.circle.fill").foregroundStyle(.orange)
@@ -983,18 +974,66 @@ struct SigningSheet: View {
 
     // MARK: Sign bar
 
+    private var signDisabled: Bool { signing || signQueued || certs.active == nil || macho?.encrypted == true }
+    private var repackageDisabled: Bool { repackaging || signing || signQueued }
+
+    /// Pinned bottom bar, no background or borders: Repackage on the left, credit in the middle, Sign on the right.
     private var signBar: some View {
-        Button { Task { await signTapped() } } label: {
-            HStack(spacing: 7.5) {
-                if signing || signQueued { ProgressView().tint(.white) } else { Image(systemName: "signature").font(.system(size: 13.5, weight: .bold)) }
-                Text(signing ? "Signing…" : (signQueued ? "Waiting for download…" : "Sign IPA")).font(.system(size: 13.5, weight: .bold))
+        HStack(alignment: .center, spacing: 8) {
+            Button { Task { await repackageTapped() } } label: {
+                VStack(spacing: 4) {
+                    ZStack {
+                        if repackaging { ProgressView().tint(accent) } else { Image(systemName: "shippingbox").font(.system(size: 26)) }
+                    }
+                    .frame(width: 28, height: 28)
+                    Text(repackaging ? "Packing…" : "Repackage").font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                }
+                .foregroundStyle(repackageDisabled ? Theme.subtle : accent).frame(width: 100)
             }
-            .frame(maxWidth: .infinity).padding(.vertical, 16)
-            .background(certs.active == nil || macho?.encrypted == true ? Theme.subtle : accent).foregroundStyle(.white)
-            .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .disabled(repackageDisabled)
+
+            VStack(spacing: 2) {
+                Text("Made by ᴍƦᴢᴇꜰΛ").font(.system(size: 14, weight: .bold)).foregroundStyle(.orange).lineLimit(1).minimumScaleFactor(0.7)
+                Text("Powered by DELVEK.NET").font(.system(size: 9, weight: .semibold)).foregroundStyle(accent).lineLimit(1).minimumScaleFactor(0.6)
+            }
+            .frame(maxWidth: .infinity)
+
+            Button { Task { await signTapped() } } label: {
+                VStack(spacing: 4) {
+                    ZStack {
+                        if signing || signQueued { ProgressView().tint(accent) } else { Image(systemName: "signature").font(.system(size: 26)) }
+                    }
+                    .frame(width: 28, height: 28)
+                    Text(signing ? "Signing…" : (signQueued ? "Waiting…" : "Sign")).font(.system(size: 13, weight: .semibold)).lineLimit(1)
+                }
+                .foregroundStyle(signDisabled ? Theme.subtle : accent).frame(width: 100)
+            }
+            .disabled(signDisabled)
         }
-        .disabled(signing || signQueued || certs.active == nil || macho?.encrypted == true)
-        .padding(.horizontal, 12).padding(.top, 6).padding(.bottom, 4.5)
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
+        .frame(maxWidth: .infinity)
+        .background(Color.black)
+    }
+
+    /// Applies the edits above (name, bundle ID, icon, version, libraries, injections) and exports an unsigned IPA.
+    private func repackageTapped() async {
+        guard !repackaging else { return }
+        if !fileReady {
+            guard await waitForFile(abortOnFailure: true) else {
+                if let f = pending?.failure { error = "Download failed: \(f)" }
+                return
+            }
+        }
+        repackaging = true; error = nil
+        defer { repackaging = false }
+        let url = ipaURL
+        let options = buildOptionsValue()
+        do {
+            let out = try await Task.detached(priority: .userInitiated) { try Signer.repackUnsigned(ipaURL: url, options: options) }.value
+            UIActivityViewController.share(out)
+        } catch {
+            self.error = "Repackage failed: \(error.localizedDescription)"
+        }
     }
 
     // MARK: Helpers
@@ -5259,9 +5298,11 @@ struct TerminalCursor: View {
 extension UIActivityViewController {
     static func share(_ url: URL) {
         let vc = UIActivityViewController(activityItems: [url], applicationActivities: nil)
-        UIApplication.shared.connectedScenes
-            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController }
-            .first?.present(vc, animated: true)
+        var top = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.keyWindow?.rootViewController }.first
+        while let next = top?.presentedViewController { top = next }       // over any open sheet or full-screen cover
+        vc.popoverPresentationController?.sourceView = top?.view
+        top?.present(vc, animated: true)
     }
 }
 

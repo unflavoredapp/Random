@@ -591,6 +591,55 @@ nonisolated enum Signer {
         return SignOutcome(ipaURL: signed, name: name, bundleID: bundleID, version: version, entitlements: ents, sizeBytes: sz)
     }
 
+    // MARK: - Repackage (no signing)
+
+    /// Applies the same edits as a sign (name, bundle ID, version, icon, library removal and injection, plist tweaks) and zips a
+    /// new UNSIGNED .ipa. Any old signature is stripped, because the edits invalidate it; the IPA still has to be signed before install.
+    nonisolated static func repackUnsigned(ipaURL: URL, options o: SignOptions, onLog: (@Sendable (String) -> Void)? = nil) throws -> URL {
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appendingPathComponent("repack-\(UUID().uuidString)", isDirectory: true)
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        SignGuard.registerWork(work)
+        defer { SignGuard.unregisterWork(work); try? fm.removeItem(at: work) }
+
+        onLog?(">>> Extracting IPA…")
+        try fm.unzipItem(at: ipaURL, to: work)
+        let payload = work.appendingPathComponent("Payload", isDirectory: true)
+        guard let appURL = try fm.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
+            .first(where: { $0.pathExtension == "app" }) else {
+            throw ZsignError.appBundleNotFound(inIPA: ipaURL.lastPathComponent)
+        }
+
+        try applyPreSign(appURL: appURL, options: o, onLog: onLog)
+
+        // The identity edits zsign normally applies while signing.
+        let infoURL = appURL.appendingPathComponent("Info.plist")
+        if let info = NSMutableDictionary(contentsOf: infoURL) {
+            if let n = o.name, !n.isEmpty { info["CFBundleDisplayName"] = n; info["CFBundleName"] = n }
+            if let b = o.bundleID, !b.isEmpty { info["CFBundleIdentifier"] = b }
+            if let v = o.version, !v.isEmpty { info["CFBundleShortVersionString"] = v; info["CFBundleVersion"] = v }
+            try info.write(to: infoURL)
+        }
+
+        // Old signatures and profiles no longer match the edited app.
+        if let walker = fm.enumerator(at: appURL, includingPropertiesForKeys: nil) {
+            var stale: [URL] = []
+            for case let u as URL in walker where u.lastPathComponent == "_CodeSignature" || u.lastPathComponent == "embedded.mobileprovision" { stale.append(u) }
+            for u in stale { try? fm.removeItem(at: u) }
+        }
+
+        let infoNow = NSDictionary(contentsOf: infoURL)
+        let name = (infoNow?["CFBundleDisplayName"] as? String) ?? (infoNow?["CFBundleName"] as? String) ?? appURL.deletingPathExtension().lastPathComponent
+        let safe = String(name.unicodeScalars.map { CharacterSet.alphanumerics.contains($0) || $0 == "-" ? Character($0) : "_" })
+        let out = fm.temporaryDirectory.appendingPathComponent("\(safe)-repackaged-\(UUID().uuidString.prefix(6))").appendingPathExtension("ipa")
+        try? fm.removeItem(at: out)
+        onLog?(">>> Packaging IPA…")
+        do { try fm.zipItem(at: payload, to: out, shouldKeepParent: true, compressionMethod: .deflate) }
+        catch { try? fm.removeItem(at: out); throw error }
+        onLog?(">>> Repackaged (unsigned).")
+        return out
+    }
+
     // MARK: - Turbo local bulk signing
 
     /// Returns a conservative worker count that leaves room for zsign's own
