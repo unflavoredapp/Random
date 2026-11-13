@@ -335,6 +335,15 @@ struct SigningSheet: View {
         .padding(.horizontal, 12)
         .frame(maxWidth: .infinity)
         .background(Color.black)
+        // Delvek's badge leaking in from the right edge: transparent background, still image, tilted up.
+        .overlay(alignment: .topTrailing) {
+            Image("DelvekBadge").resizable().scaledToFit().frame(width: 54, height: 54)
+                .mask(LinearGradient(colors: [.black.opacity(0.3), .black], startPoint: .leading, endPoint: .trailing))   // fades into the black on the inner side
+                .opacity(0.75)
+                .rotationEffect(.degrees(-32))
+                .offset(x: 12, y: 14)
+                .allowsHitTesting(false)
+        }
     }
 
     // MARK: Bundle info (AirShare: Entitlements · Info.plist)
