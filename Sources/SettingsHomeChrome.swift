@@ -9,67 +9,60 @@ struct SettingsAppleIDCard: View {
     @State private var password = ""
     @State private var twoFACode = ""
     @State private var showPassword = false
-    @State private var showManage = false
+    @State private var showManageAccounts = false
+    @State private var showPortalManage = false
     @State private var showAddAccount = false
     @State private var accountPendingDelete: AppleIDAccount?
 
+    private var isPreparing: Bool {
+        store.authPhase == .preparing || store.authPhase == .authenticating || store.authPhase == .verifying
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("Store Access")
-                    .font(.title3.weight(.bold))
-                    .foregroundStyle(.white)
-                Spacer(minLength: 8)
-                if store.hasAnyAccount {
-                    Button("Manage") { showManage = true }
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(TetherlessPalette.accent)
-                        .buttonStyle(.plain)
-                }
-            }
+        GlassCard(corner: 24) {
+            VStack(alignment: .leading, spacing: 14) {
+                header
 
-            Text("Add multiple Apple IDs for free App Store installs and decrypt. Switch accounts per download. For decrypt, each Apple ID must also have signed in to this iPhone’s App Store at least once so iOS has its decryption keys.")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.55))
-                .fixedSize(horizontal: false, vertical: true)
-
-            Button { AppStoreDecryptGuide.openAppStore() } label: {
-                Label("Open App Store to sign in once", systemImage: "bag.fill")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(TetherlessPalette.accent)
-            }
-            .buttonStyle(.plain)
-
-            if store.accounts.isEmpty {
-                emptySignIn
-            } else {
-                accountList
-                Button {
-                    showAddAccount = true
-                } label: {
-                    Label("Add Apple ID", systemImage: "plus.circle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(TetherlessPalette.accent)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 2)
-            }
-
-            if let err = store.lastError, !err.isEmpty {
-                Text(err)
-                    .font(.footnote)
-                    .foregroundStyle(.red.opacity(0.9))
+                Text("Lets Decrypt download apps from the App Store. Signing uses your certificate — no Apple ID needed.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.7))
                     .fixedSize(horizontal: false, vertical: true)
+
+                if store.hasAnyAccount {
+                    signedInBody
+                } else if store.authPhase == .awaitingTwoFactor {
+                    twoFactorBlock
+                } else {
+                    emptySignIn
+                }
+
+                if let err = store.lastError, !err.isEmpty {
+                    Text(err)
+                        .font(.footnote)
+                        .foregroundStyle(.red.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
-        .padding(18)
-        .tetherlessGlassCard(cornerRadius: 22)
-        .sheet(isPresented: $showManage) {
+        .sheet(isPresented: $showManageAccounts) {
+            NavigationStack {
+                manageStoreAccountsSheet
+                    .navigationTitle("Store Accounts")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showManageAccounts = false }
+                        }
+                    }
+            }
+            .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showPortalManage) {
             NavigationStack {
                 AppleIDManageView()
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { showManage = false }
+                            Button("Done") { showPortalManage = false }
                         }
                     }
             }
@@ -83,7 +76,11 @@ struct SettingsAppleIDCard: View {
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") { showAddAccount = false; store.cancelTwoFactor() }
+                            Button("Cancel") {
+                                showAddAccount = false
+                                store.cancelTwoFactor()
+                                email = ""; password = ""; twoFACode = ""
+                            }
                         }
                     }
             }
@@ -109,11 +106,100 @@ struct SettingsAppleIDCard: View {
         }
     }
 
+    private var header: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "bag.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(TetherlessPalette.accent)
+                .frame(width: 28)
+            Text("Store Access")
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.white)
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var signedInBody: some View {
+        if isPreparing && !store.storeReady {
+            HStack(spacing: 10) {
+                ProgressView().tint(TetherlessPalette.accent)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Preparing…")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(store.statusMessage ?? "Starting things back up…")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+        } else {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.title3)
+                    .foregroundStyle(Color.green.opacity(0.95))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Signed in for Store access")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(store.email)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+
+            Button { showManageAccounts = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "person.2.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Manage Store Accounts")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text("Add another Apple ID for downloads, or switch accounts.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+
+            Button { AppStoreDecryptGuide.openAppStore() } label: {
+                Label("Open App Store to sign in once", systemImage: "bag.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
+            .buttonStyle(.plain)
+
+            secondaryButton("Sign Out", busy: false) {
+                store.signOutActive()
+                email = ""; password = ""; twoFACode = ""
+            }
+        }
+    }
+
     private var emptySignIn: some View {
         VStack(alignment: .leading, spacing: 12) {
+            Button { AppStoreDecryptGuide.openAppStore() } label: {
+                Label("Open App Store to sign in once", systemImage: "bag.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
+            .buttonStyle(.plain)
+
             glassField("Apple ID", text: $email, secure: false)
             HStack(spacing: 10) {
-                glassField(showPassword ? "Password" : "Password", text: $password, secure: !showPassword)
+                glassField("Password", text: $password, secure: !showPassword)
                 Button {
                     showPassword.toggle()
                 } label: {
@@ -124,16 +210,52 @@ struct SettingsAppleIDCard: View {
                 }
                 .buttonStyle(.plain)
             }
-            if store.authPhase == .awaitingTwoFactor {
-                twoFactorBlock
-            } else {
-                primaryButton(store.isBusy ? "Signing In…" : "Sign In") {
-                    Task { await store.signIn(email: email, password: password) }
-                }
-                .disabled(store.isBusy || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
-                .opacity(store.isBusy ? 0.7 : 1)
+            primaryButton(store.isBusy ? "Signing In…" : "Sign In") {
+                Task { await store.signIn(email: email, password: password) }
             }
+            .disabled(store.isBusy || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
+            .opacity(store.isBusy ? 0.7 : 1)
         }
+    }
+
+    private var manageStoreAccountsSheet: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Switch the active Apple ID used for Decrypt downloads, add another account, or remove one from this device.")
+                    .font(.footnote)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                accountList
+
+                Button {
+                    showManageAccounts = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showAddAccount = true
+                    }
+                } label: {
+                    Label("Add Apple ID", systemImage: "plus.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    showManageAccounts = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showPortalManage = true
+                    }
+                } label: {
+                    Label("Developer Portal for active ID", systemImage: "hammer.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(20)
+            .padding(.bottom, 28)
+        }
+        .background(Color.black.ignoresSafeArea())
     }
 
     private var addAccountForm: some View {
@@ -246,9 +368,12 @@ struct SettingsAppleIDCard: View {
 
                     Menu {
                         Button("Set Active") { store.selectAccount(id: account.id) }
-                        Button("Manage") {
+                        Button("Developer Portal") {
                             store.selectAccount(id: account.id)
-                            showManage = true
+                            showManageAccounts = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                showPortalManage = true
+                            }
                         }
                         Button("Remove", role: .destructive) { accountPendingDelete = account }
                     } label: {
@@ -313,6 +438,7 @@ struct SettingsAppleIDCard: View {
         .padding(.vertical, 12)
         .background(.white.opacity(0.10), in: Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+        .buttonStyle(.plain)
     }
 }
 
