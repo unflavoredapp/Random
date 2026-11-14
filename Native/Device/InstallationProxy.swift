@@ -245,10 +245,20 @@ public struct DeviceApp: Identifiable, Hashable, Codable, Sendable {
     public let isAppStore: Bool
     /// App + data size on disk, when the device reported it.
     public let sizeBytes: Int64?
+    /// On-device .app / bundle container path from installd (`Path`), when available.
+    public let installPath: String?
     public var id: String { bundleID }
-    public init(bundleID: String, name: String, version: String, isAppStore: Bool = false, sizeBytes: Int64? = nil) {
+    public init(
+        bundleID: String,
+        name: String,
+        version: String,
+        isAppStore: Bool = false,
+        sizeBytes: Int64? = nil,
+        installPath: String? = nil
+    ) {
         self.bundleID = bundleID; self.name = name; self.version = version
         self.isAppStore = isAppStore; self.sizeBytes = sizeBytes
+        self.installPath = installPath
     }
 }
 
@@ -333,7 +343,15 @@ extension InstallationProxy {
         let version = string(info, "CFBundleShortVersionString") ?? string(info, "CFBundleVersion") ?? ""
         let fixed = uint(info, "StaticDiskUsage"), dynamic = uint(info, "DynamicDiskUsage")
         let size: Int64? = (fixed == nil && dynamic == nil) ? nil : (fixed ?? 0) + (dynamic ?? 0)
-        return DeviceApp(bundleID: bundleID, name: name, version: version, isAppStore: store, sizeBytes: size)
+        let path = string(info, "Path") ?? string(info, "BundlePath") ?? string(info, "Container")
+        return DeviceApp(
+            bundleID: bundleID,
+            name: name,
+            version: version,
+            isAppStore: store,
+            sizeBytes: size,
+            installPath: path
+        )
     }
 
     /// Apps the user installed (never system apps), with their size on disk, sorted by name.
@@ -357,7 +375,8 @@ extension InstallationProxy {
         plist_dict_set_item(options, "ApplicationType", plist_new_string("User"))
         let attributes = plist_new_array()
         for key in ["CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName", "CFBundleShortVersionString", "CFBundleVersion",
-                    "ApplicationType", "SignerIdentity", "ApplicationDSID", "StaticDiskUsage", "DynamicDiskUsage"] {
+                    "ApplicationType", "SignerIdentity", "ApplicationDSID", "StaticDiskUsage", "DynamicDiskUsage",
+                    "Path", "BundlePath", "Container"] {
             plist_array_append_item(attributes, plist_new_string(key))
         }
         plist_dict_set_item(options, "ReturnAttributes", attributes)

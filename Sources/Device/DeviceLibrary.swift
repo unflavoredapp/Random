@@ -53,26 +53,39 @@ final class DeviceLibrary: ObservableObject {
     }
 
     func refresh() {
-        guard !loading, !NativeBatchUninstaller.shared.isRunning, !NativeInstaller.shared.isActive else { return }
+        task = Task { await refreshAwaiting() }
+    }
+
+    /// Awaitable refresh used by Decrypt install-wait (needs installd `Path` when LS is sandboxed).
+    @discardableResult
+    func refreshAwaiting() async -> Bool {
+        guard !NativeBatchUninstaller.shared.isRunning, !NativeInstaller.shared.isActive else { return false }
+        if loading {
+            // Wait briefly for an in-flight refresh instead of no-oping.
+            for _ in 0..<50 {
+                if !loading { break }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            return !apps.isEmpty
+        }
         loading = true
         error = nil
-        task = Task {
-            let manager = DeviceInstallationManager.shared
-            do {
-                let list = try await manager.installedApps(mode: manager.mode)
-                    .filter { $0.bundleID != Bundle.main.bundleIdentifier }
-                apps = list
-                lastLoaded = Date()
-                persist()
-                ExpiryRadar.scheduleReminders(for: list)
-                loading = false
-                await loadMissingIcons(for: list)
-            } catch is CancellationError {
-                loading = false
-            } catch {
-                self.error = error.localizedDescription
-                loading = false
-            }
+        defer { loading = false }
+        let manager = DeviceInstallationManager.shared
+        do {
+            let list = try await manager.installedApps(mode: manager.mode)
+                .filter { $0.bundleID != Bundle.main.bundleIdentifier }
+            apps = list
+            lastLoaded = Date()
+            persist()
+            ExpiryRadar.scheduleReminders(for: list)
+            Task { await loadMissingIcons(for: list) }
+            return true
+        } catch is CancellationError {
+            return false
+        } catch {
+            self.error = error.localizedDescription
+            return false
         }
     }
 

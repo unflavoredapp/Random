@@ -5,6 +5,7 @@
 //  verifies cryptid=0 on every output binary, and refuses partial IPAs.
 //
 
+import Darwin
 import Foundation
 import ZIPFoundation
 
@@ -100,15 +101,59 @@ enum FairPlayDecrypt {
     // MARK: - Path resolution
 
     /// Resolve the on-disk .app path for an installed bundle (same device).
-    static func installedAppURL(bundleID: String) -> URL? {
+    /// `knownPath` is an installd `Path`/`BundlePath` from the pairing tunnel when LaunchServices is sandboxed.
+    static func installedAppURL(bundleID: String, knownPath: String? = nil) -> URL? {
         let id = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return nil }
 
+        if let known = knownPath?.trimmingCharacters(in: .whitespacesAndNewlines), !known.isEmpty,
+           let url = existingAppDirectory(URL(fileURLWithPath: known)) {
+            return url
+        }
         if let url = lsWorkspaceURL(bundleID: id) { return url }
         if let url = lsRecordURL(bundleID: id) { return url }
         if let url = lsProxyURL(bundleID: id) { return url }
+        if let url = mobileInstallationLookupURL(bundleID: id) { return url }
         if let url = pathFallbackURL(bundleID: id) { return url }
         return nil
+    }
+
+    /// `MobileInstallationLookup` SPI — often returns Path when LSApplicationWorkspace is blocked.
+    private static func mobileInstallationLookupURL(bundleID: String) -> URL? {
+        guard let miClass = NSClassFromString("MobileInstallationLookup") as? NSObject.Type
+                ?? NSClassFromString("MIClientConnection") as? NSObject.Type else {
+            // Fall through to function-pointer style lookup used on older iOS.
+            return mobileInstallationLookupCAPI(bundleID: bundleID)
+        }
+        _ = miClass
+        return mobileInstallationLookupCAPI(bundleID: bundleID)
+    }
+
+    private static func mobileInstallationLookupCAPI(bundleID: String) -> URL? {
+        // dlsym MobileInstallationLookup — returns CFDictionary keyed by bundle id → attributes.
+        guard let handle = dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_LAZY)
+                ?? dlopen("/System/Library/PrivateFrameworks/MobileInstallation.framework/MobileInstallation", RTLD_NOW) else {
+            return nil
+        }
+        defer { dlclose(handle) }
+        typealias LookupFn = @convention(c) (CFDictionary?, CFDictionary?) -> Unmanaged<CFDictionary>?
+        guard let sym = dlsym(handle, "MobileInstallationLookup") else { return nil }
+        let lookup = unsafeBitCast(sym, to: LookupFn.self)
+        let request: [String: Any] = [
+            "ApplicationType": "Any",
+            "ReturnAttributes": ["Path", "CFBundleIdentifier", "BundlePath", "Container", "CFBundleExecutable"]
+        ]
+        guard let raw = lookup(request as CFDictionary, nil)?.takeUnretainedValue() as? [String: Any] else {
+            return nil
+        }
+        let entry = (raw[bundleID] as? [String: Any])
+            ?? ((raw["LookupResult"] as? [String: Any])?[bundleID] as? [String: Any])
+        guard let entry else { return nil }
+        let path = (entry["Path"] as? String)
+            ?? (entry["BundlePath"] as? String)
+            ?? (entry["Container"] as? String)
+        guard let path, !path.isEmpty else { return nil }
+        return existingAppDirectory(URL(fileURLWithPath: path))
     }
 
     private static func lsWorkspaceURL(bundleID: String) -> URL? {
@@ -203,9 +248,10 @@ enum FairPlayDecrypt {
     static func decryptInstalledApp(
         bundleID: String,
         displayName: String,
+        knownPath: String? = nil,
         progress: ((String) -> Void)? = nil
     ) throws -> URL {
-        guard let source = installedAppURL(bundleID: bundleID) else {
+        guard let source = installedAppURL(bundleID: bundleID, knownPath: knownPath) else {
             throw FairPlayDecryptError.noInstalledApp(
                 "Couldn't find \(bundleID) on this iPhone. Install it from the App Store, then try again."
             )
