@@ -44,10 +44,10 @@ final class DeviceDecryptService: ObservableObject {
             } catch AppStoreClientError.tokenExpired {
                 // Fall through to soft refresh below.
             } catch {
-                // Non-expiry failures (204/403): still try a soft refresh once, then surface.
-                AppleIDStore.shared.invalidateStorefrontSession()
+                // Non-expiry (204/403): retry once with the *same* session / soft ensure.
+                // Do NOT invalidate+forceRefresh here — that re-triggers a 2FA wall.
                 do {
-                    let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
+                    let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: false)
                     return try await AppStoreClient.shared.purchaseHistory(account: account)
                 } catch {
                     throw error
@@ -60,6 +60,7 @@ final class DeviceDecryptService: ObservableObject {
             return try await AppStoreClient.shared.purchaseHistory(account: account)
         } catch AppStoreClientError.tokenExpired {
             AppleIDStore.shared.invalidateStorefrontSession()
+            // forceRefresh only after real expiry — fall back to prior token if 2FA blocks.
             let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
             return try await AppStoreClient.shared.purchaseHistory(account: account)
         }
@@ -483,8 +484,9 @@ final class DeviceDecryptService: ObservableObject {
                 "This Apple ID doesn’t own a license for \(displayName). Buy or redeem it once, then decrypt again."
             )
         } catch AppStoreClientError.needsTwoFactor {
+            AppleIDStore.shared.noteStoreNeedsVerification()
             throw DecryptError(
-                "App Store needs a verification code — open Settings › Store Access, enter the 6-digit code (you stay signed in), then retry."
+                "App Store needs a one-time verification code. Enter the 6-digit code below (or Settings › Store Access → Text me a code), then tap Submit code — you stay signed in."
             )
         } catch AppStoreClientError.tokenExpired {
             throw DecryptError(

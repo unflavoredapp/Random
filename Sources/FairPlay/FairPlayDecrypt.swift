@@ -876,18 +876,10 @@ enum FairPlayDecrypt {
         // hangs forever on stock iOS (UI stuck on “Watch / App Clips…”). Skip Watch always.
         progress?("Skipping Watch (not decryptable on iPhone)…")
 
-        progress?("App Clips…")
-        let clips = root.appendingPathComponent("AppClips", isDirectory: true)
-        // Bound directory I/O — same hang class as Watch on some installs.
-        if let items = withTimeout(seconds: 6, work: {
-            try? fm.contentsOfDirectory(at: clips, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
-        }) ?? nil {
-            for item in items where item.pathExtension.lowercased() == "app" {
-                consider(bundleExecutableURL(in: item))
-                // Nested frameworks under clips — keep shallow; don't recurse forever.
-                collectFrameworks(in: item)
-            }
-        }
+        // App Clips are the same hang class: directory listing can return, then nested
+        // Frameworks / fp_is_macho on the clip binary blocks forever on stock installs
+        // (UI stuck on “App Clips…”). Soft role only — skip like Watch.
+        progress?("Skipping App Clips (optional · avoids install-path hang)…")
 
         if out.isEmpty {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(root.lastPathComponent).")
