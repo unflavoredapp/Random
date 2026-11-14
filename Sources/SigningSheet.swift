@@ -530,6 +530,9 @@ struct SigningSheet: View {
             if m == "appleid" { appleIDs.activatePreferredSigningCertificate() }
         }
         .onAppear {
+            if appleIDs.activeAccount != nil, appleIDs.preferredSigningCertificateID() != nil {
+                FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
+            }
             CertificateStore.shared.activatePreferredCertificate(forSigningMethod: method)
             if method == "appleid" { appleIDs.activatePreferredSigningCertificate() }
         }
@@ -1355,9 +1358,15 @@ struct SigningSheet: View {
                 return
             }
             if appleIDs.preferredSigningCertificateID() == nil {
-                error = "Create or link a development certificate in Manage Apple ID (real Developer Portal), or import one in Certificates."
-                return
+                do {
+                    log.append(">>> Creating free Apple ID development certificate…")
+                    _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
+                } catch {
+                    error = "Couldn't prepare a free Apple ID certificate: \(error.localizedDescription). Open Settings › Store Access › Manage Store Accounts › Developer Portal and tap Create."
+                    return
+                }
             }
+            appleIDs.activatePreferredSigningCertificate()
         }
         guard let material = try? certs.activeMaterial() else { error = "No active certificate."; return }
         if canAccessDeveloperTools, AVX512AirShareBridge.shared.enabled {

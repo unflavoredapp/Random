@@ -27,6 +27,41 @@ final class DeviceDecryptService: ObservableObject {
         DeviceLibrary.shared.apps.filter(\.isAppStore)
     }
 
+    /// Public iTunes lookup: current version + minimum OS (for the Versions sheet when server history is unavailable).
+    func versionList(for app: DecryptApp) async -> (versions: [DecryptVersion], minOS: String?)? {
+        var adam: Int?
+        if let r = app.url.range(of: #"/id(\d+)"#, options: .regularExpression) {
+            adam = Int(String(app.url[r]).filter(\.isNumber))
+        }
+        let bundle = app.bundle.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard adam != nil || !bundle.isEmpty else {
+            if !app.version.isEmpty {
+                return ([DecryptVersion(v: app.version, current: true, minOS: nil)], nil)
+            }
+            return nil
+        }
+        guard var comps = URLComponents(string: "https://itunes.apple.com/lookup") else { return nil }
+        if let adam {
+            comps.queryItems = [URLQueryItem(name: "id", value: "\(adam)"), URLQueryItem(name: "limit", value: "1")]
+        } else {
+            comps.queryItems = [URLQueryItem(name: "bundleId", value: bundle), URLQueryItem(name: "limit", value: "1")]
+        }
+        guard let url = comps.url else { return nil }
+        guard let (data, resp) = try? await URLSession.shared.data(from: url),
+              (resp as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let row = (json["results"] as? [[String: Any]])?.first else {
+            if !app.version.isEmpty {
+                return ([DecryptVersion(v: app.version, current: true, minOS: nil)], nil)
+            }
+            return nil
+        }
+        let ver = (row["version"] as? String) ?? app.version
+        let minOS = (row["minimumOsVersion"] as? String)
+        guard !ver.isEmpty else { return nil }
+        return ([DecryptVersion(v: ver, current: true, minOS: minOS)], minOS)
+    }
+
     /// Resolve an App Store URL for a bundle ID via Apple’s public lookup (on-device, no bot).
     func storeURL(forBundleID bundleID: String) async throws -> String {
         let id = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)

@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 // MARK: - Models
@@ -23,6 +24,8 @@ struct DecryptApp: Identifiable, Hashable {
 struct DecryptVersion: Identifiable, Hashable {
     let v: String
     let current: Bool
+    /// App Store minimum iOS for this build, when known (e.g. "15.0").
+    var minOS: String? = nil
     var id: String { v }
 }
 
@@ -170,18 +173,40 @@ final class DecryptClient: ObservableObject {
         guard let app = selected else { return }
         loadingVersions = true; error = nil
         defer { loadingVersions = false }
+
+        // Prefer server version history (same list UI as Telegram / Banana Kong style).
         do {
             let o = try await send(makeRequest("api/decrypt/versions", body: ["url": app.url, "page": page], timeout: 150))
             let list = (o["versions"] as? [[String: Any]]) ?? []
-            versions = list.compactMap { i in
-                guard let v = i["v"] as? String else { return nil }
-                return DecryptVersion(v: v, current: (i["current"] as? Bool) ?? false)
+            let mapped = list.compactMap { i -> DecryptVersion? in
+                guard let v = i["v"] as? String, !v.isEmpty else { return nil }
+                let minOS = (i["min_ios"] as? String) ?? (i["minimumOsVersion"] as? String)
+                return DecryptVersion(v: v, current: (i["current"] as? Bool) ?? false, minOS: minOS)
             }
-            versionPage = Int(intValue(o["page"])).clamped(1, 500)
-            versionPages = max(1, Int(intValue(o["pages"])))
-            versionTotal = Int(intValue(o["total"]))
+            if !mapped.isEmpty {
+                versions = mapped
+                versionPage = Int(intValue(o["page"])).clamped(1, 500)
+                versionPages = max(1, Int(intValue(o["pages"])))
+                versionTotal = Int(intValue(o["total"]))
+                return
+            }
         } catch {
-            self.error = error.localizedDescription
+            // Fall through to on-device iTunes current-version listing.
+            if DecryptChannel.current == .telegram {
+                self.error = error.localizedDescription
+                return
+            }
+        }
+
+        // This Device: at least show the live App Store build + min iOS from public lookup.
+        if let local = await DeviceDecryptService.shared.versionList(for: app) {
+            versions = local.versions
+            versionPage = 1
+            versionPages = 1
+            versionTotal = local.versions.count
+            error = nil
+        } else if versions.isEmpty {
+            error = "Couldn't load version history. Try again, or decrypt the latest build from search."
         }
     }
 
@@ -575,13 +600,13 @@ struct DecryptView: View {
 
                 if c.phase == .done, let file = c.finished {
                     VStack(spacing: 10) {
-                        Text("Confirm the install — it'll open automatically once it's ready.")
+                        Text("Signs with your free Apple ID 7-day certificate and installs on this iPhone.")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.7))
                         Button {
-                            SignQueue.shared.enqueue(file)
+                            SignQueue.shared.enqueueForAppleIDInstall(file)
                         } label: {
-                            Text("Done")
+                            Text("Sign & Install")
                                 .font(.title3.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
@@ -666,25 +691,52 @@ private struct DecryptVersionsSheet: View {
     @ObservedObject private var c = DecryptClient.shared
     @Environment(\.dismiss) private var dismiss
 
+    private var deviceIOS: String {
+        UIDevice.current.systemVersion
+    }
+
     var body: some View {
         NavigationStack {
             ZStack {
                 AppBackground().ignoresSafeArea()
                 List {
+                    Section {
+                        Text("FairPlay decrypt runs on this iPhone (iOS \(deviceIOS)). Pick a build whose min iOS is ≤ \(deviceIOS). This Device silent download uses the latest owned build when history isn’t available; Telegram can fetch older archives.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .listRowBackground(Color.clear)
+                    }
+
                     if c.loadingVersions && c.versions.isEmpty {
                         HStack {
                             ProgressView().tint(TetherlessPalette.accent)
                             Text("Loading versions…").foregroundStyle(.white.opacity(0.7))
                         }
                         .listRowBackground(Color.clear)
+                    } else if let err = c.error, c.versions.isEmpty {
+                        Text(err)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                            .listRowBackground(Color.clear)
                     } else {
                         ForEach(c.versions) { v in
                             Button {
-                                DeviceDecryptService.shared.decryptFromSearch(app, version: v.v)
+                                if DecryptChannel.current == .telegram {
+                                    c.start(url: app.url, version: v.v, display: app.name)
+                                } else {
+                                    DeviceDecryptService.shared.decryptFromSearch(app, version: v.v)
+                                }
                                 dismiss()
                             } label: {
                                 HStack {
-                                    Text(v.v).foregroundStyle(.white)
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(v.v).foregroundStyle(.white)
+                                        if let min = v.minOS, !min.isEmpty {
+                                            Text("iOS \(min)+")
+                                                .font(.caption2)
+                                                .foregroundStyle(.white.opacity(0.45))
+                                        }
+                                    }
                                     Spacer()
                                     if v.current {
                                         Text("Latest").font(.subheadline).foregroundStyle(.white.opacity(0.45))
@@ -706,7 +758,10 @@ private struct DecryptVersionsSheet: View {
                 }
             }
         }
-        .task { await c.loadVersions(page: 1) }
+        .task {
+            c.select(app)
+            await c.loadVersions(page: 1)
+        }
     }
 }
 

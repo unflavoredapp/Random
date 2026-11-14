@@ -347,6 +347,22 @@ final class SignQueue: ObservableObject {
 
     func enqueue(_ url: URL, switchToSign: Bool = true) {
         pending = url
+        // Decrypt → Sign should use the free Apple ID 7-day cert when Store Access is signed in.
+        FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
         if switchToSign { requestedTab = 0 }
+    }
+
+    /// Enqueue a decrypted IPA and ensure a free Apple ID development certificate is ready.
+    func enqueueForAppleIDInstall(_ url: URL) {
+        pending = url
+        FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
+        requestedTab = 0
+        Task {
+            do {
+                _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
+            } catch {
+                // Signing sheet still opens; user can Create cert from Manage Apple ID if ensure failed.
+            }
+        }
     }
 }
