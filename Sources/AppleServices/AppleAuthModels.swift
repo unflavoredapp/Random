@@ -152,6 +152,9 @@ enum AppleAuthError: LocalizedError, Sendable {
             if c == -80043 || c == -80045 || c == 80043 || c == 80045 {
                 return "Apple couldn't verify this device right now (\(c)). Tap Sign In again — a fresh device identity will be provisioned."
             }
+            if c == 1100 || m.localizedCaseInsensitiveContains("session has expired") {
+                return "Developer Portal session expired — sign in again under Store Access, then Refresh."
+            }
             return "Developer Portal error \(c): \(m)"
         case .csrFailed(let m): return "CSR generation failed: \(m)"
         case .missingPendingAuth: return "Start Apple ID sign-in again."

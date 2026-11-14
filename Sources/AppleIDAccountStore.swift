@@ -442,6 +442,43 @@ final class AppleIDStore: ObservableObject {
         return try? JSONDecoder().decode(AppleAuthSession.self, from: data)
     }
 
+    /// Re-run GrandSlam with the saved password so Developer Portal tokens work again after error 1100.
+    @discardableResult
+    func refreshPortalSession() async throws -> AppleAuthSession {
+        guard let account = activeAccount else {
+            throw AppleAuthError.message("Sign in under Store Access first.")
+        }
+        guard let password = Keychain.getSecret(Self.passwordPrefix + account.id), !password.isEmpty else {
+            throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Store Access.")
+        }
+        authPhase = .authenticating
+        lastError = nil
+        statusMessage = "Refreshing Developer Portal session…"
+        do {
+            let session = try await GSAAuthClient.shared.authenticate(email: account.email, password: password)
+            await finishRealSignIn(session: session, password: password)
+            return session
+        } catch AppleAuthError.needsTwoFactor {
+            withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+            refreshTwoFactorChannelFromGSA()
+            statusMessage = twoFactorPromptMessage()
+            throw AppleAuthError.needsTwoFactor
+        } catch {
+            authPhase = .idle
+            lastError = error.localizedDescription
+            throw error
+        }
+    }
+
+    /// True when a portal API failure means the GrandSlam cookie/session must be renewed.
+    static func isPortalSessionExpired(_ error: Error) -> Bool {
+        if let e = error as? AppleAuthError, case .portal(let code, let msg) = e {
+            return code == 1100 || msg.localizedCaseInsensitiveContains("session has expired")
+        }
+        let text = error.localizedDescription
+        return text.contains("1100") || text.localizedCaseInsensitiveContains("session has expired")
+    }
+
     /// iTunes Store session for silent purchase/download.
     func storefrontSession() -> StorefrontSession? {
         guard let data = activeAccount?.storeSessionJSON else { return nil }
