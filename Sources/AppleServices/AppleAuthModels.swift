@@ -17,6 +17,9 @@ struct AppleAuthSession: Codable, Equatable, Sendable {
     var teamName: String?
     var isFreeTeam: Bool
     var xcodeVersion: String
+    /// Short-lived GrandSlam PET (`com.apple.gs.idms.pet`) — exchange as MZFinance `password`
+    /// to mint `passwordToken` after HSA2 (not durable; omit from long-term portal JSON when empty).
+    var pet: String?
 
     var isExpired: Bool {
         guard let expiresAt else { return false }
@@ -34,7 +37,8 @@ struct AppleAuthSession: Codable, Equatable, Sendable {
         teamID: String? = nil,
         teamName: String? = nil,
         isFreeTeam: Bool = true,
-        xcodeVersion: String = "14.0"
+        xcodeVersion: String = "14.0",
+        pet: String? = nil
     ) {
         self.dsid = dsid
         self.authToken = authToken
@@ -47,6 +51,7 @@ struct AppleAuthSession: Codable, Equatable, Sendable {
         self.teamName = teamName
         self.isFreeTeam = isFreeTeam
         self.xcodeVersion = xcodeVersion
+        self.pet = pet
     }
 }
 
