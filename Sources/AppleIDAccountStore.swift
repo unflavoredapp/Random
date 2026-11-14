@@ -80,6 +80,10 @@ final class AppleIDStore: ObservableObject {
     @Published var statusMessage: String?
     @Published var presentedDisplayCode: String?
     @Published private(set) var storeReady = false
+    /// True when the active 2FA challenge is SMS (text to trusted phone).
+    @Published private(set) var twoFactorUsesSMS = false
+    /// Obfuscated phone hint for SMS 2FA UI (e.g. ••••42).
+    @Published private(set) var twoFactorPhoneHint: String?
     /// Last 2FA code — reused once for iTunes Store authenticate after GSA succeeds.
     private var pendingStoreAuthCode: String?
 
@@ -172,12 +176,9 @@ final class AppleIDStore: ObservableObject {
             let session = try await GSAAuthClient.shared.authenticate(email: e, password: p)
             await finishRealSignIn(session: session, password: p)
         } catch AppleAuthError.needsTwoFactor {
+            refreshTwoFactorChannelFromGSA()
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
-            // Apple often already pushed the code (hsc 409). Asking /trusteddevice again caused
-            // HTTP 500 "Could not connect to iCloud" — just collect the code on screen.
-            statusMessage = GSAAuthClient.shared.twoFactorCodeAlreadySent
-                ? "Apple already sent a code to your trusted devices — enter it below."
-                : "Enter the 6-digit code from your trusted Apple device."
+            statusMessage = twoFactorPromptMessage()
             lastError = nil
         } catch {
             authPhase = .idle
@@ -197,7 +198,7 @@ final class AppleIDStore: ObservableObject {
     func submitTwoFactor(code: String) async {
         let digits = code.filter(\.isNumber)
         guard digits.count == 6 else {
-            lastError = "Enter the 6-digit code from your Apple device."
+            lastError = "Enter the 6-digit verification code."
             return
         }
         lastError = nil
@@ -213,6 +214,51 @@ final class AppleIDStore: ObservableObject {
         }
     }
 
+    /// Texts a code to the Apple ID’s trusted phone (SMS). Prefer this when no other Apple device is nearby.
+    func requestSMSCode() async {
+        lastError = nil
+        authPhase = .verifying
+        do {
+            let hint = try await GSAAuthClient.shared.requestSMSCode()
+            refreshTwoFactorChannelFromGSA()
+            authPhase = .awaitingTwoFactor
+            if hint.isEmpty {
+                statusMessage = "A text message with a code was sent to your trusted phone number."
+            } else {
+                statusMessage = "A text message with a code was sent to \(hint)."
+            }
+        } catch {
+            refreshTwoFactorChannelFromGSA()
+            authPhase = .awaitingTwoFactor
+            lastError = error.localizedDescription
+            statusMessage = twoFactorPromptMessage()
+        }
+    }
+
+    var isSMSTwoFactor: Bool { twoFactorUsesSMS }
+
+    private func refreshTwoFactorChannelFromGSA() {
+        let gsa = GSAAuthClient.shared
+        if case .sms = gsa.twoFactorChannel {
+            twoFactorUsesSMS = true
+        } else {
+            twoFactorUsesSMS = false
+        }
+        twoFactorPhoneHint = gsa.twoFactorPhoneHint
+    }
+
+    private func twoFactorPromptMessage() -> String {
+        if twoFactorUsesSMS {
+            if let hint = twoFactorPhoneHint, !hint.isEmpty {
+                return "Enter the 6-digit code texted to \(hint)."
+            }
+            return "Enter the 6-digit code texted to your phone."
+        }
+        return GSAAuthClient.shared.twoFactorCodeAlreadySent
+            ? "Apple already sent a code to your trusted devices — enter it below. Or tap Text me a code."
+            : "Enter the 6-digit code from a trusted Apple device, or tap Text me a code."
+    }
+
     func submitVerificationCode() {
         Task { await submitTwoFactor(code: verificationCode) }
     }
@@ -223,6 +269,9 @@ final class AppleIDStore: ObservableObject {
         pendingStoreAuthCode = nil
         authPhase = accounts.isEmpty ? .idle : .idle
         lastError = nil
+        statusMessage = nil
+        twoFactorUsesSMS = false
+        twoFactorPhoneHint = nil
         verificationCode = ""
         if accounts.isEmpty {
             draftEmail = ""
@@ -280,6 +329,8 @@ final class AppleIDStore: ObservableObject {
         statusMessage = nil
         lastError = nil
         presentedDisplayCode = nil
+        twoFactorUsesSMS = false
+        twoFactorPhoneHint = nil
         authPhase = .idle
         UserDefaults.standard.set(false, forKey: Self.storeReadyKey)
         save()
@@ -290,7 +341,7 @@ final class AppleIDStore: ObservableObject {
     func presentTrustedDeviceCode() {
         // Real codes are pushed by Apple to trusted devices — nothing to display locally.
         presentedDisplayCode = nil
-        statusMessage = "Check your trusted Apple devices for the verification code."
+        statusMessage = twoFactorPromptMessage()
     }
 
     func dismissDisplayedCode() { presentedDisplayCode = nil }
@@ -501,6 +552,8 @@ final class AppleIDStore: ObservableObject {
         draftEmail = email
         draftPassword = ""
         verificationCode = ""
+        twoFactorUsesSMS = false
+        twoFactorPhoneHint = nil
         lastError = nil
 
         // Also establish iTunes Store passwordToken for silent purchase/download.

@@ -1,6 +1,6 @@
 //
 //  GSAAuthClient.swift
-//  Real Apple GrandSlam SRP authentication + trusted-device 2FA.
+//  Real Apple GrandSlam SRP authentication + trusted-device / SMS 2FA.
 //  Pattern from SideSign Authentication.swift — no simulated delays or fake codes.
 //
 
@@ -15,6 +15,8 @@ final class GSAAuthClient: ObservableObject {
     private let validateURL = URL(string: "https://gsa.apple.com/grandslam/GsService2/validate")!
     private let trustedDeviceURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice")!
     private let trustedDeviceSecurityCodeURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice/securitycode")!
+    private let phonePutURL = URL(string: "https://gsa.apple.com/auth/verify/phone/put?mode=sms")!
+    private let phoneSecurityCodeURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode?referrer=/auth/verify/phone/put")!
     private let authApp = "com.apple.gs.xcode.auth"
     /// SideInstaller / SideStore working Xcode version string for GSA + 2FA.
     private let xcodeVersion = "14.2 (14C18)"
@@ -40,6 +42,10 @@ final class GSAAuthClient: ObservableObject {
     private var pending2FA: TwoFactorPending?
     /// Apple already pushed a code (hsc 409 / pushedCode) — do not hit /trusteddevice again.
     private(set) var twoFactorCodeAlreadySent = false
+    /// Obfuscated phone shown after SMS request (e.g. ••••42).
+    private(set) var twoFactorPhoneHint: String?
+    /// Active 2FA channel for UI copy / resend.
+    private(set) var twoFactorChannel: TwoFactorPending = .trustedDevice
 
     private init() {}
 
@@ -53,6 +59,8 @@ final class GSAAuthClient: ObservableObject {
         pendingEmail = e
         pendingPassword = password
         twoFactorCodeAlreadySent = false
+        twoFactorPhoneHint = nil
+        twoFactorChannel = .trustedDevice
 
         do {
             return try await authenticateOnce(email: e, password: password, skipTwoFactorGate: false)
@@ -73,14 +81,32 @@ final class GSAAuthClient: ObservableObject {
         do {
             return try await runSRP(email: email, password: password, anisette: anisette, skipTwoFactorGate: skipTwoFactorGate)
         } catch AppleAuthError.needsTwoFactor {
+            // Prefer SMS to the trusted phone — many users don't have another Apple device nearby.
+            if await requestSMSCodeBestEffort(phoneID: "1") {
+                throw AppleAuthError.needsTwoFactor
+            }
             pending2FA = .trustedDevice
-            // AltSign #59: when Apple already pushed the code, requesting another kills it
-            // and /auth/verify/trusteddevice often returns HTTP 500 "Could not connect to iCloud".
+            twoFactorChannel = .trustedDevice
+            // AltSign #59: when Apple already pushed the code, requesting another kills it.
             if !twoFactorCodeAlreadySent {
                 await requestTrustedDeviceCodeBestEffort()
             }
             throw AppleAuthError.needsTwoFactor
         }
+    }
+
+    /// Explicitly text a code to the Apple ID’s trusted phone (UI “Text me a code”).
+    @discardableResult
+    func requestSMSCode(phoneID: String = "1") async throws -> String {
+        guard pendingAnisette != nil, pendingDSID != nil, pendingIDMS != nil else {
+            throw AppleAuthError.missingPendingAuth
+        }
+        let hint = try await sendSMSCodeRequest(phoneID: phoneID)
+        pending2FA = .sms(phoneID: hint.phoneID)
+        twoFactorChannel = .sms(phoneID: hint.phoneID)
+        twoFactorPhoneHint = hint.obfuscated.isEmpty ? nil : hint.obfuscated
+        twoFactorCodeAlreadySent = true
+        return twoFactorPhoneHint ?? hint.phoneID
     }
 
     private static func isTransientAnisetteRejection(_ code: Int) -> Bool {
@@ -92,12 +118,17 @@ final class GSAAuthClient: ObservableObject {
     func submitTwoFactor(code: String) async throws -> AppleAuthSession {
         let digits = code.filter(\.isNumber)
         guard digits.count == 6 else {
-            throw AppleAuthError.message("Enter the 6-digit code from a trusted device.")
+            throw AppleAuthError.message("Enter the 6-digit verification code.")
         }
-        guard let anisette = pendingAnisette, !pendingEmail.isEmpty, !pendingPassword.isEmpty else {
+        guard pendingAnisette != nil, !pendingEmail.isEmpty, !pendingPassword.isEmpty else {
             throw AppleAuthError.missingPendingAuth
         }
-        try await submitTrustedDeviceCode(digits)
+        switch pending2FA ?? twoFactorChannel {
+        case .sms(let phoneID):
+            try await submitPhoneCode(digits, phoneID: phoneID, mode: "sms")
+        case .trustedDevice:
+            try await submitTrustedDeviceCode(digits)
+        }
         do {
             let session = try await completeAfterTwoFactor()
             clearPending()
@@ -132,6 +163,211 @@ final class GSAAuthClient: ObservableObject {
         pendingIDMS = nil
         pending2FA = nil
         twoFactorCodeAlreadySent = false
+        twoFactorPhoneHint = nil
+        twoFactorChannel = .trustedDevice
+    }
+
+    private struct SMSRequestResult {
+        var phoneID: String
+        var obfuscated: String
+    }
+
+    private func requestSMSCodeBestEffort(phoneID: String) async -> Bool {
+        do {
+            _ = try await requestSMSCode(phoneID: phoneID)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// SideSign `sendPhone2FACodeRequest` — POST `/auth/verify/phone/put?mode=sms`.
+    private func sendSMSCodeRequest(phoneID: String) async throws -> SMSRequestResult {
+        guard let anisette = pendingAnisette, let dsid = pendingDSID, let idms = pendingIDMS else {
+            throw AppleAuthError.missingPendingAuth
+        }
+        let sanitized = phoneID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "1"
+            : phoneID.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var lastError: Error = AppleAuthError.network("SMS request failed.")
+        for macClient in [true, false] {
+            do {
+                var req = makeTwoFactorRequest(
+                    url: phonePutURL,
+                    dsid: dsid,
+                    idms: idms,
+                    anisette: anisette,
+                    preferMacClient: macClient
+                )
+                req.httpMethod = "POST"
+                req.httpShouldHandleCookies = false
+                req.httpBody = try PropertyListSerialization.data(fromPropertyList: [
+                    "serverInfo": [
+                        "mode": "sms",
+                        "phoneNumber.id": sanitized
+                    ]
+                ], format: .xml, options: 0)
+
+                let (data, resp) = try await session.data(for: req)
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+
+                if let alert = parseXMLUIAlert(from: data), status >= 400 {
+                    if status == 429 || alert.localizedCaseInsensitiveContains("too many") {
+                        throw AppleAuthError.tooManyAttempts(alert)
+                    }
+                    lastError = AppleAuthError.network(alert)
+                    if [403, 433, 500, 503].contains(status) { continue }
+                    throw lastError
+                }
+
+                let dict = parsePlist(data)
+                let ec = dict?["ec"] as? Int
+                    ?? ((dict?["Status"] as? [String: Any])?["ec"] as? Int)
+                    ?? 0
+                let em = (dict?["em"] as? String)
+                    ?? ((dict?["Status"] as? [String: Any])?["em"] as? String)
+                if ec == -21668 || ec == -20102 || ec == -22411 || status == 429 {
+                    throw AppleAuthError.tooManyAttempts(em ?? "Too many verification attempts.")
+                }
+                if ec != 0 {
+                    lastError = AppleAuthError.portal(ec, em ?? "Failed to text a verification code.")
+                    if [403, 433, 500, 503].contains(status) { continue }
+                    throw lastError
+                }
+                guard status == 200 || status == 201 || status == 204 else {
+                    lastError = AppleAuthError.network(
+                        em ?? "SMS request failed (HTTP \(status))."
+                    )
+                    if [403, 433, 500, 503].contains(status) { continue }
+                    throw lastError
+                }
+
+                let phoneDict = (dict?["phoneNumber"] as? [String: Any])
+                    ?? (dict?["phoneNumbers"] as? [[String: Any]])?.first
+                    ?? (dict?["trustedPhoneNumbers"] as? [[String: Any]])?.first
+                let xmlInfo = parseXMLUIServerInfo(from: data)
+                let resolvedID = {
+                    if let raw = phoneDict?["id"] {
+                        let s = "\(raw)".trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !s.isEmpty { return s }
+                    }
+                    if let xml = xmlInfo.phoneID, !xml.isEmpty { return xml }
+                    return sanitized
+                }()
+                let obfuscated = (phoneDict?["numberWithDialCode"] as? String)
+                    ?? (phoneDict?["obfuscatedNumber"] as? String)
+                    ?? (phoneDict?["lastTwoDigits"] as? String).map { "••\($0)" }
+                    ?? parseXMLUIObfuscatedNumber(from: data)
+                    ?? ""
+                return SMSRequestResult(phoneID: resolvedID, obfuscated: obfuscated)
+            } catch let e as AppleAuthError {
+                switch e {
+                case .tooManyAttempts(_), .missingPendingAuth:
+                    throw e
+                default:
+                    lastError = e
+                    continue
+                }
+            } catch {
+                lastError = error
+                continue
+            }
+        }
+        throw lastError
+    }
+
+    /// SideSign `validatePhone2FACode` — POST phone securitycode + PE token expected.
+    private func submitPhoneCode(_ code: String, phoneID: String, mode: String) async throws {
+        guard let anisette = pendingAnisette, let dsid = pendingDSID, let idms = pendingIDMS else {
+            throw AppleAuthError.missingPendingAuth
+        }
+
+        var lastError: Error = AppleAuthError.incorrectCode
+        for macClient in [true, false] {
+            var req = makeTwoFactorRequest(
+                url: phoneSecurityCodeURL,
+                dsid: dsid,
+                idms: idms,
+                anisette: anisette,
+                preferMacClient: macClient
+            )
+            req.httpMethod = "POST"
+            req.httpShouldHandleCookies = false
+            // SideSign uses dotted keys + nested serverInfo for phone verify.
+            req.httpBody = try PropertyListSerialization.data(fromPropertyList: [
+                "securityCode.code": code,
+                "serverInfo": [
+                    "mode": mode,
+                    "phoneNumber.id": phoneID
+                ]
+            ], format: .xml, options: 0)
+
+            let (data, resp) = try await session.data(for: req)
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            let http = resp as? HTTPURLResponse
+
+            do {
+                try throwIfBad2FA(data: data, status: status)
+            } catch AppleAuthError.incorrectCode {
+                throw AppleAuthError.incorrectCode
+            } catch let AppleAuthError.tooManyAttempts(msg) {
+                throw AppleAuthError.tooManyAttempts(msg)
+            } catch {
+                lastError = error
+                if [403, 433, 500, 503].contains(status) { continue }
+                throw error
+            }
+
+            if status == 200 || status == 204 {
+                // Phone verify should return X-Apple-PE-Token; tolerate if Apple skips it.
+                let hasPE = http?.allHeaderFields.keys.contains(where: {
+                    ($0 as? String)?.lowercased() == "x-apple-pe-token"
+                }) == true
+                if hasPE || status == 200 || status == 204 {
+                    return
+                }
+            }
+            if status == 401 || status == 403 {
+                throw AppleAuthError.incorrectCode
+            }
+            lastError = AppleAuthError.incorrectCode
+            if [500, 503].contains(status) { continue }
+        }
+        throw lastError
+    }
+
+    private func parseXMLUIServerInfo(from data: Data) -> (phoneID: String?, mode: String?) {
+        guard let str = String(data: data, encoding: .utf8),
+              let range = str.range(of: #"<serverInfo[^>]*>"#, options: .regularExpression) else {
+            return (nil, nil)
+        }
+        let tag = String(str[range])
+        var phoneID: String?
+        var mode: String?
+        if let r = tag.range(of: #"(?<=phoneNumber\.id=")[^"]+"#, options: .regularExpression) {
+            phoneID = String(tag[r])
+        }
+        if let r = tag.range(of: #"(?<=mode=")[^"]+"#, options: .regularExpression) {
+            mode = String(tag[r])
+        }
+        return (phoneID, mode)
+    }
+
+    private func parseXMLUIObfuscatedNumber(from data: Data) -> String? {
+        guard let str = String(data: data, encoding: .utf8) else { return nil }
+        for pattern in [
+            #"(?<=numberWithDialCode=")[^"]+"#,
+            #"(?<=obfuscatedNumber=")[^"]+"#,
+            #"(?<=lastTwoDigits=")[^"]+"#
+        ] {
+            if let r = str.range(of: pattern, options: .regularExpression) {
+                let v = String(str[r])
+                if pattern.contains("lastTwoDigits") { return "••\(v)" }
+                return v
+            }
+        }
+        return nil
     }
 
     // MARK: - SRP (init → complete → decrypt spd → apptokens)
