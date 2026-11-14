@@ -37,8 +37,15 @@ final class DeviceDecryptService: ObservableObject {
 
     /// Apple ID purchase/download history (owned apps this account can redownload).
     func ownedStoreApps() async throws -> [OwnedStoreApp] {
-        let account = try await AppleIDStore.shared.ensureStorefrontSession()
-        return try await AppStoreClient.shared.purchaseHistory(account: account)
+        do {
+            let account = try await AppleIDStore.shared.ensureStorefrontSession()
+            return try await AppStoreClient.shared.purchaseHistory(account: account)
+        } catch AppStoreClientError.tokenExpired {
+            // Stale passwordToken still looked "usable" — force a fresh store login once.
+            AppleIDStore.shared.invalidateStorefrontSession()
+            let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
+            return try await AppStoreClient.shared.purchaseHistory(account: account)
+        }
     }
 
     private func storeVersionHistory(for app: DecryptApp) async -> (versions: [DecryptVersion], minOS: String?)? {

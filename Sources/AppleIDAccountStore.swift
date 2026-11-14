@@ -485,9 +485,16 @@ final class AppleIDStore: ObservableObject {
         return try? JSONDecoder().decode(StorefrontSession.self, from: data)
     }
 
+    /// Drop a stale iTunes Store passwordToken so the next ensure re-authenticates.
+    func invalidateStorefrontSession() {
+        guard let aid = activeAccountID, let idx = accounts.firstIndex(where: { $0.id == aid }) else { return }
+        accounts[idx].storeSessionJSON = nil
+        save()
+    }
+
     /// Ensure a usable storefront session (re-auth with saved password if needed).
-    func ensureStorefrontSession() async throws -> StorefrontSession {
-        if let existing = storefrontSession(), existing.isUsable {
+    func ensureStorefrontSession(forceRefresh: Bool = false) async throws -> StorefrontSession {
+        if !forceRefresh, let existing = storefrontSession(), existing.isUsable {
             return existing
         }
         guard let email = activeAccount?.email, !email.isEmpty else {
@@ -496,14 +503,21 @@ final class AppleIDStore: ObservableObject {
         guard let password = Keychain.getSecret(Self.passwordPrefix + (activeAccountID ?? "")), !password.isEmpty else {
             throw AppStoreClientError.message("Missing Apple ID password — sign in again under Store Access.")
         }
-        let session = try await AppStoreClient.shared.authenticate(
-            email: email,
-            password: password,
-            authCode: pendingStoreAuthCode
-        )
-        pendingStoreAuthCode = nil
-        persistStoreSession(session)
-        return session
+        do {
+            let session = try await AppStoreClient.shared.authenticate(
+                email: email,
+                password: password,
+                authCode: pendingStoreAuthCode
+            )
+            pendingStoreAuthCode = nil
+            persistStoreSession(session)
+            return session
+        } catch AppStoreClientError.needsTwoFactor {
+            // Surface an actionable path — Decrypt › Owned has no 2FA field of its own.
+            throw AppStoreClientError.message(
+                "App Store sign-in needs a verification code. Open Settings › Store Access, enter the 6-digit code (or Sign Out → Sign In), then tap refresh on Owned."
+            )
+        }
     }
 
     private func persistStoreSession(_ store: StorefrontSession) {
