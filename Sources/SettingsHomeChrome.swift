@@ -468,39 +468,58 @@ struct SettingsAppleIDCard: View {
             .disabled(store.isBusy || twoFACode.filter(\.isNumber).count < 6)
             .opacity(store.isBusy ? 0.7 : 1)
 
-            HStack(spacing: 16) {
-                Button {
-                    Task { await store.requestSMSCode() }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "message.fill")
-                        Text(store.isSMSTwoFactor ? "Resend text message" : "Text me a code")
-                            .font(.footnote.weight(.semibold))
+            VStack(alignment: .leading, spacing: 10) {
+                if !store.isSMSTwoFactor {
+                    Button {
+                        Task { await store.requestTrustedDevicePush() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "iphone.radiowaves.left.and.right")
+                            Text("Send again to devices")
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .foregroundStyle(TetherlessPalette.accent)
                     }
-                    .foregroundStyle(TetherlessPalette.accent)
+                    .buttonStyle(.plain)
+                    .disabled(store.isBusy)
                 }
-                .buttonStyle(.plain)
-                .disabled(store.isBusy)
 
-                Spacer(minLength: 0)
+                HStack(spacing: 16) {
+                    Button {
+                        Task { await store.requestSMSCode() }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: "message.fill")
+                            Text(store.isSMSTwoFactor ? "Resend text message" : "Text me a code")
+                                .font(.footnote.weight(.semibold))
+                        }
+                        .foregroundStyle(TetherlessPalette.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(store.isBusy)
 
-                Button {
-                    store.cancelTwoFactor()
-                    twoFACode = ""
-                } label: {
-                    Text("Cancel")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.55))
+                    Spacer(minLength: 0)
+
+                    Button {
+                        store.cancelTwoFactor()
+                        twoFACode = ""
+                    } label: {
+                        Text("Cancel")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(store.isBusy)
                 }
-                .buttonStyle(.plain)
-                .disabled(store.isBusy)
             }
         }
     }
 
     private var twoFactorHelpText: String {
         if store.isBusy {
-            return "Checking the code with Apple…"
+            return store.statusMessage?.isEmpty == false
+                ? store.statusMessage!
+                : "Checking the code with Apple…"
         }
         if let status = store.statusMessage, !status.isEmpty {
             return status
@@ -511,7 +530,7 @@ struct SettingsAppleIDCard: View {
             }
             return "Enter the 6-digit code texted to your phone."
         }
-        return "Enter the code shown on one of your Apple devices."
+        return "Check your other Apple devices for “Apple Account Sign In Requested”, tap Allow, then enter the code shown. Turn Focus off if nothing appears."
     }
 
     private var accountList: some View {
