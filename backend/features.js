@@ -23,12 +23,36 @@ function create(d0) {
   for (const col of ["src_id TEXT", "hidden INTEGER NOT NULL DEFAULT 0"]) {
     try { db.exec("ALTER TABLE admin_news ADD COLUMN " + col); } catch { /* already there */ }
   }
+  for (const col of ["description TEXT", "features TEXT", "image_file TEXT", "ipa_file TEXT", "ipa_name TEXT", "ipa_size INTEGER", "ipa_version TEXT"]) {
+    try { db.exec("ALTER TABLE admin_news ADD COLUMN " + col); } catch { /* already there */ }
+  }
+  // Uploaded pictures and IPAs for news cards live on disk, outside the database.
+  const MEDIA_DIR = process.env.NEWS_MEDIA_DIR || path.join(__dirname, "..", "data", "news-media");
+  try { fs.mkdirSync(MEDIA_DIR, { recursive: true }); } catch (e) { console.warn("News media dir:", e.message); }
+  const MEDIA_RE = /^[a-f0-9]{24}\.(png|jpg|webp|gif|ipa)$/;
+  const IPA_MAX = (Number(process.env.NEWS_IPA_MAX_GB) || 4) * 1e9, IMG_MAX = 8e6;
+  const mediaUrl = (f) => (f ? "/news-media/" + f : "");
+  const featList = (v) => { try { const a = JSON.parse(v || "[]"); return Array.isArray(a) ? a.filter(x => typeof x === "string" && x.trim()).slice(0, 12) : []; } catch { return []; } };
+  function pruneMedia() { // uploads nothing refers to (replaced, removed, or never saved) go after an hour
+    try {
+      const keep = new Set();
+      for (const r of db.prepare("SELECT image_file i, ipa_file p FROM admin_news").all()) { if (r.i) keep.add(r.i); if (r.p) keep.add(r.p); }
+      for (const n of fs.readdirSync(MEDIA_DIR)) {
+        const f = path.join(MEDIA_DIR, n);
+        if (keep.has(n) || Date.now() - fs.statSync(f).mtimeMs < 3600000) continue;
+        fs.rmSync(f, { force: true });
+      }
+    } catch (e) { console.warn("News media prune:", e.message); }
+  }
+  setInterval(pruneMedia, 3600000).unref();
   const newsHiddenQ = db.prepare("SELECT 1 FROM admin_news WHERE hidden=1 AND src_id=?");
   let newsVer = 0;
   const newsRows = () => db.prepare("SELECT * FROM admin_news ORDER BY date DESC, id DESC").all();
   const adminNewsItems = () => newsRows().filter(r => !r.hidden).map(r => ({
-    identifier: r.src_id || "admin-" + r.id, title: r.title, caption: r.caption || "", imageURL: r.image_url || "",
+    identifier: r.src_id || "admin-" + r.id, title: r.title, caption: r.caption || "", imageURL: r.image_file ? mediaUrl(r.image_file) : (r.image_url || ""),
     url: r.url || "", appID: r.app_id || "", tintColor: r.tint || "", date: r.date,
+    description: r.description || "", features: featList(r.features),
+    ipaURL: r.ipa_file ? mediaUrl(r.ipa_file) : "", ipaSize: r.ipa_size || 0, ipaVersion: r.ipa_version || "",
   }));
 
   // ---------- hide / pin / staff picks ----------
@@ -287,7 +311,10 @@ function create(d0) {
     // ----- news editor (admin items + every item from the repo / data file, all editable) -----
     const NCSS = CSS + "label{display:block;margin:12px 0 4px;font-size:13px;color:#9a9a9a}input[type=text],input[type=url],input[type=date],textarea{width:100%;padding:10px 12px;border:1px solid #333;border-radius:11px;background:#0b0b0b;color:#fff;font:16px system-ui;outline:0}" +
       "textarea{min-height:84px;resize:vertical}input:focus,textarea:focus{border-color:var(--acc)}.thumb{flex:none;width:52px;height:52px;border-radius:12px;object-fit:cover;background:#111}.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}.hint{font-size:12px;color:#777;margin-top:4px}.acts{display:flex;gap:8px;margin-top:16px}a.sm{display:inline-flex;align-items:center;text-decoration:none}" +
-      ".row .n small{display:block;color:#888;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.btns{display:flex;gap:6px}";
+      ".row .n small{display:block;color:#888;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.btns{display:flex;gap:6px}" +
+      "h3.fs{margin:22px 0 2px;padding-top:12px;border-top:1px solid #292929;font-size:12px;letter-spacing:1.5px;color:#9a9a9a}.fbtn{display:flex;align-items:center;min-height:44px;padding:0 12px;border:1px dashed #444;border-radius:11px;color:#bbb;cursor:pointer;overflow:hidden}.fbtn.has{border-color:var(--acc);color:#fff}.fbtn input{display:none}.fbtn span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
+      ".pv{position:relative;display:flex;align-items:flex-end;height:118px;border-radius:16px;border:1px solid #333;overflow:hidden;background:#161616;margin-bottom:6px}.pvi{position:absolute;inset:0;background-size:cover;background-position:center}.pvt{position:relative;width:100%;padding:12px;background:linear-gradient(transparent,rgba(0,0,0,.85))}.pvt b{display:block;font-size:15px}.pvt span{display:block;font-size:11px;color:#ddd;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}" +
+      ".prog{height:8px;border-radius:99px;background:#222;margin-top:12px;overflow:hidden}.prog div{height:100%;width:0;background:var(--acc)}";
     const dateOnly = (iso) => { const t = Date.parse(iso); return t ? new Date(t).toISOString().slice(0, 10) : ""; };
     const nid = (n) => String((n && (n.identifier || n.title)) || "").trim().slice(0, 80);
     // upstream (repo / data file) items, de-duplicated, as admin_news-shaped rows
@@ -301,7 +328,10 @@ function create(d0) {
       return out;
     };
     const fmtTarget = (r) => (r.app_id ? "app " + r.app_id : r.url || "no link");
-    const nrow = (r, btns, tag) => `<div class="row">${r.image_url ? `<img class="thumb" src="${esc(r.image_url)}" alt="" referrerpolicy="no-referrer">` : ""}<div class="n"><b>${esc(r.title)}${tag || ""}</b><code>${esc(dateOnly(r.date) || "no date")} \u00b7 ${esc(fmtTarget(r))}</code>${r.caption ? `<small>${esc(r.caption)}</small>` : ""}</div><div class="btns">${btns}</div></div>`;
+    try { db.exec("CREATE TABLE IF NOT EXISTS page_views(page_key TEXT NOT NULL, day TEXT NOT NULL, views INTEGER NOT NULL DEFAULT 0, unique_views INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(page_key,day))"); } catch (e) { console.warn("page_views table:", e.message); }
+    const newsViewsQ = db.prepare("SELECT COALESCE(SUM(views),0) c FROM page_views WHERE page_key=?");
+    const newsViews = (r) => newsViewsQ.get("news:" + (r.src_id || "admin-" + r.id)).c;
+    const nrow = (r, btns, tag) => `<div class="row">${r.image_file || r.image_url ? `<img class="thumb" src="${esc(r.image_file ? mediaUrl(r.image_file) : r.image_url)}" alt="" referrerpolicy="no-referrer">` : ""}<div class="n"><b>${esc(r.title)}${r.ipa_file ? ' <span class="tag ok">IPA</span>' : ""}${tag || ""}</b><code>${esc(dateOnly(r.date) || "no date")} \u00b7 ${esc(fmtTarget(r))} \u00b7 ${newsViews(r).toLocaleString()} view${newsViews(r) === 1 ? "" : "s"}</code>${r.caption ? `<small>${esc(r.caption)}</small>` : ""}</div><div class="btns">${btns}</div></div>`;
     const nform = (act, fields, label, cls) => `<form class="inl" method="post" action="/admin/news/${act}"${cls ? ` onsubmit="return confirm('${cls}')"` : ""}><input type="hidden" name="csrf" value="${csrf}">${fields}<button class="sm" type="submit">${label}</button></form>`;
 
     web.get("/admin/news", auth, (req, res) => {
@@ -323,20 +353,64 @@ function create(d0) {
         `<a class="sm" href="/admin/news?from=${encodeURIComponent(r.src_id)}">Edit</a>` + nform("hide", `<input type="hidden" name="src" value="${esc(r.src_id)}">`, "Hide", "Hide this item from the site and feed?"),
         ` <span class="tag">${esc(r.src)}</span>`)).join("") || '<p class="m">No repo or file news found.</p>';
       const hidden = hid.map(r => nrow(r, nform("delete", `<input type="hidden" name="id" value="${r.id}">`, "Restore"), ' <span class="tag bad">hidden</span>')).join("");
-      res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'unsafe-inline'" });
+      res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'unsafe-inline'" });
       res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="dark"><title>News \u00b7 Admin</title><style>${NCSS}</style></head><body><div class="w"><div class="lay">${menu("/admin/news")}<main class="main">
 <h1>News</h1>${flash}
-<h2>${editing ? "EDIT ITEM" : "ADD ITEM"}</h2><form class="box" method="post" action="/admin/news/save"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="id" value="${v.id || ""}"><input type="hidden" name="src" value="${esc(srcId)}">
+<h2>${editing ? "EDIT ITEM" : "ADD ITEM"}</h2><form class="box" id="nf" method="post" action="/admin/news/save"><input type="hidden" name="csrf" value="${csrf}"><input type="hidden" name="id" value="${v.id || ""}"><input type="hidden" name="src" value="${esc(srcId)}">
+<input type="hidden" name="image_file" id="hif" value=""><input type="hidden" name="ipa_file" id="hpf" value=""><input type="hidden" name="ipa_size" id="hps" value=""><input type="hidden" name="ipa_name" id="hpn" value=""><input type="hidden" name="drop_image" id="hdi" value=""><input type="hidden" name="drop_ipa" id="hdp" value="">
 ${!v.id && srcId ? `<p class="hint" style="margin:0 0 6px">Editing a ${esc(v.src || "repo")} item. Saving makes an edited copy that replaces the original on the site and feed.</p>` : ""}
+<div class="pv" id="pv"><div class="pvi" id="pvi"></div><div class="pvt"><b id="pvt">${esc(v.title || "Title")}</b><span id="pvc">${esc(v.caption || "Caption appears here")}</span></div></div>
+<h3 class="fs">Card</h3>
 <label for="t">Title (required, 80 max)</label><input id="t" type="text" name="title" maxlength="80" required value="${esc(v.title || "")}">
-<label for="c">Caption (220 max)</label><textarea id="c" name="caption" maxlength="220">${esc(v.caption || "")}</textarea>
-<label for="i">Image URL (https)</label><input id="i" type="url" name="image_url" placeholder="https://\u2026/banner.png" value="${esc(v.image_url || "")}">
+<label for="c">Caption (220 max, shown on the card)</label><textarea id="c" name="caption" maxlength="220">${esc(v.caption || "")}</textarea>
+<label for="ds">Description (shown when the card is opened)</label><textarea id="ds" name="description" maxlength="3000" style="min-height:130px" placeholder="Longer text. Line breaks are kept.">${esc(v.description || "")}</textarea>
+<label for="ft">Feature list (one per line, 12 max)</label><textarea id="ft" name="features" maxlength="1500" style="min-height:104px" placeholder="Premium unlocked&#10;No ads&#10;Works on iOS 15+">${esc(featList(v.features).join("\n"))}</textarea>
+<h3 class="fs">Picture</h3>
+<div class="two"><div><label for="i">Image URL (https)</label><input id="i" type="url" name="image_url" placeholder="https://…/banner.png" value="${esc(v.image_url || "")}"></div>
+<div><label for="imgf">…or upload a picture</label><label class="fbtn" id="imgl"><span>Choose image</span><input id="imgf" type="file" accept="image/png,image/jpeg,image/webp,image/gif"></label></div></div>
+${v.image_file ? `<p class="hint" id="curimg">Uploaded picture in use (it wins over the URL). <label style="display:inline;color:#f66"><input type="checkbox" id="dropimg"> remove it</label></p>` : `<p class="hint">If you upload a picture and also give a URL, the upload is used. Both are kept so you can switch back.</p>`}
+<h3 class="fs">Link</h3>
 <div class="two"><div><label for="a">Link to an app (bundle ID)</label><input id="a" type="text" name="app" placeholder="com.example.app" value="${esc(v.app_id || "")}" autocapitalize="off" autocorrect="off"></div>
-<div><label for="u">\u2026or external link (https)</label><input id="u" type="url" name="url" placeholder="https://\u2026" value="${esc(v.url || "")}"></div></div>
+<div><label for="u">…or external link (https)</label><input id="u" type="url" name="url" placeholder="https://…" value="${esc(v.url || "")}"></div></div>
 <p class="hint">If both are filled in, the app link wins. Current: ${esc(target)}.</p>
+<h3 class="fs">IPA (optional)</h3>
+<div class="two"><div><label for="ipaf">Attach an IPA (up to ${Math.round(IPA_MAX / 1e9)} GB)</label><label class="fbtn" id="ipal"><span>Choose .ipa</span><input id="ipaf" type="file" accept=".ipa,application/octet-stream"></label></div>
+<div><label for="iv">IPA version</label><input id="iv" type="text" name="ipa_version" maxlength="30" placeholder="1.0.0" value="${esc(v.ipa_version || "")}" autocapitalize="off"></div></div>
+${v.ipa_file ? `<p class="hint">Attached: <b>${esc(v.ipa_name || v.ipa_file)}</b> (${esc(((v.ipa_size || 0) / 1e6).toFixed(1))} MB). Choosing another file replaces it. <label style="display:inline;color:#f66"><input type="checkbox" id="dropipa"> remove it</label></p>` : `<p class="hint">With an IPA attached the card gets Download and Sign buttons in the app, and a download button on the site.</p>`}
+<h3 class="fs">Style</h3>
 <div class="two"><div><label for="k">Accent color</label><input id="k" type="text" name="tint" placeholder="#ff3b14" maxlength="7" autocapitalize="off" value="${esc(v.tint || "")}"></div>
 <div><label for="d">Date</label><input id="d" type="date" name="date" value="${esc(dateOnly(v.date))}"></div></div>
-<div class="acts"><button class="btn" type="submit">${editing ? "Save changes" : "Publish"}</button>${editing ? '<a class="sm" style="height:40px;padding:0 14px" href="/admin/news">Cancel</a>' : ""}</div></form>
+<div class="prog" id="prog" hidden><div id="pbar"></div></div><p class="hint" id="pmsg"></p>
+<div class="acts"><button class="btn" type="submit" id="sv">${editing ? "Save changes" : "Publish"}</button>${editing ? '<a class="sm" style="height:40px;padding:0 14px" href="/admin/news">Cancel</a>' : ""}</div></form>
+<script>
+(function(){
+var T=${JSON.stringify(csrf)};
+function $(i){return document.getElementById(i);}
+var f=$('nf');
+function pv(){$('pvt').textContent=$('t').value||'Title';$('pvc').textContent=$('c').value||'Caption appears here';}
+['t','c'].forEach(function(i){$(i).addEventListener('input',pv);});
+function setImg(src){var e=$('pvi');e.style.backgroundImage=src?'url('+src+')':'none';}
+var ex=${JSON.stringify(v.image_file ? mediaUrl(v.image_file) : (v.image_url || ""))};if(ex)setImg(ex);
+$('i').addEventListener('input',function(){if(!$('imgf').files[0])setImg(this.value.trim());});
+$('imgf').addEventListener('change',function(){var g=this.files[0];$('imgl').className=g?'fbtn has':'fbtn';$('imgl').querySelector('span').textContent=g?g.name:'Choose image';if(g){if(g.size>8e6){alert('Pictures can be 8 MB at most.');this.value='';return;}setImg(URL.createObjectURL(g));}});
+$('ipaf').addEventListener('change',function(){var g=this.files[0];$('ipal').className=g?'fbtn has':'fbtn';$('ipal').querySelector('span').textContent=g?g.name:'Choose .ipa';if(g&&!$('iv').value){var m=/(\\d+(?:\\.\\d+)+)/.exec(g.name);if(m)$('iv').value=m[1];}});
+function up(kind,file,onp){return new Promise(function(ok,no){var x=new XMLHttpRequest();x.open('PUT','/admin/news/upload?kind='+kind+'&name='+encodeURIComponent(file.name));x.setRequestHeader('x-csrf',T);x.setRequestHeader('content-type','application/octet-stream');
+ x.upload.onprogress=function(e){if(e.lengthComputable)onp(e.loaded/e.total);};
+ x.onload=function(){var j;try{j=JSON.parse(x.responseText);}catch(e){no(new Error('Upload failed ('+x.status+')'));return;}if(j.ok)ok(j);else no(new Error(j.error||'Upload failed'));};
+ x.onerror=function(){no(new Error('Network error'));};x.send(file);});}
+f.addEventListener('submit',function(e){
+ if($('dropimg')&&$('dropimg').checked)$('hdi').value='1';
+ if($('dropipa')&&$('dropipa').checked)$('hdp').value='1';
+ var img=$('imgf').files[0],ipa=$('ipaf').files[0];if(!img&&!ipa)return;
+ e.preventDefault();$('sv').disabled=true;$('prog').hidden=false;
+ function bar(p,what){$('pbar').style.width=Math.round(p*100)+'%';$('pmsg').textContent='Uploading '+what+' '+Math.round(p*100)+'%';}
+ var chain=Promise.resolve();
+ if(img)chain=chain.then(function(){return up('image',img,function(p){bar(p,'picture');});}).then(function(j){$('hif').value=j.name;});
+ if(ipa)chain=chain.then(function(){return up('ipa',ipa,function(p){bar(p,'IPA');});}).then(function(j){$('hpf').value=j.name;$('hps').value=j.size;$('hpn').value=ipa.name;});
+ chain.then(function(){$('pmsg').textContent='Saving...';f.submit();}).catch(function(er){$('sv').disabled=false;$('prog').hidden=true;$('pmsg').textContent=er.message;$('pmsg').style.color='#f66';});
+});
+})();
+</script>
 <h2>YOUR ITEMS (${mine.length})</h2><div class="box">${yours}</div>
 <h2>FROM REPO / FILE (${srcItems.length})</h2><div class="box">${fromSrc}</div>
 ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>` : ""}
@@ -354,6 +428,8 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       const title = String(b.title || "").trim().slice(0, 80);
       if (!title) return back("Title is required");
       const caption = String(b.caption || "").trim().slice(0, 220);
+      const description = String(b.description || "").replace(/\r/g, "").trim().slice(0, 3000);
+      const features = JSON.stringify(String(b.features || "").replace(/\r/g, "").split("\n").map(x => x.replace(/^[\s\-\u2022*]+/, "").trim().slice(0, 80)).filter(Boolean).slice(0, 12));
       const imgIn = String(b.image_url || "").trim(), image = imgIn ? safeHttps(imgIn) : "";
       if (imgIn && !image) return back("Image must be an https:// URL");
       let appId = "", url = "";
@@ -364,14 +440,72 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       const tint = /^#?[0-9a-f]{6}$/i.test(tintIn) ? "#" + tintIn.replace("#", "") : "";
       if (tintIn && !tint) return back("Color must look like #ff3b14");
       if (!id && src) { const ex = db.prepare("SELECT id FROM admin_news WHERE src_id=?").get(src); if (ex) id = ex.id; }
-      const old = id ? db.prepare("SELECT date FROM admin_news WHERE id=?").get(id) : null;
+      const old = id ? db.prepare("SELECT date,image_file,ipa_file,ipa_name,ipa_size FROM admin_news WHERE id=?").get(id) : null;
+      // Uploaded files: a freshly uploaded name wins, "remove" clears, otherwise the existing one stays.
+      const okFile = (n, kind) => MEDIA_RE.test(String(n || "")) && (kind === "ipa" ? /\.ipa$/.test(n) : !/\.ipa$/.test(n)) && fs.existsSync(path.join(MEDIA_DIR, n)) ? String(n) : "";
+      const newImg = okFile(b.image_file, "image"), newIpa = okFile(b.ipa_file, "ipa");
+      const imageFile = newImg || (b.drop_image === "1" ? "" : (old && old.image_file) || "");
+      const ipaFile = newIpa || (b.drop_ipa === "1" ? "" : (old && old.ipa_file) || "");
+      const ipaSize = ipaFile ? (() => { try { return fs.statSync(path.join(MEDIA_DIR, ipaFile)).size; } catch { return 0; } })() : 0;
+      const ipaName = newIpa ? String(b.ipa_name || "").slice(0, 120) : (ipaFile && old ? old.ipa_name || "" : "");
+      const ipaVersion = ipaFile ? String(b.ipa_version || "").replace(/[^0-9A-Za-z._-]/g, "").slice(0, 30) : "";
       const t = Date.parse(b.date);
       const date = t ? new Date(t).toISOString() : (old && old.date) || new Date().toISOString();
       const now = new Date().toISOString();
-      if (id && old) { db.prepare("UPDATE admin_news SET title=?,caption=?,image_url=?,url=?,app_id=?,tint=?,date=?,hidden=0 WHERE id=?").run(title, caption, image, url, appId, tint, date, id); newsVer++; return done("Saved \u201c" + title + "\u201d", id); }
-      db.prepare("INSERT INTO admin_news(title,caption,image_url,url,app_id,tint,date,created_at,src_id,hidden) VALUES(?,?,?,?,?,?,?,?,?,0)").run(title, caption, image, url, appId, tint, date, now, src || null);
+      if (id && old) { db.prepare("UPDATE admin_news SET title=?,caption=?,image_url=?,url=?,app_id=?,tint=?,date=?,hidden=0,description=?,features=?,image_file=?,ipa_file=?,ipa_name=?,ipa_size=?,ipa_version=? WHERE id=?").run(title, caption, image, url, appId, tint, date, description, features, imageFile, ipaFile, ipaName, ipaSize, ipaVersion, id); newsVer++; pruneMedia(); return done("Saved \u201c" + title + "\u201d", id); }
+      db.prepare("INSERT INTO admin_news(title,caption,image_url,url,app_id,tint,date,created_at,src_id,hidden,description,features,image_file,ipa_file,ipa_name,ipa_size,ipa_version) VALUES(?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?)").run(title, caption, image, url, appId, tint, date, now, src || null, description, features, imageFile, ipaFile, ipaName, ipaSize, ipaVersion);
       newsVer++;
       return done((src ? "Saved edited copy of \u201c" : "Published \u201c") + title + "\u201d", 0);
+    });
+
+    // Raw-body upload (no base64, no size blow-up): the editor sends the file straight from the browser.
+    web.put("/admin/news/upload", auth, (req, res) => {
+      res.set("Cache-Control", "no-store");
+      const bad = (code, error) => res.status(code).json({ ok: false, error });
+      if (!okCsrf(req.get("x-csrf"))) return bad(403, "Bad token. Reload the page and try again.");
+      const kind = req.query.kind === "ipa" ? "ipa" : req.query.kind === "image" ? "image" : "";
+      if (!kind) return bad(400, "Unknown upload type.");
+      const max = kind === "ipa" ? IPA_MAX : IMG_MAX;
+      if (Number(req.get("content-length") || 0) > max) return bad(413, "File too large (" + Math.round(max / 1e6) + " MB max).");
+      const tmp = path.join(MEDIA_DIR, ".up-" + crypto.randomBytes(8).toString("hex"));
+      const out = fs.createWriteStream(tmp);
+      let got = 0, dead = false;
+      const drop = (code, msg) => { if (dead) return; dead = true; req.unpipe(out); out.destroy(); fs.rm(tmp, { force: true }, () => {}); if (!res.headersSent) bad(code, msg); req.resume(); };
+      req.on("data", (c) => { got += c.length; if (got > max) drop(413, "File too large (" + Math.round(max / 1e6) + " MB max)."); });
+      req.on("aborted", () => drop(499, "Upload cancelled."));
+      out.on("error", () => drop(500, "Could not save the file."));
+      out.on("finish", () => {
+        if (dead) return;
+        try {
+          const fd = fs.openSync(tmp, "r"), h4 = Buffer.alloc(12); fs.readSync(fd, h4, 0, 12, 0); fs.closeSync(fd);
+          let ext = "";
+          if (kind === "ipa") ext = h4[0] === 0x50 && h4[1] === 0x4b && h4[2] === 3 && h4[3] === 4 ? "ipa" : "";
+          else if (h4.slice(0, 4).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47]))) ext = "png";
+          else if (h4[0] === 0xff && h4[1] === 0xd8 && h4[2] === 0xff) ext = "jpg";
+          else if (h4.slice(0, 4).toString() === "GIF8") ext = "gif";
+          else if (h4.slice(0, 4).toString() === "RIFF" && h4.slice(8, 12).toString() === "WEBP") ext = "webp";
+          if (!got || !ext) { fs.rmSync(tmp, { force: true }); return bad(400, kind === "ipa" ? "That isn't an IPA file." : "Use a PNG, JPG, WebP or GIF picture."); }
+          const name = crypto.randomBytes(12).toString("hex") + "." + ext;
+          fs.renameSync(tmp, path.join(MEDIA_DIR, name));
+          return res.json({ ok: true, name, size: got });
+        } catch (e) { fs.rmSync(tmp, { force: true }); return bad(500, "Could not save the file."); }
+      });
+      req.pipe(out);
+    });
+    // Public: pictures for the cards, and the attached IPAs (named after the card + version when downloaded).
+    web.get("/news-media/:name", (req, res) => {
+      const n = String(req.params.name || "");
+      const file = path.join(MEDIA_DIR, n);
+      if (!MEDIA_RE.test(n) || !fs.existsSync(file)) return res.status(404).type("text").send("Not found");
+      const hdr = { "X-Content-Type-Options": "nosniff", "Access-Control-Allow-Origin": "*" };
+      if (n.endsWith(".ipa")) {
+        const r = db.prepare("SELECT title,ipa_version v FROM admin_news WHERE ipa_file=? ORDER BY id DESC").get(n);
+        const base = String((r && r.title) || "app").replace(/[^A-Za-z0-9._ -]+/g, "_").trim().slice(0, 60) || "app";
+        hdr["Content-Type"] = "application/octet-stream";
+        hdr["Content-Disposition"] = `attachment; filename="${base}${r && r.v ? "-" + r.v : ""}.ipa"`;
+        hdr["Cache-Control"] = "public, max-age=3600";
+      } else hdr["Cache-Control"] = "public, max-age=604800, immutable";
+      return res.sendFile(file, { headers: hdr, dotfiles: "deny" });
     });
 
     web.post("/admin/news/hide", auth, form, (req, res) => {
@@ -390,7 +524,7 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       if (!okCsrf(b.csrf)) return res.status(403).send("Bad token. Reload the page and try again.");
       const row = db.prepare("SELECT src_id,hidden FROM admin_news WHERE id=?").get(parseInt(b.id, 10) || 0);
       db.prepare("DELETE FROM admin_news WHERE id=?").run(parseInt(b.id, 10) || 0);
-      newsVer++;
+      newsVer++; pruneMedia();
       return res.redirect(303, "/admin/news?m=" + encodeURIComponent(row && row.hidden ? "Restored" : row && row.src_id ? "Reverted to original" : "Deleted"));
     });
 
@@ -408,56 +542,22 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       const TCSS = CSS + "label{display:block;margin:12px 0 4px;font-size:13px;color:#9a9a9a}input[type=text],input[type=password],input[type=tel]{width:100%;height:44px;padding:0 12px;border:1px solid #333;border-radius:11px;background:#0b0b0b;color:#fff;font:16px system-ui;outline:0}input:focus{border-color:var(--acc)}.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:#f33}.dot.ok{background:#2fd16b}.mm{color:#9a9a9a;font-size:12px}.sm.danger{border-color:#7a2318;color:#f66}code.k{background:#111;border:1px solid #292929;border-radius:8px;padding:2px 7px}";
       web.get("/admin/telegram", auth, async (req, res) => {
         const s = await T.status();
-        const state = !s.lib ? "The <code class=\"k\">telegram</code> package isn't installed. Run <code class=\"k\">cd /opt/airshare-telegram &amp;&amp; npm i telegram &amp;&amp; pm2 restart airshare</code>."
-          : s.authed ? `Connected as <b>${esc(s.who.name || "account")}</b>${s.who.username ? " (@" + esc(s.who.username) + ")" : ""}. Requests go to <b>@${esc(s.bot)}</b>.`
-          : s.hasKeys ? "Not logged in. Add your phone below." + (s.error ? " (" + esc(s.error) + ")" : "") : "Add your API id and hash first.";
+        const state = s.authed
+          ? `Own bot <b>@${esc(s.bot || s.who.username || "")}</b> is configured. Jobs wait for the <b>iPhone worker</b> (TetherLess › Settings › Phone Worker).`
+          : (s.error ? esc(s.error) : "Set <code class=\"k\">TELEGRAM_BOT_TOKEN</code> on the server.");
+        const worker = s.workerConfigured
+          ? "Worker token configured (<code class=\"k\">DECRYPT_WORKER_TOKEN</code>)."
+          : "Set <code class=\"k\">DECRYPT_WORKER_TOKEN</code> and enter the same token in the iOS app.";
         res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'unsafe-inline'" });
         res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="dark"><title>Telegram \u00b7 Admin</title><style>${TCSS}</style></head><body><div class="w"><div class="lay">${menu("/admin/telegram")}<main class="main">
-<h1>Telegram</h1><div class="flash" id="fl" hidden></div>
-<div class="box"><span class="dot${s.authed ? " ok" : ""}"></span>${state}
-<p class="mm">Decrypt build ${esc(s.build || "old")} \u00b7 max file ${esc(s.maxGb || 1.5)} GB</p>
-<p class="mm">The lock icon on the site sends App Store links from this account to @${esc(s.bot)} and returns the IPA to the visitor. Use a dedicated account if you can.</p></div>
-<h2>1 \u00b7 API KEYS</h2><div class="box"><p class="mm" style="margin-top:0">From my.telegram.org &rarr; API development tools.</p>
-<label for="ai">api_id</label><input id="ai" type="text" inputmode="numeric" autocomplete="off" value="${esc(s.apiId)}" placeholder="12345678">
-<label for="ah">api_hash</label><input id="ah" type="password" autocomplete="off" placeholder="${s.hasKeys ? "saved (enter to replace)" : "32 hex characters"}">
-<div class="acts"><button class="btn" type="button" id="k">Save keys</button></div></div>
-<h2>2 \u00b7 LOG IN</h2><div class="box">
-<label for="ph">Phone (with country code)</label><input id="ph" type="tel" autocomplete="off" placeholder="+15551234567">
-<div class="acts"><button class="btn" type="button" id="sc">Send code</button></div>
-<div id="cb" hidden><label for="cd">Code from Telegram</label><input id="cd" type="text" inputmode="numeric" autocomplete="off" placeholder="12345">
-<div class="acts"><button class="btn" type="button" id="si">Sign in</button></div></div>
-<div id="pb" hidden><label for="pw">2-step verification password</label><input id="pw" type="password" autocomplete="off">
-<div class="acts"><button class="btn" type="button" id="sp">Sign in</button></div></div></div>
-<details class="box"><summary style="cursor:pointer;color:var(--acc);font-weight:600">Or paste a session string</summary><label for="ss">gramjs StringSession</label><input id="ss" type="password" autocomplete="off"><div class="acts"><button class="btn" type="button" id="us">Use session</button></div></details>
-${s.authed ? '<div class="acts"><button class="sm danger" type="button" id="lo">Log out of Telegram</button></div>' : ""}
-</main></div></div>
-<script>
-(function(){
-var T=${JSON.stringify(csrf)};
-function $(i){return document.getElementById(i);}
-function flash(t,bad){var f=$('fl');f.textContent=t;f.hidden=false;f.style.borderColor=bad?'#f33':'';f.style.color=bad?'#f66':'';window.scrollTo(0,0);}
-function post(u,o){o.csrf=T;return fetch(u,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify(o)}).then(function(r){return r.json();});}
-function ok(m){sessionStorage.setItem('adm:m',m);location.reload();}
-var m=sessionStorage.getItem('adm:m');if(m){sessionStorage.removeItem('adm:m');flash(m);}
-function run(b,p,f){b.disabled=true;p.then(function(j){b.disabled=false;f(j);}).catch(function(){b.disabled=false;flash('Network error.',true);});}
-$('k').onclick=function(){run(this,post('/admin/telegram/keys',{api_id:$('ai').value,api_hash:$('ah').value}),function(j){j.ok?ok('Keys saved.'):flash(j.error,true);});};
-$('sc').onclick=function(){run(this,post('/admin/telegram/code',{phone:$('ph').value}),function(j){if(j.ok){$('cb').hidden=false;flash(j.viaApp?'Code sent. Check your Telegram app.':'Code sent by SMS.');}else flash(j.error,true);});};
-$('si').onclick=function(){run(this,post('/admin/telegram/signin',{code:$('cd').value}),function(j){if(j.ok)ok('Logged in.');else if(j.need2fa){$('pb').hidden=false;flash('This account has 2-step verification. Enter the password.');}else flash(j.error,true);});};
-$('sp').onclick=function(){run(this,post('/admin/telegram/signin',{password:$('pw').value}),function(j){j.ok?ok('Logged in.'):flash(j.error||'Failed.',true);});};
-$('us').onclick=function(){run(this,post('/admin/telegram/session',{session:$('ss').value}),function(j){j.ok?ok('Session saved.'):flash(j.error,true);});};
-if($('lo'))$('lo').onclick=function(){if(!confirm('Log out of Telegram? Decrypt stops working until you log in again.'))return;run(this,post('/admin/telegram/logout',{}),function(j){ok('Logged out.');});};
-})();
-</script></body></html>`);
+<h1>Telegram decrypt bot</h1>
+<div class="box"><span class="dot${s.authed && s.workerConfigured ? " ok" : ""}"></span>${state}
+<p class="mm">${worker}</p>
+<p class="mm">Build ${esc(s.build || "")} \u00b7 mode ${esc(s.mode || "phone-worker")} \u00b7 waiting ${esc(String(s.waiting || 0))}</p>
+<p class="mm">FastDecryptBot / GramJS userbot login is removed. Create a bot with <b>@BotFather</b>, set env <code class=\"k\">TELEGRAM_BOT_TOKEN</code>, optional <code class=\"k\">TELEGRAM_BOT_USERNAME</code> and <code class=\"k\">TELEGRAM_ALLOWED_IDS</code> (comma chat ids).</p>
+<p class="mm">Keep TetherLess open on the signed-in iPhone with Phone Worker enabled so FairPlay can run.</p></div>
+</main></div></div></body></html>`);
       });
-      web.post("/admin/telegram/keys", auth, tjson, tguard, async (req, res) => {
-        const b = req.body || {};
-        const err = await T.setKeys(b.api_id, b.api_hash);
-        return err ? tj(res, 400, err) : res.json({ ok: true });
-      });
-      web.post("/admin/telegram/code", auth, tjson, tguard, async (req, res) => { const r = await T.sendCode((req.body || {}).phone); return r.error ? tj(res, 400, r.error) : res.json(r); });
-      web.post("/admin/telegram/signin", auth, tjson, tguard, async (req, res) => { const b = req.body || {}; const r = await T.signIn(b.code, b.password); return r.error ? tj(res, 400, r.error) : res.json(r.need2fa ? { ok: false, need2fa: true } : { ok: true }); });
-      web.post("/admin/telegram/session", auth, tjson, tguard, async (req, res) => { const err = await T.useSession((req.body || {}).session); return err ? tj(res, 400, err) : res.json({ ok: true }); });
-      web.post("/admin/telegram/logout", auth, tjson, tguard, async (req, res) => { await T.logout(); return res.json({ ok: true }); });
     }
 
     // ---------- analytics, inside the admin layout ----------
@@ -522,6 +622,17 @@ if($('lo'))$('lo').onclick=function(){if(!confirm('Log out of Telegram? Decrypt 
 <label>Groups (badges shown in the app)</label><div class="gchips">${(A.groupCatalog || []).map(g => `<button type="button" class="gc${(u.groups || []).includes(g) ? " on" : ""}" data-g="${esc(g)}">${esc(g.replace(/_/g, " "))}</button>`).join("")}</div>
 <label>Sponsor label (like FastDecryptBot)</label><input type="text" class="spn" maxlength="40" value="${esc(u.sponsor || "")}" placeholder="Sponsor name (empty = none)" autocomplete="off">
 <div class="acts"><button class="btn" type="button" data-act="saveroles" data-uid="${u.id}">Save role, groups &amp; sponsor</button></div>
+<h3>Premium</h3>
+<p class="m" style="margin:4px 0 8px">${u.premium && u.premium.active ? `Active \u00b7 ${u.premium.days_left} day${u.premium.days_left === 1 ? "" : "s"} left (until ${esc(day(u.premium.expires))})` : "Not active"}</p>
+<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="number" class="pdays" min="0" max="3650" placeholder="Days" style="width:110px"><button class="sm" type="button" data-act="premadd" data-uid="${u.id}">Add days</button><button class="sm" type="button" data-act="premset" data-uid="${u.id}">Set to</button><button class="sm danger" type="button" data-act="premrev" data-uid="${u.id}">Remove</button></div>
+<div class="acts" style="margin-top:8px">${[7, 30, 90, 365].map(n => `<button class="sm" type="button" data-act="premquick" data-n="${n}" data-uid="${u.id}">+${n}d</button>`).join("")}</div>
+<h3>Access</h3>
+<p class="m" style="margin:4px 0 8px">${u.ban && u.ban.banned ? `BANNED${u.ban.reason ? " \u2014 " + esc(u.ban.reason) : ""}${u.ban.until ? ` (until ${esc(day(u.ban.until))})` : " (permanent)"} \u00b7 cannot sign in, and beta builds on their device remove themselves` : "Active"}</p>
+${u.ban && u.ban.banned
+  ? `<div class="acts"><button class="sm" type="button" data-act="unban" data-uid="${u.id}">Unban</button></div>`
+  : `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center"><input type="text" class="bnreason" placeholder="Reason (optional)" style="width:46%"><input type="number" class="bndays" min="0" max="3650" placeholder="Days (blank = forever)" style="width:170px"></div><div class="acts" style="margin-top:8px"><button class="sm danger" type="button" data-act="ban" data-uid="${u.id}">Ban account</button></div>`}
+<div class="acts" style="margin-top:8px"><button class="sm" type="button" data-act="correlate" data-uid="${u.id}">Show other accounts on this device / network</button></div>
+<div class="m" id="cor${u.id}" style="margin-top:6px"></div>
 ${recent ? `<h3>Recent signs</h3><ul class="rec">${recent}</ul>` : ""}
 <h3>Certificates (${u.certs.length}/10)</h3>${certs}
 <details class="add"><summary>Attach certificate</summary>
@@ -542,14 +653,20 @@ ${recent ? `<h3>Recent signs</h3><ul class="rec">${recent}</ul>` : ""}
 <div class="acts"><button class="btn" type="button" id="mk">Create account</button></div>
 <p class="mm">Attached certificates are used by the signer on the server. Users can sign with them but can't download, view or remove them.</p></div>
 <h2>ACCOUNTS (${users.length})</h2><div class="sum"><div><b>${users.length}</b><span>Accounts</span></div><div><b>${tot.c}</b><span>Certificates</span></div><div><b>${tot.n}</b><span>No cert</span></div><div><b>${tot.s}</b><span>Signs 7d</span></div></div><input type="search" class="fq" id="fq" placeholder="Search accounts" autocomplete="off" autocapitalize="off"><div id="list">${cards}</div>
+<h2>BANNED DEVICES</h2><p class="mm">An ADID banned here can't sign in or create a new account, even one that has never touched this ADID before.</p><div class="box"><div class="two"><input id="bdadid" type="text" placeholder="AS-XXXXXX-XX" autocapitalize="off" autocomplete="off"><input id="bdreason" type="text" placeholder="Reason (optional)"></div><input id="bddays" type="number" min="0" max="3650" placeholder="Days (blank = forever)" style="margin-top:8px"><div class="acts"><button class="btn" type="button" id="bdban">Ban device</button></div></div><div id="bdlist"></div>
 </main></div></div>
 <script>
 (function(){
 var T=${JSON.stringify(csrf)};
 function $(i){return document.getElementById(i);}
 function qa(s,r){return Array.prototype.slice.call((r||document).querySelectorAll(s));}
+function esc2(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function flash(t,bad){var f=$('fl');f.textContent=t;f.hidden=false;f.style.borderColor=bad?'#f33':'';f.style.color=bad?'#f66':'';window.scrollTo(0,0);}
 function post(u,o){o.csrf=T;return fetch(u,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify(o)}).then(function(r){return r.json();});}
+function bdload(){fetch('/admin/accounts/banned-devices',{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){var list=(j.list||[]);$('bdlist').innerHTML=list.map(function(r){return '<div class="row" style="padding:8px 0;border-top:1px solid #1d1d1d"><b>'+esc2(r.adid)+'</b>'+(r.reason?' <span class="mm">'+esc2(r.reason)+'</span>':'')+(r.banned_until?' <span class="mm">until '+esc2(r.banned_until.slice(0,10))+'</span>':' <span class="mm">permanent</span>')+' <button class="sm" type="button" data-unban-adid="'+esc2(r.adid)+'">Unban</button></div>';}).join('')||'<p class="mm">No banned devices.</p>';});}
+$('bdban').addEventListener('click',function(){var a=($('bdadid').value||'').trim().toUpperCase();if(!a){flash('Enter an ADID.',true);return;}post('/admin/accounts/ban-device',{adid:a,banned:true,reason:$('bdreason').value,days:$('bddays').value}).then(function(j){if(!j.ok){flash(j.error||'Failed.',true);return;}$('bdadid').value='';$('bdreason').value='';$('bddays').value='';bdload();flash('Device banned.');});});
+$('bdlist').addEventListener('click',function(e){var b=e.target.closest('[data-unban-adid]');if(!b)return;post('/admin/accounts/ban-device',{adid:b.getAttribute('data-unban-adid'),banned:false}).then(function(j){if(j.ok)bdload();});});
+bdload();
 function b64(file){return new Promise(function(ok,no){var r=new FileReader();r.onload=function(){var u=new Uint8Array(r.result),a='',i;for(i=0;i<u.length;i+=32768)a+=String.fromCharCode.apply(null,u.subarray(i,i+32768));ok(btoa(a));};r.onerror=no;r.readAsArrayBuffer(file);});}
 function done(j,msg,uid){if(j.ok){sessionStorage.setItem('adm:m',msg);if(uid)sessionStorage.setItem('adm:o',uid);location.reload();}else flash(j.error||'Failed.',true);}
 $('fq').addEventListener('input',function(){var q=this.value.trim().toLowerCase();qa('#list details.acc').forEach(function(d){d.hidden=!!q&&d.getAttribute('data-q').indexOf(q)<0;});});
@@ -561,6 +678,13 @@ $('mk').addEventListener('click',function(){var u=$('nu').value.trim(),p=$('np')
 qa('.fbtn input').forEach(function(x){x.addEventListener('change',function(){var g=x.files&&x.files[0];x.parentNode.querySelector('span').textContent=g?g.name:(x.className==='fp12'?'Choose .p12':'Choose .mobileprovision');x.parentNode.className=g?'fbtn has':'fbtn';});});
 $('list').addEventListener('click',function(e){var g=e.target.closest('.gc');if(g){g.classList.toggle('on');return;}var b=e.target.closest('[data-act]');if(!b)return;var act=b.getAttribute('data-act'),uid=Number(b.getAttribute('data-uid')),box=b.closest('.box');
  if(act==='saveroles'){var gs=[].map.call(box.querySelectorAll('.gc.on'),function(x){return x.getAttribute('data-g');});post('/admin/accounts/roles',{id:uid,role:box.querySelector('.role').value,groups:gs,sponsor:box.querySelector('.spn').value}).then(function(j){done(j,'Saved. The app picks it up on next refresh.',uid);});}
+ else if(act==='premadd'||act==='premset'||act==='premrev'||act==='premquick'){var n=act==='premquick'?Number(b.getAttribute('data-n')):Number(box.querySelector('.pdays').value)||0;
+  if((act==='premadd'||act==='premset')&&act!=='premset'&&n<=0){flash('Enter a number of days.',true);return;}
+  post('/admin/accounts/premium',{id:uid,mode:act==='premrev'?'revoke':act==='premset'?'set':'add',days:n}).then(function(j){done(j,j.ok&&j.premium&&j.premium.active?'Premium: '+j.premium.days_left+' days left.':'Premium removed.',uid);});}
+ else if(act==='ban'||act==='unban'){if(act==='ban'&&!confirm('Ban this account? It is signed out everywhere, and beta builds on its device will remove themselves.'))return;
+  var reason=act==='ban'?box.querySelector('.bnreason').value:'',days=act==='ban'?box.querySelector('.bndays').value:'';
+  post('/admin/accounts/ban',{id:uid,banned:act==='ban',reason:reason,days:days}).then(function(j){done(j,act==='ban'?'Account banned.':'Account unbanned.',uid);});}
+ else if(act==='correlate'){var el=$('cor'+uid);el.textContent='Loading\\u2026';fetch('/admin/accounts/correlate/'+uid,{credentials:'same-origin'}).then(function(r){return r.json();}).then(function(j){if(!j.ok){el.textContent=j.error||'Failed.';return;}if(!j.others.length){el.textContent='No other accounts found on the same device or network.';return;}el.innerHTML=j.others.map(function(o){return '<div>u'+o.id+' <b>'+esc2(o.username)+'</b>'+(o.banned?' <span style="color:#f66">BANNED</span>':'')+' <span class="mm">via '+o.via.map(esc2).join(', ')+'</span></div>';}).join('');});}
  else if(act==='deluser'){if(!confirm('Delete this account and its certificates?'))return;post('/admin/accounts/delete',{id:uid}).then(function(j){done(j,'Account deleted.');});}
  else if(act==='delcert'){if(!confirm('Remove this certificate?'))return;post('/admin/accounts/cert/delete',{id:uid,cert:Number(b.getAttribute('data-cert'))}).then(function(j){done(j,'Certificate removed.',uid);});}
  else if(act==='setpw'){var pw=box.querySelector('.npw').value;post('/admin/accounts/password',{id:uid,password:pw}).then(function(j){done(j,'Password updated.',uid);});}
@@ -585,6 +709,32 @@ $('list').addEventListener('click',function(e){var g=e.target.closest('.gc');if(
         if (A.setGroups(id, b.groups) === null) return jf(res, 404, "Account not found.");
         A.setSponsor(id, b.sponsor);
         return res.json({ ok: true });
+      }, jerr);
+      web.post("/admin/accounts/ban", auth, ajson, guardA, (req, res) => {
+        const b = req.body || {};
+        const r = A.setBanned ? A.setBanned(Number(b.id), !!b.banned, b.reason, b.days) : null;
+        return r === null ? jf(res, 404, "Account not found.") : res.json({ ok: true, ban: r });
+      }, jerr);
+      web.post("/admin/accounts/ban-device", auth, ajson, guardA, (req, res) => {
+        const b = req.body || {};
+        const r = A.setAdidBanned ? A.setAdidBanned(b.adid, !!b.banned, b.reason, b.days) : null;
+        return r === null && b.banned ? jf(res, 400, "Bad ADID.") : res.json({ ok: true, ban: r });
+      }, jerr);
+      web.get("/admin/accounts/banned-devices", auth, (_req, res) => {
+        res.set("Cache-Control", "no-store");
+        return res.json({ ok: true, list: A.bannedAdids ? A.bannedAdids() : [] });
+      });
+      web.get("/admin/accounts/correlate/:id", auth, (req, res) => {
+        res.set("Cache-Control", "no-store");
+        const id = Number(req.params.id);
+        if (!Number.isInteger(id)) return jf(res, 400, "Bad request.");
+        return res.json({ ok: true, others: A.correlate ? A.correlate(id) : [] });
+      });
+      web.post("/admin/accounts/premium", auth, ajson, guardA, (req, res) => {
+        const b = req.body || {}, mode = String(b.mode || "add");
+        if (!A.setPremium || !["add", "set", "revoke"].includes(mode)) return jf(res, 400, "Bad request.");
+        const p = A.setPremium(Number(b.id), mode, b.days);
+        return p ? res.json({ ok: true, premium: p }) : jf(res, 404, "Account not found.");
       }, jerr);
       web.post("/admin/accounts/delete", auth, ajson, guardA, (req, res) => {
         const id = Number((req.body || {}).id);
@@ -615,7 +765,7 @@ $('list').addEventListener('click',function(e){var g=e.target.closest('.gc');if(
     return vs ? (vs.find(x => verOf(x) === staffVer.get(key)) || vs[0]) : null;
   };
   return {
-    wrap, floatPinned, mount, runCheck, newsVer: () => newsVer, newsHidden: (id) => !!newsHiddenQ.get(String(id)),
+    wrap, floatPinned, mount, runCheck, newsVer: () => newsVer, ver: () => ver, newsHidden: (id) => !!newsHiddenQ.get(String(id)),
     staffPicks: staffKeys,                                                    // [key, ...]  (unchanged)
     staffVersion: (key) => staffVer.get(key) || "",                           // chosen version string, "" = none
     staffEntries: () => staffKeys().map(k => ({ key: k, version: staffVer.get(k) || "" })),

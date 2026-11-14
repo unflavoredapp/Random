@@ -2,7 +2,7 @@
 //  DecryptView.swift
 //  Decrypt tab (lock icon). Two channels:
 //    • This Device — FairPlay mremap on installed apps (SC_Info + App Store keys)
-//    • Telegram Bot — server bridge to @FastDecryptBot for App Store links
+//    • Telegram Bot — own bot + Phone Worker (on-device FairPlay; not FastDecryptBot)
 //
 
 import SwiftUI

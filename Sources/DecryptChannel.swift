@@ -1,6 +1,6 @@
 //
 //  DecryptChannel.swift
-//  Device FairPlay vs Telegram bot (@FastDecryptBot via server bridge).
+//  Device FairPlay vs own Telegram bot (phone worker — not FastDecryptBot).
 //
 
 import Foundation
@@ -31,7 +31,7 @@ enum DecryptChannel: String, CaseIterable, Identifiable {
         case .device:
             return "Free & purchased apps: silent Store download, then FairPlay decrypt on this iPhone — no Mac, no jailbreak."
         case .telegram:
-            return "Optional remote path via the server’s Telegram bridge to @FastDecryptBot."
+            return "Your bot queues App Store links; this iPhone’s Phone Worker decrypts and uploads the IPA (no FastDecryptBot)."
         }
     }
 

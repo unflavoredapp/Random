@@ -252,6 +252,56 @@ final class DeviceDecryptService: ObservableObject {
         return DecryptApp(id: url, name: "App", bundle: "", icon: nil, dev: "", version: "", url: url)
     }
 
+    /// Phone-worker / TG-bot path: silent Store download + **in-process** FairPlay so a clear
+    /// IPA file exists on this host for upload (skips companion install UI).
+    func decryptForWorkerUpload(
+        storeURL: String,
+        displayName: String = "App",
+        version: String? = nil,
+        progress: ((String) -> Void)? = nil
+    ) async throws -> (url: URL, name: String, version: String) {
+        guard AppleIDStore.shared.isSignedIn else {
+            throw DecryptError("Sign in under Settings › Store Access first.")
+        }
+        try FairPlayKeyGate.requireReady()
+        let adam = try await resolveAdamId(bundleID: "", storeURL: storeURL)
+        guard let adam else {
+            throw DecryptError("Couldn't resolve an App Store id from that link.")
+        }
+        progress?("Contacting Apple…")
+        var account = try await AppleIDStore.shared.ensureStorefrontSession()
+        var pinned = ""
+        if let version, !version.isEmpty {
+            pinned = (try? await AppStoreClient.shared.resolveDownloadVersionId(
+                adamId: adam,
+                account: account,
+                version: version,
+                externalVersionId: nil
+            )) ?? ""
+        }
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tetherless-worker", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        let dest = tmpDir.appendingPathComponent("worker_\(adam).ipa")
+        progress?("Downloading encrypted IPA…")
+        let result = try await purchaseAndDownloadWithStoreRefresh(
+            adamId: adam,
+            account: &account,
+            destination: dest,
+            externalVersionId: pinned.isEmpty ? nil : pinned,
+            version: version
+        )
+        let name = displayName.isEmpty ? "App" : displayName
+        progress?("Decrypting on this iPhone…")
+        let clear = try FairPlayDecrypt.decryptIPA(
+            at: result.url,
+            displayName: name
+        ) { msg in
+            progress?(msg)
+        }
+        return (clear, name, result.item.displayVersion)
+    }
+
     /// Decrypt via a signed “Tetherless Decrypt” companion IPA (FairPlayed-style console lives there).
     func decryptInstalled(_ app: DeviceApp, version: String? = nil) async {
         guard !busy else { return }

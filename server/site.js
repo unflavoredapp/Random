@@ -771,7 +771,7 @@ function mountSite(web, d0) {
   const GUEST_DAYS = 7;
   setInterval(() => { try { db.prepare("DELETE FROM user_certs WHERE uid LIKE 'g%' AND created_at < ?").run(new Date(Date.now() - GUEST_DAYS * 86400000).toISOString()); } catch {} }, 3600000).unref();
 
-  // Telegram userbot -> @FastDecryptBot bridge (lock icon). Needs: npm i telegram
+  // Phone-worker decrypt + optional own Telegram bot (TELEGRAM_BOT_TOKEN). No FastDecryptBot.
   let decMod = null;
   try { decMod = require("./decrypt").create({ db, secret: viewSalt }); } catch (e) { console.warn("Decrypt disabled:", e.message); }
 
@@ -1132,7 +1132,7 @@ function mountSite(web, d0) {
         let file = "", name = "App", entry = null, hasIcon = false;
         const tryCache = () => { const e = ck && cGet(ck); if (!e) return null; const u = cUse(e, dir); entry = e; file = u.file; hasIcon = u.hasIcon; say("From cache"); return { cached: true }; };
         if (!tryCache()) {
-          const r = await decMod.request(j.url, dir, say, tryCache, vreq);
+          const r = await decMod.request(j.url, dir, say, tryCache, vreq, j);
           if (!r.cached) {
             file = r.file; name = r.name || "App";
             if (r.url) { file = path.join(dir, "in.ipa"); say("Fetching the IPA"); await fetchTo(r.url, file, p => say("Fetching the IPA " + p + "%")); }
@@ -1140,13 +1140,13 @@ function mountSite(web, d0) {
         }
         const fd = fs.openSync(file, "r"), b4 = Buffer.alloc(4); fs.readSync(fd, b4, 0, 4, 0); fs.closeSync(fd);
         const size = fs.statSync(file).size;
-        if (size < 100 || b4.readUInt32BE(0) !== 0x504b0304) throw new Error("The bot's file isn't an IPA.");
+        if (size < 100 || b4.readUInt32BE(0) !== 0x504b0304) throw new Error("The uploaded file isn't an IPA.");
         let meta;
         if (entry) meta = { name: entry.name, bid: entry.bid, ver: entry.ver, iconUrl: entry.icon_url || "" };
         else {
           say("Checking the IPA");
           const info = ipaInfo(file);
-          if (info && info.bad) throw new Error("The bot's file doesn't contain an app.");
+          if (info && info.bad) throw new Error("The uploaded file doesn't contain an app.");
           const i = info || {};
           meta = { name: String(i.CFBundleDisplayName || i.CFBundleName || name).replace(/[\u0000-\u001f<>]/g, "").slice(0, 60) || "App", bid: String(i.CFBundleIdentifier || "com.example.app").slice(0, 155), ver: String(i.CFBundleShortVersionString || i.CFBundleVersion || "1.0").slice(0, 40), iconUrl: "" };
           hasIcon = ipaIcon(file, path.join(dir, "icon.png"));
@@ -1159,11 +1159,17 @@ function mountSite(web, d0) {
         histPut(j.uid, aid, vreq, { name: meta.name, bid: meta.bid, ver: meta.ver, size, icon: meta.iconUrl, url: j.url });
         if (aid) cPin(ck, j.uid);
         Object.assign(j, { status: "done", up: id, size, name: meta.name, bid: meta.bid, ver: meta.ver, cached: !!entry, msg: "Done" });
+        if (typeof j.onDone === "function") {
+          try { await j.onDone({ status: "done", filePath: file, name: meta.name, bid: meta.bid, ver: meta.ver, up: id, size }); } catch (e) { console.warn("Decrypt onDone:", e.message); }
+        }
       } catch (e) {
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
         j.status = "error"; j.error = String(e.message || "Decrypt failed.").slice(0, 200);
         if (!j.refunded && acct.decrypt) { j.refunded = true; try { acct.decrypt.refund(j.uid, j.ip, aid || undefined); } catch {} } // a failed decrypt doesn't use up the day's allowance or start the per-app cooldown
         console.warn("Decrypt failed:", j.error);
+        if (typeof j.onDone === "function") {
+          try { await j.onDone({ status: "error", error: j.error }); } catch {}
+        }
       }
     }
     const appInfoCache = new Map();
@@ -1273,7 +1279,6 @@ function mountSite(web, d0) {
         if (limited("dv|" + req.ip, 40, 3600000)) return fail(res, 429, "Too many requests. Try again later.");
         const ck = appIdOf(url) + "|" + page, hit = verCache.get(ck);
         if (hit && hit.at > Date.now() - 15 * 60000) return res.json(hit.v);
-        if (decMod.busy()) return fail(res, 503, "The bot is busy with another request. Try again in a moment.");
         const v = await decMod.versions(url, page);
         const out = Object.assign({ ok: true }, v);
         if (verCache.size > 300) verCache.clear();
@@ -1290,6 +1295,71 @@ function mountSite(web, d0) {
       if (j.status === "done") Object.assign(out, { up: j.up, name: j.name, bid: j.bid, ver: j.ver, size: j.size });
       return res.json(out);
     });
+
+    // iPhone worker claim / progress / complete (DECRYPT_WORKER_TOKEN).
+    if (decMod && typeof decMod.attachWorkerRoutes === "function") {
+      decMod.attachWorkerRoutes(web, { jsonBody, fail });
+    }
+
+    // Own Telegram bot → same decrypt jobs (phone worker). Optional TELEGRAM_BOT_TOKEN.
+    if (decMod && typeof decMod.startTelegramBot === "function") {
+      decMod.startTelegramBot({
+        createDecryptJob: async ({ url, version, uid, ip, notify }) => {
+          if (!decMod.validUrl(url)) return { error: "Paste an App Store link." };
+          const vreq = String(version || "").trim();
+          if (vreq && !/^[0-9][0-9A-Za-z._-]{0,29}$/.test(vreq)) return { error: "Bad version." };
+          if (decBusy().length >= 8) return { error: "Decrypt is busy. Try again in a minute." };
+          const id = crypto.randomBytes(12).toString("hex");
+          const j = {
+            id, uid: uid || ("tg:" + id), ip: ip || "telegram", url, vreq,
+            status: "queued", msg: "Queued", error: "",
+            expires: Date.now() + 75 * 60000,
+            onDone: async (payload) => {
+              if (typeof notify === "function") {
+                if (payload.status === "done") await notify("done", payload);
+                else await notify("error", payload);
+              }
+            },
+          };
+          decJobs.set(id, j);
+          runDecrypt(j);
+          return { ok: true, id };
+        },
+        sendIpaToChat: async (chatId, payload) => {
+          if (!decMod.tgApi || !payload.filePath || !fs.existsSync(payload.filePath)) {
+            await decMod.tgApi("sendMessage", {
+              chat_id: chatId,
+              text: `Done: ${payload.name || "App"} (${payload.ver || ""}). Download from the site if the file wasn’t attached.`,
+            });
+            return;
+          }
+          // Telegram Bot API sendDocument via multipart is heavier; send a short notice + site hint.
+          // File remains available via /api/ipa/file when the same uid polls; for TG we stream with fetch FormData if available.
+          try {
+            const FormData = require("form-data");
+            const form = new FormData();
+            form.append("chat_id", String(chatId));
+            form.append("document", fs.createReadStream(payload.filePath), {
+              filename: `${(payload.name || "App").replace(/[^\w.-]+/g, "_")}.ipa`,
+              contentType: "application/octet-stream",
+            });
+            form.append("caption", `${payload.name || "App"} ${payload.ver || ""} · decrypted on-device`.trim());
+            await new Promise((resolve, reject) => {
+              form.submit(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendDocument`, (err, res) => {
+                if (err) return reject(err);
+                res.resume();
+                resolve();
+              });
+            });
+          } catch (e) {
+            await decMod.tgApi("sendMessage", {
+              chat_id: chatId,
+              text: `Done: ${payload.name || "App"} — open TetherLess / the site to download (TG attach failed: ${e.message || e}).`,
+            });
+          }
+        },
+      });
+    }
     web.get("/api/ipa/file/:upId", (req, res) => {
       const u = findUpload(actorId(req, res, false), String(req.params.upId));
       if (!u) return res.status(404).type("text").send("Not found. The file expired, decrypt it again.");
@@ -2011,7 +2081,7 @@ $('q').addEventListener('input',function(){clearTimeout(tm);var v=this.value.tri
 <div class="cmsg" id="dq" style="margin-top:10px;text-align:center"></div>
 <div class="cmsg" id="st" role="status" style="margin-top:10px"></div>
 <div class="rs" id="res" hidden><img id="ri" alt="" referrerpolicy="no-referrer"><div class="tx"><small id="rbid">DECRYPTED</small><b id="rn"></b><span id="rm"></span></div></div>
-<div class="dact" id="acts" hidden><a class="vb" id="dl" href="#"><i class="fa-solid fa-download"></i><span>Download</span></a><div class="pw">Powered by<a href="https://t.me/${esc(decMod ? decMod.bot : "FastDecryptBot")}" rel="noopener">@${esc(decMod ? decMod.bot : "FastDecryptBot")}</a></div><a class="vb pri" id="sg" href="#"><i class="fa-solid fa-signature"></i><span>Sign</span></a></div>
+<div class="dact" id="acts" hidden><a class="vb" id="dl" href="#"><i class="fa-solid fa-download"></i><span>Download</span></a><div class="pw">Powered by<a href="https://t.me/${esc(decMod ? decMod.bot : "TetherLessDecryptBot")}" rel="noopener">@${esc(decMod ? decMod.bot : "TetherLessDecryptBot")}</a> · on-device worker</div><a class="vb pri" id="sg" href="#"><i class="fa-solid fa-signature"></i><span>Sign</span></a></div>
 <div id="hw" hidden><div class="lbl" style="margin-top:22px">Recent</div><div class="sres" id="hist"></div><div class="btnrow"><button class="abtn ghost" id="hclr" type="button"><i class="fa-regular fa-trash-can"></i> Clear history</button></div></div>
 <div class="bsp"></div>
 <script>
@@ -2066,7 +2136,7 @@ $('go').addEventListener('click',function(){var v=$('u').value.trim();
 $('u').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();$('go').click();}});
 var vs={page:1,pages:1,busy:false};
 function loadVers(pg){var v=$('u').value.trim();if(!URE.test(v)||vs.busy)return;
- vs.busy=true;$('vp').hidden=false;$('vm').textContent='Asking the bot for versions...';$('vm').className='cmsg';
+ vs.busy=true;$('vp').hidden=false;$('vm').textContent='Loading versions...';$('vm').className='cmsg';
  fetch('/api/decrypt/versions',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({url:v,page:pg||1})}).then(function(r){return r.json();}).then(function(j){
   vs.busy=false;
   if(!j.ok){$('vm').textContent=j.error||'Could not load versions.';$('vm').className='cmsg err';return;}

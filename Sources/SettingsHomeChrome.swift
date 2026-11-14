@@ -375,6 +375,7 @@ struct SettingsAppleIDCard: View {
                 }
 
                 StoreDeviceSpoofCard()
+                PhoneDecryptWorkerCard()
             }
             .padding(20)
             .padding(.bottom, 28)
@@ -641,6 +642,54 @@ private struct SettingsStoreCodeEntry: View {
             code = ""
         } catch {
             localError = error.localizedDescription
+        }
+    }
+}
+
+/// Enable this iPhone as the FairPlay worker for the site / own Telegram bot queue.
+struct PhoneDecryptWorkerCard: View {
+    @ObservedObject private var worker = PhoneDecryptWorker.shared
+
+    var body: some View {
+        GlassCard(corner: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                Toggle(isOn: Binding(
+                    get: { worker.enabled },
+                    set: { worker.applyEnabled($0) }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Phone Worker")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text("Claim decrypt jobs from your site / Telegram bot and run FairPlay on this iPhone. Keep the app open while jobs run.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.45))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .tint(TetherlessPalette.accent)
+
+                SecureField("DECRYPT_WORKER_TOKEN", text: $worker.workerToken)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.footnote.monospaced())
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.28), in: Capsule())
+                    .foregroundStyle(.white)
+                    .disabled(!worker.enabled)
+                    .opacity(worker.enabled ? 1 : 0.5)
+
+                Text(worker.status)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(worker.busy ? TetherlessPalette.accent : .white.opacity(0.55))
+                if let err = worker.lastError, !err.isEmpty {
+                    Text(err)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
         }
     }
 }

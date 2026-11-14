@@ -30,6 +30,7 @@ struct UnzipDropApp: App {
                 RootView()
                     .task {
                         LocalZSignAPI.shared.startIfNeeded()
+                        PhoneDecryptWorker.shared.startIfNeeded()
                         // tetherless.dev pack (backloop.dev replacement) — ready before first install.
                         await OTABootstrap.ensurePublicPack(force: true)
                         // Recognized ADID + device key signs straight in; with a live session this just refreshes the profile.
@@ -45,6 +46,7 @@ struct UnzipDropApp: App {
                     .onChange(of: scenePhase) { phase in
                         if phase == .active {
                             ZefvAccount.shared.restoreFromKeychainIfNeeded()
+                            PhoneDecryptWorker.shared.startIfNeeded()
                             Task {
                                 await OTABootstrap.ensurePublicPack()
                                 await VPNReconnectCoordinator.shared.appBecameActive()

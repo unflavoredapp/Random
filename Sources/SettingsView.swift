@@ -733,7 +733,7 @@ private struct AboutScreen: View {
                     featureRow("signature", "Sign & install any IPA",
                                "Using your free Apple ID, or your own certificate.")
                     featureRow("lock.open.fill", "Get a clean copy of apps you own",
-                               "Decrypt on this iPhone with FairPlay, or via the Telegram bot bridge. Device mode needs a one-time App Store sign-in so iOS has that Apple ID’s decryption keys.")
+                               "Decrypt on this iPhone with FairPlay, or queue via your own Telegram bot (Phone Worker). Device mode needs a one-time App Store sign-in so iOS has that Apple ID’s decryption keys.")
                     featureRow("person.2.fill", "Multiple App Store accounts",
                                "Sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.")
                     featureRow("puzzlepiece.extension.fill", "Tweak injection",
