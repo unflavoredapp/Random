@@ -29,7 +29,7 @@ enum DecryptChannel: String, CaseIterable, Identifiable {
     var blurb: String {
         switch self {
         case .device:
-            return "Fully on-device: silent Store download, then FairPlay decrypt on this iPhone — no Mac, no jailbreak."
+            return "Free & purchased apps: silent Store download, then FairPlay decrypt on this iPhone — no Mac, no jailbreak."
         case .telegram:
             return "Optional remote path via the server’s Telegram bridge to @FastDecryptBot."
         }

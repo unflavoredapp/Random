@@ -644,12 +644,35 @@ final class AppleIDStore: ObservableObject {
         do {
             let session = try await ensureStorefrontSession(forceRefresh: true)
             storeNeedsVerification = false
+            statusMessage = "Store access ready — free & purchased downloads unlocked"
             return session
         } catch AppStoreClientError.needsTwoFactor {
             storeNeedsVerification = true
             throw AppStoreClientError.message(
-                "Incorrect or expired code — request a new one under Settings › Store Access (Text me a code), then retry."
+                "Incorrect or expired code — tap Text me a code, then retry."
             )
+        }
+    }
+
+    /// Nudge Apple to send a Store verification code (trusted device / SMS) without signing out.
+    func requestStoreVerificationPrompt() async {
+        storeNeedsVerification = true
+        storefrontNeedsRefresh = true
+        pendingStoreAuthCode = nil
+        do {
+            _ = try await ensureStorefrontSession(forceRefresh: true)
+            if storefrontSession()?.isUsable == true {
+                storeNeedsVerification = false
+                statusMessage = "Store access ready — free & purchased downloads unlocked"
+            }
+        } catch AppStoreClientError.needsTwoFactor {
+            storeNeedsVerification = true
+            statusMessage = "Enter the 6-digit code Apple sent to your trusted devices."
+            // Prefer SMS when no other Apple device is nearby.
+            await requestSMSCode()
+        } catch {
+            storeNeedsVerification = true
+            statusMessage = error.localizedDescription
         }
     }
 
@@ -744,7 +767,8 @@ final class AppleIDStore: ObservableObject {
         storeReady = true
         UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
 
-        // Also establish iTunes Store passwordToken for silent purchase/download.
+        // Also establish iTunes Store passwordToken for silent purchase/download
+        // (free + already-purchased apps — the Decrypt niche).
         statusMessage = "Connecting App Store download session…"
         do {
             let store = try await AppStoreClient.shared.authenticate(
@@ -753,15 +777,21 @@ final class AppleIDStore: ObservableObject {
                 authCode: pendingStoreAuthCode
             )
             persistStoreSession(store)
-            statusMessage = session.teamName.map { "Signed in · \($0) · silent download ready" }
-                ?? "Signed in · silent download ready"
+            storeNeedsVerification = false
+            statusMessage = session.teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
+                ?? "Signed in · free & purchased downloads ready"
         } catch AppStoreClientError.needsTwoFactor {
-            statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
-            // Keep pendingStoreAuthCode only if unused; store still needs a code on first download.
+            // Apple ID portal is signed in; MZFinance still wants a 6-digit code.
             storeNeedsVerification = true
+            statusMessage = "Signed in — enter the Store verification code to fetch free & purchased apps"
         } catch {
-            statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
-            // Non-fatal — portal auth still works; silent download retries later.
+            // Non-fatal — portal auth still works; soft-retry store session once.
+            storeNeedsVerification = storefrontSession()?.isUsable != true
+            if storeNeedsVerification {
+                statusMessage = "Signed in — open Store Access if downloads ask for a code"
+            } else {
+                statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
+            }
         }
         // Clear only after a successful store session (or non-2FA failure).
         if storefrontSession()?.isUsable == true || storeNeedsVerification == false {
