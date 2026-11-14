@@ -45,62 +45,78 @@ struct SettingsView: View {
 
     var body: some View {
         ZStack {
-                Theme.bg.ignoresSafeArea()
-                ScrollView(showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 0) {
+            Theme.bg.ignoresSafeArea()
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 14) {
+                    SettingsAppleIDCard()
+                    SettingsSoftwareUpdateCard()
+                    SettingsGlassNavRow(
+                        systemImage: "key.fill",
+                        title: "Custom Certificate",
+                        subtitle: certs.active.map { "Using \($0.name)" } ?? "Sign with your own paid certificate"
+                    ) { screen = .certificates }
 
-                        SettingsSection("General") {
-                            SettingsRow(icon: "info.circle.fill", title: "About", subtitle: "App information and version") { screen = .about }
-                            SettingsRow(icon: "square.grid.3x3.fill", title: "Browse Sources",
-                                        subtitle: "repo.json feeds · download IPAs into Unsigned") { screen = .browse }
-                        }
+                    SettingsDisableNotificationsRow()
+                        .padding(.top, 4)
 
-                        SettingsSection("Account") {
-                            SettingsRow(icon: account.isLoggedIn ? "person.crop.circle.fill" : "person.crop.circle.badge.plus",
-                                        title: "User Settings",
-                                        subtitle: account.isLoggedIn ? "\(DisplayName.username(account.username ?? "")) · account and device settings" : "Sign in or register") { screen = .account }
-                            SettingsRow(icon: "plus.app.fill", title: "Request Certificate",
+                    Text("MORE")
+                        .font(.system(size: 12, weight: .semibold))
+                        .kerning(1.1)
+                        .foregroundStyle(.white.opacity(0.45))
+                        .padding(.top, 10)
+
+                    SettingsGlassNavRow(systemImage: "info.circle.fill", title: "About",
+                                        subtitle: "App information and version") { screen = .about }
+                    SettingsGlassNavRow(systemImage: "square.grid.3x3.fill", title: "Browse Sources",
+                                        subtitle: "repo.json feeds · download IPAs into Library") { screen = .browse }
+                    SettingsGlassNavRow(
+                        systemImage: account.isLoggedIn ? "person.crop.circle.fill" : "person.crop.circle.badge.plus",
+                        title: "User Settings",
+                        subtitle: account.isLoggedIn
+                            ? "\(DisplayName.username(account.username ?? "")) · account and device settings"
+                            : "Sign in or register"
+                    ) { screen = .account }
+                    SettingsGlassNavRow(systemImage: "plus.app.fill", title: "Request Certificate",
                                         subtitle: "Submit or review your certificate requests") { screen = .signingRequestCertificate }
-                        }
-
-                        SettingsSection("Signing") {
-                            SettingsRow(icon: "checkmark.seal.fill", imageName: "CertSeal", title: "Certificates",
-                                        subtitle: certs.active?.name ?? "No signing certificate") { screen = .certificates }
-                            SettingsRow(icon: "gearshape.fill", title: "Settings",
+                    SettingsGlassNavRow(systemImage: "gearshape.fill", title: "TrustCore & Domain",
                                         subtitle: "TrustCore API · TetherLess Domain") { screen = .tableView }
-                            // The "dev" group specifically — not admin, not the developer role. Being an admin
-                            // or having elevated role doesn't put the GitHub repo tools in front of you.
-                            if account.style.badges.contains("dev") {
-                                SettingsRow(icon: "chevron.left.forwardslash.chevron.right", title: "GitHub",
-                                            subtitle: githubSubtitle) { screen = .github }
-                            }
-                        }
+                    SettingsGlassNavRow(
+                        systemImage: "arrow.down.app.fill",
+                        title: "Install Method",
+                        subtitle: NativeInstaller.isSelected
+                            ? "Native · built-in VPN · auto-updates"
+                            : "OTA · itms-services over tetherless.dev"
+                    ) { screen = .nativeInstall }
 
-                        SettingsSection("Install") {
-                            SettingsRow(icon: "arrow.down.app.fill", title: "Install Method",
-                                        subtitle: NativeInstaller.isSelected ? "Native · built-in VPN · auto-updates" : "OTA · itms-services over TetherLess domain") { screen = .nativeInstall }
-                        }
-
-                        SettingsSection("Support") {
-                            SettingsLink(icon: "globe", imageName: "airshare_logo", title: "TetherLess",
-                                         subtitle: "tetherless.dev · Official site",
-                                         url: URL(string: "https://tetherless.dev")!)
-                            SettingsLink(icon: "network", imageName: "delvek_logo", imageURL: URL(string: "https://delvek.net/img/delvek4.png"), title: "Delvek.net",
-                                         subtitle: "delvek.net | Repo and support",
-                                         url: URL(string: "https://delvek.net")!)
-                        }
-
-                        StatusFooter()
-                            .padding(.top, 26)
+                    if account.style.badges.contains("dev") {
+                        SettingsGlassNavRow(systemImage: "chevron.left.forwardslash.chevron.right",
+                                            title: "GitHub", subtitle: githubSubtitle) { screen = .github }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 6)
-                    .padding(.bottom, 20)
+
+                    SettingsGlassNavRow(systemImage: "globe", title: "TetherLess",
+                                        subtitle: "tetherless.dev · Official site") {
+                        if let u = URL(string: "https://tetherless.dev") {
+                            UIApplication.shared.open(u)
+                        }
+                    }
+                    SettingsGlassNavRow(systemImage: "network", title: "Delvek.net",
+                                        subtitle: "delvek.net · Repo and support") {
+                        if let u = URL(string: "https://delvek.net") {
+                            UIApplication.shared.open(u)
+                        }
+                    }
+
+                    StatusFooter()
+                        .padding(.top, 12)
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 6)
+                .padding(.bottom, 120)
             }
             .safeAreaInset(edge: .top, spacing: 0) {
                 HStack {
                     Text("Settings")
-                        .font(.system(size: 36, weight: .bold))
+                        .font(.system(size: 40, weight: .bold))
                         .foregroundStyle(.white)
                     Spacer()
                     Text("\(Theme.appVersion)")
