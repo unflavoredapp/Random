@@ -452,6 +452,23 @@ struct DecryptView: View {
         return Swift.min(Swift.max(v, 0), 100) / 100
     }
 
+    private var decryptJobStatusLabel: String {
+        switch c.phase {
+        case .downloading:
+            return c.message.isEmpty ? "Downloading…" : c.message
+        case .done:
+            return "Decrypted"
+        case .failed:
+            return "Failed"
+        case .queued:
+            return "Queued"
+        case .running:
+            return "Decrypting…"
+        case .idle:
+            return c.message.isEmpty ? "Ready" : c.message
+        }
+    }
+
     // MARK: Cards
 
     private func resultAppCard(_ app: DecryptApp, downloading: Bool) -> some View {
@@ -508,17 +525,18 @@ struct DecryptView: View {
                         Text(app.name.isEmpty ? c.finishedName : app.name)
                             .font(.headline.weight(.semibold)).foregroundStyle(.white)
                         Text(app.dev).font(.caption).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
-                        Text(c.phase == .downloading ? (c.message.isEmpty ? "Downloading…" : c.message)
-                               : (c.phase == .done ? "Downloaded" : c.phase == .failed ? "Failed" : "Downloaded"))
+                        Text(decryptJobStatusLabel)
                             .font(.caption).foregroundStyle(.white.opacity(0.55))
                     }
                     Spacer()
-                    if c.phase == .done || c.phase == .running || c.phase == .queued {
+                    if c.phase == .done {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     } else if c.phase == .failed {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     } else if c.phase == .downloading {
                         SlimProgress(value: percent).frame(width: 64)
+                    } else if c.phase == .running || c.phase == .queued {
+                        ProgressView().tint(TetherlessPalette.accent).scaleEffect(0.85)
                     }
                 }
 

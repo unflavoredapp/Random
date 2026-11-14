@@ -141,9 +141,11 @@ final class DeviceDecryptService: ObservableObject {
 
             status = "Decrypting \(app.name) on this device…"
             do {
+                let known = await resolveInstalledAppURL(bundleID: app.bundleID)?.path
                 let clear = try FairPlayDecrypt.decryptInstalledApp(
                     bundleID: app.bundleID,
-                    displayName: app.name
+                    displayName: app.name,
+                    knownPath: known
                 ) { [weak self] msg in
                     Task { @MainActor in self?.status = msg }
                 }
@@ -212,11 +214,12 @@ final class DeviceDecryptService: ObservableObject {
             guard !bid.isEmpty else {
                 throw DecryptError("Missing bundle ID — search again or paste an App Store link.")
             }
-            if FairPlayDecrypt.installedAppURL(bundleID: bid) != nil {
+            if let installed = await resolveInstalledAppURL(bundleID: bid) {
                 status = "Decrypting \(app.name) on this device…"
                 let clear = try FairPlayDecrypt.decryptInstalledApp(
                     bundleID: bid,
-                    displayName: app.name
+                    displayName: app.name,
+                    knownPath: installed.path
                 ) { [weak self] msg in
                     Task { @MainActor in self?.status = msg }
                 }
@@ -281,11 +284,12 @@ final class DeviceDecryptService: ObservableObject {
 
             // Prefer decrypt via installed path once the silent purchase made the license live;
             // otherwise attempt IPA-path FairPlay (needs readable SC_Info / keys on device).
-            if FairPlayDecrypt.installedAppURL(bundleID: bundleID) != nil {
+            if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
                 status = "License ready — decrypting installed \(displayName)…"
                 let clear = try FairPlayDecrypt.decryptInstalledApp(
                     bundleID: bundleID,
-                    displayName: displayName
+                    displayName: displayName,
+                    knownPath: installed.path
                 ) { [weak self] msg in
                     Task { @MainActor in
                         self?.status = msg
@@ -349,31 +353,66 @@ final class DeviceDecryptService: ObservableObject {
         return nil
     }
 
+    /// LaunchServices is often sandboxed for other apps — also ask installd (Pair) + MobileInstallation.
+    private func resolveInstalledAppURL(bundleID: String) async -> URL? {
+        let fromLibrary = DeviceLibrary.shared.apps.first(where: { $0.bundleID == bundleID })?.installPath
+        if let url = FairPlayDecrypt.installedAppURL(bundleID: bundleID, knownPath: fromLibrary) {
+            return url
+        }
+        // Ask installd via Pair tunnel for Path — LaunchServices is often sandboxed for other apps.
+        _ = await DeviceLibrary.shared.refreshAwaiting()
+        let refreshed = DeviceLibrary.shared.apps.first(where: { $0.bundleID == bundleID })?.installPath
+        if let url = FairPlayDecrypt.installedAppURL(bundleID: bundleID, knownPath: refreshed) {
+            return url
+        }
+        return FairPlayDecrypt.installedAppURL(bundleID: bundleID)
+    }
+
     private func waitForStoreInstallThenDecrypt(
         bundleID: String,
         displayName: String,
         storeURL: String
     ) async throws {
         DecryptClient.shared.phase = .running
-        DecryptClient.shared.message = "Install \(displayName) from the App Store — decrypt runs automatically on this device"
         DecryptClient.shared.error = nil
+
+        // App may already be installed (App Store shows Open) while LS can't see the path yet.
+        if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
+            status = "Found on device — decrypting \(displayName)…"
+            DecryptClient.shared.message = status
+            let clear = try FairPlayDecrypt.decryptInstalledApp(
+                bundleID: bundleID,
+                displayName: displayName,
+                knownPath: installed.path
+            ) { [weak self] msg in
+                Task { @MainActor in
+                    self?.status = msg
+                    DecryptClient.shared.message = msg
+                }
+            }
+            finishSuccess(url: clear, name: displayName)
+            return
+        }
+
+        DecryptClient.shared.message = "Install \(displayName) from the App Store — decrypt runs automatically on this device"
         status = "Opening App Store — install with \(AppleIDStore.shared.email.isEmpty ? "your Apple ID" : AppleIDStore.shared.email)…"
         AppStoreDecryptGuide.openAppStoreListing(storeURL)
 
         let deadline = Date().addingTimeInterval(10 * 60)
         var spins = 0
+        var sawInLibraryWithoutPath = false
         while Date() < deadline {
             try Task.checkCancellation()
-            // Refresh paired/library lists so newly installed App Store apps show up quickly.
             if spins % 3 == 0 {
-                await DeviceLibrary.shared.refresh()
+                _ = await DeviceLibrary.shared.refreshAwaiting()
             }
-            if let _ = FairPlayDecrypt.installedAppURL(bundleID: bundleID) {
+            if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
                 status = "Installed — decrypting \(displayName) on this device…"
                 DecryptClient.shared.message = status
                 let clear = try FairPlayDecrypt.decryptInstalledApp(
                     bundleID: bundleID,
-                    displayName: displayName
+                    displayName: displayName,
+                    knownPath: installed.path
                 ) { [weak self] msg in
                     Task { @MainActor in
                         self?.status = msg
@@ -383,8 +422,16 @@ final class DeviceDecryptService: ObservableObject {
                 finishSuccess(url: clear, name: displayName)
                 return
             }
+            if DeviceLibrary.shared.apps.contains(where: { $0.bundleID == bundleID }) {
+                sawInLibraryWithoutPath = true
+            }
             spins += 1
-            // Re-nudge the App Store every ~30s so Get/Install stays in front of the user.
+            // Don't hammer App Store forever when the app is already installed but path is invisible.
+            if sawInLibraryWithoutPath && spins >= 8 {
+                throw DecryptError(
+                    "\(displayName) is installed, but TetherLess can’t read its on-disk path yet. Connect Pair (Native), wait for the tunnel, then tap Decrypt again — FairPlay needs that path for keys."
+                )
+            }
             if spins % 15 == 0 {
                 status = "Still waiting — reopening App Store for \(displayName)…"
                 DecryptClient.shared.message = status
@@ -445,9 +492,11 @@ final class DeviceDecryptService: ObservableObject {
         for (i, app) in apps.enumerated() {
             status = "[\(i + 1)/\(apps.count)] \(app.name)…"
             do {
+                let known = await resolveInstalledAppURL(bundleID: app.bundleID)?.path
                 let clear = try FairPlayDecrypt.decryptInstalledApp(
                     bundleID: app.bundleID,
-                    displayName: app.name
+                    displayName: app.name,
+                    knownPath: known
                 ) { [weak self] msg in
                     Task { @MainActor in
                         self?.status = "[\(i + 1)/\(apps.count)] \(app.name) · \(msg)"
