@@ -150,7 +150,7 @@ final class DeviceDecryptService: ObservableObject {
                 finishSuccess(url: clear, name: app.name)
                 return
             } catch FairPlayDecryptError.noInstalledApp {
-                status = "Not installed — opening App Store for your Apple ID…"
+                status = "Not installed — trying silent App Store download…"
             } catch let e as FairPlayDecryptError {
                 // Keys / FairPlay failure — do NOT mask with a remote download.
                 lastError = e.localizedDescription
@@ -161,6 +161,13 @@ final class DeviceDecryptService: ObservableObject {
             }
 
             let storeURL = try await storeURL(forBundleID: app.bundleID)
+            if await trySilentPurchaseDownloadDecrypt(
+                bundleID: app.bundleID,
+                displayName: app.name,
+                storeURL: storeURL
+            ) {
+                return
+            }
             try await waitForStoreInstallThenDecrypt(
                 bundleID: app.bundleID,
                 displayName: app.name,
@@ -217,6 +224,14 @@ final class DeviceDecryptService: ObservableObject {
                 return
             }
             let link = storeURL.isEmpty ? try await self.storeURL(forBundleID: bid) : storeURL
+            // Silent purchase + download (no App Store UI). Falls back to install-wait if needed.
+            if await trySilentPurchaseDownloadDecrypt(
+                bundleID: bid,
+                displayName: app.name,
+                storeURL: link
+            ) {
+                return
+            }
             try await waitForStoreInstallThenDecrypt(
                 bundleID: bid,
                 displayName: app.name,
@@ -228,6 +243,110 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.error = error.localizedDescription
             status = ""
         }
+    }
+
+    /// ipatool-style silent buy + CDN download, then FairPlay. Returns true if finished successfully.
+    @discardableResult
+    private func trySilentPurchaseDownloadDecrypt(
+        bundleID: String,
+        displayName: String,
+        storeURL: String
+    ) async -> Bool {
+        do {
+            guard let adam = try await resolveAdamId(bundleID: bundleID, storeURL: storeURL) else {
+                status = "Couldn't resolve App Store id — falling back to App Store install…"
+                return false
+            }
+            status = "Silent App Store session…"
+            DecryptClient.shared.phase = .running
+            DecryptClient.shared.message = status
+            let account = try await AppleIDStore.shared.ensureStorefrontSession()
+
+            let tmpDir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("tetherless-silent", isDirectory: true)
+            try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+            let dest = tmpDir.appendingPathComponent("\(bundleID.isEmpty ? "app" : bundleID)_\(adam).ipa")
+
+            let ipa = try await AppStoreClient.shared.purchaseAndDownload(
+                adamId: adam,
+                account: account,
+                destination: dest,
+                onProgress: { [weak self] msg in
+                    Task { @MainActor in
+                        self?.status = msg
+                        DecryptClient.shared.message = msg
+                    }
+                }
+            )
+
+            // Prefer decrypt via installed path once the silent purchase made the license live;
+            // otherwise attempt IPA-path FairPlay (needs readable SC_Info / keys on device).
+            if FairPlayDecrypt.installedAppURL(bundleID: bundleID) != nil {
+                status = "License ready — decrypting installed \(displayName)…"
+                let clear = try FairPlayDecrypt.decryptInstalledApp(
+                    bundleID: bundleID,
+                    displayName: displayName
+                ) { [weak self] msg in
+                    Task { @MainActor in
+                        self?.status = msg
+                        DecryptClient.shared.message = msg
+                    }
+                }
+                finishSuccess(url: clear, name: displayName)
+                return true
+            }
+
+            status = "Decrypting silently downloaded \(displayName)…"
+            DecryptClient.shared.message = status
+            do {
+                let clear = try FairPlayDecrypt.decryptIPA(
+                    at: ipa,
+                    displayName: displayName
+                ) { [weak self] msg in
+                    Task { @MainActor in
+                        self?.status = msg
+                        DecryptClient.shared.message = msg
+                    }
+                }
+                finishSuccess(url: clear, name: displayName)
+                return true
+            } catch {
+                // Keep the encrypted IPA; fall through to App Store install for fairplayd path.
+                status = "Downloaded encrypted IPA — install once so FairPlay keys can finish decrypt…"
+                DecryptClient.shared.message = status
+                return false
+            }
+        } catch AppStoreClientError.paidApp {
+            status = "Paid app — install from the App Store once, then decrypt on-device…"
+            return false
+        } catch AppStoreClientError.tokenExpired, AppStoreClientError.needsTwoFactor {
+            status = "App Store session needs refresh — open Store Access, then retry…"
+            return false
+        } catch {
+            status = "Silent download unavailable (\(error.localizedDescription)) — opening App Store…"
+            return false
+        }
+    }
+
+    private func resolveAdamId(bundleID: String, storeURL: String) async throws -> Int? {
+        if let r = storeURL.range(of: #"/id(\d+)"#, options: .regularExpression) {
+            let digits = String(storeURL[r]).filter(\.isNumber)
+            if let n = Int(digits) { return n }
+        }
+        let id = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty else { return nil }
+        guard var comps = URLComponents(string: "https://itunes.apple.com/lookup") else { return nil }
+        comps.queryItems = [
+            URLQueryItem(name: "bundleId", value: id),
+            URLQueryItem(name: "limit", value: "1")
+        ]
+        guard let url = comps.url else { return nil }
+        let (data, _) = try await URLSession.shared.data(from: url)
+        let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let results = json["results"] as? [[String: Any]] ?? []
+        if let track = results.first?["trackId"] as? Int { return track }
+        if let track = results.first?["trackId"] as? NSNumber { return track.intValue }
+        return nil
     }
 
     private func waitForStoreInstallThenDecrypt(
