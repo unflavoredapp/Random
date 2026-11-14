@@ -459,7 +459,7 @@ struct StoreDeviceSpoofCard: View {
                     Text("Spoof Store iOS / device")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text("Tells buy.itunes which iOS/device you are so Apple can pick a matching IPA variant. Does not change this iPhone’s real OS. Strongest when downloading latest (unpinned); version pins still win when set.")
+                    Text("Claims another iOS/device on store requests (Configurator+iOS UA, Client-Info, headers). Auto-selects a compatible app build when you don’t pin a version. Does not change this iPhone’s real OS.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.45))
                         .fixedSize(horizontal: false, vertical: true)
@@ -590,6 +590,22 @@ struct StoreDeviceSpoofCard: View {
                         .background(Color.black.opacity(0.28), in: Capsule())
                     }
 
+                    Toggle(isOn: Binding(
+                        get: { spoof.autoSelectCompatibleVersion },
+                        set: { spoof.autoSelectCompatibleVersion = $0; persist() }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Auto-pick compatible app version")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Text("Walks store version IDs and pins the newest build whose min iOS fits the spoofed OS.")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .tint(TetherlessPalette.accent)
+
                     Menu {
                         ForEach(StoreUserAgentStyle.allCases, id: \.self) { style in
                             Button(style.label) {
@@ -615,10 +631,10 @@ struct StoreDeviceSpoofCard: View {
                     Text("Real device: iOS \(UIDevice.current.systemVersion) · \(StoreDeviceSpoof.realModelIdentifier())")
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.35))
-                    Text(spoof.storeUserAgent(fallbackConfigurator: "Configurator/2.15"))
+                    Text(spoof.storeUserAgent(fallbackConfigurator: "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"))
                         .font(.caption2)
                         .foregroundStyle(.white.opacity(0.35))
-                        .lineLimit(3)
+                        .lineLimit(4)
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }

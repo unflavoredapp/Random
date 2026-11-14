@@ -350,20 +350,23 @@ final class DeviceDecryptService: ObservableObject {
         }
         let account = try await AppleIDStore.shared.ensureStorefrontSession()
 
+        // Explicit pin from Versions sheet, else spoof-compatible / display-version resolve inside client.
         var pinned = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if pinned.isEmpty {
             do {
-                pinned = try await AppStoreClient.shared.resolveExternalVersionId(
+                pinned = try await AppStoreClient.shared.resolveDownloadVersionId(
                     adamId: adam,
                     account: account,
-                    version: version
+                    version: version,
+                    externalVersionId: nil
                 ) ?? ""
             } catch {
-                // Continue with latest if version resolve fails.
                 pinned = ""
             }
         }
-        if let version, !version.isEmpty, pinned.isEmpty {
+        if spoof.enabled, pinned.isEmpty {
+            publishDecryptProgress("Spoof \(spoof.summaryLabel) · downloading with store UA…")
+        } else if let version, !version.isEmpty, pinned.isEmpty {
             publishDecryptProgress("Using latest owned build (couldn’t pin v\(version))…")
         } else if !pinned.isEmpty {
             publishDecryptProgress("Pinning store build \(pinned)…")
@@ -377,18 +380,22 @@ final class DeviceDecryptService: ObservableObject {
 
         let ipa: URL
         let downloadedVersion: String
+        let downloadedMinOS: String?
         do {
             let result = try await AppStoreClient.shared.purchaseAndDownload(
                 adamId: adam,
                 account: account,
                 destination: dest,
                 externalVersionId: pinned.isEmpty ? nil : pinned,
+                version: version,
                 onProgress: { [weak self] msg in
                     Task { @MainActor in self?.publishDecryptProgress(msg) }
                 }
             )
             ipa = result.url
             downloadedVersion = result.item.displayVersion
+            downloadedMinOS = result.item.minimumOS
+            pinned = result.item.externalVersionId.isEmpty ? pinned : result.item.externalVersionId
         } catch AppStoreClientError.paidApp {
             throw DecryptError(
                 "\(displayName) is paid — silent download only covers free/owned apps. Buy it once with this Apple ID, then decrypt again (still no App Store UI from TetherLess)."
@@ -415,7 +422,13 @@ final class DeviceDecryptService: ObservableObject {
             return
         }
 
-        let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
+        var label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
+        if let min = downloadedMinOS, !min.isEmpty {
+            label += " (iOS \(min)+)"
+        }
+        if spoof.enabled, let min = downloadedMinOS, !spoof.acceptsMinimumOS(min) {
+            publishDecryptProgress("Warning: package wants iOS \(min)+ but spoof claims \(spoof.effectiveIOSVersion)…")
+        }
         publishDecryptProgress("Decrypting silently downloaded \(label)…")
         do {
             let clear = try FairPlayDecrypt.decryptIPA(

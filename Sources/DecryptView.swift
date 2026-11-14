@@ -742,6 +742,12 @@ private struct DecryptVersionsSheet: View {
                             .listRowBackground(Color.clear)
                     } else {
                         ForEach(c.versions) { v in
+                            let spoof = StoreDeviceSpoof.current
+                            let fitsSpoof = !spoof.enabled || spoof.acceptsMinimumOS(v.minOS)
+                            let fitsDevice = {
+                                guard let min = v.minOS, !min.isEmpty else { return true }
+                                return StoreDeviceSpoof.compareVersions(min, deviceIOS) != .orderedDescending
+                            }()
                             Button {
                                 if DecryptChannel.current == .telegram {
                                     c.start(url: app.url, version: v.v, display: app.name)
@@ -761,7 +767,12 @@ private struct DecryptVersionsSheet: View {
                                             if let min = v.minOS, !min.isEmpty {
                                                 Text("iOS \(min)+")
                                                     .font(.caption2)
-                                                    .foregroundStyle(.white.opacity(0.45))
+                                                    .foregroundStyle(fitsSpoof ? .white.opacity(0.45) : .orange.opacity(0.85))
+                                            }
+                                            if spoof.enabled, fitsSpoof {
+                                                Text("spoof OK")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(TetherlessPalette.accent.opacity(0.8))
                                             }
                                             if let ext = v.externalId, !ext.isEmpty, ext != v.v {
                                                 Text("id \(ext)")
@@ -773,6 +784,8 @@ private struct DecryptVersionsSheet: View {
                                     Spacer()
                                     if v.current {
                                         Text("Latest").font(.subheadline).foregroundStyle(.white.opacity(0.45))
+                                    } else if !fitsDevice {
+                                        Text("Device").font(.caption).foregroundStyle(.orange.opacity(0.7))
                                     }
                                 }
                             }
