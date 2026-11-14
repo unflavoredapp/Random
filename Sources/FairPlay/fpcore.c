@@ -119,7 +119,8 @@ bool fp_is_macho(const char *path) {
     bool ok = pread(fd, &m, 4, 0) == 4;
     close(fd);
     if (!ok) return false;
-    return m == MH_MAGIC_64 || m == MH_MAGIC || m == FAT_CIGAM || m == FAT_CIGAM_64;
+    return m == MH_MAGIC_64 || m == MH_MAGIC || m == MH_CIGAM_64 || m == MH_CIGAM
+        || m == FAT_MAGIC || m == FAT_MAGIC_64 || m == FAT_CIGAM || m == FAT_CIGAM_64;
 }
 
 #pragma mark - parsing
@@ -161,8 +162,9 @@ int fp_parse(const char *path, fp_slice_t *slices, int max, int *count, char *er
     uint32_t magic = 0;
     if (!pread_full(fd, &magic, 4, 0)) { close(fd); snprintf(err, errlen, "short read"); return -1; }
     int rc = 0;
-    if (magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
-        bool is64 = magic == FAT_CIGAM_64;
+    if (magic == FAT_MAGIC || magic == FAT_MAGIC_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
+        bool is64 = (magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64);
+        // Fat headers are always big-endian on disk.
         struct fat_header fh; pread_full(fd, &fh, sizeof fh, 0);
         uint32_t n = OSSwapBigToHostInt32(fh.nfat_arch);
         uint64_t p = sizeof fh;
@@ -175,9 +177,14 @@ int fp_parse(const char *path, fp_slice_t *slices, int max, int *count, char *er
                 struct fat_arch fa; if (!pread_full(fd, &fa, sizeof fa, p)) break; p += sizeof fa;
                 o = OSSwapBigToHostInt32(fa.offset); sz = OSSwapBigToHostInt32(fa.size); ct = OSSwapBigToHostInt32(fa.cputype);
             }
-            if (!(ct & CPU_ARCH_ABI64)) continue; // 32-bit slices are irrelevant on arm64-only devices
+            // Prefer arm64 / arm64e; still accept any 64-bit slice (simulators, etc.).
+            if (!(ct & CPU_ARCH_ABI64)) continue;
             char e2[128];
             if (parse_thin(fd, o, sz, &slices[*count], e2, sizeof e2) == 0) (*count)++;
+        }
+        if (*count == 0) {
+            snprintf(err, errlen, "fat Mach-O has no decryptable 64-bit slices");
+            rc = -1;
         }
     } else if (magic == MH_MAGIC_64) {
         rc = parse_thin(fd, 0, (uint64_t)st.st_size, &slices[0], err, errlen);
@@ -337,6 +344,14 @@ int fp_max_cryptid(const char *path) {
         if (sl[i].has_enc && (int)sl[i].cryptid > max) max = (int)sl[i].cryptid;
     }
     return max;
+}
+
+int fp_count_encrypted_slices(const char *path) {
+    fp_slice_t sl[FP_MAX_SLICES]; int n = 0; char err[256] = {0};
+    if (fp_parse(path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) return -1;
+    int c = 0;
+    for (int i = 0; i < n; i++) if (sl[i].has_enc && sl[i].cryptid) c++;
+    return c;
 }
 
 int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, void *ctx) {

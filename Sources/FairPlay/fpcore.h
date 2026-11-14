@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 
-#define FP_MAX_SLICES 8
+#define FP_MAX_SLICES 16
 
 typedef void (*fp_log_t)(void *ctx, const char *msg);
 
@@ -54,3 +54,5 @@ bool fp_is_macho(const char *path);
 int  fp_has_encrypted_slice(const char *path);
 // Highest cryptid across slices (0 = clear). -1 on parse error.
 int  fp_max_cryptid(const char *path);
+// Count slices with cryptid ≠ 0. -1 on parse error.
+int  fp_count_encrypted_slices(const char *path);

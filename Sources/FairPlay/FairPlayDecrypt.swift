@@ -29,15 +29,39 @@ struct FairPlayDecryptReport: Sendable {
     var decrypted: [String] = []
     var plain: [String] = []
     var failed: [String] = []
+    /// Secondary targets (Watch / widgets / App Clips) that failed but didn't abort the IPA.
+    var softFailed: [String] = []
+    var skipped: [String] = []
     var sourcePath: String = ""
     var usedInstalledPath: Bool = false
+    var scanned = 0
+    var encryptedBefore = 0
 
     var summary: String {
         var parts: [String] = []
+        if scanned > 0 { parts.append("\(scanned) scanned") }
         if !decrypted.isEmpty { parts.append("\(decrypted.count) decrypted") }
         if !plain.isEmpty { parts.append("\(plain.count) already clear") }
+        if !softFailed.isEmpty { parts.append("\(softFailed.count) optional failed") }
         if !failed.isEmpty { parts.append("\(failed.count) failed") }
         return parts.isEmpty ? "no Mach-Os" : parts.joined(separator: " · ")
+    }
+}
+
+/// How critical a binary is to a successful IPA.
+private enum FairPlayBinaryRole {
+    case main
+    case framework
+    case appex          // widgets / share / notification
+    case nestedApp      // Watch.app / App Clip / Messages
+    case other
+
+    /// Fail the whole job if this role can't decrypt.
+    var isRequired: Bool {
+        switch self {
+        case .main, .framework: return true
+        case .appex, .nestedApp, .other: return false
+        }
     }
 }
 
@@ -142,6 +166,7 @@ enum FairPlayDecrypt {
         var report = try decryptMachOs(readingFrom: source, writingTo: destApp, progress: progress)
         report.sourcePath = source.path
         report.usedInstalledPath = true
+        progress?(report.summary)
 
         try hardenDecryptedApp(at: destApp, report: report)
         return try zipDecryptedPayload(payload, displayName: displayName, report: report)
@@ -195,35 +220,37 @@ enum FairPlayDecrypt {
         progress: ((String) -> Void)? = nil
     ) throws -> FairPlayDecryptReport {
         var report = FairPlayDecryptReport()
-        let fm = FileManager.default
         let binaries = try collectMachOs(under: sourceApp)
         guard !binaries.isEmpty else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(sourceApp.lastPathComponent).")
         }
+        report.scanned = binaries.count
+        report.encryptedBefore = binaries.reduce(0) { acc, url in
+            let n = url.path.withCString { fp_count_encrypted_slices($0) }
+            return acc + max(0, n)
+        }
+        progress?("Found \(binaries.count) Mach-Os (\(report.encryptedBefore) encrypted slices)…")
 
-        // Main executable first — fail fast if FairPlay keys aren't available —
-        // then appex / frameworks / other, with limited parallelism.
         let ordered = prioritizeBinaries(binaries, app: sourceApp)
         guard let first = ordered.first else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found.")
         }
 
-        // 1) Main (or first) — serial, fail closed.
+        // 1) Required first binary (main) — serial, fail closed.
         try decryptOne(
             file: first, sourceApp: sourceApp, destApp: destApp,
-            index: 0, total: ordered.count, progress: progress, report: &report, requireMain: true
+            index: 0, total: ordered.count, progress: progress, report: &report,
+            role: role(of: first, under: sourceApp, app: sourceApp)
         )
 
-        // 2) Remainder — concurrent (cap 3) for frameworks / appex.
+        // 2) Remainder — concurrent (cap 4) across frameworks / appex / Watch / clips.
         let rest = Array(ordered.dropFirst())
         if !rest.isEmpty {
             progress?("Decrypting \(rest.count) more binaries…")
             let lock = NSLock()
-            var localFailed: [String] = []
-            var localDecrypted: [String] = []
-            var localPlain: [String] = []
+            var local = FairPlayDecryptReport()
             let group = DispatchGroup()
-            let gate = DispatchSemaphore(value: 3)
+            let gate = DispatchSemaphore(value: 4)
             for (offset, file) in rest.enumerated() {
                 group.enter()
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -231,33 +258,71 @@ enum FairPlayDecrypt {
                     gate.wait()
                     defer { gate.signal() }
                     var mini = FairPlayDecryptReport()
+                    let r = role(of: file, under: sourceApp, app: sourceApp)
                     do {
                         try decryptOne(
                             file: file, sourceApp: sourceApp, destApp: destApp,
                             index: offset + 1, total: ordered.count, progress: nil,
-                            report: &mini, requireMain: false
+                            report: &mini, role: r
                         )
                     } catch {
+                        // decryptOne only throws for required roles; soft-fail goes into report.
                         let rel = relativePath(file, under: sourceApp)
-                        lock.lock(); localFailed.append(rel); lock.unlock()
+                        lock.lock()
+                        if r.isRequired { local.failed.append(rel) }
+                        else { local.softFailed.append(rel) }
+                        lock.unlock()
                         return
                     }
                     lock.lock()
-                    localDecrypted.append(contentsOf: mini.decrypted)
-                    localPlain.append(contentsOf: mini.plain)
-                    localFailed.append(contentsOf: mini.failed)
+                    local.decrypted.append(contentsOf: mini.decrypted)
+                    local.plain.append(contentsOf: mini.plain)
+                    local.failed.append(contentsOf: mini.failed)
+                    local.softFailed.append(contentsOf: mini.softFailed)
                     lock.unlock()
                 }
             }
             group.wait()
-            report.decrypted.append(contentsOf: localDecrypted)
-            report.plain.append(contentsOf: localPlain)
-            report.failed.append(contentsOf: localFailed)
+            report.decrypted.append(contentsOf: local.decrypted)
+            report.plain.append(contentsOf: local.plain)
+            report.failed.append(contentsOf: local.failed)
+            report.softFailed.append(contentsOf: local.softFailed)
+        }
+
+        // 3) Retry pass on anything still encrypted (fairplayd can flake under load).
+        if !report.failed.isEmpty || !report.softFailed.isEmpty {
+            progress?("Retrying failed binaries…")
+            let retryTargets = (report.failed + report.softFailed).compactMap { rel -> URL? in
+                let src = sourceApp.appendingPathComponent(rel)
+                return FileManager.default.fileExists(atPath: src.path) ? src : nil
+            }
+            report.failed.removeAll()
+            report.softFailed.removeAll()
+            for (i, file) in retryTargets.enumerated() {
+                var mini = FairPlayDecryptReport()
+                let r = role(of: file, under: sourceApp, app: sourceApp)
+                do {
+                    try decryptOne(
+                        file: file, sourceApp: sourceApp, destApp: destApp,
+                        index: i, total: retryTargets.count, progress: progress,
+                        report: &mini, role: r
+                    )
+                    report.decrypted.append(contentsOf: mini.decrypted)
+                    report.plain.append(contentsOf: mini.plain)
+                    report.failed.append(contentsOf: mini.failed)
+                    report.softFailed.append(contentsOf: mini.softFailed)
+                } catch {
+                    if r.isRequired {
+                        throw error
+                    }
+                    report.softFailed.append(relativePath(file, under: sourceApp))
+                }
+            }
         }
 
         if !report.failed.isEmpty {
             throw FairPlayDecryptError.stillEncrypted(
-                "FairPlay left \(report.failed.count) binary(ies) encrypted: \(report.failed.prefix(4).joined(separator: ", "))\(report.failed.count > 4 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
+                "FairPlay left \(report.failed.count) required binary(ies) encrypted: \(report.failed.prefix(4).joined(separator: ", "))\(report.failed.count > 4 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
             )
         }
         return report
@@ -272,7 +337,7 @@ enum FairPlayDecrypt {
         total: Int,
         progress: ((String) -> Void)?,
         report: inout FairPlayDecryptReport,
-        requireMain: Bool
+        role: FairPlayBinaryRole
     ) throws {
         let fm = FileManager.default
         let rel = relativePath(file, under: sourceApp)
@@ -295,12 +360,20 @@ enum FairPlayDecrypt {
             try fm.moveItem(at: tmp, to: outFile)
             let still = outFile.path.withCString { fp_has_encrypted_slice($0) }
             if still != 0 {
-                report.failed.append(rel)
+                // Restore install/IPA copy so packaging still has a complete tree for soft-fail roles.
                 try? fm.removeItem(at: outFile)
-                if requireMain || isMainExecutable(rel, app: sourceApp) {
-                    throw FairPlayDecryptError.mainExecutableFailed(
-                        "Main executable still encrypted after decrypt. \(AppStoreDecryptGuide.failureHint)"
-                    )
+                if sourceApp != destApp {
+                    try? fm.copyItem(at: file, to: outFile)
+                }
+                if role.isRequired {
+                    report.failed.append(rel)
+                    if role == .main {
+                        throw FairPlayDecryptError.mainExecutableFailed(
+                            "Main executable still encrypted after decrypt. \(AppStoreDecryptGuide.failureHint)"
+                        )
+                    }
+                } else {
+                    report.softFailed.append(rel)
                 }
             } else {
                 report.decrypted.append(rel)
@@ -313,24 +386,31 @@ enum FairPlayDecrypt {
             report.plain.append(rel)
         } else {
             try? fm.removeItem(at: tmp)
-            report.failed.append(rel)
-            let detail = logBuf.lines.suffix(3).joined(separator: " | ")
-            if requireMain || isMainExecutable(rel, app: sourceApp) {
-                throw FairPlayDecryptError.mainExecutableFailed(
-                    "Couldn't decrypt the main executable (\(rel)). \(detail.isEmpty ? AppStoreDecryptGuide.failureHint : detail)"
-                )
+            let detail = logBuf.lines.suffix(2).joined(separator: " | ")
+            if role.isRequired {
+                report.failed.append(rel)
+                if role == .main {
+                    throw FairPlayDecryptError.mainExecutableFailed(
+                        "Couldn't decrypt the main executable (\(rel)). \(detail.isEmpty ? AppStoreDecryptGuide.failureHint : detail)"
+                    )
+                }
+            } else {
+                // Keep whatever was copied into dest (may still be encrypted).
+                if sourceApp != destApp, !fm.fileExists(atPath: outFile.path) {
+                    try? fm.copyItem(at: file, to: outFile)
+                }
+                report.softFailed.append(rel)
             }
         }
     }
 
     // MARK: - Harden / package
 
-    /// Strip FairPlay license crumbs / account metadata and verify no encrypted Mach-O remains.
+    /// Strip FairPlay license crumbs / account metadata and verify no *required* encrypted Mach-O remains.
     private static func hardenDecryptedApp(at app: URL, report: FairPlayDecryptReport) throws {
         let fm = FileManager.default
-        // SC_Info is useless (and unwanted) on a clear IPA.
+        // SC_Info is useless (and unwanted) on a clear IPA — including nested Watch / appex.
         try? fm.removeItem(at: app.appendingPathComponent("SC_Info"))
-        // Walk nested appex / frameworks for SC_Info too.
         if let enumerator = fm.enumerator(at: app, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
             for case let item as URL in enumerator where item.lastPathComponent == "SC_Info" {
                 try? fm.removeItem(at: item)
@@ -338,13 +418,19 @@ enum FairPlayDecrypt {
         }
         stripAccountData(from: app)
 
+        let softSet = Set(report.softFailed)
         let remaining = try collectMachOs(under: app).filter { url in
-            url.path.withCString { fp_has_encrypted_slice($0) } == 1
+            guard url.path.withCString({ fp_has_encrypted_slice($0) }) == 1 else { return false }
+            let rel = relativePath(url, under: app)
+            // Soft-failed Watch / widget / App Clip may remain encrypted without aborting.
+            if softSet.contains(rel) { return false }
+            let r = role(of: url, under: app, app: app)
+            return r.isRequired
         }
         if !remaining.isEmpty {
             let names = remaining.prefix(4).map(\.lastPathComponent).joined(separator: ", ")
             throw FairPlayDecryptError.stillEncrypted(
-                "Post-decrypt verify found cryptid ≠ 0 in \(remaining.count) file(s): \(names). \(AppStoreDecryptGuide.failureHint)"
+                "Post-decrypt verify found cryptid ≠ 0 in \(remaining.count) required file(s): \(names). \(AppStoreDecryptGuide.failureHint)"
             )
         }
         if report.decrypted.isEmpty && report.plain.isEmpty {
@@ -387,7 +473,14 @@ enum FairPlayDecrypt {
         report: FairPlayDecryptReport
     ) throws -> URL {
         let safe = sanitizeFileName(displayName)
-        let tag = report.failed.isEmpty ? "-decrypted" : "-PARTIAL"
+        let tag: String
+        if !report.failed.isEmpty {
+            tag = "-PARTIAL"
+        } else if !report.softFailed.isEmpty {
+            tag = "-decrypted-soft"
+        } else {
+            tag = "-decrypted"
+        }
         let outName = safe + tag + ".ipa"
         let dest = AppPaths.dir("inbox").appendingPathComponent(outName)
         let tmp = dest.appendingPathExtension("tmp")
@@ -425,48 +518,102 @@ enum FairPlayDecrypt {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
             at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey],
+            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]
         ) else {
             throw FairPlayDecryptError.failed("Couldn't read app bundle.")
         }
         let skipExt: Set<String> = [
             "png", "jpg", "jpeg", "gif", "webp", "car", "json", "plist", "strings", "stringsdict",
-            "nib", "storyboardc", "html", "js", "css", "mp3", "m4a", "caf", "mp4", "mov",
-            "ttf", "otf", "txt", "md", "xml", "svg", "pdf", "bundle"
+            "nib", "storyboardc", "html", "js", "css", "mp3", "m4a", "caf", "mp4", "mov", "wav",
+            "ttf", "otf", "ttc", "txt", "md", "xml", "svg", "pdf", "bundle", "metal", "metallib"
         ]
         var out: [URL] = []
+        var seen = Set<String>()
         for case let file as URL in enumerator {
+            let vals = try? file.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            if vals?.isDirectory == true {
+                let name = file.lastPathComponent
+                if name == "SC_Info" || name == "_CodeSignature" {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
             if skipExt.contains(file.pathExtension.lowercased()) { continue }
-            // Never feed SC_Info / CodeResources into the decryptor as "binaries".
-            if file.path.contains("/SC_Info/") { continue }
+            if file.path.contains("/SC_Info/") || file.path.contains("/_CodeSignature/") { continue }
+            if vals?.isSymbolicLink == true { continue }
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: file.path, isDirectory: &isDir), !isDir.boolValue else { continue }
-            let isLink = (try? file.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false
-            if isLink { continue }
+            let path = file.standardizedFileURL.path
+            guard !seen.contains(path) else { continue }
             if file.path.withCString({ fp_is_macho($0) }) {
+                seen.insert(path)
                 out.append(file)
+            }
+        }
+        // Explicitly seed nested Watch / App Clip / appex executables from Info.plist.
+        for nested in nestedBundleRoots(under: root) {
+            if let exe = mainExecutableURL(in: nested) {
+                let path = exe.standardizedFileURL.path
+                if !seen.contains(path), exe.path.withCString({ fp_is_macho($0) }) {
+                    seen.insert(path)
+                    out.append(exe)
+                }
             }
         }
         return out
     }
 
-    /// Order: main executable → appex → frameworks → everything else.
+    /// Nested .appex / Watch.app / App Clip .app containers under the root bundle.
+    private static func nestedBundleRoots(under root: URL) -> [URL] {
+        var roots: [URL] = []
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        let rootPath = root.standardizedFileURL.path
+        for case let url as URL in enumerator {
+            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+            guard isDir else { continue }
+            let ext = url.pathExtension.lowercased()
+            guard ext == "appex" || ext == "app" else { continue }
+            if url.standardizedFileURL.path == rootPath { continue }
+            roots.append(url)
+        }
+        return roots
+    }
+
+    /// Order: main → frameworks → appex → nested Watch/App Clip → other.
     private static func prioritizeBinaries(_ files: [URL], app: URL) -> [URL] {
-        let mainPath = mainExecutableURL(in: app)?.path
-        func rank(_ u: URL) -> Int {
-            let p = u.path
-            if let mainPath, p == mainPath { return 0 }
-            if p.contains(".appex/") { return 1 }
-            if p.contains(".framework/") { return 2 }
-            if p.contains("/PlugIns/") { return 1 }
-            return 3
+        func order(_ r: FairPlayBinaryRole) -> Int {
+            switch r {
+            case .main: return 0
+            case .framework: return 1
+            case .appex: return 2
+            case .nestedApp: return 3
+            case .other: return 4
+            }
         }
         return files.sorted { a, b in
-            let ra = rank(a), rb = rank(b)
-            if ra != rb { return ra < rb }
+            let oa = order(role(of: a, under: app, app: app))
+            let ob = order(role(of: b, under: app, app: app))
+            if oa != ob { return oa < ob }
             return a.path < b.path
         }
+    }
+
+    private static func role(of file: URL, under root: URL, app: URL) -> FairPlayBinaryRole {
+        let rel = relativePath(file, under: root)
+        if isMainExecutable(rel, app: app) { return .main }
+        let parts = rel.split(separator: "/")
+        if parts.contains(where: { $0.hasSuffix(".appex") }) { return .appex }
+        if parts.dropFirst().contains(where: { $0.hasSuffix(".app") }) { return .nestedApp }
+        if rel.contains(".framework/") || rel.hasSuffix(".dylib") { return .framework }
+        if parts.first == "PlugIns" || parts.first == "Extensions" { return .appex }
+        if parts.first == "Watch" || parts.first == "AppClips" { return .nestedApp }
+        return .other
     }
 
     /// Batch decrypt several installed apps (device FairPlay). Stops on first hard failure if `stopOnError`.
