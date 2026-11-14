@@ -556,10 +556,23 @@ struct DecryptView: View {
     private static func needsStoreVerification(_ error: String?) -> Bool {
         guard let error, !error.isEmpty else { return false }
         let e = error.lowercased()
+        // Portal cert errors (7460) are not store 2FA — don't stack the SMS entry on them.
+        if isPortalCertError(error) { return false }
         return e.contains("verification code")
             || e.contains("two-factor")
             || e.contains("2fa")
             || e.contains("submit code")
+            || e.contains("password token")
+            || e.contains("resend text message")
+    }
+
+    private static func isPortalCertError(_ error: String?) -> Bool {
+        guard let error, !error.isEmpty else { return false }
+        let e = error.lowercased()
+        return e.contains("7460")
+            || e.contains("developer portal")
+            || e.contains("development certificate")
+            || e.contains("pending certificate request")
     }
 
     /// Only show the one-time App Store key hint when FairPlay/keys look like the failure mode.
@@ -732,7 +745,8 @@ struct DecryptView: View {
                     Text(c.error ?? "Decrypt failed.")
                         .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
-                    if Self.needsStoreVerification(c.error) || AppleIDStore.shared.storeNeedsVerification {
+                    if !Self.isPortalCertError(c.error),
+                       Self.needsStoreVerification(c.error) || AppleIDStore.shared.storeNeedsVerification {
                         DecryptStoreCodeEntry(retryApp: app)
                     }
                     FailurePlaybookCard(errorText: c.error)

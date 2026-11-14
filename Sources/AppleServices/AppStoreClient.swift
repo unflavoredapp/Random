@@ -122,7 +122,13 @@ enum AppStoreClientError: LocalizedError {
 final class AppStoreClient: ObservableObject {
     static let shared = AppStoreClient()
 
-    private let session = URLSession(configuration: .ephemeral)
+    /// Same pattern as GSA: do not auto-follow redirects. Authenticate must re-POST the
+    /// plist to `Location` (URLSession would otherwise convert POST→GET onto HTML 404/500).
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        config.httpMaximumConnectionsPerHost = 1
+        return URLSession(configuration: config, delegate: StoreRedirectBlocker.shared, delegateQueue: nil)
+    }()
     private let configuratorUA = "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
 
     private enum Paths {
@@ -1004,8 +1010,24 @@ final class AppStoreClient: ObservableObject {
                 headerMap[String(describing: k)] = String(describing: v)
             }
         }
-        if allowRedirectCapture, (300..<400).contains(status) {
-            return ([:], headerMap, status)
+        if (300..<400).contains(status) {
+            if allowRedirectCapture {
+                return ([:], headerMap, status)
+            }
+            // Non-auth calls: follow one hop manually with the same method/body.
+            if let loc = headerMap["Location"] ?? headerMap["location"], !loc.isEmpty,
+               let next = URL(string: loc, relativeTo: endpoint)?.absoluteString {
+                return try await postPlist(
+                    url: next,
+                    body: body,
+                    anisette: anisette,
+                    extraHeaders: extraHeaders,
+                    allowRedirectCapture: false,
+                    forcePristineClientInfo: forcePristineClientInfo,
+                    stripSpoofIdentity: stripSpoofIdentity
+                )
+            }
+            throw AppStoreClientError.network("Store redirected (HTTP \(status)) without a usable Location.")
         }
         // Empty / no-content: usually spoof identity / Client-Info fighting anisette.
         // Retry once with pristine headers before surfacing HTTP 204 (owned list used to
@@ -1197,5 +1219,20 @@ final class AppStoreClient: ObservableObject {
         if let n = any as? NSNumber { return n.intValue }
         if let s = any as? String, let i = Int(s) { return i }
         return nil
+    }
+}
+
+/// Blocks HTTP redirects so authenticate can re-POST to pod `Location` (ipatool-style).
+private final class StoreRedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = StoreRedirectBlocker()
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }
