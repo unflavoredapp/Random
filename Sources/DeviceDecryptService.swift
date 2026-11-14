@@ -406,6 +406,10 @@ final class DeviceDecryptService: ObservableObject {
             )
         } catch AppStoreClientError.tokenExpired, AppStoreClientError.needsTwoFactor {
             throw DecryptError("App Store session needs refresh — sign in again under Settings › Store Access, then retry.")
+        } catch AppStoreClientError.network(let detail) {
+            throw DecryptError(
+                "App Store download failed (\(detail)). Try: Settings › Store Access → Sign Out → Sign In, then decrypt again. If spoof is on, leave Auto-pick on and keep Client-Info rewrite off."
+            )
         }
 
         // Prefer live install path only when we didn’t pin an older/different build.

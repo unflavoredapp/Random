@@ -606,6 +606,22 @@ struct StoreDeviceSpoofCard: View {
                     }
                     .tint(TetherlessPalette.accent)
 
+                    Toggle(isOn: Binding(
+                        get: { spoof.rewriteClientInfo },
+                        set: { spoof.rewriteClientInfo = $0; persist() }
+                    )) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Rewrite Client-Info (advanced)")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Text("Off by default. Turning this on can cause HTTP 204/404 from Apple when anisette MID doesn’t match.")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .tint(TetherlessPalette.accent)
+
                     Menu {
                         ForEach(StoreUserAgentStyle.allCases, id: \.self) { style in
                             Button(style.label) {

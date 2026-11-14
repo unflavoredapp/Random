@@ -516,14 +516,22 @@ struct DecryptView: View {
 
     /// Only show the one-time App Store key hint when FairPlay/keys look like the failure mode.
     private static func shouldShowAppStoreKeyHint(_ error: String?) -> Bool {
-        guard let error, !error.isEmpty else { return true }
+        guard let error, !error.isEmpty else { return false }
         let e = error.lowercased()
+        // Network / store protocol failures are not missing FairPlay keys.
+        if e.contains("non-plist") || e.contains("http 204") || e.contains("http 404")
+            || e.contains("http 500") || e.contains("http 502") || e.contains("http 503")
+            || e.contains("store request failed") || e.contains("cdn download") {
+            return false
+        }
         if e.contains("pair") || e.contains("on-disk path") || e.contains("timed out") { return false }
         if e.contains("sign in under") || e.contains("store access") { return false }
+        if e.contains("token") || e.contains("password") || e.contains("2fa") || e.contains("verification") {
+            return false
+        }
         return e.contains("fairplay")
             || e.contains("cryptid")
             || e.contains("encrypted")
-            || e.contains("app store")
             || e.contains("decryption key")
             || e.contains("sc_info")
             || e.contains("license")

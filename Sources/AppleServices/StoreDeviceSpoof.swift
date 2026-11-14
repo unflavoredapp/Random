@@ -75,6 +75,9 @@ struct StoreDeviceSpoof: Equatable, Sendable {
     /// When true (default), unpinned downloads auto-select an externalVersionId
     /// whose min iOS fits the claimed OS.
     var autoSelectCompatibleVersion: Bool
+    /// Rewrite `X-MMe-Client-Info` to the spoofed model/OS. Off by default —
+    /// mismatched Client-Info vs anisette MID often yields HTTP 204/404 from Apple.
+    var rewriteClientInfo: Bool
 
     static let defaultsKey = "tetherless.storeDeviceSpoof.v3"
     private static let legacyKeys = ["tetherless.storeDeviceSpoof.v2", "tetherless.storeDeviceSpoof"]
@@ -87,7 +90,8 @@ struct StoreDeviceSpoof: Equatable, Sendable {
             build: "",
             hardwarePlatform: "",
             style: .configuratorIOS,
-            autoSelectCompatibleVersion: true
+            autoSelectCompatibleVersion: true,
+            rewriteClientInfo: false
         )
     }
 
@@ -108,6 +112,7 @@ struct StoreDeviceSpoof: Equatable, Sendable {
                     m.hardwarePlatform = v2.hardwarePlatform ?? ""
                     m.style = v2.style ?? .configuratorIOS
                     m.autoSelectCompatibleVersion = true
+                    m.rewriteClientInfo = false
                     Self.current = m
                     return m
                 }
@@ -118,6 +123,7 @@ struct StoreDeviceSpoof: Equatable, Sendable {
                     m.deviceModel = v1.deviceModel
                     m.build = v1.build
                     m.style = .configuratorIOS
+                    m.rewriteClientInfo = false
                     Self.current = m
                     return m
                 }
@@ -141,6 +147,7 @@ struct StoreDeviceSpoof: Equatable, Sendable {
         style = profile.style
         hardwarePlatform = Self.hardwarePlatform(forModel: deviceModel) ?? hardwarePlatform
         autoSelectCompatibleVersion = true
+        rewriteClientInfo = false
         enabled = profile.id != "device"
         if profile.id == "device" {
             iosVersion = UIDevice.current.systemVersion
@@ -222,30 +229,23 @@ struct StoreDeviceSpoof: Equatable, Sendable {
         }
     }
 
-    /// Extra identity headers AMS / buy.itunes often honor alongside UA.
+    /// Extra identity headers alongside UA. Keep conservative — exotic keys have 404’d some pods.
     func storeIdentityHeaders() -> [String: String] {
         var headers: [String: String] = [
             "X-Apple-I-Device-Type": effectiveModel.hasPrefix("iPad") ? "2" : "1",
             "X-Apple-Client-Application": "Software",
-            "X-Apple-I-Requested-Model": effectiveModel,
-            "X-Apple-I-OS-Version": effectiveIOSVersion,
-            "X-Apple-Software-Version": effectiveBuild,
-            "X-Apple-I-Software-Build": effectiveBuild,
-            "X-Apple-I-Device-Model": effectiveModel,
         ]
         if enabled {
-            headers["X-Apple-I-Client-Application"] = "com.apple.AppStore"
-            headers["X-Apple-Client-Versions"] = "iOS/\(effectiveIOSVersion)"
-            headers["X-Apple-Model"] = effectiveModel
-            headers["X-Apple-Hardware-Model"] = effectiveHardwarePlatform
+            headers["X-Apple-I-OS-Version"] = effectiveIOSVersion
+            headers["X-Apple-I-Requested-Model"] = effectiveModel
         }
         return headers
     }
 
     /// Rewrite anisette `X-MMe-Client-Info` so store requests claim the spoofed device/OS.
-    /// Keeps AuthKit product tokens intact; only swaps model + OS version/build segments.
+    /// Only when `rewriteClientInfo` is on — mismatched Client-Info vs MID/OTP often 204/404s.
     func rewritingClientInfo(_ original: String) -> String {
-        guard enabled else { return original }
+        guard enabled, rewriteClientInfo else { return original }
         var info = original
         let model = effectiveModel
         let ios = effectiveIOSVersion
@@ -277,16 +277,11 @@ struct StoreDeviceSpoof: Equatable, Sendable {
         return info
     }
 
-    /// Plist fields merged into buy/download bodies when spoofing.
+    /// Extra plist fields — keep minimal. Extra keys have caused Apple HTTP 404 on some pods.
     func storeRequestBodyFields(guid: String) -> [String: Any] {
-        guard enabled else { return [:] }
-        return [
-            "osVersion": effectiveIOSVersion,
-            "serialNumber": "0",
-            "guid": guid,
-            "deviceType": effectiveModel.hasPrefix("iPad") ? "iPad" : "iPhone",
-            "softwareVersionBuddy": effectiveBuild,
-        ]
+        _ = guid
+        // serialNumber is already set by the download caller when needed.
+        return [:]
     }
 
     /// Whether `minOS` from store metadata is installable under the claimed iOS.
@@ -401,7 +396,7 @@ private struct LegacyV2: Codable {
 
 extension StoreDeviceSpoof: Codable {
     enum CodingKeys: String, CodingKey {
-        case enabled, iosVersion, deviceModel, build, hardwarePlatform, style, autoSelectCompatibleVersion
+        case enabled, iosVersion, deviceModel, build, hardwarePlatform, style, autoSelectCompatibleVersion, rewriteClientInfo
     }
 
     init(from decoder: Decoder) throws {
@@ -413,6 +408,7 @@ extension StoreDeviceSpoof: Codable {
         hardwarePlatform = try c.decodeIfPresent(String.self, forKey: .hardwarePlatform) ?? ""
         style = try c.decodeIfPresent(StoreUserAgentStyle.self, forKey: .style) ?? .configuratorIOS
         autoSelectCompatibleVersion = try c.decodeIfPresent(Bool.self, forKey: .autoSelectCompatibleVersion) ?? true
+        rewriteClientInfo = try c.decodeIfPresent(Bool.self, forKey: .rewriteClientInfo) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -424,5 +420,6 @@ extension StoreDeviceSpoof: Codable {
         try c.encode(hardwarePlatform, forKey: .hardwarePlatform)
         try c.encode(style, forKey: .style)
         try c.encode(autoSelectCompatibleVersion, forKey: .autoSelectCompatibleVersion)
+        try c.encode(rewriteClientInfo, forKey: .rewriteClientInfo)
     }
 }
