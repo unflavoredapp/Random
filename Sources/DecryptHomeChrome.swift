@@ -4,6 +4,7 @@
 //  store card, search field, and pick-encrypted-IPA card.
 //
 
+import IDeviceSwift
 import SwiftUI
 
 /// Centered title + settings gear (reference Decrypt header).

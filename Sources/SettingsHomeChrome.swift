@@ -289,6 +289,47 @@ struct SettingsAppleIDCard: View {
 }
 
 
+@MainActor
+final class AppUpdateChecker: ObservableObject {
+    static let shared = AppUpdateChecker()
+
+    @Published private(set) var remoteVersion: String?
+    @Published private(set) var downloadURL: URL?
+    @Published private(set) var checking = false
+    @Published private(set) var message: String?
+
+    var localVersion: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? Theme.appVersion
+    }
+
+    var updateAvailable: Bool {
+        guard let remote = remoteVersion else { return false }
+        return VersionCompare.isNewer(remote: remote, than: localVersion)
+    }
+
+    func refresh() async {
+        checking = true
+        defer { checking = false }
+        do {
+            guard let url = URL(string: "https://api.github.com/repos/unflavoredapp/Random/releases/latest") else { return }
+            var req = URLRequest(url: url)
+            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            let (data, resp) = try await URLSession.shared.data(for: req)
+            guard (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                message = "Couldn't check for updates."
+                return
+            }
+            let tag = ((obj["tag_name"] as? String) ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
+            remoteVersion = tag.isEmpty ? nil : tag
+            if let html = obj["html_url"] as? String { downloadURL = URL(string: html) }
+            message = nil
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+}
+
 struct SettingsSoftwareUpdateCard: View {
     @ObservedObject private var checker = AppUpdateChecker.shared
     @Environment(\.openURL) private var openURL
