@@ -54,7 +54,12 @@ struct StoreDownloadItem: @unchecked Sendable {
     var itemName: String { stringMeta("itemName") ?? stringMeta("playlistName") ?? "" }
     var artistName: String { stringMeta("artistName") ?? "" }
     var minimumOS: String? {
-        stringMeta("minimumOSVersion") ?? stringMeta("MinimumOSVersion") ?? stringMeta("minOS")
+        stringMeta("minimumOSVersion")
+            ?? stringMeta("MinimumOSVersion")
+            ?? stringMeta("minimumOsVersion")
+            ?? stringMeta("minOS")
+            ?? stringMeta("systemVersion")
+            ?? stringMeta("requiredOS")
     }
 
     private func stringMeta(_ key: String) -> String? {
@@ -168,10 +173,12 @@ final class AppStoreClient: ObservableObject {
                     "why": "signIn"
                 ],
                 anisette: anisette,
-                extraHeaders: [
-                    "Content-Type": "application/x-apple-plist",
-                    "User-Agent": storeUserAgent
-                ],
+                extraHeaders: {
+                    var h = StoreDeviceSpoof.current.storeIdentityHeaders()
+                    h["Content-Type"] = "application/x-apple-plist"
+                    h["User-Agent"] = storeUserAgent
+                    return h
+                }(),
                 allowRedirectCapture: true
             )
             last = dict
@@ -377,6 +384,56 @@ final class AppStoreClient: ObservableObject {
         return nil
     }
 
+    /// When Store iOS spoof is on, pick the newest externalVersionId whose min iOS
+    /// fits the claimed OS (or latest when claiming “newest”).
+    func resolveSpoofCompatibleVersionId(
+        adamId: Int,
+        account: StorefrontSession
+    ) async throws -> String? {
+        let spoof = StoreDeviceSpoof.current
+        guard spoof.enabled, spoof.autoSelectCompatibleVersion else { return nil }
+
+        let listed = try await listExternalVersionIds(adamId: adamId, account: account)
+        if spoof.claimsNewestOS {
+            return listed.latest ?? listed.ids.last
+        }
+
+        // Walk newest → oldest; resolve metadata until minOS fits claimed iOS.
+        let newestFirst = Array(listed.ids.reversed())
+        let probeLimit = min(newestFirst.count, 48)
+        for ext in newestFirst.prefix(probeLimit) {
+            do {
+                let item = try await fetchDownloadItem(
+                    adamId: adamId,
+                    account: account,
+                    externalVersionId: ext
+                )
+                if spoof.acceptsMinimumOS(item.minimumOS) {
+                    return ext
+                }
+            } catch {
+                continue
+            }
+        }
+        // Fall back to latest — UA spoof may still influence the unpinned path.
+        return listed.latest ?? listed.ids.last
+    }
+
+    /// Resolve pin from explicit version string, else spoof-compatible auto pin.
+    func resolveDownloadVersionId(
+        adamId: Int,
+        account: StorefrontSession,
+        version: String? = nil,
+        externalVersionId: String? = nil
+    ) async throws -> String? {
+        let explicit = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !explicit.isEmpty { return explicit }
+        if let fromLabel = try await resolveExternalVersionId(adamId: adamId, account: account, version: version) {
+            return fromLabel
+        }
+        return try await resolveSpoofCompatibleVersionId(adamId: adamId, account: account)
+    }
+
     /// Best-effort purchase / download history for this Apple ID.
     func purchaseHistory(account: StorefrontSession) async throws -> [OwnedStoreApp] {
         let anisette = try await AnisetteClient.shared.fetch()
@@ -498,15 +555,36 @@ final class AppStoreClient: ObservableObject {
         destination: URL,
         price: Double = 0,
         externalVersionId: String? = nil,
+        version: String? = nil,
         onProgress: ((String) -> Void)? = nil
     ) async throws -> (url: URL, item: StoreDownloadItem) {
+        var pin = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if pin.isEmpty {
+            if let resolved = try? await resolveDownloadVersionId(
+                adamId: adamId,
+                account: account,
+                version: version,
+                externalVersionId: nil
+            ) {
+                pin = resolved
+            }
+        }
+        if !pin.isEmpty {
+            let spoof = StoreDeviceSpoof.current
+            if spoof.enabled {
+                onProgress?("Spoof \(spoof.summaryLabel) · pinning \(pin)…")
+            } else {
+                onProgress?("Pinning store build \(pin)…")
+            }
+        }
+
         onProgress?("Ensuring App Store license…")
         do {
             try await purchaseFreeLicense(
                 adamId: adamId,
                 account: account,
                 price: price,
-                externalVersionId: externalVersionId
+                externalVersionId: pin.isEmpty ? nil : pin
             )
         } catch AppStoreClientError.message(let m)
             where m.localizedCaseInsensitiveContains("already") || m.localizedCaseInsensitiveContains("license") {
@@ -515,13 +593,34 @@ final class AppStoreClient: ObservableObject {
             if case .tokenExpired = e { throw e }
             // License already exists often surfaces as HTTP 500 in ipatool — continue to download.
         }
-        return try await downloadIPA(
+
+        var result = try await downloadIPA(
             adamId: adamId,
             account: account,
             destination: destination,
-            externalVersionId: externalVersionId,
+            externalVersionId: pin.isEmpty ? nil : pin,
             onProgress: onProgress
         )
+
+        // If spoof wanted a lower OS but Apple still handed a newer-min package, walk older IDs.
+        let spoof = StoreDeviceSpoof.current
+        if spoof.enabled,
+           spoof.autoSelectCompatibleVersion,
+           !spoof.claimsNewestOS,
+           !spoof.acceptsMinimumOS(result.item.minimumOS) {
+            onProgress?("Package needs iOS \(result.item.minimumOS ?? "?")+ — finding older build for spoof…")
+            if let older = try? await resolveSpoofCompatibleVersionId(adamId: adamId, account: account),
+               older != pin {
+                result = try await downloadIPA(
+                    adamId: adamId,
+                    account: account,
+                    destination: destination,
+                    externalVersionId: older,
+                    onProgress: onProgress
+                )
+            }
+        }
+        return result
     }
 
     // MARK: - Purchase / download wire
@@ -592,50 +691,86 @@ final class AppStoreClient: ObservableObject {
         anisette: AnisetteHeaders,
         externalVersionId: String?
     ) async throws -> StoreDownloadItem {
-        // volumeStore uses externalVersionId; redownload uses appExtVrsId.
+        // Try volumeStore (pod → p25 → bare) then redownload. Treat 204/404/5002 as soft fails.
+        var lastError: Error?
+        for endpoint in volumeStoreCandidates(account: account) {
+            do {
+                return try await downloadProductOnce(
+                    adamId: adamId,
+                    account: account,
+                    anisette: anisette,
+                    endpoint: endpoint,
+                    versionKey: "externalVersionId",
+                    externalVersionId: externalVersionId
+                )
+            } catch {
+                if isSoftDownloadFailure(error) {
+                    lastError = error
+                    continue
+                }
+                throw error
+            }
+        }
+
         do {
             return try await downloadProductOnce(
                 adamId: adamId,
                 account: account,
                 anisette: anisette,
-                endpoint: volumeStoreURL(account: account),
-                versionKey: "externalVersionId",
+                endpoint: Paths.redownload,
+                versionKey: "appExtVrsId",
                 externalVersionId: externalVersionId
             )
-        } catch let e as AppStoreClientError {
-            // Owned apps often return 5002 / empty items on volumeStore — fall back to redownload.
-            switch e {
-            case .message(let m)
-                where m.contains("5002")
-                    || m.localizedCaseInsensitiveContains("no download")
-                    || m.localizedCaseInsensitiveContains("no longer available")
-                    || m.localizedCaseInsensitiveContains("empty"):
-                break
-            case .tokenExpired:
-                // Historical bug: some owned-app 5002s were mapped to token expiry.
-                // Probe redownload before failing the session.
-                break
-            default:
-                throw e
+        } catch {
+            if isSoftDownloadFailure(error), let lastError {
+                throw lastError
             }
+            throw error
         }
-
-        return try await downloadProductOnce(
-            adamId: adamId,
-            account: account,
-            anisette: anisette,
-            endpoint: Paths.redownload,
-            versionKey: "appExtVrsId",
-            externalVersionId: externalVersionId
-        )
     }
 
-    private func volumeStoreURL(account: StorefrontSession) -> String {
-        var host = Paths.downloadHost
+    private func volumeStoreCandidates(account: StorefrontSession) -> [String] {
+        var hosts: [String] = []
         if let pod = account.pod, !pod.isEmpty {
-            host = "https://p\(pod)-buy.itunes.apple.com"
+            hosts.append("https://p\(pod)-buy.itunes.apple.com")
         }
-        return "\(host)\(Paths.downloadPath)?guid=\(account.guid)"
+        hosts.append(Paths.downloadHost) // p25
+        hosts.append("https://buy.itunes.apple.com")
+        // Dedup while preserving order.
+        var seen = Set<String>()
+        return hosts.compactMap { host in
+            guard seen.insert(host).inserted else { return nil }
+            return "\(host)\(Paths.downloadPath)?guid=\(account.guid)"
+        }
+    }
+
+    private func isSoftDownloadFailure(_ error: Error) -> Bool {
+        if let e = error as? AppStoreClientError {
+            switch e {
+            case .tokenExpired:
+                // Probe next endpoint before forcing re-login (owned-app 5002 was once mapped here).
+                return true
+            case .message(let m):
+                let lower = m.lowercased()
+                return m.contains("5002")
+                    || lower.contains("no download")
+                    || lower.contains("no longer available")
+                    || lower.contains("empty")
+                    || lower.contains("204")
+                    || lower.contains("404")
+                    || lower.contains("non-plist")
+            case .network(let m):
+                let lower = m.lowercased()
+                return lower.contains("204")
+                    || lower.contains("404")
+                    || lower.contains("non-plist")
+                    || lower.contains("502")
+                    || lower.contains("503")
+            default:
+                return false
+            }
+        }
+        return false
     }
 
     private func downloadProductOnce(
@@ -649,7 +784,8 @@ final class AppStoreClient: ObservableObject {
         var body: [String: Any] = [
             "creditDisplay": "",
             "guid": account.guid,
-            "salableAdamId": adamId
+            "salableAdamId": adamId,
+            "serialNumber": "0"
         ]
         if let ext = externalVersionId, !ext.isEmpty {
             body[versionKey] = ext
@@ -722,7 +858,8 @@ final class AppStoreClient: ObservableObject {
         body: [String: Any],
         anisette: AnisetteHeaders,
         extraHeaders: [String: String],
-        allowRedirectCapture: Bool = false
+        allowRedirectCapture: Bool = false,
+        forcePristineClientInfo: Bool = false
     ) async throws -> (dict: [String: Any], headers: [String: String], status: Int) {
         guard let endpoint = URL(string: url) else {
             throw AppStoreClientError.message("Bad App Store URL.")
@@ -732,7 +869,7 @@ final class AppStoreClient: ObservableObject {
         req.httpMethod = "POST"
         req.httpBody = plist
         req.httpShouldHandleCookies = true
-        applyAnisette(&req, anisette)
+        applyAnisette(&req, anisette, forcePristineClientInfo: forcePristineClientInfo)
         for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
 
         let (data, resp) = try await session.data(for: req)
@@ -747,18 +884,50 @@ final class AppStoreClient: ObservableObject {
         if allowRedirectCapture, (300..<400).contains(status) {
             return ([:], headerMap, status)
         }
+        // Empty / no-content: owned-license or bad host — let callers try the next endpoint.
+        if status == 204 || (data.isEmpty && (status == 0 || status == 204)) {
+            throw AppStoreClientError.network("Non-plist App Store response (HTTP 204)")
+        }
         if data.isEmpty, status == 500 {
             return (["failureType": "5002"], headerMap, status)
         }
-        guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
+        if status == 404 {
             let raw = String(data: data, encoding: .utf8) ?? ""
-            throw AppStoreClientError.network("Non-plist App Store response (HTTP \(status)): \(raw.prefix(160))")
+            throw AppStoreClientError.network("Non-plist App Store response (HTTP 404): \(raw.prefix(120))")
+        }
+        guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
+            // One retry with pristine Client-Info — spoof rewrite is a common 204/404 cause.
+            if !forcePristineClientInfo, StoreDeviceSpoof.current.enabled {
+                return try await postPlist(
+                    url: url,
+                    body: body,
+                    anisette: anisette,
+                    extraHeaders: extraHeaders,
+                    allowRedirectCapture: allowRedirectCapture,
+                    forcePristineClientInfo: true
+                )
+            }
+            let raw = String(data: data, encoding: .utf8) ?? ""
+            throw AppStoreClientError.network(
+                "Store request failed (HTTP \(status)). Sign in again under Store Access if this keeps happening. \(raw.prefix(100))"
+            )
         }
         return (dict, headerMap, status)
     }
 
-    private func applyAnisette(_ req: inout URLRequest, _ a: AnisetteHeaders) {
-        req.setValue(a.clientInfo, forHTTPHeaderField: "X-MMe-Client-Info")
+    private func applyAnisette(
+        _ req: inout URLRequest,
+        _ a: AnisetteHeaders,
+        forcePristineClientInfo: Bool = false
+    ) {
+        // Keep Client-Info aligned with anisette MID/OTP unless user explicitly enables rewrite.
+        let clientInfo: String
+        if forcePristineClientInfo {
+            clientInfo = a.clientInfo
+        } else {
+            clientInfo = StoreDeviceSpoof.current.rewritingClientInfo(a.clientInfo)
+        }
+        req.setValue(clientInfo, forHTTPHeaderField: "X-MMe-Client-Info")
         req.setValue(a.machineID, forHTTPHeaderField: "X-Apple-I-MD-M")
         req.setValue(a.oneTimePassword, forHTTPHeaderField: "X-Apple-I-MD")
         req.setValue(a.localUserID, forHTTPHeaderField: "X-Apple-I-MD-LU")

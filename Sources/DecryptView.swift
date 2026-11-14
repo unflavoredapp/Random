@@ -516,14 +516,22 @@ struct DecryptView: View {
 
     /// Only show the one-time App Store key hint when FairPlay/keys look like the failure mode.
     private static func shouldShowAppStoreKeyHint(_ error: String?) -> Bool {
-        guard let error, !error.isEmpty else { return true }
+        guard let error, !error.isEmpty else { return false }
         let e = error.lowercased()
+        // Network / store protocol failures are not missing FairPlay keys.
+        if e.contains("non-plist") || e.contains("http 204") || e.contains("http 404")
+            || e.contains("http 500") || e.contains("http 502") || e.contains("http 503")
+            || e.contains("store request failed") || e.contains("cdn download") {
+            return false
+        }
         if e.contains("pair") || e.contains("on-disk path") || e.contains("timed out") { return false }
         if e.contains("sign in under") || e.contains("store access") { return false }
+        if e.contains("token") || e.contains("password") || e.contains("2fa") || e.contains("verification") {
+            return false
+        }
         return e.contains("fairplay")
             || e.contains("cryptid")
             || e.contains("encrypted")
-            || e.contains("app store")
             || e.contains("decryption key")
             || e.contains("sc_info")
             || e.contains("license")
@@ -742,6 +750,12 @@ private struct DecryptVersionsSheet: View {
                             .listRowBackground(Color.clear)
                     } else {
                         ForEach(c.versions) { v in
+                            let spoof = StoreDeviceSpoof.current
+                            let fitsSpoof = !spoof.enabled || spoof.acceptsMinimumOS(v.minOS)
+                            let fitsDevice = {
+                                guard let min = v.minOS, !min.isEmpty else { return true }
+                                return StoreDeviceSpoof.compareVersions(min, deviceIOS) != .orderedDescending
+                            }()
                             Button {
                                 if DecryptChannel.current == .telegram {
                                     c.start(url: app.url, version: v.v, display: app.name)
@@ -761,7 +775,12 @@ private struct DecryptVersionsSheet: View {
                                             if let min = v.minOS, !min.isEmpty {
                                                 Text("iOS \(min)+")
                                                     .font(.caption2)
-                                                    .foregroundStyle(.white.opacity(0.45))
+                                                    .foregroundStyle(fitsSpoof ? .white.opacity(0.45) : .orange.opacity(0.85))
+                                            }
+                                            if spoof.enabled, fitsSpoof {
+                                                Text("spoof OK")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(TetherlessPalette.accent.opacity(0.8))
                                             }
                                             if let ext = v.externalId, !ext.isEmpty, ext != v.v {
                                                 Text("id \(ext)")
@@ -773,6 +792,8 @@ private struct DecryptVersionsSheet: View {
                                     Spacer()
                                     if v.current {
                                         Text("Latest").font(.subheadline).foregroundStyle(.white.opacity(0.45))
+                                    } else if !fitsDevice {
+                                        Text("Device").font(.caption).foregroundStyle(.orange.opacity(0.7))
                                     }
                                 }
                             }
