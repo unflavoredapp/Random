@@ -41,10 +41,46 @@ final class DeviceDecryptService: ObservableObject {
             let account = try await AppleIDStore.shared.ensureStorefrontSession()
             return try await AppStoreClient.shared.purchaseHistory(account: account)
         } catch AppStoreClientError.tokenExpired {
-            // Stale passwordToken still looked "usable" — force a fresh store login once.
+            // Soft refresh — keeps the Apple ID signed in; replaces the store token in place.
             AppleIDStore.shared.invalidateStorefrontSession()
             let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
             return try await AppStoreClient.shared.purchaseHistory(account: account)
+        }
+    }
+
+    /// purchaseAndDownload with one automatic store-token refresh on expiry (no sign-out).
+    private func purchaseAndDownloadWithStoreRefresh(
+        adamId: Int,
+        account: inout StorefrontSession,
+        destination: URL,
+        externalVersionId: String?,
+        version: String?
+    ) async throws -> (url: URL, item: StoreDownloadItem) {
+        do {
+            return try await AppStoreClient.shared.purchaseAndDownload(
+                adamId: adamId,
+                account: account,
+                destination: destination,
+                externalVersionId: externalVersionId,
+                version: version,
+                onProgress: { [weak self] msg in
+                    Task { @MainActor in self?.publishDecryptProgress(msg) }
+                }
+            )
+        } catch AppStoreClientError.tokenExpired {
+            publishDecryptProgress("Refreshing App Store session…")
+            AppleIDStore.shared.invalidateStorefrontSession()
+            account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
+            return try await AppStoreClient.shared.purchaseAndDownload(
+                adamId: adamId,
+                account: account,
+                destination: destination,
+                externalVersionId: externalVersionId,
+                version: version,
+                onProgress: { [weak self] msg in
+                    Task { @MainActor in self?.publishDecryptProgress(msg) }
+                }
+            )
         }
     }
 
@@ -356,7 +392,7 @@ final class DeviceDecryptService: ObservableObject {
         } else {
             publishDecryptProgress("Silent App Store session…")
         }
-        let account = try await AppleIDStore.shared.ensureStorefrontSession()
+        var account = try await AppleIDStore.shared.ensureStorefrontSession()
 
         // Explicit pin from Versions sheet, else spoof-compatible / display-version resolve inside client.
         var pinned = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -368,6 +404,15 @@ final class DeviceDecryptService: ObservableObject {
                     version: version,
                     externalVersionId: nil
                 ) ?? ""
+            } catch AppStoreClientError.tokenExpired {
+                AppleIDStore.shared.invalidateStorefrontSession()
+                account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
+                pinned = (try? await AppStoreClient.shared.resolveDownloadVersionId(
+                    adamId: adam,
+                    account: account,
+                    version: version,
+                    externalVersionId: nil
+                )) ?? ""
             } catch {
                 pinned = ""
             }
@@ -390,15 +435,12 @@ final class DeviceDecryptService: ObservableObject {
         let downloadedVersion: String
         let downloadedMinOS: String?
         do {
-            let result = try await AppStoreClient.shared.purchaseAndDownload(
+            let result = try await purchaseAndDownloadWithStoreRefresh(
                 adamId: adam,
-                account: account,
+                account: &account,
                 destination: dest,
                 externalVersionId: pinned.isEmpty ? nil : pinned,
-                version: version,
-                onProgress: { [weak self] msg in
-                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                }
+                version: version
             )
             ipa = result.url
             downloadedVersion = result.item.displayVersion
@@ -412,17 +454,23 @@ final class DeviceDecryptService: ObservableObject {
             throw DecryptError(
                 "This Apple ID doesn’t own a license for \(displayName). Buy or redeem it once, then decrypt again."
             )
-        } catch AppStoreClientError.tokenExpired, AppStoreClientError.needsTwoFactor {
-            throw DecryptError("App Store session needs refresh — sign in again under Settings › Store Access, then retry.")
+        } catch AppStoreClientError.needsTwoFactor {
+            throw DecryptError(
+                "App Store needs a verification code — open Settings › Store Access, enter the 6-digit code (you stay signed in), then retry."
+            )
+        } catch AppStoreClientError.tokenExpired {
+            throw DecryptError(
+                "App Store session couldn’t refresh automatically — open Settings › Store Access and tap refresh, then retry. You should still be signed in."
+            )
         } catch AppStoreClientError.network(let detail) {
             let lower = detail.lowercased()
             if lower.contains("403") || lower.contains("client identity") {
                 throw DecryptError(
-                    "App Store download failed (\(detail)). This is a store identity rejection — not missing FairPlay keys. In Settings › Store Access, switch spoof to “This iPhone” (or “Newest IPA”), Sign Out → Sign In, then decrypt again."
+                    "App Store download failed (\(detail)). Store identity rejection — not missing FairPlay keys. In Settings › Store Access, switch spoof to “This iPhone” (or “Newest IPA”), then retry (no need to sign out)."
                 )
             }
             throw DecryptError(
-                "App Store download failed (\(detail)). Try: Settings › Store Access → Sign Out → Sign In, then decrypt again. If spoof is on, leave Auto-pick on and keep Client-Info rewrite off."
+                "App Store download failed (\(detail)). Retry from Settings › Store Access if needed. If spoof is on, leave Auto-pick on and keep Client-Info rewrite off."
             )
         }
 

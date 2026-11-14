@@ -192,7 +192,7 @@ struct DecryptOwnedStoreAppsSection: View {
                         if loadError.localizedCaseInsensitiveContains("204")
                             || loadError.localizedCaseInsensitiveContains("verification")
                             || loadError.localizedCaseInsensitiveContains("expired") {
-                            Text("Tip: Settings › Store Access → spoof “This iPhone”, Client-Info rewrite off, then Sign Out → Sign In and refresh.")
+                            Text("Tip: Settings › Store Access → spoof “This iPhone”, Client-Info rewrite off, then refresh Owned (stay signed in).")
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.45))
                                 .fixedSize(horizontal: false, vertical: true)
