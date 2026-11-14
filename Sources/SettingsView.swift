@@ -740,7 +740,7 @@ private struct AboutScreen: View {
                     featureRow("key.fill", "Custom certificate mode",
                                "Bring your own paid certificate to install over the air, with no pairing or VPN.")
                     featureRow("person.crop.circle.badge.checkmark", "Manage your Apple ID",
-                               "View your signing certificates, App IDs, and devices, and revoke a certificate to free a slot — right in the app, no Apple Developer portal needed.")
+                               "View your signing certificates, App IDs, and devices from Apple’s Developer services, and revoke a certificate to free a free-tier slot — in the app.")
                 }
                 .padding(.top, 14)
                 .padding(.bottom, 6)

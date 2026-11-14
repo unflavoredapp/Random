@@ -1,8 +1,7 @@
 //
 //  DeviceDecryptService.swift
-//  On-device decrypt: use apps already installed on this iPhone (with this device’s
-//  App Store decryption keys), not a Telegram bot. Resolves a Store URL for an
-//  installed App Store app and hands it to DecryptClient for a DRM-free IPA.
+//  On-device decrypt: FairPlay mremap on apps installed on this iPhone (App Store keys + SC_Info),
+//  not a Telegram bot. Falls back to Store download + local FairPlay when the install path is missing.
 //
 
 import Foundation
@@ -96,7 +95,6 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     private func appInfo(url: String) async throws -> DecryptApp {
-        // Prefer device-local iTunes lookup when we can parse an id; else keep the link as-is.
         let id: String? = {
             if let r = url.range(of: #"/id(\d+)"#, options: .regularExpression) {
                 return String(url[r]).filter(\.isNumber)
@@ -121,7 +119,7 @@ final class DeviceDecryptService: ObservableObject {
         return DecryptApp(id: url, name: "App", bundle: "", icon: nil, dev: "", version: "", url: url)
     }
 
-    /// Decrypt an app that is (or will be) owned on this device — uses this iPhone’s App Store keys, not a TG bot.
+    /// Decrypt an installed App Store app with this device’s FairPlay keys (mremap_encrypted).
     func decryptInstalled(_ app: DeviceApp, version: String? = nil) async {
         guard !busy else { return }
         busy = true
@@ -135,7 +133,25 @@ final class DeviceDecryptService: ObservableObject {
             if !AppStoreDecryptGuide.isAcknowledged(email: AppleIDStore.shared.email) {
                 status = "Confirm this Apple ID has signed in to the App Store on this iPhone once…"
             }
-            status = "Looking up App Store listing…"
+
+            // Primary path: decrypt from the live install (SC_Info readable by fairplayd).
+            status = "Decrypting \(app.name) on this device…"
+            do {
+                let clear = try FairPlayDecrypt.decryptInstalledApp(bundleID: app.bundleID, displayName: app.name)
+                DecryptClient.shared.finished = clear
+                DecryptClient.shared.finishedName = app.name
+                DecryptClient.shared.phase = .done
+                DecryptClient.shared.message = "Decrypted on this device · saved to Library"
+                status = ""
+                AppNav.shared.go(AppTab.library.rawValue)
+                return
+            } catch let e as FairPlayDecryptError {
+                // Fall through to Store download + local FairPlay when install path missing / partial.
+                status = "Install-path decrypt unavailable (\(e.localizedDescription)). Trying Store IPA…"
+            } catch {
+                status = "Install-path decrypt failed. Trying Store IPA…"
+            }
+
             let storeURL = try await storeURL(forBundleID: app.bundleID)
             let display = app.name
             let clientApp = DecryptApp(
@@ -148,7 +164,7 @@ final class DeviceDecryptService: ObservableObject {
                 url: storeURL
             )
             DecryptClient.shared.select(clientApp)
-            status = "Decrypting on this device…"
+            status = "Downloading + decrypting on this device…"
             DecryptClient.shared.start(url: storeURL, version: version, display: display)
             status = ""
         } catch {
@@ -158,6 +174,12 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     func decryptFromSearch(_ app: DecryptApp, version: String? = nil) {
+        // Prefer live install when the bundle is already on this iPhone.
+        if !app.bundle.isEmpty, FairPlayDecrypt.installedAppURL(bundleID: app.bundle) != nil {
+            let deviceApp = DeviceApp(bundleID: app.bundle, name: app.name, version: app.version, isAppStore: true)
+            Task { await decryptInstalled(deviceApp, version: version) }
+            return
+        }
         DecryptClient.shared.select(app)
         DecryptClient.shared.start(url: app.url, version: version, display: app.name)
     }

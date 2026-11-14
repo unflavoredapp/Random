@@ -1,12 +1,8 @@
 //
 //  DecryptView.swift
-//  Decrypt tab (lock icon). On-device decrypt using this iPhone’s App Store keys —
-//  not a Telegram bot. Search the App Store (public iTunes lookup) or pick an app
-//  already installed on this device; decrypt runs with the device ADID / Store Access
-//  Apple ID and saves a DRM-free IPA to the Library inbox.
-//
-//  Job transport still uses the app API (api/decrypt · versions · history · ipa/file)
-//  keyed by this device (X-AS-ADID) and the active Store Access Apple ID.
+//  Decrypt tab (lock icon). On-device FairPlay decrypt (mremap_encrypted) using this
+//  iPhone’s App Store keys — not a Telegram bot. Prefer apps installed on this device
+//  (live .app path + SC_Info); Store search / IPA pick fall back through local FairPlay.
 //
 
 import SwiftUI
@@ -266,6 +262,18 @@ final class DecryptClient: ObservableObject {
         let dest = AppPaths.dir("inbox").appendingPathComponent(file)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
+        // On-device FairPlay decrypt (mremap_encrypted). No-op if already clear.
+        do {
+            let clear = try FairPlayDecrypt.decryptIPA(at: dest, displayName: name)
+            if clear != dest {
+                try? FileManager.default.removeItem(at: dest)
+                try FileManager.default.moveItem(at: clear, to: dest)
+            }
+            message = "Decrypted on this device · saved to Library"
+        } catch {
+            // Keep the IPA; surface the FairPlay error so the App Store sign-in tip can help.
+            self.error = "Downloaded, but on-device decrypt failed: \(error.localizedDescription). \(AppStoreDecryptGuide.failureHint)"
+        }
         return dest
     }
 
@@ -391,16 +399,22 @@ struct DecryptView: View {
         guard let url = urls.first else { return }
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let dest = AppPaths.dir("inbox").appendingPathComponent(url.lastPathComponent)
         do {
-            if FileManager.default.fileExists(atPath: dest.path) {
-                try FileManager.default.removeItem(at: dest)
-            }
-            try FileManager.default.copyItem(at: url, to: dest)
-            pickMessage = "Imported \(url.lastPathComponent) into Library."
+            let clear = try FairPlayDecrypt.decryptIPA(at: url, displayName: url.deletingPathExtension().lastPathComponent)
+            pickMessage = "Decrypted on this device → \(clear.lastPathComponent)"
             AppNav.shared.go(AppTab.library.rawValue)
         } catch {
-            pickMessage = error.localizedDescription
+            // Fall back to import encrypted for later
+            let dest = AppPaths.dir("inbox").appendingPathComponent(url.lastPathComponent)
+            do {
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.copyItem(at: url, to: dest)
+                pickMessage = "Imported encrypted IPA. Decrypt failed: \(error.localizedDescription)"
+            } catch {
+                pickMessage = error.localizedDescription
+            }
         }
     }
 

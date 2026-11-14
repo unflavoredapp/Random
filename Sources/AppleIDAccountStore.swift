@@ -21,6 +21,10 @@ struct AppleIDAccount: Identifiable, Codable, Equatable, Hashable {
     var appIDs: [String] = []
     /// Device UDIDs associated with this account’s profiles.
     var deviceUDIDs: [String] = []
+    /// Serialized AppleAuthSession for Developer Portal.
+    var portalSessionJSON: Data? = nil
+    var teamID: String? = nil
+    var teamName: String? = nil
 
     var displayName: String { label.isEmpty ? email : "\(label) · \(email)" }
     var statusLabel: String {
@@ -157,8 +161,18 @@ final class AppleIDStore: ObservableObject {
         draftEmail = e
         authPhase = .authenticating
         _ = Keychain.setSecret(Self.passwordPrefix + "pending", p)
-        try? await Task.sleep(nanoseconds: 700_000_000)
-        withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+        do {
+            let session = try await GSAAuthClient.shared.authenticate(email: e, password: p)
+            await finishRealSignIn(session: session, password: p)
+        } catch AppleAuthError.needsTwoFactor {
+            withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+            statusMessage = "Enter the 6-digit code from your trusted Apple device."
+        } catch {
+            authPhase = .idle
+            lastError = error.localizedDescription
+            Keychain.deleteSecret(Self.passwordPrefix + "pending")
+            GSAAuthClient.shared.cancel()
+        }
     }
 
     /// Legacy no-arg sign-in using draft fields.
@@ -169,30 +183,20 @@ final class AppleIDStore: ObservableObject {
 
     func submitTwoFactor(code: String) async {
         let digits = code.filter(\.isNumber)
-        guard digits.count >= 4 else {
-            lastError = "Enter the verification code from your Apple device."
+        guard digits.count == 6 else {
+            lastError = "Enter the 6-digit code from your Apple device."
             return
         }
         lastError = nil
         authPhase = .verifying
-        try? await Task.sleep(nanoseconds: 1_100_000_000)
-        let e = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let pw = Keychain.getSecret(Self.passwordPrefix + "pending") ?? ""
-        Keychain.deleteSecret(Self.passwordPrefix + "pending")
-        if let existing = accounts.first(where: { $0.email == e }) {
-            activeAccountID = existing.id
-            _ = Keychain.setSecret(Self.passwordPrefix + existing.id, pw)
-        } else {
-            let id = UUID().uuidString
-            accounts.append(AppleIDAccount(id: id, email: e, addedAt: Date()))
-            activeAccountID = id
-            _ = Keychain.setSecret(Self.passwordPrefix + id, pw)
+        do {
+            let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
+            let pw = Keychain.getSecret(Self.passwordPrefix + "pending") ?? ""
+            await finishRealSignIn(session: session, password: pw)
+        } catch {
+            authPhase = .awaitingTwoFactor
+            lastError = error.localizedDescription
         }
-        verificationCode = ""
-        save()
-        withAnimation(.snappy) { authPhase = .preparing }
-        await finishPreparing()
-        syncProfileMetadataFromCertificates()
     }
 
     func submitVerificationCode() {
@@ -200,6 +204,7 @@ final class AppleIDStore: ObservableObject {
     }
 
     func cancelTwoFactor() {
+        GSAAuthClient.shared.cancel()
         Keychain.deleteSecret(Self.passwordPrefix + "pending")
         authPhase = accounts.isEmpty ? .idle : .idle
         lastError = nil
@@ -268,7 +273,9 @@ final class AppleIDStore: ObservableObject {
     }
 
     func presentTrustedDeviceCode() {
-        presentedDisplayCode = String((0..<6).map { _ in String(Int.random(in: 0...9)) }.joined())
+        // Real codes are pushed by Apple to trusted devices — nothing to display locally.
+        presentedDisplayCode = nil
+        statusMessage = "Check your trusted Apple devices for the verification code."
     }
 
     func dismissDisplayedCode() { presentedDisplayCode = nil }
@@ -364,6 +371,11 @@ final class AppleIDStore: ObservableObject {
         return CertificateStore.shared.activeID
     }
 
+    func portalSession() -> AppleAuthSession? {
+        guard let data = activeAccount?.portalSessionJSON else { return nil }
+        return try? JSONDecoder().decode(AppleAuthSession.self, from: data)
+    }
+
     func activatePreferredSigningCertificate() {
         if let id = preferredSigningCertificateID() {
             CertificateStore.shared.activeID = id
@@ -403,8 +415,51 @@ final class AppleIDStore: ObservableObject {
         }
     }
 
+    /// Persist a live GrandSlam session as a Store account (no simulated delay auth).
+    private func finishRealSignIn(session: AppleAuthSession, password: String) async {
+        authPhase = .preparing
+        statusMessage = "Fetching developer team…"
+        var session = session
+        // Attach first Developer Portal team when available (free or paid).
+        if let teams = try? await DeveloperPortalClient.shared.listTeams(auth: session),
+           let team = teams.first {
+            session.teamID = team.id
+            session.teamName = team.name
+            session.isFreeTeam = team.isFree
+        }
+
+        let email = session.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let sessionJSON = try? JSONEncoder().encode(session)
+
+        if let idx = accounts.firstIndex(where: { $0.email.caseInsensitiveCompare(email) == .orderedSame }) {
+            accounts[idx].portalSessionJSON = sessionJSON
+            accounts[idx].teamID = session.teamID
+            accounts[idx].teamName = session.teamName
+            activeAccountID = accounts[idx].id
+            _ = Keychain.setSecret(Self.passwordPrefix + accounts[idx].id, password)
+        } else {
+            let id = UUID().uuidString
+            var account = AppleIDAccount(id: id, email: email, addedAt: Date())
+            account.portalSessionJSON = sessionJSON
+            account.teamID = session.teamID
+            account.teamName = session.teamName
+            accounts.append(account)
+            activeAccountID = id
+            _ = Keychain.setSecret(Self.passwordPrefix + id, password)
+        }
+
+        Keychain.deleteSecret(Self.passwordPrefix + "pending")
+        draftEmail = email
+        draftPassword = ""
+        verificationCode = ""
+        lastError = nil
+        statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
+        save()
+        activatePreferredSigningCertificate()
+        await finishPreparing()
+    }
+
     private func finishPreparing() async {
-        try? await Task.sleep(nanoseconds: 900_000_000)
         storeReady = true
         UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
         withAnimation(.snappy) { authPhase = .idle }

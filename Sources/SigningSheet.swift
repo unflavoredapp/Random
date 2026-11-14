@@ -78,8 +78,7 @@ struct SigningSheet: View {
     @State private var o = ExtraToggles()
     @State private var expanded: Set<String> = ["general"]
 
-    // AirShare-style signing method selector (Saved / Enterprise / Apple ID).
-    // "saved" is fully wired; the others are UI placeholders to plug in later.
+    // Signing method: Saved cert · Enterprise (in-house ProvisionsAllDevices) · Free Apple ID (linked portal cert).
     @AppStorage("uzd_signing_method") private var method = "saved"   // saved | enterprise | appleid
     @State private var enterpriseName = ""
     @State private var appleIDEmail = ""
@@ -527,14 +526,12 @@ struct SigningSheet: View {
             savedBody
         }
         .onChange(of: method) { m in
-            if m == "appleid" {
-                appleIDs.activatePreferredSigningCertificate()
-            }
+            CertificateStore.shared.activatePreferredCertificate(forSigningMethod: m)
+            if m == "appleid" { appleIDs.activatePreferredSigningCertificate() }
         }
         .onAppear {
-            if method == "appleid" {
-                appleIDs.activatePreferredSigningCertificate()
-            }
+            CertificateStore.shared.activatePreferredCertificate(forSigningMethod: method)
+            if method == "appleid" { appleIDs.activatePreferredSigningCertificate() }
         }
     }
 
@@ -551,6 +548,7 @@ struct SigningSheet: View {
         let on = method == tag
         return Button {
             method = tag
+            CertificateStore.shared.activatePreferredCertificate(forSigningMethod: tag)
             if tag == "appleid" { appleIDs.activatePreferredSigningCertificate() }
         } label: {
             HStack(spacing: 6) {
@@ -580,7 +578,11 @@ struct SigningSheet: View {
             if email.isEmpty { return "Add an Apple ID in Settings › Store Access, then link a development certificate." }
             return email
         case "enterprise":
-            return certs.active?.name ?? "Import an enterprise certificate in Certificates"
+            if let c = certs.preferredCertificate(forSigningMethod: "enterprise"),
+               certs.cachedProfileInfo(for: c).isEnterprise {
+                return c.name
+            }
+            return "No enterprise profile found — import an in-house .mobileprovision"
         default:
             return certs.active?.name ?? "No certificate selected"
         }
@@ -602,7 +604,7 @@ struct SigningSheet: View {
                     .frame(width: 46, height: 46)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(methodHeadline).font(.system(size: 8.5, weight: .heavy)).kerning(1.1).foregroundStyle(accentSoft)
-                        Text(method == "appleid" ? methodSubline : c.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                        Text(method == "saved" ? c.name : methodSubline).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "slider.horizontal.3")
@@ -1337,6 +1339,15 @@ struct SigningSheet: View {
             UINotificationFeedbackGenerator().notificationOccurred(.error)
             return
         }
+        CertificateStore.shared.activatePreferredCertificate(forSigningMethod: method)
+        if method == "enterprise" {
+            guard let c = certs.preferredCertificate(forSigningMethod: "enterprise"),
+                  certs.cachedProfileInfo(for: c).isEnterprise else {
+                error = "Enterprise signing needs an in-house certificate (ProvisionsAllDevices). Import one in Certificates."
+                return
+            }
+            certs.activeID = c.id
+        }
         if method == "appleid" {
             appleIDs.activatePreferredSigningCertificate()
             if appleIDs.activeAccount == nil {
@@ -1344,7 +1355,7 @@ struct SigningSheet: View {
                 return
             }
             if appleIDs.preferredSigningCertificateID() == nil {
-                error = "Link a development certificate to your Apple ID in Manage, or import one in Certificates."
+                error = "Create or link a development certificate in Manage Apple ID (real Developer Portal), or import one in Certificates."
                 return
             }
         }
