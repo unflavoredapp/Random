@@ -417,6 +417,7 @@
 				CODE_SIGN_ENTITLEMENTS = "unzip-drop.entitlements";
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
+					"$(SRCROOT)/Sources",
 					"$(SRCROOT)/Sources/zsign",
 					"$(SRCROOT)/Sources/zsign/common",
 					"$(SRCROOT)/Sources/Capstone/include",
@@ -463,6 +464,7 @@
 				CODE_SIGN_ENTITLEMENTS = "unzip-drop.entitlements";
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
+					"$(SRCROOT)/Sources",
 					"$(SRCROOT)/Sources/zsign",
 					"$(SRCROOT)/Sources/zsign/common",
 					"$(SRCROOT)/Sources/Capstone/include",

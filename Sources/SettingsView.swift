@@ -58,6 +58,7 @@ struct SettingsView: View {
 
                     SettingsDisableNotificationsRow()
                     SettingsBackgroundSideloadingRow()
+                    SettingsKeepAppsAliveCard()
 
                     Text("MORE")
                         .font(.system(size: 12, weight: .semibold))
@@ -727,7 +728,7 @@ private struct AboutScreen: View {
                     featureRow("signature", "Sign & install any IPA",
                                "Using your free Apple ID, or your own certificate.")
                     featureRow("lock.open.fill", "Get a clean copy of apps you own",
-                               "Download an app you already own from the App Store and produce a DRM-free copy, fully on-device.")
+                               "Decrypt on this iPhone with FairPlay, or via the Telegram bot bridge. Device mode needs a one-time App Store sign-in so iOS has that Apple ID’s decryption keys.")
                     featureRow("person.2.fill", "Multiple App Store accounts",
                                "Sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.")
                     featureRow("puzzlepiece.extension.fill", "Tweak injection",
@@ -739,7 +740,7 @@ private struct AboutScreen: View {
                     featureRow("key.fill", "Custom certificate mode",
                                "Bring your own paid certificate to install over the air, with no pairing or VPN.")
                     featureRow("person.crop.circle.badge.checkmark", "Manage your Apple ID",
-                               "View your signing certificates, App IDs, and devices, and revoke a certificate to free a slot — right in the app, no Apple Developer portal needed.")
+                               "View your signing certificates, App IDs, and devices from Apple’s Developer services, and revoke a certificate to free a free-tier slot — in the app.")
                 }
                 .padding(.top, 14)
                 .padding(.bottom, 6)
@@ -2483,6 +2484,8 @@ private struct NativeInstallScreen: View {
                 Label("Re-sign when certificate changes", systemImage: "checkmark.seal.fill").foregroundStyle(Theme.text)
             }
             .tint(Theme.accent).listRowBackground(Theme.card)
+            TButton(title: "Refresh All", icon: "arrow.clockwise.circle.fill", busy: appUpdater.busy,
+                    enabled: !appUpdater.busy && !installer.isActive) { appUpdater.refreshAll() }
             TButton(title: "Check for Updates", icon: "magnifyingglass", busy: appUpdater.busy,
                     enabled: !appUpdater.busy && !installer.isActive) { appUpdater.checkOnly() }
             TButton(title: "Update Apps Now", icon: "arrow.down.app", busy: appUpdater.busy,

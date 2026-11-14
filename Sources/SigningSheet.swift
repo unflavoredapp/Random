@@ -42,6 +42,7 @@ struct SigningSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @ObservedObject private var certs = CertificateStore.shared
+    @ObservedObject private var appleIDs = AppleIDStore.shared
     @ObservedObject private var staff = StaffGate.shared
     @ObservedObject private var account = ZefvAccount.shared
     @ObservedObject private var ota = OTAInstaller.shared
@@ -77,8 +78,7 @@ struct SigningSheet: View {
     @State private var o = ExtraToggles()
     @State private var expanded: Set<String> = ["general"]
 
-    // AirShare-style signing method selector (Saved / Enterprise / Apple ID).
-    // "saved" is fully wired; the others are UI placeholders to plug in later.
+    // Signing method: Saved cert · Enterprise (in-house ProvisionsAllDevices) · Free Apple ID (linked portal cert).
     @AppStorage("uzd_signing_method") private var method = "saved"   // saved | enterprise | appleid
     @State private var enterpriseName = ""
     @State private var appleIDEmail = ""
@@ -522,7 +522,69 @@ struct SigningSheet: View {
     private var signingMethodCard: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionLabel("SIGNING METHOD")
+            methodPicker
             savedBody
+        }
+        .onChange(of: method) { m in
+            CertificateStore.shared.activatePreferredCertificate(forSigningMethod: m)
+            if m == "appleid" { appleIDs.activatePreferredSigningCertificate() }
+        }
+        .onAppear {
+            CertificateStore.shared.activatePreferredCertificate(forSigningMethod: method)
+            if method == "appleid" { appleIDs.activatePreferredSigningCertificate() }
+        }
+    }
+
+    private var methodPicker: some View {
+        HStack(spacing: 8) {
+            methodChip("Saved", tag: "saved", icon: "checkmark.seal.fill")
+            methodChip("Enterprise", tag: "enterprise", icon: "building.2.fill")
+            methodChip("Apple ID", tag: "appleid", icon: "person.crop.circle.fill")
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private func methodChip(_ title: String, tag: String, icon: String) -> some View {
+        let on = method == tag
+        return Button {
+            method = tag
+            CertificateStore.shared.activatePreferredCertificate(forSigningMethod: tag)
+            if tag == "appleid" { appleIDs.activatePreferredSigningCertificate() }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 11, weight: .bold))
+                Text(title).font(.system(size: 12, weight: .semibold))
+            }
+            .foregroundStyle(on ? Color.black : Color.white.opacity(0.75))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 10)
+            .background(on ? accentSoft : Color.white.opacity(0.08), in: Capsule())
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var methodHeadline: String {
+        switch method {
+        case "enterprise": return "USING ENTERPRISE CERTIFICATE"
+        case "appleid": return "USING FREE APPLE ID"
+        default: return "USING YOUR SAVED CERTIFICATE"
+        }
+    }
+
+    private var methodSubline: String {
+        switch method {
+        case "appleid":
+            let email = appleIDs.email
+            if email.isEmpty { return "Add an Apple ID in Settings › Store Access, then link a development certificate." }
+            return email
+        case "enterprise":
+            if let c = certs.preferredCertificate(forSigningMethod: "enterprise"),
+               certs.cachedProfileInfo(for: c).isEnterprise {
+                return c.name
+            }
+            return "No enterprise profile found — import an in-house .mobileprovision"
+        default:
+            return certs.active?.name ?? "No certificate selected"
         }
     }
 
@@ -536,13 +598,13 @@ struct SigningSheet: View {
                         if let ui = UIImage(named: "CertSeal") {
                             Image(uiImage: ui).resizable().scaledToFit()
                         } else {
-                            Image(systemName: "checkmark.seal.fill").resizable().scaledToFit().foregroundStyle(accentSoft)
+                            Image(systemName: method == "appleid" ? "person.crop.circle.fill" : "checkmark.seal.fill").resizable().scaledToFit().foregroundStyle(accentSoft)
                         }
                     }
                     .frame(width: 46, height: 46)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("USING YOUR SAVED CERTIFICATE").font(.system(size: 8.5, weight: .heavy)).kerning(1.1).foregroundStyle(accentSoft)
-                        Text(c.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                        Text(methodHeadline).font(.system(size: 8.5, weight: .heavy)).kerning(1.1).foregroundStyle(accentSoft)
+                        Text(method == "saved" ? c.name : methodSubline).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "slider.horizontal.3")
@@ -1276,6 +1338,26 @@ struct SigningSheet: View {
             error = "This IPA is still FairPlay-encrypted (cryptid ≠ 0). Signing it will produce an app that crashes at launch. Get a decrypted IPA first."
             UINotificationFeedbackGenerator().notificationOccurred(.error)
             return
+        }
+        CertificateStore.shared.activatePreferredCertificate(forSigningMethod: method)
+        if method == "enterprise" {
+            guard let c = certs.preferredCertificate(forSigningMethod: "enterprise"),
+                  certs.cachedProfileInfo(for: c).isEnterprise else {
+                error = "Enterprise signing needs an in-house certificate (ProvisionsAllDevices). Import one in Certificates."
+                return
+            }
+            certs.activeID = c.id
+        }
+        if method == "appleid" {
+            appleIDs.activatePreferredSigningCertificate()
+            if appleIDs.activeAccount == nil {
+                error = "Sign in with an Apple ID under Settings › Store Access first."
+                return
+            }
+            if appleIDs.preferredSigningCertificateID() == nil {
+                error = "Create or link a development certificate in Manage Apple ID (real Developer Portal), or import one in Certificates."
+                return
+            }
         }
         guard let material = try? certs.activeMaterial() else { error = "No active certificate."; return }
         if canAccessDeveloperTools, AVX512AirShareBridge.shared.enabled {

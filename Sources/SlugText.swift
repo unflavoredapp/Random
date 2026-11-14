@@ -200,8 +200,8 @@ struct OnboardingView: View {
                             linkTile(title: "TetherLess", url: "https://tetherless.dev") {
                                 brandMark(side: 32, radius: 9)
                             }
-                            linkTile(title: "@FastDecryptBot", url: "https://t.me/FastDecryptBot", small: true) {
-                                assetTile("fastdecrypt_logo", fallback: "scissors")
+                            linkTile(title: "Decrypt", url: nil, small: true) {
+                                symbolTile("lock.open.fill", Color(red: 0.27, green: 0.56, blue: 0.97))
                             }
                             linkTile(title: "Donate", url: nil) {
                                 symbolTile("bitcoinsign", Color(red: 0.2, green: 0.2, blue: 0.24))

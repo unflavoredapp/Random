@@ -92,7 +92,7 @@ struct AdminMembersSheet: View {
 
             Text("SPONSOR").font(.system(size: 10, weight: .heavy, design: .monospaced)).kerning(1.2).foregroundStyle(Theme.subtle)
             HStack(spacing: 8) {
-                TextField("e.g. FastDecryptBot", text: Binding(
+                TextField("e.g. partner handle", text: Binding(
                     get: { sponsorDraft[u.username] ?? u.sponsor },
                     set: { sponsorDraft[u.username] = $0 }))
                     .autocorrectionDisabled()

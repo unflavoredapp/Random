@@ -1,12 +1,8 @@
 //
 //  DecryptView.swift
-//  Decrypt tab (lock icon). Search the App Store or paste a link, pick the latest
-//  or an older version, and the AirShare backend decrypts it and hands back the IPA.
-//  The IPA is saved to the Library inbox, ready to sign.
-//
-//  Backend routes (airshare.lol): /api/appsearch · /api/appinfo · /api/decrypt ·
-//  /api/decrypt/versions · /api/decrypt/:id · /api/decrypt/history · /api/ipa/file/:up
-//  Auth: Bearer account token when signed in, always X-AS-ADID (device ADID).
+//  Decrypt tab (lock icon). Two channels:
+//    • This Device — FairPlay mremap on installed apps (SC_Info + App Store keys)
+//    • Telegram Bot — server bridge to @FastDecryptBot for App Store links
 //
 
 import SwiftUI
@@ -101,6 +97,12 @@ final class DecryptClient: ObservableObject {
         r.cachePolicy = .reloadIgnoringLocalCacheData
         r.setValue(MDID.current, forHTTPHeaderField: "X-AS-ADID")
         if let t = ZefvAccount.shared.sessionToken, !t.isEmpty { r.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
+        // Active Store Access Apple ID so multi-account switching affects decrypt jobs.
+        let appleEmail = AppleIDStore.shared.email
+        if !appleEmail.isEmpty {
+            r.setValue(appleEmail, forHTTPHeaderField: "X-AS-Apple-ID")
+            r.setValue(AppleIDStore.shared.activeAccountID ?? "", forHTTPHeaderField: "X-AS-Apple-ID-Account")
+        }
         if let body {
             r.httpMethod = "POST"
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -143,23 +145,9 @@ final class DecryptClient: ObservableObject {
         searching = true; error = nil
         defer { searching = false }
         do {
-            if Self.isStoreLink(q) {
-                let o = try await send(makeRequest("api/appinfo", query: ["url": q]))
-                let icon = ((o["icon512"] as? String) ?? (o["icon"] as? String)).flatMap { URL(string: $0) }
-                let app = DecryptApp(id: q, name: (o["name"] as? String) ?? "App", bundle: (o["bid"] as? String) ?? "",
-                                     icon: icon, dev: (o["dev"] as? String) ?? (o["artist"] as? String) ?? "",
-                                     version: (o["ver"] as? String) ?? (o["version"] as? String) ?? "", url: q)
-                if !Task.isCancelled { results = [app] }
-                return
-            }
-            let o = try await send(makeRequest("api/appsearch", query: ["q": q]))
-            let items = (o["items"] as? [[String: Any]]) ?? []
-            if Task.isCancelled { return }
-            results = items.compactMap { i in
-                guard let id = i["id"] as? String, let name = i["name"] as? String, let url = i["url"] as? String else { return nil }
-                return DecryptApp(id: id, name: name, bundle: (i["bid"] as? String) ?? "", icon: (i["icon"] as? String).flatMap { URL(string: $0) },
-                                  dev: (i["dev"] as? String) ?? "", version: (i["ver"] as? String) ?? "", url: url)
-            }
+            // On-device App Store search (iTunes) — no Telegram / FastDecryptBot.
+            let found = try await DeviceDecryptService.shared.searchAppStore(q)
+            if !Task.isCancelled { results = found }
         } catch {
             if Task.isCancelled { return }
             results = []
@@ -274,7 +262,35 @@ final class DecryptClient: ObservableObject {
         let dest = AppPaths.dir("inbox").appendingPathComponent(file)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
-        return dest
+        // Telegram bot IPAs should already be clear; still verify / finish with FairPlay when needed.
+        if DecryptChannel.current == .telegram {
+            let still = dest.path.withCString { fp_has_encrypted_slice($0) }
+            if still != 1 {
+                message = "Saved from Telegram bot · Library"
+                return dest
+            }
+        }
+        do {
+            let clear = try FairPlayDecrypt.decryptIPA(at: dest, displayName: name) { [weak self] msg in
+                Task { @MainActor in self?.message = msg }
+            }
+            if clear != dest {
+                try? FileManager.default.removeItem(at: dest)
+                try FileManager.default.moveItem(at: clear, to: dest)
+            }
+            message = DecryptChannel.current == .telegram
+                ? "Telegram IPA finished with on-device FairPlay · Library"
+                : "Decrypted on this device · saved to Library"
+            return dest
+        } catch {
+            if DecryptChannel.current == .telegram {
+                // Bot claimed success but FairPlay couldn't finish — keep file, surface warning.
+                message = "Saved from Telegram (FairPlay verify failed: \(error.localizedDescription))"
+                return dest
+            }
+            try? FileManager.default.removeItem(at: dest)
+            throw DecryptError("On-device FairPlay decrypt failed: \(error.localizedDescription)")
+        }
     }
 
     // MARK: History
@@ -330,15 +346,23 @@ struct DecryptView: View {
 
                     if store.isSignedIn {
                         DecryptSignedInCard(email: store.email, onSignOut: store.signOut)
+                        if showingIdleHero {
+                            DecryptChannelPicker()
+                            if DecryptChannel.current == .device {
+                                DecryptAppStoreSignInHint()
+                                DecryptDeviceAppsSection()
+                            }
+                        }
                         DecryptSearchBar(query: $query, focused: $searchFocused) {
                             Task { await c.search(query) }
                         }
-                        if showingIdleHero {
+                        if showingIdleHero, DecryptChannel.current == .device {
                             DecryptPickIPACard { pickingIPA = true }
                         }
                     } else {
                         DecryptHeroBlock()
                         DecryptStoreGateCard { AppNav.shared.go(AppTab.settings.rawValue) }
+                        DecryptAppStoreSignInHint()
                     }
 
                     if c.searching {
@@ -394,16 +418,25 @@ struct DecryptView: View {
         guard let url = urls.first else { return }
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        let dest = AppPaths.dir("inbox").appendingPathComponent(url.lastPathComponent)
         do {
-            if FileManager.default.fileExists(atPath: dest.path) {
-                try FileManager.default.removeItem(at: dest)
-            }
-            try FileManager.default.copyItem(at: url, to: dest)
-            pickMessage = "Imported \(url.lastPathComponent) into Library."
+            let clear = try FairPlayDecrypt.decryptIPA(
+                at: url,
+                displayName: url.deletingPathExtension().lastPathComponent
+            )
+            pickMessage = "Decrypted on this device → \(clear.lastPathComponent)"
             AppNav.shared.go(AppTab.library.rawValue)
         } catch {
-            pickMessage = error.localizedDescription
+            // Prefer install-path decrypt: import encrypted only as a last resort for later retry.
+            let dest = AppPaths.dir("inbox").appendingPathComponent(url.lastPathComponent)
+            do {
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    try FileManager.default.removeItem(at: dest)
+                }
+                try FileManager.default.copyItem(at: url, to: dest)
+                pickMessage = "FairPlay failed (\(error.localizedDescription)). Imported encrypted IPA — install the app on this iPhone and decrypt from On This Device."
+            } catch {
+                pickMessage = error.localizedDescription
+            }
         }
     }
 
@@ -447,8 +480,7 @@ struct DecryptView: View {
                         .buttonStyle(.plain)
                         .disabled(c.busy)
                         Button {
-                            c.select(app)
-                            c.start(url: app.url, version: nil, display: app.name)
+                            DeviceDecryptService.shared.decryptFromSearch(app)
                         } label: {
                             Image(systemName: "arrow.down.circle")
                                 .foregroundStyle(.white)
@@ -456,7 +488,7 @@ struct DecryptView: View {
                                 .background(.white.opacity(0.10), in: Circle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(c.busy)
+                        .disabled(c.busy || DeviceDecryptService.shared.busy)
                     }
                 }
             }
@@ -527,6 +559,7 @@ struct DecryptView: View {
                 if c.phase == .failed {
                     Text(c.error ?? "Decrypt failed.")
                         .font(.caption).foregroundStyle(.orange)
+                    DecryptAppStoreSignInHint(compact: true)
                     Button("Dismiss") { c.reset() }
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.55))
@@ -606,7 +639,7 @@ private struct DecryptVersionsSheet: View {
                     } else {
                         ForEach(c.versions) { v in
                             Button {
-                                c.start(url: app.url, version: v.v, display: app.name)
+                                DeviceDecryptService.shared.decryptFromSearch(app, version: v.v)
                                 dismiss()
                             } label: {
                                 HStack {

@@ -81,6 +81,18 @@ nonisolated struct ProfileInfo: Sendable {
     var expires: Date? = nil
     var udids: [String] = []
     var created: Date? = nil          // CreationDate: start of the validity window (for the PPQ timer bar)
+    /// Enterprise / in-house profiles set ProvisionsAllDevices and omit a device list.
+    var provisionsAllDevices: Bool = false
+    var getTaskAllow: Bool? = nil
+
+    /// True for enterprise (in-house) profiles — not free/dev ad-hoc.
+    var isEnterprise: Bool {
+        if provisionsAllDevices { return true }
+        // Enterprise profiles often have no device list and get-task-allow false/absent.
+        if udids.isEmpty, getTaskAllow == false { return true }
+        if udids.isEmpty, name?.lowercased().contains("distribution") == true { return true }
+        return false
+    }
 
     var expirationDate: Date? { expires }
     var daysUntilExpiry: Int? {
@@ -192,9 +204,13 @@ final class CertificateStore: ObservableObject {
         guard let d = xml.data(using: .isoLatin1),
               let plist = try? PropertyListSerialization.propertyList(from: d, format: nil) as? [String: Any] else { return ProfileInfo() }
         let team = (plist["TeamName"] as? String) ?? (plist["TeamIdentifier"] as? [String])?.first
+        let ents = plist["Entitlements"] as? [String: Any]
+        let getTask = ents?["get-task-allow"] as? Bool
         return ProfileInfo(name: plist["Name"] as? String, team: team, expires: plist["ExpirationDate"] as? Date,
                            udids: plist["ProvisionedDevices"] as? [String] ?? [],
-                           created: plist["CreationDate"] as? Date)
+                           created: plist["CreationDate"] as? Date,
+                           provisionsAllDevices: (plist["ProvisionsAllDevices"] as? Bool) ?? false,
+                           getTaskAllow: getTask)
     }
 
     func cachedProfileInfo(for cert: Certificate) -> ProfileInfo {
@@ -202,6 +218,30 @@ final class CertificateStore: ObservableObject {
         let info = (try? Data(contentsOf: cert.provisionURL)).map(Self.profileInfo) ?? ProfileInfo()
         profileInfoCache[cert.id] = info
         return info
+    }
+
+
+    /// Prefer an enterprise profile when signing method is enterprise; else linked free/dev; else active.
+    func preferredCertificate(forSigningMethod method: String) -> Certificate? {
+        switch method {
+        case "enterprise":
+            if let c = certificates.first(where: { cachedProfileInfo(for: $0).isEnterprise }) {
+                return c
+            }
+            return active
+        case "appleid":
+            if let id = AppleIDStore.shared.preferredSigningCertificateID(),
+               let c = certificates.first(where: { $0.id == id }) { return c }
+            return active
+        default:
+            return active
+        }
+    }
+
+    func activatePreferredCertificate(forSigningMethod method: String) {
+        if let c = preferredCertificate(forSigningMethod: method) {
+            activeID = c.id
+        }
     }
 
     // MARK: Device ↔ profile check

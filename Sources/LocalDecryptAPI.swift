@@ -2,11 +2,10 @@
 //  LocalDecryptAPI.swift
 //  Decrypt functions on the local TrustCore engine (the on-device Vapor server).
 //
-//  These routes use exactly the same data as the Decrypt tab: the same backend routes
-//  (api/appsearch · api/appinfo · api/decrypt · api/decrypt/versions · api/decrypt/:id ·
-//  api/decrypt/quota · api/decrypt/history · api/ipa/file/:up), the same device ADID and the
-//  same account token. The engine only relays and tracks the job; nothing is decrypted here.
-//  A finished job lands in the Library inbox, ready for POST /v1/sign.
+//  Local TrustCore decrypt routes for on-device jobs (this iPhone’s App Store keys /
+//  device ADID — not a Telegram bot). Search uses public iTunes lookup in the UI;
+//  job status still tracks api/decrypt · versions · quota · history · ipa/file with
+//  X-AS-ADID. A finished job lands in the Library inbox, ready for POST /v1/sign.
 //
 //  Routes (all need the X-mSign-Local-Token header, like /v1/sign):
 //    GET  /v1/decrypt/search?q=<text or apps.apple.com link>
@@ -80,6 +79,12 @@ nonisolated enum LocalDecryptBridge {
         r.cachePolicy = .reloadIgnoringLocalCacheData
         r.setValue(MDID.current, forHTTPHeaderField: "X-AS-ADID")
         if let t = ZefvAccount.currentSessionToken, !t.isEmpty { r.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
+        if let email = UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache"), !email.isEmpty {
+            r.setValue(email, forHTTPHeaderField: "X-AS-Apple-ID")
+        }
+        if let aid = UserDefaults.standard.string(forKey: "tetherless.appleid.active"), !aid.isEmpty {
+            r.setValue(aid, forHTTPHeaderField: "X-AS-Apple-ID-Account")
+        }
         if let body {
             r.httpMethod = "POST"
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -213,7 +218,18 @@ actor LocalDecryptJobs {
         let dest = AppPaths.dir("inbox").appendingPathComponent(file)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
-        return dest
+        // Finish with on-device FairPlay; fail closed if cryptid remains.
+        do {
+            let clear = try FairPlayDecrypt.decryptIPA(at: dest, displayName: name)
+            if clear != dest {
+                try? FileManager.default.removeItem(at: dest)
+                try FileManager.default.moveItem(at: clear, to: dest)
+            }
+            return dest
+        } catch {
+            try? FileManager.default.removeItem(at: dest)
+            throw LocalDecryptBridge.Failure("On-device FairPlay decrypt failed: \(error.localizedDescription)")
+        }
     }
 }
 
