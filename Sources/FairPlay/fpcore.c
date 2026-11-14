@@ -1,7 +1,13 @@
 // FairPlayed — FairPlay decryption research tool.
 // Revised mremap_encrypted: page-aligned remap window, native cryptid mode,
 // libsystem_kernel dlsym fallback, guarded page-in retries.
+//
+// Regression (stock iOS / 16 KB pages):
+// - FP_MODE_NATIVE is first in fp_decrypt_file()'s attempt order.
+// - cryptoff that is only 4 KB-aligned is NOT rejected; fp_compute_remap_window()
+//   aligns the mremap args, then we copy the original crypt range only.
 #include "fpcore.h"
+#include "fp_page.h"
 
 #include <dlfcn.h>
 #include <errno.h>
@@ -52,23 +58,59 @@ static int raw_mremap_encrypted(void *addr, size_t len, uint32_t cryptid, uint32
 #endif
 }
 
-static mremap_encrypted_fn resolve_mremap_encrypted(void) {
+enum { FP_MREMAP_BACKEND_NONE = 0, FP_MREMAP_BACKEND_DLSYM = 1, FP_MREMAP_BACKEND_KERNEL = 2, FP_MREMAP_BACKEND_SVC = 3 };
+
+static mremap_encrypted_fn resolve_mremap_encrypted(int *backend_out, const char **err_out) {
     static mremap_encrypted_fn fn;
     static int resolved;
-    if (resolved) return fn;
+    static int backend;
+    static char errbuf[128];
+    if (resolved) {
+        if (backend_out) *backend_out = backend;
+        if (err_out) *err_out = backend ? NULL : errbuf;
+        return fn;
+    }
+    errbuf[0] = 0;
     // Prefer the exported libsystem symbol (works when the stub is present).
     fn = (mremap_encrypted_fn)dlsym(RTLD_DEFAULT, "mremap_encrypted");
-    if (!fn) {
+    if (fn) {
+        backend = FP_MREMAP_BACKEND_DLSYM;
+    } else {
+        const char *dl1 = dlerror();
         void *h = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_LAZY | RTLD_NOLOAD);
         if (!h) h = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_LAZY);
-        if (h) fn = (mremap_encrypted_fn)dlsym(h, "mremap_encrypted");
+        if (h) {
+            fn = (mremap_encrypted_fn)dlsym(h, "mremap_encrypted");
+            if (fn) backend = FP_MREMAP_BACKEND_KERNEL;
+        }
+        if (!fn) {
+            const char *dl2 = dlerror();
+            snprintf(errbuf, sizeof errbuf, "dlsym=%s; kernel=%s; falling back to svc",
+                     dl1 && *dl1 ? dl1 : "nil",
+                     dl2 && *dl2 ? dl2 : (h ? "nil" : "dlopen-failed"));
+            backend = FP_MREMAP_BACKEND_SVC; // raw svc path used by do_mremap_encrypted
+        }
     }
     resolved = 1;
+    if (backend_out) *backend_out = backend;
+    if (err_out) *err_out = backend == FP_MREMAP_BACKEND_SVC ? errbuf : NULL;
     return fn;
 }
 
+static const char *mremap_backend_name(int backend) {
+    switch (backend) {
+        case FP_MREMAP_BACKEND_DLSYM: return "dlsym";
+        case FP_MREMAP_BACKEND_KERNEL: return "libsystem_kernel";
+        case FP_MREMAP_BACKEND_SVC: return "svc";
+        default: return "none";
+    }
+}
+
 static int do_mremap_encrypted(void *addr, size_t len, uint32_t cryptid, uint32_t cputype, uint32_t cpusubtype) {
-    mremap_encrypted_fn fn = resolve_mremap_encrypted();
+    int backend = 0;
+    const char *err = NULL;
+    mremap_encrypted_fn fn = resolve_mremap_encrypted(&backend, &err);
+    (void)err;
     if (fn) return fn(addr, len, cryptid, cputype, cpusubtype);
     return raw_mremap_encrypted(addr, len, cryptid, cputype, cpusubtype);
 }
@@ -82,9 +124,6 @@ static uint64_t fp_page_size(void) {
     }
     return pg;
 }
-
-static uint64_t align_down(uint64_t v, uint64_t pg) { return v & ~(pg - 1); }
-static uint64_t align_up(uint64_t v, uint64_t pg) { return (v + pg - 1) & ~(pg - 1); }
 
 /// Pick cryptid + PROT flags for a mode. cryptid arg selects the VM path
 /// (2 = CRYPTID_MODEL_ENCRYPTION skips PROT_EXEC); it is not the FairPlay key id.
@@ -220,27 +259,58 @@ static int parse_thin(int fd, uint64_t off, uint64_t size, fp_slice_t *s, char *
 
 int fp_parse(const char *path, fp_slice_t *slices, int max, int *count, char *err, size_t errlen) {
     *count = 0;
+    if (!slices || max <= 0 || !count) {
+        if (err && errlen) snprintf(err, errlen, "bad args");
+        return -1;
+    }
     int fd = open(path, O_RDONLY);
     if (fd < 0) { snprintf(err, errlen, "open: %s", strerror(errno)); return -1; }
-    struct stat st; fstat(fd, &st);
+    struct stat st;
+    if (fstat(fd, &st) != 0 || st.st_size < 4) {
+        close(fd);
+        snprintf(err, errlen, "stat/size: %s", st.st_size < 4 ? "too small" : strerror(errno));
+        return -1;
+    }
+    const uint64_t file_size = (uint64_t)st.st_size;
     uint32_t magic = 0;
     if (!pread_full(fd, &magic, 4, 0)) { close(fd); snprintf(err, errlen, "short read"); return -1; }
     int rc = 0;
     if (magic == FAT_MAGIC || magic == FAT_MAGIC_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64) {
         bool is64 = (magic == FAT_MAGIC_64 || magic == FAT_CIGAM_64);
         // Fat headers are always big-endian on disk.
-        struct fat_header fh; pread_full(fd, &fh, sizeof fh, 0);
+        struct fat_header fh;
+        if (!pread_full(fd, &fh, sizeof fh, 0)) {
+            close(fd); snprintf(err, errlen, "short fat header"); return -1;
+        }
         uint32_t n = OSSwapBigToHostInt32(fh.nfat_arch);
+        // Cap absurd tables; real universals are tiny (≤ ~10 arches).
+        if (n == 0 || n > 64) {
+            close(fd); snprintf(err, errlen, "fat nfat_arch=%u invalid", n); return -1;
+        }
+        uint64_t arch_sz = is64 ? sizeof(struct fat_arch_64) : sizeof(struct fat_arch);
+        if (arch_sz > UINT64_MAX / n || sizeof fh + n * arch_sz > file_size) {
+            close(fd); snprintf(err, errlen, "fat arch table overflows file"); return -1;
+        }
         uint64_t p = sizeof fh;
         for (uint32_t i = 0; i < n && *count < max; i++) {
             uint64_t o, sz; uint32_t ct;
             if (is64) {
-                struct fat_arch_64 fa; if (!pread_full(fd, &fa, sizeof fa, p)) break; p += sizeof fa;
-                o = OSSwapBigToHostInt64(fa.offset); sz = OSSwapBigToHostInt64(fa.size); ct = OSSwapBigToHostInt32(fa.cputype);
+                struct fat_arch_64 fa;
+                if (!pread_full(fd, &fa, sizeof fa, p)) break;
+                p += sizeof fa;
+                o = OSSwapBigToHostInt64(fa.offset);
+                sz = OSSwapBigToHostInt64(fa.size);
+                ct = OSSwapBigToHostInt32(fa.cputype);
             } else {
-                struct fat_arch fa; if (!pread_full(fd, &fa, sizeof fa, p)) break; p += sizeof fa;
-                o = OSSwapBigToHostInt32(fa.offset); sz = OSSwapBigToHostInt32(fa.size); ct = OSSwapBigToHostInt32(fa.cputype);
+                struct fat_arch fa;
+                if (!pread_full(fd, &fa, sizeof fa, p)) break;
+                p += sizeof fa;
+                o = OSSwapBigToHostInt32(fa.offset);
+                sz = OSSwapBigToHostInt32(fa.size);
+                ct = OSSwapBigToHostInt32(fa.cputype);
             }
+            // Slice must lie entirely inside the file.
+            if (sz == 0 || o > file_size || sz > file_size - o) continue;
             // Prefer arm64 / arm64e; still accept any 64-bit slice (simulators, etc.).
             if (!(ct & CPU_ARCH_ABI64)) continue;
             char e2[128];
@@ -251,7 +321,7 @@ int fp_parse(const char *path, fp_slice_t *slices, int max, int *count, char *er
             rc = -1;
         }
     } else if (magic == MH_MAGIC_64) {
-        rc = parse_thin(fd, 0, (uint64_t)st.st_size, &slices[0], err, errlen);
+        rc = parse_thin(fd, 0, file_size, &slices[0], err, errlen);
         if (rc == 0) *count = 1;
     } else {
         snprintf(err, errlen, "not a 64-bit Mach-O (magic 0x%08x)", magic);
@@ -274,15 +344,13 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
 
     // Page-align the remap window. On 16 KB devices, LC cryptoff/cryptsize may still
     // be 4 KB multiples; the kernel rejects non-page-aligned mremap_encrypted args.
-    uint64_t crypt_end = (uint64_t)s->cryptoff + (uint64_t)s->cryptsize;
-    uint64_t remap_off = align_down(s->cryptoff, pg);
-    uint64_t remap_end = align_up(crypt_end, pg);
-    if (remap_end <= remap_off || remap_end > s->slice_size) {
+    // Do NOT hard-reject 4 KB-aligned cryptoff — compute an aligned window instead.
+    uint64_t remap_off = 0, remap_len = 0;
+    if (!fp_compute_remap_window(s->cryptoff, s->cryptsize, s->slice_size, pg, &remap_off, &remap_len)) {
         res->mremap_errno = EINVAL;
         res->ms = now_ms() - t0;
         return -1;
     }
-    uint64_t remap_len = remap_end - remap_off;
     res->remap_off = remap_off;
     res->remap_len = remap_len;
 
@@ -300,7 +368,7 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
     }
 
     // Map enough of the slice to cover the aligned remap window.
-    uint64_t map_len = align_up(remap_end, pg);
+    uint64_t map_len = fp_align_up(remap_off + remap_len, pg);
     if (map_len == 0) map_len = pg;
     uint8_t *base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, (off_t)s->slice_off);
     if (base == MAP_FAILED) { res->mmap_errno = errno; close(fd); res->ms = now_ms() - t0; return -1; }
@@ -509,8 +577,19 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
 
     int out = open(out_path, O_RDWR);
     if (out < 0) { logf_(log, ctx, "  open out: %s", strerror(errno)); return -1; }
+
+    // Resolve mremap backend once so logs show dlsym vs svc (not silent).
+    {
+        int backend = 0;
+        const char *rerr = NULL;
+        (void)resolve_mremap_encrypted(&backend, &rerr);
+        if (rerr) logf_(log, ctx, "  mremap backend=%s (%s)", mremap_backend_name(backend), rerr);
+        else logf_(log, ctx, "  mremap backend=%s", mremap_backend_name(backend));
+    }
+
     // Order: native LC cryptid first, then R/cryptid=2 (no PROT_EXEC), then dyld RX/cid1.
     // Each mode is tried with and without F_ADDFILESIGS_RETURN.
+    // Kept in sync with tests/fpcore/test_fp_page.c (kExpectedDecryptOrder).
     const int order[][2] = {
         {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
         {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
@@ -527,16 +606,18 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             rc = -1; break;
         }
         // Remap window must fit in the slice after page alignment.
-        uint64_t remap_off = align_down(s->cryptoff, pg);
-        uint64_t remap_end = align_up((uint64_t)s->cryptoff + s->cryptsize, pg);
-        if (remap_end <= remap_off || remap_end > s->slice_size) {
-            logf_(log, ctx, "  slice[%d] crypt range not remappable (off=0x%x size=0x%x page=%llu)",
-                  i, s->cryptoff, s->cryptsize, (unsigned long long)pg);
+        // Intentionally NOT: (cryptoff % page) != 0 → fail. That rejected valid
+        // 4 KB LC ranges on 16 KB devices before alignment could run.
+        uint64_t remap_off = 0, remap_len = 0;
+        if (!fp_compute_remap_window(s->cryptoff, s->cryptsize, s->slice_size, pg, &remap_off, &remap_len)) {
+            logf_(log, ctx, "  slice[%d] crypt range not remappable (off=0x%x size=0x%x page=%llu slice=%llu)",
+                  i, s->cryptoff, s->cryptsize, (unsigned long long)pg, (unsigned long long)s->slice_size);
             rc = -1; break;
         }
         if (s->cryptoff % pg) {
-            logf_(log, ctx, "  slice[%d] cryptoff 0x%x not page-aligned (page=%llu) — aligning remap down to 0x%llx",
-                  i, s->cryptoff, (unsigned long long)pg, (unsigned long long)remap_off);
+            logf_(log, ctx, "  slice[%d] cryptoff 0x%x not page-aligned (page=%llu) — aligning remap to 0x%llx+0x%llx",
+                  i, s->cryptoff, (unsigned long long)pg,
+                  (unsigned long long)remap_off, (unsigned long long)remap_len);
         }
         uint8_t *dec = malloc(s->cryptsize);
         if (!dec) { rc = -1; break; }

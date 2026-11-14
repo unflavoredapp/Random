@@ -1,0 +1,22 @@
+name: FairPlay fpcore page tests
+
+on:
+  push:
+    paths: [ 'Sources/FairPlay/**', 'tests/fpcore/**' ]
+  pull_request:
+    paths: [ 'Sources/FairPlay/**', 'tests/fpcore/**' ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fpcore-page:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y clang
+      - name: Run 4K/16K page + decrypt-order regression tests
+        run: tests/fpcore/run.sh
