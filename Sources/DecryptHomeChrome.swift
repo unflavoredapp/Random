@@ -44,7 +44,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Sign in once under Store Access, then search free apps or anything this Apple ID already purchased — Tetherless downloads and decrypts on-device. No Mac. No jailbreak.")
+            Text("Sign in under Store Access (add each country’s Apple ID you use). Search shows listings from every linked storefront — free apps or anything those IDs already purchased. Tetherless downloads and decrypts on-device. No Mac. No jailbreak.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)

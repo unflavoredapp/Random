@@ -427,6 +427,43 @@ final class AppleIDStore: ObservableObject {
 
     func switchTo(id: String) { selectAccount(id: id) }
 
+    /// Distinct ISO country codes for every linked account that has a storefront session.
+    func linkedStorefrontCountryCodes() -> [String] {
+        var codes: [String] = []
+        var seen = Set<String>()
+        for account in accounts {
+            guard let data = account.storeSessionJSON,
+                  let session = try? JSONDecoder().decode(StorefrontSession.self, from: data),
+                  let code = StorefrontCountry.code(fromStoreFront: session.storeFront) else {
+                continue
+            }
+            if seen.insert(code).inserted {
+                codes.append(code)
+            }
+        }
+        return codes
+    }
+
+    /// Activate the linked Apple ID whose storefront matches `countryCode` (e.g. `jp`).
+    @discardableResult
+    func selectAccountMatching(countryCode: String) -> Bool {
+        let want = countryCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !want.isEmpty else { return false }
+        for account in accounts {
+            guard let data = account.storeSessionJSON,
+                  let session = try? JSONDecoder().decode(StorefrontSession.self, from: data),
+                  let code = StorefrontCountry.code(fromStoreFront: session.storeFront),
+                  code == want else {
+                continue
+            }
+            if account.id != activeAccountID {
+                selectAccount(id: account.id)
+            }
+            return true
+        }
+        return false
+    }
+
     func removeAccount(id: String) {
         Keychain.deleteSessionSecret(Self.passwordPrefix + id)
         Keychain.deleteSessionSecret(Self.storeSessionPrefix + id)
