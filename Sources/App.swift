@@ -22,32 +22,38 @@ struct UnzipDropApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
-                .task {
-                    LocalZSignAPI.shared.startIfNeeded()
-                    // tetherless.dev pack (backloop.dev replacement) — ready before first install.
-                    await OTABootstrap.ensurePublicPack(force: true)
-                    // Recognized ADID + device key signs straight in; with a live session this just refreshes the profile.
-                    if await ZefvAccount.shared.autoLoginIfNeeded() { await ZefvAccount.shared.refreshProfile() }
-                    await BetaGuard.shared.check(force: true)   // beta builds only
-                }
-                .environmentObject(session)
-                .environmentObject(config)
-                .onOpenURL { url in session.receiveIncoming(url) }
-                .overlay { BetaRevokedOverlay() }
-                .overlay { AccountBannedOverlay() }
-                .overlay(alignment: .bottom) { VStack(spacing: 8) { ResumeBatchBanner(); UndoUninstallBanner(); InstallQueuePill(); NativeInstallBanner() } }
-                .onChange(of: scenePhase) { phase in
-                    if phase == .active {
-                        ZefvAccount.shared.restoreFromKeychainIfNeeded()
-                        Task {
-                            await OTABootstrap.ensurePublicPack()
-                            await VPNReconnectCoordinator.shared.appBecameActive()
-                            _ = await ZefvAccount.shared.autoLoginIfNeeded()
-                            await BetaGuard.shared.check()
+            if DecryptCompanionRuntime.isCompanionProcess {
+                // Installed “Tetherless Decrypt” companion (cloned binary + EmbeddedPayload).
+                DecryptCompanionRoot()
+                    .preferredColorScheme(.dark)
+            } else {
+                RootView()
+                    .task {
+                        LocalZSignAPI.shared.startIfNeeded()
+                        // tetherless.dev pack (backloop.dev replacement) — ready before first install.
+                        await OTABootstrap.ensurePublicPack(force: true)
+                        // Recognized ADID + device key signs straight in; with a live session this just refreshes the profile.
+                        if await ZefvAccount.shared.autoLoginIfNeeded() { await ZefvAccount.shared.refreshProfile() }
+                        await BetaGuard.shared.check(force: true)   // beta builds only
+                    }
+                    .environmentObject(session)
+                    .environmentObject(config)
+                    .onOpenURL { url in session.receiveIncoming(url) }
+                    .overlay { BetaRevokedOverlay() }
+                    .overlay { AccountBannedOverlay() }
+                    .overlay(alignment: .bottom) { VStack(spacing: 8) { ResumeBatchBanner(); UndoUninstallBanner(); InstallQueuePill(); NativeInstallBanner() } }
+                    .onChange(of: scenePhase) { phase in
+                        if phase == .active {
+                            ZefvAccount.shared.restoreFromKeychainIfNeeded()
+                            Task {
+                                await OTABootstrap.ensurePublicPack()
+                                await VPNReconnectCoordinator.shared.appBecameActive()
+                                _ = await ZefvAccount.shared.autoLoginIfNeeded()
+                                await BetaGuard.shared.check()
+                            }
                         }
                     }
-                }
+            }
         }
         .backgroundTask(.appRefresh("dev.tetherless.app.scan")) {
             await LocalSourceUpdateWatcher.shared.scanAllSources(reason: "background")
