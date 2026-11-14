@@ -720,8 +720,32 @@ private struct AboutScreen: View {
                 }
                 .font(.system(size: 17, weight: .semibold)).foregroundStyle(Theme.text.opacity(0.9)).padding(.top, 8)
 
+                // Features
+                sectionLabel("FEATURES").padding(.top, 40)
+                Rectangle().fill(Theme.stroke).frame(height: 0.5)
+                VStack(alignment: .leading, spacing: 14) {
+                    featureRow("signature", "Sign & install any IPA",
+                               "Using your free Apple ID, or your own certificate.")
+                    featureRow("lock.open.fill", "Get a clean copy of apps you own",
+                               "Download an app you already own from the App Store and produce a DRM-free copy, fully on-device.")
+                    featureRow("person.2.fill", "Multiple App Store accounts",
+                               "Sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.")
+                    featureRow("puzzlepiece.extension.fill", "Tweak injection",
+                               "Add .deb or .dylib tweaks while you sign.")
+                    featureRow("arrow.clockwise.circle.fill", "Keep apps alive",
+                               "Resign in one tap, Refresh All at once, or automate it with a Shortcut so your apps (and TetherLess itself) never expire — even while your iPhone is locked.")
+                    featureRow("folder.fill", "Built-in Files",
+                               "Manage IPAs, tweaks, and downloads without leaving the app.")
+                    featureRow("key.fill", "Custom certificate mode",
+                               "Bring your own paid certificate to install over the air, with no pairing or VPN.")
+                    featureRow("person.crop.circle.badge.checkmark", "Manage your Apple ID",
+                               "View your signing certificates, App IDs, and devices, and revoke a certificate to free a slot — right in the app, no Apple Developer portal needed.")
+                }
+                .padding(.top, 14)
+                .padding(.bottom, 6)
+
                 // Credits
-                sectionLabel("CREDITS").padding(.top, 54)
+                sectionLabel("CREDITS").padding(.top, 34)
                 Rectangle().fill(Theme.stroke).frame(height: 0.5)
                 ForEach(Array(credits.enumerated()), id: \.element.id) { idx, c in
                     Button { if let u = URL(string: c.url) { openURL(u) } } label: {
@@ -775,6 +799,21 @@ private struct AboutScreen: View {
     private func sectionLabel(_ t: String) -> some View {
         HStack { Text(t).font(.system(size: 15, weight: .medium)).foregroundStyle(Theme.subtle).padding(.leading, 4); Spacer() }
             .padding(.bottom, 12)
+    }
+
+    private func featureRow(_ symbol: String, _ title: String, _ body: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Theme.accent)
+                .frame(width: 28, height: 28)
+                .padding(.top, 1)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.text)
+                Text(body).font(.system(size: 13)).foregroundStyle(Theme.subtle).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
