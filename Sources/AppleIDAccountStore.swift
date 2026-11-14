@@ -279,6 +279,8 @@ final class AppleIDStore: ObservableObject {
         } catch AppleAuthError.needsTwoFactor {
             refreshTwoFactorChannelFromGSA()
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+            // GSAAuthClient already fired the Mac trusteddevice GET (Allow + code sheets).
+            // Don't request again here — a second GET can invalidate the on-screen code.
             statusMessage = twoFactorPromptMessage()
             lastError = nil
         } catch {
@@ -438,8 +440,8 @@ final class AppleIDStore: ObservableObject {
             }
             return "Enter the 6-digit code texted to your phone."
         }
-        // Push appears on *other* trusted devices (not this iPhone). Focus can hide it.
-        return "Check your other Apple devices for “Apple Account Sign In Requested”, tap Allow, then enter the code shown. Turn Focus off if nothing appears."
+        // System sheets overlay THIS app: Allow (map / MacBook Pro) then the 6-digit code.
+        return "Watch for Apple’s Allow sheet (map) and verification code on this iPhone — turn Focus off if they don’t appear. Then enter the code below."
     }
 
     /// Force another trusted-device push (Settings “Send again to devices”).
