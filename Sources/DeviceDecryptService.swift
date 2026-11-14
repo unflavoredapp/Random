@@ -236,17 +236,21 @@ final class DeviceDecryptService: ObservableObject {
         storeURL: String
     ) async throws {
         DecryptClient.shared.phase = .running
-        DecryptClient.shared.message = "Install \(displayName) from the App Store, then we’ll decrypt on this device"
+        DecryptClient.shared.message = "Install \(displayName) from the App Store — decrypt runs automatically on this device"
         DecryptClient.shared.error = nil
-        status = "Opening App Store — install with your Apple ID…"
+        status = "Opening App Store — install with \(AppleIDStore.shared.email.isEmpty ? "your Apple ID" : AppleIDStore.shared.email)…"
         AppStoreDecryptGuide.openAppStoreListing(storeURL)
 
-        let deadline = Date().addingTimeInterval(8 * 60)
+        let deadline = Date().addingTimeInterval(10 * 60)
         var spins = 0
         while Date() < deadline {
             try Task.checkCancellation()
+            // Refresh paired/library lists so newly installed App Store apps show up quickly.
+            if spins % 3 == 0 {
+                await DeviceLibrary.shared.refresh()
+            }
             if let _ = FairPlayDecrypt.installedAppURL(bundleID: bundleID) {
-                status = "Installed — decrypting \(displayName)…"
+                status = "Installed — decrypting \(displayName) on this device…"
                 DecryptClient.shared.message = status
                 let clear = try FairPlayDecrypt.decryptInstalledApp(
                     bundleID: bundleID,
@@ -261,7 +265,12 @@ final class DeviceDecryptService: ObservableObject {
                 return
             }
             spins += 1
-            if spins % 5 == 0 {
+            // Re-nudge the App Store every ~30s so Get/Install stays in front of the user.
+            if spins % 15 == 0 {
+                status = "Still waiting — reopening App Store for \(displayName)…"
+                DecryptClient.shared.message = status
+                AppStoreDecryptGuide.openAppStoreListing(storeURL)
+            } else if spins % 5 == 0 {
                 status = "Waiting for \(displayName) to finish installing…"
                 DecryptClient.shared.message = status
             }

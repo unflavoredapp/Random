@@ -16,13 +16,21 @@ final class GSAAuthClient: ObservableObject {
     private let trustedDeviceURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice")!
     private let trustedDeviceSecurityCodeURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice/securitycode")!
     private let authApp = "com.apple.gs.xcode.auth"
-    private let xcodeVersion = "14.0"
+    /// SideInstaller / SideStore working Xcode version string for GSA + 2FA.
+    private let xcodeVersion = "14.2 (14C18)"
     private let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         // GrandSlam sometimes redirects to HTML error pages; never follow those.
         config.httpShouldSetCookies = false
+        // Avoid connection reuse — GSA/auth often returns 5xx on pooled sockets (SideStore).
+        config.httpMaximumConnectionsPerHost = 1
         return URLSession(configuration: config, delegate: GSRedirectBlocker.shared, delegateQueue: nil)
     }()
+
+    /// Mac AuthKit identity for `gsa.apple.com/auth/*` — Windows/akd clears SRP but auth pages often 500/403 it.
+    private let twoFactorMacClientInfo =
+        "<MacBookPro18,3> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/14.3.0)>"
+    private let twoFactorMacUserAgent = "Xcode"
 
     private var pendingEmail = ""
     private var pendingPassword = ""
@@ -30,6 +38,8 @@ final class GSAAuthClient: ObservableObject {
     private var pendingDSID: String?
     private var pendingIDMS: String?
     private var pending2FA: TwoFactorPending?
+    /// Apple already pushed a code (hsc 409 / pushedCode) — do not hit /trusteddevice again.
+    private(set) var twoFactorCodeAlreadySent = false
 
     private init() {}
 
@@ -42,6 +52,7 @@ final class GSAAuthClient: ObservableObject {
 
         pendingEmail = e
         pendingPassword = password
+        twoFactorCodeAlreadySent = false
 
         do {
             return try await authenticateOnce(email: e, password: password, skipTwoFactorGate: false)
@@ -63,7 +74,11 @@ final class GSAAuthClient: ObservableObject {
             return try await runSRP(email: email, password: password, anisette: anisette, skipTwoFactorGate: skipTwoFactorGate)
         } catch AppleAuthError.needsTwoFactor {
             pending2FA = .trustedDevice
-            try await requestTrustedDeviceCode()
+            // AltSign #59: when Apple already pushed the code, requesting another kills it
+            // and /auth/verify/trusteddevice often returns HTTP 500 "Could not connect to iCloud".
+            if !twoFactorCodeAlreadySent {
+                await requestTrustedDeviceCodeBestEffort()
+            }
             throw AppleAuthError.needsTwoFactor
         }
     }
@@ -116,6 +131,7 @@ final class GSAAuthClient: ObservableObject {
         pendingDSID = nil
         pendingIDMS = nil
         pending2FA = nil
+        twoFactorCodeAlreadySent = false
     }
 
     // MARK: - SRP (init → complete → decrypt spd → apptokens)
@@ -179,6 +195,8 @@ final class GSAAuthClient: ObservableObject {
             let au = status?["au"] as? String
             let hsc = status?["hsc"] as? Int
             if au != nil || hsc == 409 {
+                // hsc 409 with empty au = Apple already pushed a code (AltSign #59 / isideload).
+                twoFactorCodeAlreadySent = (hsc == 409) || (au == "pushedCode")
                 throw AppleAuthError.needsTwoFactor
             }
             throw AppleAuthError.message("Auth complete missing SPD/M2.")
@@ -204,13 +222,15 @@ final class GSAAuthClient: ObservableObject {
 
         let status = completeResp["Status"] as? [String: Any]
         let au = (status?["au"] as? String) ?? (completeResp["au"] as? String)
+        let hsc = status?["hsc"] as? Int
         let needs2FA: Bool = {
             if let au, ["trustedDeviceSecondaryAuth", "trustedDevice", "secondaryAuth", "sms", "voice", "phone", "pushedCode"].contains(au) {
                 return true
             }
-            return (status?["hsc"] as? Int) == 409
+            return hsc == 409
         }()
         if needs2FA, !skipTwoFactorGate {
+            twoFactorCodeAlreadySent = (hsc == 409) || (au == "pushedCode")
             throw AppleAuthError.needsTwoFactor
         }
 
@@ -281,63 +301,129 @@ final class GSAAuthClient: ObservableObject {
 
     // MARK: - Trusted-device 2FA
 
-    private func requestTrustedDeviceCode() async throws {
-        guard let anisette = pendingAnisette, let dsid = pendingDSID, let idms = pendingIDMS else {
-            // No identity yet (spd missing) — still ping endpoint so Apple may push; caller retries auth after code.
-            var req = URLRequest(url: trustedDeviceURL)
-            req.httpMethod = "POST"
-            if let a = pendingAnisette { applyAnisette(&req, a) }
-            req.setValue("application/x-plist", forHTTPHeaderField: "Content-Type")
-            req.setValue("application/x-buddyml", forHTTPHeaderField: "Accept")
-            let (_, resp) = try await session.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200..<500).contains(code) else {
-                throw AppleAuthError.network("Trusted-device challenge failed (HTTP \(code)).")
+    /// Best-effort code request. Never blocks the 2FA UI — Apple often already pushed a code,
+    /// and `/auth/verify/trusteddevice` frequently returns HTTP 500 xmlui "Could not connect to iCloud"
+    /// when hit with the Windows anisette identity used for GrandSlam SRP (SideStore/SideSign).
+    private func requestTrustedDeviceCodeBestEffort() async {
+        do {
+            try await requestTrustedDeviceCode(preferMacClient: true)
+        } catch {
+            // Soft-fail: still show the code field. A code may already be on trusted devices.
+            twoFactorCodeAlreadySent = true
+        }
+    }
+
+    private func requestTrustedDeviceCode(preferMacClient: Bool) async throws {
+        guard let anisette = pendingAnisette else {
+            throw AppleAuthError.missingPendingAuth
+        }
+
+        // SideSign uses GET (Apple Wiki / AltSign). POST is what produced the user's HTTP 500 xmlui.
+        func attempt(macClient: Bool) async throws -> (Data, Int) {
+            var req: URLRequest
+            if let dsid = pendingDSID, let idms = pendingIDMS {
+                req = makeTwoFactorRequest(
+                    url: trustedDeviceURL,
+                    dsid: dsid,
+                    idms: idms,
+                    anisette: anisette,
+                    preferMacClient: macClient
+                )
+            } else {
+                req = URLRequest(url: trustedDeviceURL)
+                applyAnisette(&req, anisette)
+                if macClient { applyTwoFactorMacIdentity(&req) }
+                req.setValue("application/x-plist", forHTTPHeaderField: "Content-Type")
+                req.setValue("application/x-buddyml", forHTTPHeaderField: "Accept")
             }
+            req.httpMethod = "GET"
+            req.httpShouldHandleCookies = false
+            let (data, resp) = try await session.data(for: req)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            return (data, code)
+        }
+
+        var (data, code) = try await attempt(macClient: preferMacClient)
+        // Retry once with the opposite client identity on auth-page 403/500/503.
+        if [403, 433, 500, 503].contains(code) {
+            (data, code) = try await attempt(macClient: !preferMacClient)
+        }
+
+        if code == 200 || code == 201 || code == 204 || code == 409 {
             return
         }
-        var req = makeTwoFactorRequest(url: trustedDeviceURL, dsid: dsid, idms: idms, anisette: anisette)
-        req.httpMethod = "POST"
-        let (data, resp) = try await session.data(for: req)
-        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        guard code == 200 || code == 201 || code == 204 || code == 409 else {
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            throw AppleAuthError.network("Trusted-device challenge failed (HTTP \(code)): \(raw.prefix(240))")
+
+        if let alert = parseXMLUIAlert(from: data) {
+            // "Could not connect to iCloud" after Apple already pushed → continue to code entry.
+            if alert.localizedCaseInsensitiveContains("icloud") || code == 500 {
+                twoFactorCodeAlreadySent = true
+                return
+            }
+            throw AppleAuthError.network(alert)
         }
+        let raw = String(data: data, encoding: .utf8) ?? ""
+        if code >= 500 {
+            twoFactorCodeAlreadySent = true
+            return
+        }
+        throw AppleAuthError.network("Trusted-device challenge failed (HTTP \(code)): \(raw.prefix(160))")
     }
 
     private func submitTrustedDeviceCode(_ code: String) async throws {
         guard let anisette = pendingAnisette else { throw AppleAuthError.missingPendingAuth }
 
-        // Prefer identity-token validate (SideSign), then securitycode endpoint.
+        // Prefer identity-token validate (SideSign / Apple Wiki), then securitycode endpoint.
         if let dsid = pendingDSID, let idms = pendingIDMS {
-            var validate = makeTwoFactorRequest(url: validateURL, dsid: dsid, idms: idms, anisette: anisette)
-            validate.httpMethod = "GET"
-            validate.setValue(code, forHTTPHeaderField: "security-code")
-            let (data, resp) = try await session.data(for: validate)
-            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            try throwIfBad2FA(data: data, status: status)
+            for macClient in [true, false] {
+                var validate = makeTwoFactorRequest(
+                    url: validateURL,
+                    dsid: dsid,
+                    idms: idms,
+                    anisette: anisette,
+                    preferMacClient: macClient
+                )
+                validate.httpMethod = "GET"
+                validate.setValue(code, forHTTPHeaderField: "security-code")
+                validate.httpShouldHandleCookies = false
+                let (data, resp) = try await session.data(for: validate)
+                let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if status == 200 {
+                    try throwIfBad2FA(data: data, status: status)
+                    return
+                }
+                // Wrong code — don't thrash client identities.
+                if status == 401 || status == 403 {
+                    try throwIfBad2FA(data: data, status: status)
+                }
+                if macClient { continue }
 
-            if status == 200 { return }
-
-            var sec = makeTwoFactorRequest(url: trustedDeviceSecurityCodeURL, dsid: dsid, idms: idms, anisette: anisette)
-            sec.httpMethod = "POST"
-            sec.httpBody = try PropertyListSerialization.data(fromPropertyList: [
-                "securityCode": ["code": code]
-            ], format: .xml, options: 0)
-            let (data2, resp2) = try await session.data(for: sec)
-            let status2 = (resp2 as? HTTPURLResponse)?.statusCode ?? 0
-            try throwIfBad2FA(data: data2, status: status2)
-            guard status2 == 200 || status2 == 204 else {
-                throw AppleAuthError.incorrectCode
+                var sec = makeTwoFactorRequest(
+                    url: trustedDeviceSecurityCodeURL,
+                    dsid: dsid,
+                    idms: idms,
+                    anisette: anisette,
+                    preferMacClient: true
+                )
+                sec.httpMethod = "POST"
+                sec.httpBody = try PropertyListSerialization.data(fromPropertyList: [
+                    "securityCode": ["code": code]
+                ], format: .xml, options: 0)
+                let (data2, resp2) = try await session.data(for: sec)
+                let status2 = (resp2 as? HTTPURLResponse)?.statusCode ?? 0
+                try throwIfBad2FA(data: data2, status: status2)
+                guard status2 == 200 || status2 == 204 else {
+                    throw AppleAuthError.incorrectCode
+                }
+                return
             }
-            return
+            throw AppleAuthError.incorrectCode
         }
 
         // Fallback without identity (should be rare)
         var req = URLRequest(url: trustedDeviceSecurityCodeURL)
         req.httpMethod = "POST"
         applyAnisette(&req, anisette)
+        applyTwoFactorMacIdentity(&req)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "securityCode": ["code": code]
@@ -351,6 +437,12 @@ final class GSAAuthClient: ObservableObject {
     }
 
     private func throwIfBad2FA(data: Data, status: Int) throws {
+        if let alert = parseXMLUIAlert(from: data), status >= 400 {
+            if alert.localizedCaseInsensitiveContains("incorrect") || status == 401 || status == 403 {
+                throw AppleAuthError.incorrectCode
+            }
+            throw AppleAuthError.network(alert)
+        }
         let dict = parsePlist(data)
         let ec = dict?["ec"] as? Int
             ?? ((dict?["Status"] as? [String: Any])?["ec"] as? Int)
@@ -372,11 +464,15 @@ final class GSAAuthClient: ObservableObject {
         url: URL,
         dsid: String,
         idms: String,
-        anisette: AnisetteHeaders
+        anisette: AnisetteHeaders,
+        preferMacClient: Bool
     ) -> URLRequest {
         let identity = Data("\(dsid):\(idms)".utf8).base64EncodedString()
         var req = URLRequest(url: url)
         applyAnisette(&req, anisette)
+        if preferMacClient {
+            applyTwoFactorMacIdentity(&req)
+        }
         req.setValue("application/x-buddyml", forHTTPHeaderField: "Accept")
         req.setValue("en-us", forHTTPHeaderField: "Accept-Language")
         req.setValue("application/x-plist", forHTTPHeaderField: "Content-Type")
@@ -384,6 +480,30 @@ final class GSAAuthClient: ObservableObject {
         req.setValue(xcodeVersion, forHTTPHeaderField: "X-Xcode-Version")
         req.setValue(identity, forHTTPHeaderField: "X-Apple-Identity-Token")
         return req
+    }
+
+    private func applyTwoFactorMacIdentity(_ req: inout URLRequest) {
+        req.setValue(twoFactorMacClientInfo, forHTTPHeaderField: "X-MMe-Client-Info")
+        req.setValue(twoFactorMacUserAgent, forHTTPHeaderField: "User-Agent")
+    }
+
+    private func parseXMLUIAlert(from data: Data) -> String? {
+        guard let str = String(data: data, encoding: .utf8),
+              str.localizedCaseInsensitiveContains("xmlui") || str.localizedCaseInsensitiveContains("<alert") else {
+            return nil
+        }
+        var title: String?
+        var message: String?
+        if let r = str.range(of: #"(?<=title=")[^"]+"#, options: .regularExpression) {
+            title = String(str[r])
+        }
+        if let r = str.range(of: #"(?<=message=")[^"]+"#, options: .regularExpression) {
+            message = String(str[r])
+        }
+        let parts = [title, message]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return parts.isEmpty ? nil : parts.joined(separator: ": ")
     }
 
     // MARK: - Wire
