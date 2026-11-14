@@ -57,7 +57,7 @@ struct SettingsView: View {
                     ) { screen = .certificates }
 
                     SettingsDisableNotificationsRow()
-                        .padding(.top, 4)
+                    SettingsBackgroundSideloadingRow()
 
                     Text("MORE")
                         .font(.system(size: 12, weight: .semibold))
