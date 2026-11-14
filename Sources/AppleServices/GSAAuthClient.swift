@@ -47,6 +47,15 @@ final class GSAAuthClient: ObservableObject {
     /// Active 2FA channel for UI copy / resend.
     private(set) var twoFactorChannel: TwoFactorPending = .trustedDevice
 
+    /// True after password SRP hit 2FA and before `submitTwoFactor` / `cancel` — required to text an SMS.
+    var hasPendingTwoFactor: Bool {
+        pendingAnisette != nil
+            && pendingDSID != nil
+            && pendingIDMS != nil
+            && !pendingEmail.isEmpty
+            && !pendingPassword.isEmpty
+    }
+
     private init() {}
 
     /// Completes password SRP. Throws `.needsTwoFactor` after Apple has been asked to push a code.

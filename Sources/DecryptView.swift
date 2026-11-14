@@ -794,7 +794,7 @@ private struct DecryptStoreCodeEntry: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Enter the 6-digit code from a trusted device (or Text me a code under Store Access). You stay signed in.")
+            Text("Enter the 6-digit code texted to your phone (or from a trusted device). You stay signed in.")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
@@ -825,10 +825,29 @@ private struct DecryptStoreCodeEntry: View {
                 .buttonStyle(.plain)
                 .disabled(busy || code.filter(\.isNumber).count < 6)
             }
+            Button {
+                Task {
+                    busy = true
+                    defer { busy = false }
+                    await store.requestStoreVerificationPrompt()
+                    localError = store.statusMessage ?? store.lastError
+                }
+            } label: {
+                Label(
+                    store.isSMSTwoFactor ? "Resend text message" : "Text me a code",
+                    systemImage: "message.fill"
+                )
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(TetherlessPalette.accent)
+            }
+            .buttonStyle(.plain)
+            .disabled(busy || store.isBusy)
             if let localError, !localError.isEmpty {
                 Text(localError)
                     .font(.caption2)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(
+                        localError.localizedCaseInsensitiveContains("sent") ? Color.green.opacity(0.9) : .orange
+                    )
             }
         }
         .padding(.top, 4)
