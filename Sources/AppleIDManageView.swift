@@ -203,9 +203,8 @@ struct AppleIDManageView: View {
             Text("Create a development certificate above, then choose Apple ID as the signing method. TetherLess uses the linked/dev cert from this Apple ID.")
                 .font(.footnote).foregroundStyle(.white.opacity(0.55))
             Button {
-                store.activatePreferredSigningCertificate()
-                UserDefaults.standard.set("appleid", forKey: "uzd_signing_method")
-                status = "Apple ID signing method selected."
+                FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
+                status = "Apple ID signing method selected — SigningSheet will use your free 7-day cert."
             } label: {
                 Text("Use Apple ID for next sign")
                     .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
