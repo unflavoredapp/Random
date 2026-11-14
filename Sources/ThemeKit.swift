@@ -102,7 +102,8 @@ final class AppTheme: ObservableObject {
         particleTouch   = ParticleTouchMode(rawValue: d.string(forKey: "as_p_touch") ?? "") ?? .grab
         accentHex  = Theme.accentHex
         isDark     = Theme.isDark
-        background = ThemeBackground(rawValue: d.string(forKey: Theme.keyBackground) ?? "") ?? .particles
+        // Plain by default so the purple→teal AppBackground reads cleanly (Tetherless look).
+        background = ThemeBackground(rawValue: d.string(forKey: Theme.keyBackground) ?? "") ?? .none
     }
     private func bump() { if !cycling { revision &+= 1 } }
     func startCycleIfNeeded() { if cycleMode == .app && cycleTask == nil { restartCycle() } }
@@ -110,7 +111,7 @@ final class AppTheme: ObservableObject {
     var accent: Color { Color(hex: accentHex) }
     var colorScheme: ColorScheme { isDark ? .dark : .light }
 
-    static let presets: [String] = ["FF9A1F", "2ED9C3", "FFA773", "64CCFF", "B366FF", "FF66B2", "90EE90", "FFCC00", "FF453A", "FFFFFF"]
+    static let presets: [String] = ["458FF7", "2ED9C3", "64CCFF", "B366FF", "FF9A1F", "FFA773", "FF66B2", "90EE90", "FFCC00", "FF453A", "FFFFFF"]
 }
 
 // MARK: - Palette button (top bar)

@@ -17,7 +17,7 @@ private enum Screen: Identifiable, Hashable {
     case about, repo, token
     case dylibTemplate, ipaTemplate
     case certificates, otaDomain, certInspector, transparency, recoverData
-    case tutorials, extras, tableView, nativeInstall
+    case tutorials, extras, tableView, nativeInstall, browse
     var id: String {
         switch self {
         case .github: return "github"; case .account: return "account"; case .localZSignAPI: return "local-zsign-api"
@@ -29,6 +29,7 @@ private enum Screen: Identifiable, Hashable {
         case .extras: return "extras"
         case .tableView: return "table-view"
         case .nativeInstall: return "native-install"
+        case .browse: return "browse"
         }
     }
 }
@@ -50,6 +51,8 @@ struct SettingsView: View {
 
                         SettingsSection("General") {
                             SettingsRow(icon: "info.circle.fill", title: "About", subtitle: "App information and version") { screen = .about }
+                            SettingsRow(icon: "square.grid.3x3.fill", title: "Browse Sources",
+                                        subtitle: "repo.json feeds · download IPAs into Unsigned") { screen = .browse }
                         }
 
                         SettingsSection("Account") {
@@ -95,10 +98,18 @@ struct SettingsView: View {
                     .padding(.bottom, 20)
             }
             .safeAreaInset(edge: .top, spacing: 0) {
-                TabTitleBar(title: "Settings",
-                            centerView: AnyView(Text("\(Theme.appName.uppercased()) \(Theme.appVersion)").font(.caption.monospaced()).foregroundStyle(Theme.subtle))) {
-                    EmptyView()
+                HStack {
+                    Text("Settings")
+                        .font(.system(size: 36, weight: .bold))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Text("\(Theme.appVersion)")
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.white.opacity(0.55))
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 6)
             }
             .task { await StaffGate.shared.refresh(); await ZefvAccount.shared.refreshProfile() }
             .onReceive(AppNav.shared.$openAccountScreen) { if $0 { AppNav.shared.openAccountScreen = false; screen = .account } }
@@ -124,6 +135,7 @@ struct SettingsView: View {
                 case .extras: ExtrasScreen()
                 case .tableView: TableViewSettingsScreen()
                 case .nativeInstall: NativeInstallScreen()
+                case .browse: SourcesView()
                 }
             }
             .environmentObject(config)
@@ -229,7 +241,7 @@ private struct GitHubSettingsScreen: View {
         .fullScreenCover(item: $screen) { s in
             Group {
                 switch s {
-                case .github, .account, .localZSignAPI, .about, .certificates, .otaDomain, .extras, .tableView, .nativeInstall:
+                case .github, .account, .localZSignAPI, .about, .certificates, .otaDomain, .extras, .tableView, .nativeInstall, .browse:
                     EmptyView()
                 case .signingRequestCertificate: CertificateRequestView()
                 case .repo:  RepoScreen()
