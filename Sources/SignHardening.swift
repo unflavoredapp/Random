@@ -17,7 +17,7 @@ import Security
 import CryptoKit
 
 /// FIFO async mutex. `release()` hands the lane straight to the next waiter.
-nonisolated actor SignGate {
+actor SignGate {
     static let shared = SignGate()
     private var busy = false
     private var waiters: [CheckedContinuation<Void, Never>] = []

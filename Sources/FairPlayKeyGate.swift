@@ -24,11 +24,14 @@ enum FairPlayKeyGate {
         set { UserDefaults.standard.set(newValue, forKey: "tetherless.fairplay.gate") }
     }
 
-    static func requireReady(email: String = AppleIDStore.shared.email) throws {
+    /// Resolve email inside the body — default-arg expressions are nonisolated and
+    /// cannot read `@MainActor` `AppleIDStore.shared.email` (Xcode 16 EmitSwiftModule).
+    static func requireReady(email: String? = nil) throws {
         guard enforce else { return }
         guard AppleIDStore.shared.isSignedIn else {
             throw DecryptError("Sign in under Settings › Store Access first.")
         }
+        let email = email ?? AppleIDStore.shared.email
         guard AppStoreDecryptGuide.isAcknowledged(email: email) else {
             throw FairPlayKeyGateError.notAcknowledged(email)
         }
