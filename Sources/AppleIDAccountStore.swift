@@ -438,9 +438,8 @@ final class AppleIDStore: ObservableObject {
             }
             return "Enter the 6-digit code texted to your phone."
         }
-        return GSAAuthClient.shared.twoFactorCodeAlreadySent
-            ? "Apple already sent a code to your trusted devices — enter it below. Or tap Text me a code."
-            : "Enter the 6-digit code from a trusted Apple device, or tap Text me a code."
+        // Matches the system “Apple Account Verification Code” sheet copy.
+        return "Enter the code shown on one of your Apple devices."
     }
 
     func submitVerificationCode() {

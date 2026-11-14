@@ -90,13 +90,12 @@ final class GSAAuthClient: ObservableObject {
         do {
             return try await runSRP(email: email, password: password, anisette: anisette, skipTwoFactorGate: skipTwoFactorGate)
         } catch AppleAuthError.needsTwoFactor {
-            // Prefer SMS to the trusted phone — many users don't have another Apple device nearby.
-            if await requestSMSCodeBestEffort(phoneID: "1") {
-                throw AppleAuthError.needsTwoFactor
-            }
+            // GrandSlam correct path: trusted-device push (“Apple Account Sign In Requested”
+            // on the user’s other Apple devices + verification code sheet). SMS is opt-in
+            // via Settings “Text me a code” only — forcing SMS here skips the system popup.
             pending2FA = .trustedDevice
             twoFactorChannel = .trustedDevice
-            // AltSign #59: when Apple already pushed the code, requesting another kills it.
+            // AltSign #59: when Apple already pushed (hsc 409 / pushedCode), requesting again kills it.
             if !twoFactorCodeAlreadySent {
                 await requestTrustedDeviceCodeBestEffort()
             }
