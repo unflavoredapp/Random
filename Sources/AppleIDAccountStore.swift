@@ -92,6 +92,8 @@ final class AppleIDStore: ObservableObject {
     @Published private(set) var storeNeedsVerification = false
     /// Last 2FA code — reused once for iTunes Store authenticate after GSA succeeds.
     private var pendingStoreAuthCode: String?
+    /// Store session minted with the same sign-in 2FA *before* GrandSlam consumes the code.
+    private var pendingStoreSession: StorefrontSession?
     /// Soft flag: next ensure should re-auth without wiping the persisted store token first.
     private var storefrontNeedsRefresh = false
 
@@ -267,6 +269,7 @@ final class AppleIDStore: ObservableObject {
             lastError = error.localizedDescription
             Keychain.deleteSessionSecret(Self.passwordPrefix + "pending")
             pendingStoreAuthCode = nil
+            pendingStoreSession = nil
             GSAAuthClient.shared.cancel()
         }
     }
@@ -286,15 +289,40 @@ final class AppleIDStore: ObservableObject {
         lastError = nil
         authPhase = .verifying
         pendingStoreAuthCode = digits
+        pendingStoreSession = nil
+
+        let pw = Keychain.getSessionSecret(Self.passwordPrefix + "pending")
+            ?? Keychain.getSecret(Self.passwordPrefix + "pending")
+            ?? ""
+        let email = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        // Same 2FA the user typed for Apple ID sign-in must mint the store passwordToken
+        // *before* GrandSlam consumes the one-time code — otherwise Decrypt asks for a second SMS.
+        if !pw.isEmpty, email.contains("@") {
+            statusMessage = "Connecting App Store download session…"
+            do {
+                pendingStoreSession = try await AppStoreClient.shared.authenticate(
+                    email: email,
+                    password: pw,
+                    authCode: digits
+                )
+            } catch {
+                // Still finish portal sign-in; finishRealSignIn may retry store.
+                pendingStoreSession = nil
+            }
+        }
+
         do {
             let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
-            let pw = Keychain.getSessionSecret(Self.passwordPrefix + "pending")
-                ?? Keychain.getSecret(Self.passwordPrefix + "pending")
-                ?? ""
             await finishRealSignIn(session: session, password: pw)
         } catch {
+            // Store may already be ready even if portal 2FA failed — keep that win.
+            if pendingStoreSession?.isUsable == true {
+                lastError = "Apple ID code accepted for Store downloads, but Developer Portal still needs a fresh code. Tap Resend text message."
+            } else {
+                lastError = error.localizedDescription
+            }
             authPhase = .awaitingTwoFactor
-            lastError = error.localizedDescription
         }
     }
 
@@ -406,6 +434,7 @@ final class AppleIDStore: ObservableObject {
         GSAAuthClient.shared.cancel()
         Keychain.deleteSessionSecret(Self.passwordPrefix + "pending")
         pendingStoreAuthCode = nil
+        pendingStoreSession = nil
         authPhase = .idle
         lastError = nil
         statusMessage = nil
@@ -744,11 +773,10 @@ final class AppleIDStore: ObservableObject {
             await finishOrClearPendingGSA(code: digits)
             return session
         } catch AppStoreClientError.needsTwoFactor {
-            // Store rejected the code — try completing GSA (keeps portal alive), then ask for a fresh SMS.
-            await finishOrClearPendingGSA(code: digits)
+            // Store rejected the code — don't burn a GSA challenge on a dead OTP.
             storeNeedsVerification = true
             throw AppStoreClientError.message(
-                "Incorrect or expired code — tap Resend text message, then enter the new code."
+                "That code didn’t unlock Store downloads. Sign out and sign in again under Store Access — the same 2FA unlocks Store automatically. Or tap Resend text message for a fresh code."
             )
         } catch {
             // Network / HTML 404·500 from Apple: keep the code entry up; don't burn GSA unless it helps.
@@ -888,35 +916,56 @@ final class AppleIDStore: ObservableObject {
         storeReady = true
         UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
 
-        // Also establish iTunes Store passwordToken for silent purchase/download
-        // (free + already-purchased apps — the Decrypt niche).
+        // iTunes Store passwordToken for silent purchase/download.
+        // Prefer the session minted with the *same* sign-in 2FA (submitTwoFactor) so the
+        // user never has to enter a second Store-only code.
         statusMessage = "Connecting App Store download session…"
-        do {
-            let store = try await AppStoreClient.shared.authenticate(
-                email: email,
-                password: password,
-                authCode: pendingStoreAuthCode
-            )
-            persistStoreSession(store)
+        if let prefetched = pendingStoreSession, prefetched.isUsable {
+            persistStoreSession(prefetched)
             storeNeedsVerification = false
+            pendingStoreSession = nil
+            pendingStoreAuthCode = nil
             statusMessage = session.teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
                 ?? "Signed in · free & purchased downloads ready"
-        } catch AppStoreClientError.needsTwoFactor {
-            // Apple ID portal is signed in; MZFinance still wants a 6-digit code.
-            storeNeedsVerification = true
-            statusMessage = "Signed in — enter the Store verification code to fetch free & purchased apps"
-        } catch {
-            // Non-fatal — portal auth still works; soft-retry store session once.
-            storeNeedsVerification = storefrontSession()?.isUsable != true
-            if storeNeedsVerification {
-                statusMessage = "Signed in — open Store Access if downloads ask for a code"
-            } else {
-                statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
+        } else {
+            pendingStoreSession = nil
+            do {
+                let store = try await AppStoreClient.shared.authenticate(
+                    email: email,
+                    password: password,
+                    authCode: pendingStoreAuthCode
+                )
+                persistStoreSession(store)
+                storeNeedsVerification = false
+                pendingStoreAuthCode = nil
+                statusMessage = session.teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
+                    ?? "Signed in · free & purchased downloads ready"
+            } catch AppStoreClientError.needsTwoFactor {
+                // One more try without a code — some accounts unlock store after GSA alone.
+                if let store = try? await AppStoreClient.shared.authenticate(
+                    email: email,
+                    password: password,
+                    authCode: nil
+                ), store.isUsable {
+                    persistStoreSession(store)
+                    storeNeedsVerification = false
+                    pendingStoreAuthCode = nil
+                    statusMessage = session.teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
+                        ?? "Signed in · free & purchased downloads ready"
+                } else {
+                    // Only ask for another code when the sign-in 2FA never minted a store session.
+                    storeNeedsVerification = true
+                    statusMessage = "Signed in — tap Resend text message once if downloads ask for a code"
+                }
+            } catch {
+                storeNeedsVerification = storefrontSession()?.isUsable != true
+                if storeNeedsVerification {
+                    statusMessage = "Signed in — tap Resend text message once if downloads ask for a code"
+                } else {
+                    pendingStoreAuthCode = nil
+                    statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
+                }
             }
-        }
-        // Clear only after a successful store session (or non-2FA failure).
-        if storefrontSession()?.isUsable == true || storeNeedsVerification == false {
-            pendingStoreAuthCode = nil
         }
 
         save()

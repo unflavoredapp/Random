@@ -224,7 +224,7 @@ final class AppStoreClient: ObservableObject {
                     )
                 }
 
-                let token = string(dict["passwordToken"])
+                let token = Self.passwordToken(from: dict, headers: headers)
                 var dsid = string(dict["dsPersonId"])
                 if dsid.isEmpty { dsid = headers["X-Dsid"] ?? headers["x-dsid"] ?? "" }
                 if dsid.isEmpty {
@@ -239,9 +239,8 @@ final class AppStoreClient: ObservableObject {
 
                 guard !token.isEmpty, !dsid.isEmpty else {
                     if code.isEmpty { throw AppStoreClientError.needsTwoFactor }
-                    throw AppStoreClientError.message(
-                        "App Store sign-in returned no password token. Tap Resend text message and enter a fresh code."
-                    )
+                    // Burned / wrong OTP often comes back as an empty success-shaped plist.
+                    throw AppStoreClientError.needsTwoFactor
                 }
                 guard !storeFront.isEmpty else {
                     throw AppStoreClientError.message("App Store sign-in missing storefront.")
@@ -327,6 +326,33 @@ final class AppStoreClient: ObservableObject {
         let slice = String(cookie[range])
         let digits = slice.filter(\.isNumber)
         return digits.isEmpty ? nil : digits
+    }
+
+    private static func passwordToken(from dict: [String: Any], headers: [String: String]) -> String {
+        let direct = {
+            if let s = dict["passwordToken"] as? String, !s.isEmpty { return s }
+            if let n = dict["passwordToken"] as? NSNumber { return n.stringValue }
+            return ""
+        }()
+        if !direct.isEmpty { return direct }
+        if let account = dict["accountInfo"] as? [String: Any] {
+            if let s = account["passwordToken"] as? String, !s.isEmpty { return s }
+        }
+        // Some pods echo the token only on Set-Cookie / X-Token.
+        for (key, value) in headers {
+            let k = key.lowercased()
+            if k == "x-token", !value.isEmpty { return value }
+            if k == "set-cookie", value.lowercased().contains("x-token=") {
+                if let r = value.range(of: #"(?i)x-token=([^;]+)"#, options: .regularExpression) {
+                    let raw = String(value[r])
+                    if let eq = raw.split(separator: "=").last {
+                        let token = String(eq).trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !token.isEmpty, token != "\"\"" { return token }
+                    }
+                }
+            }
+        }
+        return ""
     }
 
     /// Obtain a free license (`buyProduct`). Paid apps are rejected.
