@@ -1,7 +1,8 @@
 //
 //  DeviceDecryptService.swift
-//  On-device decrypt: FairPlay mremap on apps installed on this iPhone (App Store keys + SC_Info),
-//  not a Telegram bot. Falls back to Store download + local FairPlay when the install path is missing.
+//  On-device decrypt: hardened FairPlay mremap on apps installed on this iPhone
+//  (App Store keys + SC_Info). Falls back to Store download + local FairPlay only
+//  when the install path is missing — not when FairPlay fails (that needs App Store sign-in).
 //
 
 import Foundation
@@ -134,22 +135,31 @@ final class DeviceDecryptService: ObservableObject {
                 status = "Confirm this Apple ID has signed in to the App Store on this iPhone once…"
             }
 
-            // Primary path: decrypt from the live install (SC_Info readable by fairplayd).
             status = "Decrypting \(app.name) on this device…"
             do {
-                let clear = try FairPlayDecrypt.decryptInstalledApp(bundleID: app.bundleID, displayName: app.name)
+                let clear = try FairPlayDecrypt.decryptInstalledApp(
+                    bundleID: app.bundleID,
+                    displayName: app.name
+                ) { [weak self] msg in
+                    Task { @MainActor in self?.status = msg }
+                }
                 DecryptClient.shared.finished = clear
                 DecryptClient.shared.finishedName = app.name
                 DecryptClient.shared.phase = .done
                 DecryptClient.shared.message = "Decrypted on this device · saved to Library"
+                DecryptClient.shared.error = nil
                 status = ""
                 AppNav.shared.go(AppTab.library.rawValue)
                 return
+            } catch FairPlayDecryptError.noInstalledApp {
+                status = "App path not found — trying Store IPA…"
             } catch let e as FairPlayDecryptError {
-                // Fall through to Store download + local FairPlay when install path missing / partial.
-                status = "Install-path decrypt unavailable (\(e.localizedDescription)). Trying Store IPA…"
-            } catch {
-                status = "Install-path decrypt failed. Trying Store IPA…"
+                // Keys / FairPlay failure — do NOT mask with a remote download.
+                lastError = e.localizedDescription
+                DecryptClient.shared.phase = .failed
+                DecryptClient.shared.error = e.localizedDescription
+                status = ""
+                return
             }
 
             let storeURL = try await storeURL(forBundleID: app.bundleID)
@@ -174,7 +184,6 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     func decryptFromSearch(_ app: DecryptApp, version: String? = nil) {
-        // Prefer live install when the bundle is already on this iPhone.
         if !app.bundle.isEmpty, FairPlayDecrypt.installedAppURL(bundleID: app.bundle) != nil {
             let deviceApp = DeviceApp(bundleID: app.bundle, name: app.name, version: app.version, isAppStore: true)
             Task { await decryptInstalled(deviceApp, version: version) }
