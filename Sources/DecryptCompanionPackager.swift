@@ -227,6 +227,20 @@ enum DecryptCompanionPackager {
         try? fm.removeItem(at: dest)
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
 
+        // Full-IPA DRM inventory before slim — companion refuses if embed drops encrypted Mach-Os.
+        progress?("Auditing FairPlay DRM on full IPA…")
+        try? fm.removeItem(at: srcApp.appendingPathComponent("Watch"))
+        let fullAudit = try FairPlayDecrypt.verifyApp(at: srcApp)
+        progress?(
+            "Full IPA · \(fullAudit.entries.count) Mach-O(s) · \(fullAudit.encrypted) encrypted · \(fullAudit.clear) clear"
+        )
+        for e in fullAudit.entries where e.isEncrypted {
+            progress?("[DRM] \(e.path) · cryptid=\(e.cryptid)")
+        }
+        if fullAudit.entries.isEmpty {
+            throw DecryptError("No Mach-Os in \(name).app — cannot build companion EmbeddedPayload.")
+        }
+
         // Slim embed: Mach-Os + SC_Info + Info.plist (FairPlayed needs SINFs next to binaries;
         // full asset trees blow up the companion install — competition stayed ~hundreds of MB).
         progress?("Copying app bundle (Mach-Os + SC_Info)…")
@@ -240,11 +254,33 @@ enum DecryptCompanionPackager {
             progress?("Replicated \(staged) nested SINF license(s)…")
         }
 
-        // Seed a tiny marker so the companion finds the payload name quickly.
+        // Ensure slim embed kept every encrypted Mach-O from the full IPA.
+        let slimAudit = try FairPlayDecrypt.verifyApp(at: dest)
+        progress?(
+            "EmbeddedPayload · \(slimAudit.entries.count) Mach-O(s) · \(slimAudit.encrypted) encrypted"
+        )
+        if slimAudit.encrypted < fullAudit.encrypted {
+            throw DecryptError(
+                "Companion embed dropped FairPlay binaries (\(slimAudit.encrypted) encrypted vs \(fullAudit.encrypted) in full IPA). Aborting."
+            )
+        }
+        if slimAudit.entries.count < fullAudit.entries.count {
+            progress?(
+                "Note: slim embed has \(slimAudit.entries.count)/\(fullAudit.entries.count) Mach-Os (extras were already clear / non-DRM)."
+            )
+        }
+
+        // Seed manifest so companion can re-check expected DRM coverage at runtime.
         let meta: [String: Any] = [
             "name": name,
             "embeddedAt": ISO8601DateFormatter().string(from: Date()),
             "hostBundle": Bundle.main.bundleIdentifier ?? "",
+            "machOs": fullAudit.entries.count,
+            "encryptedMachOs": fullAudit.encrypted,
+            "clearMachOs": fullAudit.clear,
+            "plainMachOs": fullAudit.plain,
+            "embeddedMachOs": slimAudit.entries.count,
+            "embeddedEncryptedMachOs": slimAudit.encrypted,
         ]
         if let data = try? PropertyListSerialization.data(fromPropertyList: meta, format: .xml, options: 0) {
             try? data.write(to: embedRoot.appendingPathComponent("manifest.plist"))
@@ -260,9 +296,22 @@ enum DecryptCompanionPackager {
             try fm.copyItem(at: info, to: dest.appendingPathComponent("Info.plist"))
         }
 
-        // Collect Mach-Os via the same structured discovery FairPlay uses, then copy each
-        // plus any SC_Info next to it.
-        let machos = (try? FairPlayDecrypt.collectMachOsForCompanion(under: src)) ?? []
+        // Prefer every Mach-O `verifyApp` found (full DRM coverage), then fall back to
+        // structured discovery if verify somehow returned empty.
+        var machos: [URL] = []
+        var seen = Set<String>()
+        if let audit = try? FairPlayDecrypt.verifyApp(at: src) {
+            for e in audit.entries {
+                let file = src.appendingPathComponent(e.path)
+                let key = file.standardizedFileURL.path
+                guard !seen.contains(key), fm.fileExists(atPath: file.path) else { continue }
+                seen.insert(key)
+                machos.append(file)
+            }
+        }
+        if machos.isEmpty {
+            machos = (try? FairPlayDecrypt.collectMachOsForCompanion(under: src)) ?? []
+        }
         progress?("Embedding \(machos.count) Mach-O file(s)…")
         for file in machos {
             let rel = relative(file, under: src)

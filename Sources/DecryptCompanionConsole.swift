@@ -20,6 +20,8 @@ final class DecryptCompanionController: ObservableObject {
     @Published var done = false
     @Published var finishedURL: URL?
     @Published var statusTitle = "Ready"
+    /// Last FairPlay verify_ipa summary (e.g. "12 cryptid=0 · 0 encrypted · 3 no LC_ENCRYPTION").
+    @Published var verifySummary = ""
 
     private init() {}
 
@@ -36,6 +38,7 @@ final class DecryptCompanionController: ObservableObject {
         busy = true
         done = false
         finishedURL = nil
+        verifySummary = ""
         statusTitle = "Decrypting…"
         isPresented = true
     }
@@ -50,8 +53,15 @@ final class DecryptCompanionController: ObservableObject {
         }
         if trimmed.hasPrefix("[DECRYPTED]") || trimmed.hasPrefix("[plain]") || trimmed.hasPrefix("[FAILED]") {
             statusTitle = "Decrypting…"
+        } else if trimmed.localizedCaseInsensitiveContains("DRM audit")
+                    || trimmed.hasPrefix("[BEFORE")
+                    || trimmed.hasPrefix("[AFTER")
+                    || trimmed.hasPrefix("[IPA") {
+            statusTitle = "Verifying DRM…"
         } else if trimmed.localizedCaseInsensitiveContains("packaging") {
             statusTitle = "Packaging…"
+        } else if trimmed.hasPrefix("VERIFY OK") {
+            statusTitle = "Verified clear"
         } else if trimmed.localizedCaseInsensitiveContains("wrote") || trimmed.hasPrefix("Done:") {
             statusTitle = "Done"
         } else if trimmed.count < 80 {
@@ -64,7 +74,11 @@ final class DecryptCompanionController: ObservableObject {
         done = true
         finishedURL = url
         if !name.isEmpty { displayName = name }
-        statusTitle = url == nil ? "Failed" : "Done — saving automatically…"
+        if !verifySummary.isEmpty {
+            statusTitle = "Verified · \(verifySummary)"
+        } else {
+            statusTitle = url == nil ? "Failed" : "Done — saving automatically…"
+        }
         if let url {
             appendLog("Wrote \(url.lastPathComponent).")
         }
@@ -262,10 +276,19 @@ struct DecryptCompanionConsole: View {
     }
 
     private func color(for line: String) -> Color {
-        if line.hasPrefix("[DECRYPTED]") { return Color.green.opacity(0.95) }
+        if line.hasPrefix("[DECRYPTED]") || line.hasPrefix("[AFTER CLEAR]") || line.hasPrefix("[IPA CLEAR]") {
+            return Color.green.opacity(0.95)
+        }
+        if line.hasPrefix("[BEFORE DRM]") || line.hasPrefix("[DRM]") {
+            return Color.orange.opacity(0.95)
+        }
+        if line.hasPrefix("VERIFY OK") { return Color.green }
         if line.hasPrefix("[plain]") { return Color.white.opacity(0.55) }
         if line.hasPrefix("[FAILED]") || line.hasPrefix("ERROR:") { return Color.orange }
-        if line.hasPrefix("Done:") || line.hasPrefix("Wrote ") { return Color.cyan.opacity(0.9) }
+        if line.hasPrefix("Done:") || line.hasPrefix("Wrote ") || line.hasPrefix("[BEFORE]")
+            || line.hasPrefix("[AFTER]") || line.hasPrefix("[IPA]") {
+            return Color.cyan.opacity(0.9)
+        }
         return Color.white.opacity(0.78)
     }
 }
