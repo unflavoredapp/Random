@@ -27,8 +27,40 @@ final class DeviceDecryptService: ObservableObject {
         DeviceLibrary.shared.apps.filter(\.isAppStore)
     }
 
-    /// Public iTunes lookup: current version + minimum OS (for the Versions sheet when server history is unavailable).
+    /// Version history: prefer authenticated MZFinance externalVersionIds, then public iTunes current build.
     func versionList(for app: DecryptApp) async -> (versions: [DecryptVersion], minOS: String?)? {
+        if let store = await storeVersionHistory(for: app) {
+            return store
+        }
+        return await publicItunesVersionList(for: app)
+    }
+
+    /// Apple ID purchase/download history (owned apps this account can redownload).
+    func ownedStoreApps() async throws -> [OwnedStoreApp] {
+        let account = try await AppleIDStore.shared.ensureStorefrontSession()
+        return try await AppStoreClient.shared.purchaseHistory(account: account)
+    }
+
+    private func storeVersionHistory(for app: DecryptApp) async -> (versions: [DecryptVersion], minOS: String?)? {
+        guard AppleIDStore.shared.isSignedIn else { return nil }
+        do {
+            let adam = try await resolveAdamId(bundleID: app.bundle, storeURL: app.url)
+            guard let adam else { return nil }
+            let account = try await AppleIDStore.shared.ensureStorefrontSession()
+            let versions = try await AppStoreClient.shared.resolveVersionHistory(
+                adamId: adam,
+                account: account,
+                limit: 40
+            )
+            guard !versions.isEmpty else { return nil }
+            let minOS = versions.first(where: \.current)?.minOS ?? versions.first?.minOS
+            return (versions, minOS)
+        } catch {
+            return nil
+        }
+    }
+
+    private func publicItunesVersionList(for app: DecryptApp) async -> (versions: [DecryptVersion], minOS: String?)? {
         var adam: Int?
         if let r = app.url.range(of: #"/id(\d+)"#, options: .regularExpression) {
             adam = Int(String(app.url[r]).filter(\.isNumber))
@@ -201,7 +233,8 @@ final class DeviceDecryptService: ObservableObject {
             try await silentPurchaseDownloadDecrypt(
                 bundleID: app.bundleID,
                 displayName: app.name,
-                storeURL: storeURL
+                storeURL: storeURL,
+                version: version
             )
         } catch {
             lastError = error.localizedDescription
@@ -212,7 +245,7 @@ final class DeviceDecryptService: ObservableObject {
         }
     }
 
-    func decryptFromSearch(_ app: DecryptApp, version: String? = nil) {
+    func decryptFromSearch(_ app: DecryptApp, version: String? = nil, externalVersionId: String? = nil) {
         switch DecryptChannel.current {
         case .telegram:
             DecryptClient.shared.select(app)
@@ -228,13 +261,25 @@ final class DeviceDecryptService: ObservableObject {
                 version: app.version,
                 isAppStore: true
             )
-            Task { await decryptOwnedStoreApp(deviceApp, storeURL: app.url, version: version) }
+            Task {
+                await decryptOwnedStoreApp(
+                    deviceApp,
+                    storeURL: app.url,
+                    version: version,
+                    externalVersionId: externalVersionId
+                )
+            }
         }
     }
 
     /// Device-channel path for a Store listing: decrypt if already on-disk, otherwise silent
     /// purchase/download (never opens the App Store UI).
-    func decryptOwnedStoreApp(_ app: DeviceApp, storeURL: String, version: String? = nil) async {
+    func decryptOwnedStoreApp(
+        _ app: DeviceApp,
+        storeURL: String,
+        version: String? = nil,
+        externalVersionId: String? = nil
+    ) async {
         guard !busy else { return }
         busy = true
         lastError = nil
@@ -247,7 +292,9 @@ final class DeviceDecryptService: ObservableObject {
             guard !bid.isEmpty else {
                 throw DecryptError("Missing bundle ID — search again or paste an App Store link.")
             }
-            if let installed = await resolveInstalledAppURL(bundleID: bid) {
+            // Version-pinned silent download always uses the store package (installed build may differ).
+            let wantsPinned = !(version ?? "").isEmpty || !(externalVersionId ?? "").isEmpty
+            if !wantsPinned, let installed = await resolveInstalledAppURL(bundleID: bid) {
                 publishDecryptProgress("Decrypting \(app.name) on this device…")
                 let clear = try FairPlayDecrypt.decryptInstalledApp(
                     bundleID: bid,
@@ -263,7 +310,9 @@ final class DeviceDecryptService: ObservableObject {
             try await silentPurchaseDownloadDecrypt(
                 bundleID: bid,
                 displayName: app.name,
-                storeURL: link
+                storeURL: link,
+                version: version,
+                externalVersionId: externalVersionId
             )
         } catch {
             let text = error.localizedDescription
@@ -286,7 +335,9 @@ final class DeviceDecryptService: ObservableObject {
     private func silentPurchaseDownloadDecrypt(
         bundleID: String,
         displayName: String,
-        storeURL: String
+        storeURL: String,
+        version: String? = nil,
+        externalVersionId: String? = nil
     ) async throws {
         guard let adam = try await resolveAdamId(bundleID: bundleID, storeURL: storeURL) else {
             throw DecryptError("Couldn't resolve an App Store id for \(displayName). Try another search result.")
@@ -294,31 +345,59 @@ final class DeviceDecryptService: ObservableObject {
         publishDecryptProgress("Silent App Store session…")
         let account = try await AppleIDStore.shared.ensureStorefrontSession()
 
+        var pinned = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if pinned.isEmpty {
+            do {
+                pinned = try await AppStoreClient.shared.resolveExternalVersionId(
+                    adamId: adam,
+                    account: account,
+                    version: version
+                ) ?? ""
+            } catch {
+                // Continue with latest if version resolve fails.
+                pinned = ""
+            }
+        }
+        if let version, !version.isEmpty, pinned.isEmpty {
+            publishDecryptProgress("Using latest owned build (couldn’t pin v\(version))…")
+        } else if !pinned.isEmpty {
+            publishDecryptProgress("Pinning store build \(pinned)…")
+        }
+
         let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("tetherless-silent", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-        let dest = tmpDir.appendingPathComponent("\(bundleID.isEmpty ? "app" : bundleID)_\(adam).ipa")
+        let tag = pinned.isEmpty ? "\(adam)" : "\(adam)_\(pinned)"
+        let dest = tmpDir.appendingPathComponent("\(bundleID.isEmpty ? "app" : bundleID)_\(tag).ipa")
 
         let ipa: URL
+        let downloadedVersion: String
         do {
-            ipa = try await AppStoreClient.shared.purchaseAndDownload(
+            let result = try await AppStoreClient.shared.purchaseAndDownload(
                 adamId: adam,
                 account: account,
                 destination: dest,
+                externalVersionId: pinned.isEmpty ? nil : pinned,
                 onProgress: { [weak self] msg in
                     Task { @MainActor in self?.publishDecryptProgress(msg) }
                 }
             )
+            ipa = result.url
+            downloadedVersion = result.item.displayVersion
         } catch AppStoreClientError.paidApp {
             throw DecryptError(
                 "\(displayName) is paid — silent download only covers free/owned apps. Buy it once with this Apple ID, then decrypt again (still no App Store UI from TetherLess)."
+            )
+        } catch AppStoreClientError.licenseRequired {
+            throw DecryptError(
+                "This Apple ID doesn’t own a license for \(displayName). Buy or redeem it once, then decrypt again."
             )
         } catch AppStoreClientError.tokenExpired, AppStoreClientError.needsTwoFactor {
             throw DecryptError("App Store session needs refresh — sign in again under Settings › Store Access, then retry.")
         }
 
-        // Prefer live install path if Pair/LS can see it after the license refresh.
-        if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
+        // Prefer live install path only when we didn’t pin an older/different build.
+        if pinned.isEmpty, let installed = await resolveInstalledAppURL(bundleID: bundleID) {
             publishDecryptProgress("License ready — decrypting installed \(displayName)…")
             let clear = try FairPlayDecrypt.decryptInstalledApp(
                 bundleID: bundleID,
@@ -331,7 +410,8 @@ final class DeviceDecryptService: ObservableObject {
             return
         }
 
-        publishDecryptProgress("Decrypting silently downloaded \(displayName)…")
+        let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
+        publishDecryptProgress("Decrypting silently downloaded \(label)…")
         do {
             let clear = try FairPlayDecrypt.decryptIPA(
                 at: ipa,
@@ -350,7 +430,7 @@ final class DeviceDecryptService: ObservableObject {
                         ipaURL: ipa,
                         bundleID: bundleID,
                         name: displayName,
-                        version: ""
+                        version: downloadedVersion
                     )
                     if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
                         publishDecryptProgress("Installed — decrypting \(displayName)…")

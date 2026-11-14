@@ -26,7 +26,9 @@ struct DecryptVersion: Identifiable, Hashable {
     let current: Bool
     /// App Store minimum iOS for this build, when known (e.g. "15.0").
     var minOS: String? = nil
-    var id: String { v }
+    /// MZFinance `softwareVersionExternalIdentifier` for version-pinned silent download.
+    var externalId: String? = nil
+    var id: String { externalId ?? v }
 }
 
 struct DecryptHistoryItem: Identifiable, Hashable {
@@ -174,14 +176,32 @@ final class DecryptClient: ObservableObject {
         loadingVersions = true; error = nil
         defer { loadingVersions = false }
 
-        // Prefer server version history (same list UI as Telegram / Banana Kong style).
+        // This Device: authenticated store version IDs (externalVersionId) first.
+        if DecryptChannel.current == .device {
+            if let local = await DeviceDecryptService.shared.versionList(for: app) {
+                versions = local.versions
+                versionPage = 1
+                versionPages = 1
+                versionTotal = local.versions.count
+                error = nil
+                return
+            }
+        }
+
+        // Telegram / server archive history (paged).
         do {
             let o = try await send(makeRequest("api/decrypt/versions", body: ["url": app.url, "page": page], timeout: 150))
             let list = (o["versions"] as? [[String: Any]]) ?? []
             let mapped = list.compactMap { i -> DecryptVersion? in
                 guard let v = i["v"] as? String, !v.isEmpty else { return nil }
                 let minOS = (i["min_ios"] as? String) ?? (i["minimumOsVersion"] as? String)
-                return DecryptVersion(v: v, current: (i["current"] as? Bool) ?? false, minOS: minOS)
+                let ext = (i["external_id"] as? String) ?? (i["externalVersionId"] as? String)
+                return DecryptVersion(
+                    v: v,
+                    current: (i["current"] as? Bool) ?? false,
+                    minOS: minOS,
+                    externalId: ext
+                )
             }
             if !mapped.isEmpty {
                 versions = mapped
@@ -191,14 +211,13 @@ final class DecryptClient: ObservableObject {
                 return
             }
         } catch {
-            // Fall through to on-device iTunes current-version listing.
             if DecryptChannel.current == .telegram {
                 self.error = error.localizedDescription
                 return
             }
         }
 
-        // This Device: at least show the live App Store build + min iOS from public lookup.
+        // Fallback: public iTunes current build (or store history if device path missed it).
         if let local = await DeviceDecryptService.shared.versionList(for: app) {
             versions = local.versions
             versionPage = 1
@@ -379,6 +398,7 @@ struct DecryptView: View {
                             DecryptChannelPicker()
                             if DecryptChannel.current == .device {
                                 DecryptAppStoreSignInHint()
+                                DecryptOwnedStoreAppsSection()
                                 DecryptDeviceAppsSection()
                             }
                         }
@@ -701,7 +721,9 @@ private struct DecryptVersionsSheet: View {
                 AppBackground().ignoresSafeArea()
                 List {
                     Section {
-                        Text("FairPlay decrypt runs on this iPhone (iOS \(deviceIOS)). Pick a build whose min iOS is ≤ \(deviceIOS). This Device silent download uses the latest owned build when history isn’t available; Telegram can fetch older archives.")
+                        Text(DecryptChannel.current == .device
+                              ? "Silent store download can pin a build via externalVersionId. FairPlay runs on this iPhone (iOS \(deviceIOS)) — pick a build whose min iOS is ≤ \(deviceIOS). Spoof Store iOS under Settings › Store Access if you need a different package variant."
+                              : "FairPlay decrypt runs on this iPhone (iOS \(deviceIOS)). Pick a build whose min iOS is ≤ \(deviceIOS). Telegram can fetch older archives when store history isn’t available.")
                             .font(.footnote)
                             .foregroundStyle(.white.opacity(0.55))
                             .listRowBackground(Color.clear)
@@ -724,17 +746,28 @@ private struct DecryptVersionsSheet: View {
                                 if DecryptChannel.current == .telegram {
                                     c.start(url: app.url, version: v.v, display: app.name)
                                 } else {
-                                    DeviceDecryptService.shared.decryptFromSearch(app, version: v.v)
+                                    DeviceDecryptService.shared.decryptFromSearch(
+                                        app,
+                                        version: v.v,
+                                        externalVersionId: v.externalId
+                                    )
                                 }
                                 dismiss()
                             } label: {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(v.v).foregroundStyle(.white)
-                                        if let min = v.minOS, !min.isEmpty {
-                                            Text("iOS \(min)+")
-                                                .font(.caption2)
-                                                .foregroundStyle(.white.opacity(0.45))
+                                        HStack(spacing: 6) {
+                                            if let min = v.minOS, !min.isEmpty {
+                                                Text("iOS \(min)+")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.white.opacity(0.45))
+                                            }
+                                            if let ext = v.externalId, !ext.isEmpty, ext != v.v {
+                                                Text("id \(ext)")
+                                                    .font(.caption2)
+                                                    .foregroundStyle(.white.opacity(0.35))
+                                            }
                                         }
                                     }
                                     Spacer()
