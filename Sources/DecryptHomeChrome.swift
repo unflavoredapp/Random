@@ -45,7 +45,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Decrypt runs on this iPhone with your App Store keys — not a Telegram bot. Pick an app you own (installed here or from search); TetherLess saves a DRM-free IPA to Library. That Apple ID must have signed in to the App Store on this iPhone at least once.")
+            Text("Pick This Device (FairPlay on this iPhone) or Telegram Bot (@FastDecryptBot via the server). Device mode needs the app installed and a one-time App Store sign-in for that Apple ID; Telegram mode works from an App Store link.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
@@ -147,10 +147,14 @@ struct DecryptSignedInCard: View {
 struct DecryptDeviceAppsSection: View {
     @ObservedObject private var device = DeviceLibrary.shared
     @ObservedObject private var decrypting = DeviceDecryptService.shared
+    @AppStorage("uzd_decrypt_channel") private var channelRaw = DecryptChannel.device.rawValue
 
     private var drm: [DeviceApp] { device.apps.filter(\.isAppStore) }
+    private var channel: DecryptChannel { DecryptChannel(rawValue: channelRaw) ?? .device }
 
     var body: some View {
+        if channel != .device { EmptyView() }
+        else {
         GlassCard(corner: 22) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -241,6 +245,7 @@ struct DecryptDeviceAppsSection: View {
         .onAppear {
             if NativeInstaller.isSelected { device.refreshIfStale() }
         }
+        } // device channel
     }
 }
 
