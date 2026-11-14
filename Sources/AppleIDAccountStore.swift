@@ -315,16 +315,18 @@ final class AppleIDStore: ObservableObject {
             ?? ""
         let email = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
-        // Piggyback: the same Allow / trusted-device code must mint Store *before*
-        // GrandSlam consumes it. Never advance portal 2FA on a failed store mint —
-        // that left Apple ID signed in and Store asking for a second SMS.
         guard !pw.isEmpty, email.contains("@") else {
             lastError = "Missing Apple ID password for Store unlock. Cancel, then Sign In again so Store can piggyback the first trust."
             statusMessage = twoFactorPromptMessage()
             authPhase = .awaitingTwoFactor
             return
         }
-        statusMessage = "Unlocking Store with the same code…"
+
+        // 1) Best case: MZFinance accepts the same digits (SMS-style OTPs).
+        // HSA2 Allow-sheet codes often do NOT — they’re for AuthKit / MacBook Pro sign-in.
+        // Never block portal on that failure; complete the first trust, then mint Store
+        // password-only from the warm session (no second text).
+        statusMessage = "Trying Store with the same code…"
         do {
             pendingStoreSession = try await authenticateStoreWithRetries(
                 email: email,
@@ -333,32 +335,31 @@ final class AppleIDStore: ObservableObject {
             )
         } catch {
             pendingStoreSession = nil
-            lastError = "Store couldn’t use that code yet. Use the same Allow / verification code and tap Submit Code again — Store piggybacks the first trust (no second text)."
-            statusMessage = twoFactorPromptMessage()
-            authPhase = .awaitingTwoFactor
-            return
         }
-        guard pendingStoreSession?.isUsable == true else {
-            lastError = "Store session missing after unlock. Tap Submit Code again with the same code."
-            statusMessage = twoFactorPromptMessage()
-            authPhase = .awaitingTwoFactor
-            return
-        }
+
+        statusMessage = pendingStoreSession?.isUsable == true
+            ? "Store unlocked — finishing Apple ID…"
+            : "Finishing Apple ID trust — Store will unlock next…"
 
         do {
             let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
+            // clear authCode for connect when store-first failed — password-only after GSA.
+            if pendingStoreSession?.isUsable != true {
+                pendingStoreAuthCode = nil
+            }
             await finishRealSignIn(session: session, password: pw)
         } catch {
-            // Store already unlocked with this trust — keep that win even if portal 2FA flakes.
             if pendingStoreSession?.isUsable == true {
                 await finishRealSignInWithStoreOnly(
                     email: email,
                     password: pw,
                     store: pendingStoreSession!
                 )
-                lastError = "Store downloads unlocked with that code. Developer Portal needs a fresh Allow/code only if Manage certificates fails."
+                lastError = nil
+                statusMessage = "Signed in · free & purchased downloads ready"
             } else {
                 lastError = error.localizedDescription
+                statusMessage = twoFactorPromptMessage()
                 authPhase = .awaitingTwoFactor
             }
         }
@@ -503,7 +504,7 @@ final class AppleIDStore: ObservableObject {
         }
         // System sheets overlay THIS app when we sign in as the spoofed MacBook/iPhone.
         let device = AuthClientSpoof.current.displayName
-        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off if they don’t appear. Enter that code below — Store unlocks with the same trust (no second text)."
+        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off (moon) if they don’t appear. Enter that code below; Store unlocks from the same trust after Submit (no second text)."
     }
 
     /// Force another trusted-device push (Settings “Send again to devices”).
@@ -1085,6 +1086,8 @@ final class AppleIDStore: ObservableObject {
 
     /// Mint / persist iTunes Store session with the Apple ID password (+ optional same 2FA).
     /// On success Settings shows “Signed in for Store access” with the same email.
+    /// After a successful HSA2 Allow trust, password-only MZFinance usually works even when
+    /// password+code did not (Allow-sheet digits are AuthKit, not always store OTPs).
     private func connectStoreSession(
         email: String,
         password: String,
@@ -1105,20 +1108,31 @@ final class AppleIDStore: ObservableObject {
             return
         }
 
-        do {
-            let store = try await AppStoreClient.shared.authenticate(
+        let code = (authCode ?? "").filter(\.isNumber)
+        if code.count == 6 {
+            if let store = try? await authenticateStoreWithRetries(
                 email: email,
                 password: password,
-                authCode: authCode
-            )
-            persistStoreSession(store)
-            storeNeedsVerification = false
-            pendingStoreAuthCode = nil
-            statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
-                ?? "Signed in · free & purchased downloads ready"
-            return
-        } catch AppStoreClientError.needsTwoFactor {
-            // Same password, no code — some accounts unlock store after GSA alone.
+                authCode: code
+            ), store.isUsable {
+                persistStoreSession(store)
+                storeNeedsVerification = false
+                pendingStoreAuthCode = nil
+                statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
+                    ?? "Signed in · free & purchased downloads ready"
+                return
+            }
+        }
+
+        // Warm trust: GSA 2FA just succeeded — MZFinance often accepts password alone.
+        for attempt in 1...3 {
+            statusMessage = attempt == 1
+                ? "Unlocking Store from the same Apple ID trust…"
+                : "Retrying Store unlock (\(attempt)/3)…"
+            if attempt > 1 {
+                try? await Task.sleep(nanoseconds: UInt64(attempt) * 800_000_000)
+                await AnisetteClient.shared.invalidate(resetProvisioning: false)
+            }
             if let store = try? await AppStoreClient.shared.authenticate(
                 email: email,
                 password: password,
@@ -1131,8 +1145,6 @@ final class AppleIDStore: ObservableObject {
                     ?? "Signed in · free & purchased downloads ready"
                 return
             }
-        } catch {
-            // Fall through to usable-session / verification handling below.
         }
 
         if storefrontSession()?.isUsable == true {
@@ -1141,7 +1153,7 @@ final class AppleIDStore: ObservableObject {
             statusMessage = teamName.map { "Signed in · \($0)" } ?? "Signed in"
         } else {
             storeNeedsVerification = true
-            statusMessage = "Signed in — tap Resend text message once if downloads ask for a code"
+            statusMessage = "Signed in — tap Retry Store unlock (no second text). Turn Focus off, or Sign Out and Sign In once."
         }
     }
 
