@@ -281,7 +281,7 @@ enum FairPlayDecrypt {
             _ = copyFileChunked(from: srcInfo, to: destApp.appendingPathComponent(infoName), timeout: 15)
         }
 
-        progress?("Decrypting Mach-Os from install path…")
+        progress?("Scanning install path for Mach-Os…")
         var report = try decryptMachOs(readingFrom: source, writingTo: destApp, progress: progress)
         report.sourcePath = source.path
         report.usedInstalledPath = true
@@ -352,107 +352,105 @@ enum FairPlayDecrypt {
     ) throws -> FairPlayDecryptReport {
         var report = FairPlayDecryptReport()
         // FairPlayed embed_ipa.sh: installd normally copies the main .sinf onto every
-        // SinfReplicationPaths entry; IPA trees / incomplete installs often skip that.
-        let staged = replicateSinfs(in: sourceApp)
-        report.sinfsReplicated = staged
-        if staged > 0 { progress?("Staged \(staged) nested SINF license(s)…") }
+        // SinfReplicationPaths entry. Never write into a live App Store install container —
+        // SC_Info reads/writes there hung decrypt on “Decrypting Mach-Os…”.
+        if isLiveAppStoreInstall(sourceApp) {
+            progress?("Using live install licenses (no SINF staging)…")
+        } else {
+            let staged = replicateSinfs(in: sourceApp)
+            report.sinfsReplicated = staged
+            if staged > 0 { progress?("Staged \(staged) nested SINF license(s)…") }
+        }
 
-        let binaries = try collectMachOs(under: sourceApp)
+        progress?("Locating Mach-Os…")
+        let binaries = try collectMachOs(under: sourceApp, progress: progress)
         guard !binaries.isEmpty else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(sourceApp.lastPathComponent).")
         }
         report.scanned = binaries.count
-        report.encryptedBefore = binaries.reduce(0) { acc, url in
-            let n = url.path.withCString { fp_count_encrypted_slices($0) }
-            return acc + max(0, Int(n))
+        // Don't pre-open every binary for cryptid counts — that re-hangs on install paths.
+        // Count after we know the list, with a short timeout per file.
+        var encCount = 0
+        for url in binaries {
+            if let n = withTimeout(seconds: 3, work: {
+                Int(url.path.withCString { fp_count_encrypted_slices($0) })
+            }), n > 0 {
+                encCount += n
+            }
         }
-        progress?("Found \(binaries.count) Mach-Os (\(report.encryptedBefore) encrypted slices)…")
+        report.encryptedBefore = encCount
+        progress?("Found \(binaries.count) Mach-Os (\(encCount) encrypted slices)…")
 
         let ordered = prioritizeBinaries(binaries, app: sourceApp)
-        guard let first = ordered.first else {
+        guard !ordered.isEmpty else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found.")
         }
 
-        // 1) Required first binary (main) — serial, fail closed.
-        try decryptOne(
-            file: first, sourceApp: sourceApp, destApp: destApp,
-            index: 0, total: ordered.count, progress: progress, report: &report,
-            role: role(of: first, under: sourceApp, app: sourceApp)
-        )
-
-        // 2) Remainder — concurrent (cap 4) across frameworks / appex / Watch / clips.
-        let rest = Array(ordered.dropFirst())
-        if !rest.isEmpty {
-            progress?("Decrypting \(rest.count) more binaries…")
-            let lock = NSLock()
-            var local = FairPlayDecryptReport()
-            let group = DispatchGroup()
-            let gate = DispatchSemaphore(value: 4)
-            for (offset, file) in rest.enumerated() {
-                group.enter()
-                DispatchQueue.global(qos: .userInitiated).async {
-                    defer { group.leave() }
-                    gate.wait()
-                    defer { gate.signal() }
-                    var mini = FairPlayDecryptReport()
-                    let r = role(of: file, under: sourceApp, app: sourceApp)
-                    do {
-                        try decryptOne(
-                            file: file, sourceApp: sourceApp, destApp: destApp,
-                            index: offset + 1, total: ordered.count, progress: nil,
-                            report: &mini, role: r
+        // Serial decrypt with live progress. Concurrent fairplayd page-ins previously
+        // left the UI on a single status line while one binary blocked forever.
+        for (index, file) in ordered.enumerated() {
+            let r = role(of: file, under: sourceApp, app: sourceApp)
+            let rel = relativePath(file, under: sourceApp)
+            let budget: TimeInterval = (r == .main) ? 180 : 90
+            progress?("Decrypting \(rel) (\(index + 1)/\(ordered.count))…")
+            let outcome = decryptOneWithTimeout(
+                file: file, sourceApp: sourceApp, destApp: destApp,
+                index: index, total: ordered.count, role: r, timeout: budget
+            )
+            switch outcome {
+            case .timedOut:
+                progress?("Timed out on \(rel) after \(Int(budget))s — skipping")
+                if r.isRequired {
+                    report.failed.append(rel)
+                    if r == .main {
+                        throw FairPlayDecryptError.mainExecutableFailed(
+                            "Timed out decrypting the main executable (\(rel)). \(AppStoreDecryptGuide.failureHint)"
                         )
-                    } catch {
-                        // decryptOne only throws for required roles; soft-fail goes into report.
-                        let rel = relativePath(file, under: sourceApp)
-                        lock.lock()
-                        if r.isRequired { local.failed.append(rel) }
-                        else { local.softFailed.append(rel) }
-                        lock.unlock()
-                        return
                     }
-                    lock.lock()
-                    local.decrypted.append(contentsOf: mini.decrypted)
-                    local.plain.append(contentsOf: mini.plain)
-                    local.failed.append(contentsOf: mini.failed)
-                    local.softFailed.append(contentsOf: mini.softFailed)
-                    lock.unlock()
+                } else {
+                    report.softFailed.append(rel)
+                }
+            case .threw(let error):
+                if r.isRequired {
+                    if r == .main { throw error }
+                    report.failed.append(rel)
+                } else {
+                    report.softFailed.append(rel)
+                }
+            case .ok(let mini):
+                report.decrypted.append(contentsOf: mini.decrypted)
+                report.plain.append(contentsOf: mini.plain)
+                report.failed.append(contentsOf: mini.failed)
+                report.softFailed.append(contentsOf: mini.softFailed)
+                if r == .main, mini.failed.contains(rel) {
+                    throw FairPlayDecryptError.mainExecutableFailed(
+                        "Couldn't decrypt the main executable (\(rel)). \(AppStoreDecryptGuide.failureHint)"
+                    )
                 }
             }
-            group.wait()
-            report.decrypted.append(contentsOf: local.decrypted)
-            report.plain.append(contentsOf: local.plain)
-            report.failed.append(contentsOf: local.failed)
-            report.softFailed.append(contentsOf: local.softFailed)
         }
 
-        // 3) Retry pass on anything still encrypted (fairplayd can flake under load).
-        if !report.failed.isEmpty || !report.softFailed.isEmpty {
-            progress?("Retrying failed binaries…")
-            let retryTargets = (report.failed + report.softFailed).compactMap { rel -> URL? in
-                let src = sourceApp.appendingPathComponent(rel)
-                return FileManager.default.fileExists(atPath: src.path) ? src : nil
-            }
-            report.failed.removeAll()
+        // One shorter retry pass for soft flakes only (skip hard timeouts already marked failed).
+        let softRetry = report.softFailed
+        if !softRetry.isEmpty {
+            progress?("Retrying \(softRetry.count) soft-failed binaries…")
             report.softFailed.removeAll()
-            for (i, file) in retryTargets.enumerated() {
-                var mini = FairPlayDecryptReport()
+            for (i, rel) in softRetry.enumerated() {
+                let file = sourceApp.appendingPathComponent(rel)
+                guard FileManager.default.fileExists(atPath: file.path) else { continue }
                 let r = role(of: file, under: sourceApp, app: sourceApp)
-                do {
-                    try decryptOne(
-                        file: file, sourceApp: sourceApp, destApp: destApp,
-                        index: i, total: retryTargets.count, progress: progress,
-                        report: &mini, role: r
-                    )
+                progress?("Retry \(rel) (\(i + 1)/\(softRetry.count))…")
+                let outcome = decryptOneWithTimeout(
+                    file: file, sourceApp: sourceApp, destApp: destApp,
+                    index: i, total: softRetry.count, role: r, timeout: 60
+                )
+                if case .ok(let mini) = outcome {
                     report.decrypted.append(contentsOf: mini.decrypted)
                     report.plain.append(contentsOf: mini.plain)
                     report.failed.append(contentsOf: mini.failed)
                     report.softFailed.append(contentsOf: mini.softFailed)
-                } catch {
-                    if r.isRequired {
-                        throw error
-                    }
-                    report.softFailed.append(relativePath(file, under: sourceApp))
+                } else {
+                    report.softFailed.append(rel)
                 }
             }
         }
@@ -478,10 +476,16 @@ enum FairPlayDecrypt {
 
     /// Copy the root `.sinf` onto every `SinfReplicationPaths` entry from `SC_Info/Manifest.plist`
     /// (same behavior as FairPlayed `embed_ipa.sh`). Returns how many files were staged.
+    /// Must only be called on a writable tree (never a live App Store install).
     @discardableResult
     static func replicateSinfs(in app: URL) -> Int {
+        if isLiveAppStoreInstall(app) { return 0 }
         let man = app.appendingPathComponent("SC_Info/Manifest.plist")
-        guard let plist = NSDictionary(contentsOf: man) as? [String: Any] else { return 0 }
+        // Reading SC_Info on some installs can stall — bound it.
+        let plist: [String: Any]? = withTimeout(seconds: 5) {
+            NSDictionary(contentsOf: man) as? [String: Any]
+        } ?? nil
+        guard let plist else { return 0 }
         let sinfPaths = (plist["SinfPaths"] as? [String]) ?? []
         let repPaths = (plist["SinfReplicationPaths"] as? [String]) ?? []
         guard let mainRel = sinfPaths.first, !mainRel.isEmpty else { return 0 }
@@ -745,75 +749,155 @@ enum FairPlayDecrypt {
 
     // MARK: - Mach-O discovery
 
-    private static func collectMachOs(under root: URL) throws -> [URL] {
+    /// Structured Mach-O discovery — do **not** walk every resource file under an App Store
+    /// install (that hung decrypt forever on `fp_is_macho` of assets).
+    private static func collectMachOs(
+        under root: URL,
+        progress: ((String) -> Void)? = nil
+    ) throws -> [URL] {
         let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            throw FairPlayDecryptError.failed("Couldn't read app bundle.")
-        }
-        let skipExt: Set<String> = [
-            "png", "jpg", "jpeg", "gif", "webp", "car", "json", "plist", "strings", "stringsdict",
-            "nib", "storyboardc", "html", "js", "css", "mp3", "m4a", "caf", "mp4", "mov", "wav",
-            "ttf", "otf", "ttc", "txt", "md", "xml", "svg", "pdf", "bundle", "metal", "metallib"
-        ]
         var out: [URL] = []
         var seen = Set<String>()
-        for case let file as URL in enumerator {
-            let vals = try? file.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            if vals?.isDirectory == true {
-                let name = file.lastPathComponent
-                if name == "SC_Info" || name == "_CodeSignature" {
-                    enumerator.skipDescendants()
-                }
-                continue
-            }
-            if skipExt.contains(file.pathExtension.lowercased()) { continue }
-            if file.path.contains("/SC_Info/") || file.path.contains("/_CodeSignature/") { continue }
-            if vals?.isSymbolicLink == true { continue }
+
+        func consider(_ url: URL?) {
+            guard let url else { return }
             var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: file.path, isDirectory: &isDir), !isDir.boolValue else { continue }
-            let path = file.standardizedFileURL.path
-            guard !seen.contains(path) else { continue }
-            if file.path.withCString({ fp_is_macho($0) }) {
-                seen.insert(path)
-                out.append(file)
+            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return }
+            let path = url.standardizedFileURL.path
+            guard !seen.contains(path) else { return }
+            let isMachO = withTimeout(seconds: 4) {
+                url.path.withCString { fp_is_macho($0) }
+            } ?? false
+            guard isMachO else { return }
+            seen.insert(path)
+            out.append(url)
+        }
+
+        progress?("Main executable…")
+        consider(mainExecutableURL(in: root))
+
+        // Loose dylibs / binaries at app root (rare but cheap).
+        if let top = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+            for item in top {
+                let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                if isDir { continue }
+                let ext = item.pathExtension.lowercased()
+                if ext.isEmpty || ext == "dylib" { consider(item) }
             }
         }
-        // Explicitly seed nested Watch / App Clip / appex executables from Info.plist.
-        for nested in nestedBundleRoots(under: root) {
-            if let exe = mainExecutableURL(in: nested) {
-                let path = exe.standardizedFileURL.path
-                if !seen.contains(path), exe.path.withCString({ fp_is_macho($0) }) {
-                    seen.insert(path)
-                    out.append(exe)
+
+        progress?("Frameworks…")
+        let frameworks = root.appendingPathComponent("Frameworks", isDirectory: true)
+        if let items = try? fm.contentsOfDirectory(at: frameworks, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+            for item in items {
+                let ext = item.pathExtension.lowercased()
+                if ext == "framework" {
+                    let name = item.deletingPathExtension().lastPathComponent
+                    consider(item.appendingPathComponent(name))
+                    // Nested dylibs inside the framework bundle.
+                    if let nested = try? fm.contentsOfDirectory(at: item, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+                        for n in nested {
+                            let nDir = (try? n.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                            if nDir { continue }
+                            if n.pathExtension.lowercased() == "dylib" { consider(n) }
+                        }
+                    }
+                } else if ext == "dylib" {
+                    consider(item)
                 }
             }
+        }
+
+        progress?("PlugIns / Extensions…")
+        for folder in ["PlugIns", "Extensions"] {
+            let dir = root.appendingPathComponent(folder, isDirectory: true)
+            if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                for item in items where item.pathExtension.lowercased() == "appex" {
+                    consider(mainExecutableURL(in: item))
+                }
+            }
+        }
+
+        progress?("Watch / App Clips…")
+        for folder in ["Watch", "AppClips"] {
+            let dir = root.appendingPathComponent(folder, isDirectory: true)
+            if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                for item in items where item.pathExtension.lowercased() == "app" {
+                    consider(mainExecutableURL(in: item))
+                    // Watch frameworks
+                    let wfw = item.appendingPathComponent("Frameworks", isDirectory: true)
+                    if let fws = try? fm.contentsOfDirectory(at: wfw, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                        for fw in fws where fw.pathExtension.lowercased() == "framework" {
+                            consider(fw.appendingPathComponent(fw.deletingPathExtension().lastPathComponent))
+                        }
+                    }
+                }
+            }
+        }
+
+        if out.isEmpty {
+            throw FairPlayDecryptError.failed("No Mach-O binaries found in \(root.lastPathComponent).")
         }
         return out
     }
 
-    /// Nested .appex / Watch.app / App Clip .app containers under the root bundle.
-    private static func nestedBundleRoots(under root: URL) -> [URL] {
-        var roots: [URL] = []
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(
-            at: root,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else { return [] }
-        let rootPath = root.standardizedFileURL.path
-        for case let url as URL in enumerator {
-            let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-            guard isDir else { continue }
-            let ext = url.pathExtension.lowercased()
-            guard ext == "appex" || ext == "app" else { continue }
-            if url.standardizedFileURL.path == rootPath { continue }
-            roots.append(url)
+    private enum DecryptOneOutcome {
+        case ok(FairPlayDecryptReport)
+        case threw(Error)
+        case timedOut
+    }
+
+    private static func decryptOneWithTimeout(
+        file: URL,
+        sourceApp: URL,
+        destApp: URL,
+        index: Int,
+        total: Int,
+        role: FairPlayBinaryRole,
+        timeout: TimeInterval
+    ) -> DecryptOneOutcome {
+        final class Box: @unchecked Sendable {
+            var report = FairPlayDecryptReport()
+            var error: Error?
+            var done = false
         }
-        return roots
+        let box = Box()
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                try decryptOne(
+                    file: file, sourceApp: sourceApp, destApp: destApp,
+                    index: index, total: total, progress: nil,
+                    report: &box.report, role: role
+                )
+            } catch {
+                box.error = error
+            }
+            box.done = true
+            sem.signal()
+        }
+        if sem.wait(timeout: .now() + timeout) == .timedOut {
+            return .timedOut
+        }
+        if let error = box.error { return .threw(error) }
+        return .ok(box.report)
+    }
+
+    private static func withTimeout<T>(seconds: TimeInterval, work: @escaping () -> T) -> T? {
+        let box = TimeoutBox<T>()
+        let sem = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            box.value = work()
+            sem.signal()
+        }
+        if sem.wait(timeout: .now() + seconds) == .timedOut {
+            return nil
+        }
+        return box.value
+    }
+
+    private final class TimeoutBox<T>: @unchecked Sendable {
+        var value: T?
     }
 
     /// Order: main → frameworks → appex → nested Watch/App Clip → other.
@@ -865,6 +949,14 @@ enum FairPlayDecrypt {
             }
         }
         return out
+    }
+
+    /// True when `app` lives in the system App Store install container (not our temp Payload).
+    private static func isLiveAppStoreInstall(_ app: URL) -> Bool {
+        let p = app.standardizedFileURL.path
+        return p.contains("/Bundle/Application/")
+            || p.contains("/Containers/Bundle/")
+            || p.contains("/AppTranslocation/")
     }
 
     private static func mainExecutableURL(in app: URL) -> URL? {

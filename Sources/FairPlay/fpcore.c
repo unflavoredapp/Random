@@ -392,10 +392,12 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
         res->mmap_errno = ENOMEM; res->ms = now_ms() - t0; return -1;
     }
 
-    for (int round = 0; round < 5; round++) {
+    // Cap remount rounds — Swift wraps each binary in a wall-clock timeout; burning
+    // minutes inside fairplayd flakes made the UI look permanently stuck.
+    for (int round = 0; round < 3; round++) {
         if (round > 0) {
             if (base != MAP_FAILED) munmap(base, (size_t)map_len);
-            usleep((useconds_t)(50 * 1000 * round));
+            usleep((useconds_t)(35 * 1000 * round));
             base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, (off_t)s->slice_off);
             if (base == MAP_FAILED) { res->mmap_errno = errno; break; }
         }
@@ -626,8 +628,8 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         for (size_t k = 0; k < sizeof order / sizeof order[0] && !done; k++) {
             fp_attempt_t a; char d[512];
             // Extra tries per mode — guarded remapping inside fp_attempt plus outer backoff.
-            for (int attempt = 0; attempt < 4 && !done; attempt++) {
-                if (attempt) usleep((useconds_t)(60 * 1000 * attempt));
+            for (int attempt = 0; attempt < 2 && !done; attempt++) {
+                if (attempt) usleep((useconds_t)(40 * 1000 * attempt));
                 fp_attempt(in_path, s, order[k][0], order[k][1], dec, &a);
                 if (a.pages_ok > best.pages_ok || (a.pages_ok == best.pages_ok && a.changed && !best.changed))
                     best = a;
