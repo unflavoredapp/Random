@@ -9,6 +9,8 @@ This revision pins:
 - swift-crypto 3.13.0
 - project Swift language mode 5.10
 - GitHub Actions Xcode 26.2
+- OpenSSL via `krzyzanowskim/OpenSSL` exact `3.3.3001` (replaces HAHALOSAH's 3.1.5004
+  binary, which fails Xcode 16 `PrecompileModule` on `e_os2.h` / `uint64_t`)
 
 The exact compiler diagnostic in the screenshot was truncated, so this is a dependency-graph
 fix targeted at the visible `CryptoExtras`/`RSA*.swift` failure rather than a claim that every
