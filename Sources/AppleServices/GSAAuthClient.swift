@@ -19,7 +19,7 @@ final class GSAAuthClient: ObservableObject {
     private let phoneSecurityCodeURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode?referrer=/auth/verify/phone/put")!
     private let authApp = "com.apple.gs.xcode.auth"
     /// SideInstaller / SideStore working Xcode version string for GSA + 2FA.
-    private let xcodeVersion = "14.2 (14C18)"
+    private let xcodeVersion = "15.3 (15E204a)"
     private let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         // GrandSlam sometimes redirects to HTML error pages; never follow those.
@@ -29,9 +29,12 @@ final class GSAAuthClient: ObservableObject {
         return URLSession(configuration: config, delegate: GSRedirectBlocker.shared, delegateQueue: nil)
     }()
 
-    /// Mac AuthKit identity for `gsa.apple.com/auth/*` — Windows/akd clears SRP but auth pages often 500/403 it.
+    /// Mac AuthKit identity for `gsa.apple.com/auth/*`.
+    /// Must look like a real MacBook Pro so Apple pushes the system
+    /// “Apple Account Sign In Requested” (map) + verification-code sheets to this iPhone.
+    /// Incoherent old Xcode/macOS pairs make Apple skip the HSA2 UI (AltStore #1772).
     private let twoFactorMacClientInfo =
-        "<MacBookPro18,3> <macOS;13.1;22C65> <com.apple.AuthKit/1 (com.apple.dt.Xcode/14.3.0)>"
+        "<MacBookPro18,3> <macOS;14.3;23D56> <com.apple.AuthKit/1 (com.apple.dt.Xcode/15.3.0)>"
     private let twoFactorMacUserAgent = "Xcode"
 
     private var pendingEmail = ""
@@ -90,22 +93,15 @@ final class GSAAuthClient: ObservableObject {
         do {
             return try await runSRP(email: email, password: password, anisette: anisette, skipTwoFactorGate: skipTwoFactorGate)
         } catch AppleAuthError.needsTwoFactor {
-            // GrandSlam correct path: trusted-device push (“Apple Account Sign In Requested”
-            // on the user’s *other* Apple devices + verification code sheet).
+            // Fire Mac-shaped /auth/verify/trusteddevice so THIS iPhone gets the system
+            // Allow (map / “MacBook Pro near …”) + verification-code sheets. Skipping that
+            // GET leaves Settings on “Verification code needed” with nothing overlaid.
             pending2FA = .trustedDevice
             twoFactorChannel = .trustedDevice
-            // AltSign #59: hsc 409 / pushedCode means Apple already pushed — calling
-            // /auth/verify/trusteddevice again invalidates that code. Otherwise we must
-            // GET trusteddevice or nothing pops up on the other devices.
-            if twoFactorCodeAlreadySent {
-                throw AppleAuthError.needsTwoFactor
-            }
-            let pushed = await requestTrustedDeviceCodeBestEffort()
-            if !pushed {
-                // Soft-fail left the user with no popup — fall back to SMS so a code arrives.
-                if await requestSMSCodeBestEffort(phoneID: "1") {
-                    throw AppleAuthError.needsTwoFactor
-                }
+            // Always request once when we have identity tokens. AltSign #59 warned that a
+            // *second* GET can kill an on-screen code — a first GET is what creates the UI.
+            if hasPendingTwoFactor {
+                _ = await requestTrustedDeviceCodeBestEffort()
             }
             throw AppleAuthError.needsTwoFactor
         }
@@ -464,14 +460,32 @@ final class GSAAuthClient: ObservableObject {
             "u": email
         ], anisette: anisette)
 
+        let statusEarly = completeResp["Status"] as? [String: Any]
+        let auEarly = (statusEarly?["au"] as? String) ?? (completeResp["au"] as? String)
+        let hscEarly = statusEarly?["hsc"] as? Int
+        let flagged2FA = {
+            if let auEarly, ["trustedDeviceSecondaryAuth", "trustedDevice", "secondaryAuth", "sms", "voice", "phone", "pushedCode"].contains(auEarly) {
+                return true
+            }
+            return hscEarly == 409
+        }()
+
         guard let encryptedSPD = completeResp["spd"] as? Data,
               let m2 = completeResp["M2"] as? Data else {
-            let status = completeResp["Status"] as? [String: Any]
-            let au = status?["au"] as? String
-            let hsc = status?["hsc"] as? Int
-            if au != nil || hsc == 409 {
-                // hsc 409 with empty au = Apple already pushed a code (AltSign #59 / isideload).
-                twoFactorCodeAlreadySent = (hsc == 409) || (au == "pushedCode")
+            if flagged2FA {
+                // 2FA required but SPD missing — still try to salvage identity tokens so we
+                // can fire the Mac trusteddevice GET that shows Allow + code on this iPhone.
+                if let dsid = (completeResp["adsid"] as? String)
+                    ?? (statusEarly?["adsid"] as? String)
+                    ?? (completeResp["dsid"] as? CustomStringConvertible)?.description {
+                    pendingDSID = dsid
+                }
+                if let idms = (completeResp["GsIdmsToken"] as? String)
+                    ?? (completeResp["idmsToken"] as? String)
+                    ?? (statusEarly?["GsIdmsToken"] as? String) {
+                    pendingIDMS = idms
+                }
+                twoFactorCodeAlreadySent = (auEarly == "pushedCode")
                 throw AppleAuthError.needsTwoFactor
             }
             throw AppleAuthError.message("Auth complete missing SPD/M2.")
@@ -505,7 +519,8 @@ final class GSAAuthClient: ObservableObject {
             return hsc == 409
         }()
         if needs2FA, !skipTwoFactorGate {
-            twoFactorCodeAlreadySent = (hsc == 409) || (au == "pushedCode")
+            // Never assume the Allow sheet already appeared — authenticateOnce always GETs.
+            twoFactorCodeAlreadySent = (au == "pushedCode")
             throw AppleAuthError.needsTwoFactor
         }
 

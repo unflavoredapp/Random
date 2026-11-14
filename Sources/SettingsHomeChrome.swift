@@ -530,7 +530,7 @@ struct SettingsAppleIDCard: View {
             }
             return "Enter the 6-digit code texted to your phone."
         }
-        return "Check your other Apple devices for “Apple Account Sign In Requested”, tap Allow, then enter the code shown. Turn Focus off if nothing appears."
+        return "Watch for Apple’s Allow sheet (map) and verification code on this iPhone — turn Focus off if they don’t appear. Then enter the code below."
     }
 
     private var accountList: some View {
