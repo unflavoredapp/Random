@@ -13,11 +13,42 @@ enum DecryptCompanionInstaller {
     static let companionBundleIDKey = "tetherless.decrypt.companionBundleID"
 
     /// Full competition pipeline: embed encrypted IPA → sign companion → install → open.
+    /// The FairPlay console UI runs only inside the installed companion IPA.
     @discardableResult
     static func installAndOpen(
         embedding encryptedIPA: URL,
         displayName: String,
         progress: ((String) -> Void)? = nil
+    ) async throws -> String {
+        try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
+            try DecryptCompanionPackager.buildCompanionIPA(
+                embedding: encryptedIPA,
+                bundleID: bundleID,
+                progress: progress
+            )
+        }
+    }
+
+    /// Same pipeline, embedding a live App Store install when no store IPA is on hand.
+    @discardableResult
+    static func installAndOpen(
+        embeddingInstalledApp installedApp: URL,
+        displayName: String,
+        progress: ((String) -> Void)? = nil
+    ) async throws -> String {
+        try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
+            try DecryptCompanionPackager.buildCompanionIPA(
+                embeddingInstalledApp: installedApp,
+                bundleID: bundleID,
+                progress: progress
+            )
+        }
+    }
+
+    private static func installAndOpen(
+        displayName: String,
+        progress: ((String) -> Void)?,
+        build: (_ bundleID: String, _ progress: ((String) -> Void)?) throws -> DecryptCompanionPackager.Package
     ) async throws -> String {
         progress?("Preparing your signing certificate, device, and App ID…")
         FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
@@ -33,11 +64,7 @@ enum DecryptCompanionInstaller {
         UserDefaults.standard.set(bundleID, forKey: companionBundleIDKey)
 
         progress?("Building Tetherless Decrypt companion…")
-        let package = try DecryptCompanionPackager.buildCompanionIPA(
-            embedding: encryptedIPA,
-            bundleID: bundleID,
-            progress: progress
-        )
+        let package = try build(bundleID, progress)
         let sizeMB = Double(package.approximateBytes) / 1_048_576.0
         progress?(String(format: "Companion package · %.0f MB", sizeMB))
 
@@ -97,22 +124,24 @@ enum DecryptCompanionInstaller {
 
         progress?("Verifying…")
         progress?("Trust this Apple ID in Settings › General › VPN & Device Management if iOS asks.")
-        progress?("Open in Tetherless Decrypt…")
+        progress?("Opening Tetherless Decrypt companion…")
+
+        // Host must not keep a fake companion sheet — the console UI is the separate IPA.
+        DecryptCompanionController.shared.dismiss()
 
         // Give installd a beat, then hand off.
         try? await Task.sleep(nanoseconds: 800_000_000)
         let opened = await openCompanion(bundleID: entry.bundleID, embeddedName: package.embeddedAppName)
         if !opened {
-            progress?("Installed — open “Tetherless Decrypt” from the Home Screen to finish.")
+            progress?("Installed — open “Tetherless Decrypt” from the Home Screen to finish decrypt.")
         }
         return entry.bundleID
     }
 
     @discardableResult
     static func openCompanion(bundleID: String, embeddedName: String) async -> Bool {
-        // Prefer LaunchServices open by companion bundle id — the host also
-        // registers tetherless-decrypt:// for in-app UI, so URL open can bounce
-        // back into TetherLess instead of the installed companion.
+        // Prefer LaunchServices open by companion bundle id. Host no longer
+        // registers tetherless-decrypt:// — that scheme belongs to the companion IPA.
         if openApplication(bundleID: bundleID) {
             return true
         }

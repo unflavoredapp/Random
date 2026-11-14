@@ -32,10 +32,33 @@ enum DecryptCompanionPackager {
         bundleID: String,
         progress: ((String) -> Void)? = nil
     ) throws -> Package {
+        try buildCompanionIPA(bundleID: bundleID, progress: progress) { app, progress in
+            progress?("Extracting bundle…")
+            return try embedEncryptedApp(from: encryptedIPA, into: app, progress: progress)
+        }
+    }
+
+    /// Same companion shell, embedding a live App Store install (Mach-Os + SC_Info)
+    /// when a store IPA isn’t available yet.
+    static func buildCompanionIPA(
+        embeddingInstalledApp installedApp: URL,
+        bundleID: String,
+        progress: ((String) -> Void)? = nil
+    ) throws -> Package {
+        try buildCompanionIPA(bundleID: bundleID, progress: progress) { app, progress in
+            progress?("Embedding installed app…")
+            return try embedInstalledApp(from: installedApp, into: app, progress: progress)
+        }
+    }
+
+    private static func buildCompanionIPA(
+        bundleID: String,
+        progress: ((String) -> Void)?,
+        embed: (_ companionApp: URL, _ progress: ((String) -> Void)?) throws -> String
+    ) throws -> Package {
         let fm = FileManager.default
         let work = fm.temporaryDirectory.appendingPathComponent("tl-companion-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: work, withIntermediateDirectories: true)
-        defer { /* keep until caller finishes signing; cleaned by OS tmp */ }
 
         let payload = work.appendingPathComponent("Payload", isDirectory: true)
         let app = payload.appendingPathComponent("\(companionDisplayName).app", isDirectory: true)
@@ -44,8 +67,7 @@ enum DecryptCompanionPackager {
         progress?("Preparing companion app shell…")
         try cloneHostApp(into: app, bundleID: bundleID, progress: progress)
 
-        progress?("Extracting bundle…")
-        let embedName = try embedEncryptedApp(from: encryptedIPA, into: app, progress: progress)
+        let embedName = try embed(app, progress)
 
         progress?("Packaging companion IPA…")
         let ipa = work.appendingPathComponent("TetherlessDecrypt-unsigned.ipa")
@@ -164,9 +186,11 @@ enum DecryptCompanionPackager {
             "UILaunchScreen": [String: Any](),
             "UIRequiredDeviceCapabilities": ["arm64"],
             "UISupportedInterfaceOrientations": ["UIInterfaceOrientationPortrait"],
+            // Only the companion owns tetherless-decrypt:// — host must not register
+            // that scheme or iOS may reopen TetherLess instead of this IPA.
             "CFBundleURLTypes": [[
                 "CFBundleURLName": "dev.tetherless.decrypt",
-                "CFBundleURLSchemes": [companionURLScheme, "tetherless"]
+                "CFBundleURLSchemes": [companionURLScheme]
             ]],
             // Marker so runtime knows this install is the companion role.
             "TLCompanionRole": true,
@@ -218,8 +242,39 @@ enum DecryptCompanionPackager {
             .first(where: { $0.pathExtension == "app" }) else {
             throw DecryptError("No Payload/*.app in the encrypted IPA to embed.")
         }
+        return try stageEmbeddedPayload(from: srcApp, into: companionApp, sourceLabel: "full IPA", progress: progress)
+    }
+
+    /// Slim-embed a live `/Bundle/Application/…/*.app` install into EmbeddedPayload.
+    @discardableResult
+    private static func embedInstalledApp(
+        from installedApp: URL,
+        into companionApp: URL,
+        progress: ((String) -> Void)?
+    ) throws -> String {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: installedApp.path, isDirectory: &isDir),
+              isDir.boolValue else {
+            throw DecryptError("Installed app path missing: \(installedApp.lastPathComponent).")
+        }
+        return try stageEmbeddedPayload(
+            from: installedApp,
+            into: companionApp,
+            sourceLabel: "install path",
+            progress: progress
+        )
+    }
+
+    /// Shared FairPlayed-style EmbeddedPayload staging from any `.app` tree.
+    private static func stageEmbeddedPayload(
+        from srcApp: URL,
+        into companionApp: URL,
+        sourceLabel: String,
+        progress: ((String) -> Void)?
+    ) throws -> String {
+        let fm = FileManager.default
         let name = srcApp.deletingPathExtension().lastPathComponent
-        progress?("Found embedded app: \(name)")
+        progress?("Found \(name).app")
 
         let embedRoot = companionApp.appendingPathComponent("EmbeddedPayload", isDirectory: true)
         let dest = embedRoot.appendingPathComponent(name, isDirectory: true)
@@ -227,12 +282,11 @@ enum DecryptCompanionPackager {
         try? fm.removeItem(at: dest)
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
 
-        // Full-IPA DRM inventory before slim — companion refuses if embed drops encrypted Mach-Os.
-        progress?("Auditing FairPlay DRM on full IPA…")
+        progress?("Auditing FairPlay DRM on \(sourceLabel)…")
         try? fm.removeItem(at: srcApp.appendingPathComponent("Watch"))
         let fullAudit = try FairPlayDecrypt.verifyApp(at: srcApp)
         progress?(
-            "Full IPA · \(fullAudit.entries.count) Mach-O(s) · \(fullAudit.encrypted) encrypted · \(fullAudit.clear) clear"
+            "\(sourceLabel) · \(fullAudit.entries.count) Mach-O(s) · \(fullAudit.encrypted) encrypted · \(fullAudit.clear) clear"
         )
         for e in fullAudit.entries where e.isEncrypted {
             progress?("[DRM] \(e.path) · cryptid=\(e.cryptid)")
@@ -254,14 +308,13 @@ enum DecryptCompanionPackager {
             progress?("Replicated \(staged) nested SINF license(s)…")
         }
 
-        // Ensure slim embed kept every encrypted Mach-O from the full IPA.
         let slimAudit = try FairPlayDecrypt.verifyApp(at: dest)
         progress?(
             "EmbeddedPayload · \(slimAudit.entries.count) Mach-O(s) · \(slimAudit.encrypted) encrypted"
         )
         if slimAudit.encrypted < fullAudit.encrypted {
             throw DecryptError(
-                "Companion embed dropped FairPlay binaries (\(slimAudit.encrypted) encrypted vs \(fullAudit.encrypted) in full IPA). Aborting."
+                "Companion embed dropped FairPlay binaries (\(slimAudit.encrypted) encrypted vs \(fullAudit.encrypted) in \(sourceLabel)). Aborting."
             )
         }
         if slimAudit.entries.count < fullAudit.entries.count {
@@ -270,11 +323,11 @@ enum DecryptCompanionPackager {
             )
         }
 
-        // Seed manifest so companion can re-check expected DRM coverage at runtime.
         let meta: [String: Any] = [
             "name": name,
             "embeddedAt": ISO8601DateFormatter().string(from: Date()),
             "hostBundle": Bundle.main.bundleIdentifier ?? "",
+            "source": sourceLabel,
             "machOs": fullAudit.entries.count,
             "encryptedMachOs": fullAudit.encrypted,
             "clearMachOs": fullAudit.clear,

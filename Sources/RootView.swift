@@ -153,15 +153,11 @@ struct RootView: View {
 
     private func handleAirShareDeepLink(_ url: URL) {
         let scheme = url.scheme?.lowercased() ?? ""
-        // Competition-style companion handoff: tetherless-decrypt://open or tetherless://decrypt-companion
-        if scheme == "tetherless-decrypt"
-            || (scheme == "tetherless" && (url.host?.lowercased() == "decrypt-companion" || url.host?.lowercased() == "companion")) {
+        // Companion console is a separate IPA (`tetherless-decrypt://`). Host only owns
+        // `tetherless://` — bounce decrypt-companion deep links to the Decrypt tab.
+        if scheme == "tetherless"
+            && (url.host?.lowercased() == "decrypt-companion" || url.host?.lowercased() == "companion") {
             nav.go(AppTab.decrypt.rawValue)
-            let name = URLComponents(url: url, resolvingAgainstBaseURL: false)?
-                .queryItems?.first(where: { $0.name == "name" })?.value
-                ?? "App"
-            DecryptCompanionController.shared.present(name: name, clearLog: false)
-            DecryptCompanionController.shared.appendLog("Opened companion decrypt…")
             return
         }
         guard ["airshare", "msign", "tetherless", "sideloader"].contains(scheme) else { return }
