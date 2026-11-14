@@ -502,75 +502,77 @@ final class DeviceDecryptService: ObservableObject {
             )
         }
 
-        // Prefer live install path only when we didn’t pin an older/different build.
-        if pinned.isEmpty, let installed = await resolveInstalledAppURL(bundleID: bundleID) {
-            publishDecryptProgress("Downloaded — opening companion decrypt…")
-            let clear = try FairPlayDecrypt.decryptInstalledApp(
-                bundleID: bundleID,
-                displayName: displayName,
-                knownPath: installed.path
-            ) { [weak self] msg in
-                Task { @MainActor in self?.publishDecryptProgress(msg) }
-            }
-            finishSuccess(url: clear, name: displayName)
-            return
-        }
-
-        var label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
-        if let min = downloadedMinOS, !min.isEmpty {
-            label += " (iOS \(min)+)"
-        }
+        let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
         if spoof.enabled, let min = downloadedMinOS, !spoof.acceptsMinimumOS(min) {
             publishDecryptProgress("Warning: package wants iOS \(min)+ but spoof claims \(spoof.effectiveIOSVersion)…")
         }
+        // Competition path: build/sign/install a real “Tetherless Decrypt” companion
+        // app (EmbeddedPayload + user’s Apple ID cert), then open it for FairPlay.
+        DecryptCompanionController.shared.present(name: label, version: downloadedVersion, clearLog: true)
         publishDecryptProgress("Extracting bundle…")
+        try FairPlayKeyGate.requireReady()
         do {
-            try FairPlayKeyGate.requireReady()
-            let clear = try FairPlayDecrypt.decryptIPA(
-                at: ipa,
+            _ = try await DecryptCompanionInstaller.installAndOpen(
+                embedding: ipa,
                 displayName: displayName
             ) { [weak self] msg in
                 Task { @MainActor in self?.publishDecryptProgress(msg) }
             }
-            finishSuccess(url: clear, name: displayName)
-            return
-        } catch let ipaError {
-            // Competition companion path: install encrypted IPA on-device (Pair), then
-            // FairPlay from the live install with the companion console log.
-            if NativeInstaller.isSelected {
-                publishDecryptProgress("Preparing your signing certificate, device, and App ID…")
-                publishDecryptProgress("Uploading to iPhone…")
-                do {
-                    try await NativeInstaller.shared.install(
-                        ipaURL: ipa,
-                        bundleID: bundleID,
-                        name: displayName,
-                        version: downloadedVersion
-                    )
-                    if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
-                        publishDecryptProgress("Verifying…")
-                        publishDecryptProgress("Open companion decrypt for \(displayName)…")
-                        let clear = try FairPlayDecrypt.decryptInstalledApp(
-                            bundleID: bundleID,
-                            displayName: displayName,
-                            knownPath: installed.path
-                        ) { [weak self] msg in
-                            Task { @MainActor in self?.publishDecryptProgress(msg) }
-                        }
-                        finishSuccess(url: clear, name: displayName)
-                        return
-                    }
-                } catch {
-                    DecryptCompanionController.shared.markFailed(error.localizedDescription)
-                    throw DecryptError(
-                        "Silent download OK, Pair install/decrypt failed (\(error.localizedDescription)). Earlier FairPlay error: \(ipaError.localizedDescription). Ensure \(AppleIDStore.shared.email.isEmpty ? "this Apple ID" : AppleIDStore.shared.email) signed in to Media & Purchases once — TetherLess will not open the App Store."
-                    )
-                }
-            }
-            DecryptCompanionController.shared.markFailed(ipaError.localizedDescription)
-            throw DecryptError(
-                "Silent download succeeded, but FairPlay decrypt failed (\(ipaError.localizedDescription)). \(AppStoreDecryptGuide.failureHint) TetherLess does not open the App Store during decrypt."
+            // Companion sandboxes its own Documents/Decrypted — host hands off here.
+            DecryptClient.shared.phase = .running
+            DecryptClient.shared.message = "Open Tetherless Decrypt — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
+            DecryptCompanionController.shared.appendLog(
+                "Companion installed — FairPlay continues inside Tetherless Decrypt. Trust the Apple ID under Settings › General › VPN & Device Management if asked, then open the companion."
             )
+            DecryptCompanionController.shared.statusTitle = "Open companion…"
+            DecryptCompanionController.shared.busy = false
+            return
+        } catch {
+            // Fallback: in-process IPA decrypt, then optional Pair install of the *target*.
+            publishDecryptProgress("Companion install failed — trying in-app FairPlay…")
+            publishDecryptProgress(error.localizedDescription)
+            do {
+                let clear = try FairPlayDecrypt.decryptIPA(
+                    at: ipa,
+                    displayName: displayName
+                ) { [weak self] msg in
+                    Task { @MainActor in self?.publishDecryptProgress(msg) }
+                }
+                finishSuccess(url: clear, name: displayName)
+                return
+            } catch let ipaError {
+                if NativeInstaller.isSelected {
+                    publishDecryptProgress("Uploading target app to iPhone for install-path decrypt…")
+                    do {
+                        try await NativeInstaller.shared.install(
+                            ipaURL: ipa,
+                            bundleID: bundleID,
+                            name: displayName,
+                            version: downloadedVersion
+                        )
+                        if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
+                            let clear = try FairPlayDecrypt.decryptInstalledApp(
+                                bundleID: bundleID,
+                                displayName: displayName,
+                                knownPath: installed.path
+                            ) { [weak self] msg in
+                                Task { @MainActor in self?.publishDecryptProgress(msg) }
+                            }
+                            finishSuccess(url: clear, name: displayName)
+                            return
+                        }
+                    } catch {
+                        DecryptCompanionController.shared.markFailed(error.localizedDescription)
+                        throw DecryptError(
+                            "Companion + Pair fallback failed (\(error.localizedDescription)). Earlier FairPlay error: \(ipaError.localizedDescription)."
+                        )
+                    }
+                }
+                DecryptCompanionController.shared.markFailed(ipaError.localizedDescription)
+                throw DecryptError(
+                    "Silent download succeeded, but FairPlay decrypt failed (\(ipaError.localizedDescription)). \(AppStoreDecryptGuide.failureHint)"
+                )
+            }
         }
     }
 
