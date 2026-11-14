@@ -188,6 +188,15 @@ struct DecryptOwnedStoreAppsSection: View {
                         Text(loadError)
                             .font(.caption)
                             .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if loadError.localizedCaseInsensitiveContains("204")
+                            || loadError.localizedCaseInsensitiveContains("verification")
+                            || loadError.localizedCaseInsensitiveContains("expired") {
+                            Text("Tip: Settings › Store Access → spoof “This iPhone”, Client-Info rewrite off, then Sign Out → Sign In and refresh.")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     } else if owned.isEmpty && !loading {
                         Text("No purchase history yet, or Apple didn’t return items for this session. Search still works for free/owned apps.")
                             .font(.footnote)

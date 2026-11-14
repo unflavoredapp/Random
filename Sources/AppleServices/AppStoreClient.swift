@@ -436,8 +436,12 @@ final class AppStoreClient: ObservableObject {
     }
 
     /// Best-effort purchase / download history for this Apple ID.
+    /// Account endpoints must not advertise spoofed OS identity — that commonly yields HTTP 204.
     func purchaseHistory(account: StorefrontSession) async throws -> [OwnedStoreApp] {
         let anisette = try await AnisetteClient.shared.fetch()
+        var headers = storeHeaders(account, includeSpoofIdentity: false)
+        // Match authenticate: Configurator UA + pristine Client-Info (not itunesstored spoof).
+        headers["User-Agent"] = configuratorUA
         let (dict, _, _) = try await postPlist(
             url: Paths.purchaseHistory,
             body: [
@@ -445,11 +449,13 @@ final class AppStoreClient: ObservableObject {
                 "requestId": UUID().uuidString.lowercased()
             ],
             anisette: anisette,
-            extraHeaders: storeHeaders(account)
+            extraHeaders: headers,
+            forcePristineClientInfo: true,
+            stripSpoofIdentity: true
         )
         let failure = string(dict["failureType"])
         let customer = string(dict["customerMessage"])
-        if failure == "2034" || failure == "2042" || failure == "1008" {
+        if failure == "2034" || failure == "2042" || failure == "1008" || failure == "9610" {
             throw AppStoreClientError.tokenExpired
         }
         if !failure.isEmpty {
@@ -836,7 +842,10 @@ final class AppStoreClient: ObservableObject {
         )
     }
 
-    private func storeHeaders(_ account: StorefrontSession) -> [String: String] {
+    private func storeHeaders(
+        _ account: StorefrontSession,
+        includeSpoofIdentity: Bool = true
+    ) -> [String: String] {
         var headers: [String: String] = [
             "Content-Type": "application/x-apple-plist",
             "User-Agent": storeUserAgent,
@@ -845,10 +854,21 @@ final class AppStoreClient: ObservableObject {
             "X-Apple-Store-Front": account.storeFront,
             "X-Token": account.passwordToken
         ]
-        // Always advertise device/OS identity (real or spoofed) — UA alone is not enough
-        // for every buy.itunes / redownload path.
-        for (k, v) in StoreDeviceSpoof.current.storeIdentityHeaders() {
-            headers[k] = v
+        let identity = StoreDeviceSpoof.current.storeIdentityHeaders()
+        // Device-type / client-application are safe on account endpoints.
+        if let dt = identity["X-Apple-I-Device-Type"] {
+            headers["X-Apple-I-Device-Type"] = dt
+        }
+        if let ca = identity["X-Apple-Client-Application"] {
+            headers["X-Apple-Client-Application"] = ca
+        }
+        // Spoofed OS/model headers belong on package download — not purchaseHistory /
+        // authenticate. Sending them there is a frequent HTTP 204/404 cause.
+        if includeSpoofIdentity {
+            for (k, v) in identity {
+                if k == "X-Apple-I-Device-Type" || k == "X-Apple-Client-Application" { continue }
+                headers[k] = v
+            }
         }
         return headers
     }
@@ -900,14 +920,40 @@ final class AppStoreClient: ObservableObject {
         if allowRedirectCapture, (300..<400).contains(status) {
             return ([:], headerMap, status)
         }
-        // Empty / no-content: owned-license or bad host — let callers try the next endpoint.
+        // Empty / no-content: usually spoof identity / Client-Info fighting anisette.
+        // Retry once with pristine headers before surfacing HTTP 204 (owned list used to
+        // throw immediately here and never recover).
         if status == 204 || (data.isEmpty && (status == 0 || status == 204)) {
-            throw AppStoreClientError.network("Non-plist App Store response (HTTP 204)")
+            if !stripSpoofIdentity || !forcePristineClientInfo {
+                return try await postPlist(
+                    url: url,
+                    body: body,
+                    anisette: anisette,
+                    extraHeaders: extraHeaders,
+                    allowRedirectCapture: allowRedirectCapture,
+                    forcePristineClientInfo: true,
+                    stripSpoofIdentity: true
+                )
+            }
+            throw AppStoreClientError.network(
+                "Non-plist App Store response (HTTP 204). In Settings › Store Access turn spoof to This iPhone (Client-Info rewrite off), Sign Out → Sign In, then refresh Owned."
+            )
         }
         if data.isEmpty, status == 500 {
             return (["failureType": "5002"], headerMap, status)
         }
         if status == 404 {
+            if !stripSpoofIdentity || !forcePristineClientInfo {
+                return try await postPlist(
+                    url: url,
+                    body: body,
+                    anisette: anisette,
+                    extraHeaders: extraHeaders,
+                    allowRedirectCapture: allowRedirectCapture,
+                    forcePristineClientInfo: true,
+                    stripSpoofIdentity: true
+                )
+            }
             let raw = String(data: data, encoding: .utf8) ?? ""
             throw AppStoreClientError.network("Non-plist App Store response (HTTP 404): \(raw.prefix(120))")
         }
