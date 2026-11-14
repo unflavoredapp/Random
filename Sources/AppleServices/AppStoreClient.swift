@@ -173,13 +173,14 @@ final class AppStoreClient: ObservableObject {
                     "why": "signIn"
                 ],
                 anisette: anisette,
-                extraHeaders: {
-                    var h = StoreDeviceSpoof.current.storeIdentityHeaders()
-                    h["Content-Type"] = "application/x-apple-plist"
-                    h["User-Agent"] = storeUserAgent
-                    return h
-                }(),
-                allowRedirectCapture: true
+                // Authenticate with a real-device UA — spoofed iOS 99 / exotic identity
+                // headers here are a common HTTP 403 cause. Spoof applies on download only.
+                extraHeaders: [
+                    "Content-Type": "application/x-apple-plist",
+                    "User-Agent": "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
+                ],
+                allowRedirectCapture: true,
+                stripSpoofIdentity: true
             )
             last = dict
             headers = respHeaders
@@ -542,7 +543,7 @@ final class AppStoreClient: ObservableObject {
             throw AppStoreClientError.message("App Store download response missing package URL.")
         }
         onProgress?("Downloading encrypted IPA\(item.displayVersion.isEmpty ? "" : " v\(item.displayVersion)")…")
-        try await downloadFile(from: cdn, to: destination)
+        try await downloadFileResumable(from: cdn, to: destination, onProgress: onProgress)
         onProgress?("Writing iTunesMetadata…")
         try? writeiTunesMetadata(item.metadata, email: account.email, intoIPA: destination)
         return (destination, item)
@@ -763,6 +764,7 @@ final class AppStoreClient: ObservableObject {
                 let lower = m.lowercased()
                 return lower.contains("204")
                     || lower.contains("404")
+                    || lower.contains("403")
                     || lower.contains("non-plist")
                     || lower.contains("502")
                     || lower.contains("503")
@@ -859,7 +861,8 @@ final class AppStoreClient: ObservableObject {
         anisette: AnisetteHeaders,
         extraHeaders: [String: String],
         allowRedirectCapture: Bool = false,
-        forcePristineClientInfo: Bool = false
+        forcePristineClientInfo: Bool = false,
+        stripSpoofIdentity: Bool = false
     ) async throws -> (dict: [String: Any], headers: [String: String], status: Int) {
         guard let endpoint = URL(string: url) else {
             throw AppStoreClientError.message("Bad App Store URL.")
@@ -870,7 +873,20 @@ final class AppStoreClient: ObservableObject {
         req.httpBody = plist
         req.httpShouldHandleCookies = true
         applyAnisette(&req, anisette, forcePristineClientInfo: forcePristineClientInfo)
-        for (k, v) in extraHeaders { req.setValue(v, forHTTPHeaderField: k) }
+        for (k, v) in extraHeaders {
+            if stripSpoofIdentity,
+               k == "X-Apple-I-OS-Version" || k == "X-Apple-I-Requested-Model" {
+                continue
+            }
+            req.setValue(v, forHTTPHeaderField: k)
+        }
+        if stripSpoofIdentity {
+            // Prefer a non-spoofed configurator UA when recovering from 403.
+            req.setValue(
+                "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5",
+                forHTTPHeaderField: "User-Agent"
+            )
+        }
 
         let (data, resp) = try await session.data(for: req)
         let http = resp as? HTTPURLResponse
@@ -895,16 +911,35 @@ final class AppStoreClient: ObservableObject {
             let raw = String(data: data, encoding: .utf8) ?? ""
             throw AppStoreClientError.network("Non-plist App Store response (HTTP 404): \(raw.prefix(120))")
         }
-        guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
-            // One retry with pristine Client-Info — spoof rewrite is a common 204/404 cause.
-            if !forcePristineClientInfo, StoreDeviceSpoof.current.enabled {
+        if status == 403 {
+            // Spoofed OS identity (especially literal iOS 99) often yields HTML 403.
+            if !stripSpoofIdentity || !forcePristineClientInfo {
                 return try await postPlist(
                     url: url,
                     body: body,
                     anisette: anisette,
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: allowRedirectCapture,
-                    forcePristineClientInfo: true
+                    forcePristineClientInfo: true,
+                    stripSpoofIdentity: true
+                )
+            }
+            let raw = String(data: data, encoding: .utf8) ?? ""
+            throw AppStoreClientError.network(
+                "Non-plist App Store response (HTTP 403): Apple rejected the store client identity. Turn spoof off or use “This iPhone” / “Newest IPA” (not iOS 99), then Sign Out → Sign In under Store Access. \(raw.prefix(80))"
+            )
+        }
+        guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
+            // Retry with pristine Client-Info and without spoof OS headers — common 204/403/404 cause.
+            if !forcePristineClientInfo || !stripSpoofIdentity {
+                return try await postPlist(
+                    url: url,
+                    body: body,
+                    anisette: anisette,
+                    extraHeaders: extraHeaders,
+                    allowRedirectCapture: allowRedirectCapture,
+                    forcePristineClientInfo: true,
+                    stripSpoofIdentity: true
                 )
             }
             let raw = String(data: data, encoding: .utf8) ?? ""

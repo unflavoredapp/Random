@@ -520,8 +520,10 @@ struct DecryptView: View {
         let e = error.lowercased()
         // Network / store protocol failures are not missing FairPlay keys.
         if e.contains("non-plist") || e.contains("http 204") || e.contains("http 404")
-            || e.contains("http 500") || e.contains("http 502") || e.contains("http 503")
-            || e.contains("store request failed") || e.contains("cdn download") {
+            || e.contains("http 403") || e.contains("http 500") || e.contains("http 502")
+            || e.contains("http 503") || e.contains("store request failed")
+            || e.contains("cdn download") || e.contains("client identity")
+            || e.contains("app store download failed") {
             return false
         }
         if e.contains("pair") || e.contains("on-disk path") || e.contains("timed out") { return false }
@@ -579,6 +581,17 @@ struct DecryptView: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(c.busy || DeviceDecryptService.shared.busy)
+                        Button {
+                            DecryptPipeline.shared.run(app: app)
+                        } label: {
+                            Image(systemName: "bolt.circle.fill")
+                                .foregroundStyle(TetherlessPalette.accent)
+                                .frame(width: 40, height: 40)
+                                .background(.white.opacity(0.10), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(c.busy || DeviceDecryptService.shared.busy || DecryptPipeline.shared.busy)
+                        .accessibilityLabel("Decrypt, sign, and install")
                     }
                 }
             }
@@ -632,14 +645,23 @@ struct DecryptView: View {
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.7))
                         Button {
-                            SignQueue.shared.enqueueForAppleIDInstall(file)
+                            DecryptPipeline.shared.runFinishedIPA(file, name: c.finishedName.isEmpty ? app.name : c.finishedName)
                         } label: {
-                            Text("Sign & Install")
+                            Text(DecryptPipeline.shared.busy ? "Pipeline…" : "Decrypt → Sign → Install")
                                 .font(.title3.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
                                 .padding(.vertical, 14)
                                 .background(TetherlessPalette.accent, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(DecryptPipeline.shared.busy)
+                        Button {
+                            SignQueue.shared.enqueueForAppleIDInstall(file)
+                        } label: {
+                            Text("Sign only")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.7))
                         }
                         .buttonStyle(.plain)
                         Button("Dismiss") { c.reset() }
@@ -651,6 +673,7 @@ struct DecryptView: View {
                     Text(c.error ?? "Decrypt failed.")
                         .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                    FailurePlaybookCard(errorText: c.error)
                     if Self.shouldShowAppStoreKeyHint(c.error) {
                         DecryptAppStoreSignInHint(compact: true)
                     }

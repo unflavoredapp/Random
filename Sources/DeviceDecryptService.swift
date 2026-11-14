@@ -295,6 +295,7 @@ final class DeviceDecryptService: ObservableObject {
             // Version-pinned silent download always uses the store package (installed build may differ).
             let wantsPinned = !(version ?? "").isEmpty || !(externalVersionId ?? "").isEmpty
             if !wantsPinned, let installed = await resolveInstalledAppURL(bundleID: bid) {
+                try FairPlayKeyGate.requireReady()
                 publishDecryptProgress("Decrypting \(app.name) on this device…")
                 let clear = try FairPlayDecrypt.decryptInstalledApp(
                     bundleID: bid,
@@ -407,6 +408,12 @@ final class DeviceDecryptService: ObservableObject {
         } catch AppStoreClientError.tokenExpired, AppStoreClientError.needsTwoFactor {
             throw DecryptError("App Store session needs refresh — sign in again under Settings › Store Access, then retry.")
         } catch AppStoreClientError.network(let detail) {
+            let lower = detail.lowercased()
+            if lower.contains("403") || lower.contains("client identity") {
+                throw DecryptError(
+                    "App Store download failed (\(detail)). This is a store identity rejection — not missing FairPlay keys. In Settings › Store Access, switch spoof to “This iPhone” (or “Newest IPA”), Sign Out → Sign In, then decrypt again."
+                )
+            }
             throw DecryptError(
                 "App Store download failed (\(detail)). Try: Settings › Store Access → Sign Out → Sign In, then decrypt again. If spoof is on, leave Auto-pick on and keep Client-Info rewrite off."
             )
@@ -435,6 +442,7 @@ final class DeviceDecryptService: ObservableObject {
         }
         publishDecryptProgress("Decrypting silently downloaded \(label)…")
         do {
+            try FairPlayKeyGate.requireReady()
             let clear = try FairPlayDecrypt.decryptIPA(
                 at: ipa,
                 displayName: displayName
@@ -532,6 +540,7 @@ final class DeviceDecryptService: ObservableObject {
         DecryptClient.shared.message = "Decrypted on this device · \(lastReportSummary)"
         DecryptClient.shared.error = nil
         status = ""
+        SideloadIPACache.shared.remember(url: url, kind: .decrypted, name: name)
         AppNav.shared.go(AppTab.library.rawValue)
     }
 

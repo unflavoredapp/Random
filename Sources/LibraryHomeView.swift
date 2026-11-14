@@ -45,6 +45,9 @@ struct LibraryHomeView: View {
                     if let error {
                         GlassCard { StatusRow(kind: .warning, title: error) }
                     }
+                    if segment == .signed {
+                        LibraryHealthSection()
+                    }
                     switch segment {
                     case .unsigned: unsignedSection
                     case .signed: signedSection

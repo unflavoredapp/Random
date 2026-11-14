@@ -43,8 +43,10 @@ struct StoreSpoofProfile: Identifiable, Hashable, Sendable {
         return [
             .init(id: "device", title: "This iPhone", detail: "iOS \(UIDevice.current.systemVersion)",
                   iosVersion: UIDevice.current.systemVersion, build: "", deviceModel: realModel, style: style),
-            .init(id: "newest", title: "Newest iOS", detail: "Claim iOS 99 — unlock latest packages",
-                  iosVersion: "99.0", build: "99A999", deviceModel: "iPhone17,1", style: style),
+            // Realistic UA — advertising literal iOS 99 gets HTTP 403 from MZFinance.
+            // preferLatestPackage (set in apply) still pins the newest owned build.
+            .init(id: "newest", title: "Newest IPA", detail: "Latest package · realistic iOS 18.2 UA",
+                  iosVersion: "18.2", build: "22C152", deviceModel: "iPhone17,1", style: style),
             .init(id: "ios18", title: "iOS 18.2", detail: "Recent iPhone 16 Pro",
                   iosVersion: "18.2", build: "22C152", deviceModel: "iPhone17,1", style: style),
             .init(id: "ios17", title: "iOS 17.6", detail: "iPhone 15",
@@ -78,6 +80,8 @@ struct StoreDeviceSpoof: Equatable, Sendable {
     /// Rewrite `X-MMe-Client-Info` to the spoofed model/OS. Off by default —
     /// mismatched Client-Info vs anisette MID often yields HTTP 204/404 from Apple.
     var rewriteClientInfo: Bool
+    /// Pin the newest owned externalVersionId regardless of claimed iOS (Newest IPA preset).
+    var preferLatestPackage: Bool
 
     static let defaultsKey = "tetherless.storeDeviceSpoof.v3"
     private static let legacyKeys = ["tetherless.storeDeviceSpoof.v2", "tetherless.storeDeviceSpoof"]
@@ -91,14 +95,18 @@ struct StoreDeviceSpoof: Equatable, Sendable {
             hardwarePlatform: "",
             style: .configuratorIOS,
             autoSelectCompatibleVersion: true,
-            rewriteClientInfo: false
+            rewriteClientInfo: false,
+            preferLatestPackage: false
         )
     }
 
     static var current: StoreDeviceSpoof {
         get {
             if let data = UserDefaults.standard.data(forKey: defaultsKey),
-               let decoded = try? JSONDecoder().decode(StoreDeviceSpoof.self, from: data) {
+               var decoded = try? JSONDecoder().decode(StoreDeviceSpoof.self, from: data) {
+                let before = decoded
+                decoded.sanitizeAbsurdIOSClaim()
+                if decoded != before { Self.current = decoded }
                 return decoded
             }
             for key in legacyKeys {
@@ -113,6 +121,7 @@ struct StoreDeviceSpoof: Equatable, Sendable {
                     m.style = v2.style ?? .configuratorIOS
                     m.autoSelectCompatibleVersion = true
                     m.rewriteClientInfo = false
+                    m.sanitizeAbsurdIOSClaim()
                     Self.current = m
                     return m
                 }
@@ -124,6 +133,7 @@ struct StoreDeviceSpoof: Equatable, Sendable {
                     m.build = v1.build
                     m.style = .configuratorIOS
                     m.rewriteClientInfo = false
+                    m.sanitizeAbsurdIOSClaim()
                     Self.current = m
                     return m
                 }
@@ -131,7 +141,9 @@ struct StoreDeviceSpoof: Equatable, Sendable {
             return .default
         }
         set {
-            if let data = try? JSONEncoder().encode(newValue) {
+            var value = newValue
+            value.sanitizeAbsurdIOSClaim()
+            if let data = try? JSONEncoder().encode(value) {
                 UserDefaults.standard.set(data, forKey: defaultsKey)
             }
         }
@@ -148,12 +160,27 @@ struct StoreDeviceSpoof: Equatable, Sendable {
         hardwarePlatform = Self.hardwarePlatform(forModel: deviceModel) ?? hardwarePlatform
         autoSelectCompatibleVersion = true
         rewriteClientInfo = false
+        preferLatestPackage = (profile.id == "newest")
         enabled = profile.id != "device"
         if profile.id == "device" {
             iosVersion = UIDevice.current.systemVersion
             deviceModel = Self.realModelIdentifier()
             build = ""
             hardwarePlatform = Self.hardwarePlatform(forModel: deviceModel) ?? ""
+            preferLatestPackage = false
+        }
+        sanitizeAbsurdIOSClaim()
+    }
+
+    /// Literal iOS 99 / 90+ in the UA causes MZFinance HTTP 403. Keep “newest package”
+    /// behavior via `preferLatestPackage` and advertise a real iOS string instead.
+    mutating func sanitizeAbsurdIOSClaim() {
+        let major = Self.versionTuple(iosVersion).first ?? 0
+        if major >= 90 {
+            preferLatestPackage = true
+            iosVersion = "18.2"
+            if build.isEmpty || build.hasPrefix("99") { build = "22C152" }
+            if deviceModel.isEmpty { deviceModel = "iPhone17,1" }
         }
     }
 
@@ -187,9 +214,10 @@ struct StoreDeviceSpoof: Equatable, Sendable {
         return 232
     }
 
-    /// True when claiming a “get the absolute latest” OS (AppStoreTroller-style).
+    /// True when we should pin the newest owned package (Newest IPA preset / legacy iOS 99).
     var claimsNewestOS: Bool {
         guard enabled else { return false }
+        if preferLatestPackage { return true }
         return (Self.versionTuple(effectiveIOSVersion).first ?? 0) >= 90
             || Self.compareVersions(effectiveIOSVersion, UIDevice.current.systemVersion) == .orderedDescending
                 && (Self.versionTuple(effectiveIOSVersion).first ?? 0)
@@ -200,7 +228,8 @@ struct StoreDeviceSpoof: Equatable, Sendable {
         if !enabled {
             return "Off · real iOS \(UIDevice.current.systemVersion)"
         }
-        let auto = autoSelectCompatibleVersion ? " · auto-version" : ""
+        let auto = preferLatestPackage ? " · newest IPA"
+            : (autoSelectCompatibleVersion ? " · auto-version" : "")
         return "iOS \(effectiveIOSVersion) · \(effectiveModel)\(auto)"
     }
 
@@ -396,7 +425,8 @@ private struct LegacyV2: Codable {
 
 extension StoreDeviceSpoof: Codable {
     enum CodingKeys: String, CodingKey {
-        case enabled, iosVersion, deviceModel, build, hardwarePlatform, style, autoSelectCompatibleVersion, rewriteClientInfo
+        case enabled, iosVersion, deviceModel, build, hardwarePlatform, style
+        case autoSelectCompatibleVersion, rewriteClientInfo, preferLatestPackage
     }
 
     init(from decoder: Decoder) throws {
@@ -409,6 +439,7 @@ extension StoreDeviceSpoof: Codable {
         style = try c.decodeIfPresent(StoreUserAgentStyle.self, forKey: .style) ?? .configuratorIOS
         autoSelectCompatibleVersion = try c.decodeIfPresent(Bool.self, forKey: .autoSelectCompatibleVersion) ?? true
         rewriteClientInfo = try c.decodeIfPresent(Bool.self, forKey: .rewriteClientInfo) ?? false
+        preferLatestPackage = try c.decodeIfPresent(Bool.self, forKey: .preferLatestPackage) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -421,5 +452,6 @@ extension StoreDeviceSpoof: Codable {
         try c.encode(style, forKey: .style)
         try c.encode(autoSelectCompatibleVersion, forKey: .autoSelectCompatibleVersion)
         try c.encode(rewriteClientInfo, forKey: .rewriteClientInfo)
+        try c.encode(preferLatestPackage, forKey: .preferLatestPackage)
     }
 }
