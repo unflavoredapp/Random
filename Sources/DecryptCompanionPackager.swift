@@ -349,64 +349,10 @@ enum DecryptCompanionPackager {
     }
 }
 
-// Expose Mach-O discovery for the packager without making the whole FairPlay API public surface noisy.
+// Companion slim-embed reuses the same Mach-O walk as decrypt (Flutter Runner trust,
+// live-install open-fail handling). Do not reintroduce a separate `fp_is_macho` filter.
 extension FairPlayDecrypt {
     static func collectMachOsForCompanion(under root: URL) throws -> [URL] {
-        // Reuse private collectMachOs via a thin wrapper by calling decrypt path helpers.
-        // We duplicate the structured walk here to avoid changing access control on collectMachOs.
-        let fm = FileManager.default
-        var out: [URL] = []
-        var seen = Set<String>()
-
-        func consider(_ url: URL?) {
-            guard let url else { return }
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return }
-            let path = url.standardizedFileURL.path
-            guard !seen.contains(path) else { return }
-            let ok = url.path.withCString { fp_is_macho($0) }
-            guard ok else { return }
-            seen.insert(path)
-            out.append(url)
-        }
-
-        func exe(in bundle: URL) -> URL? {
-            let info = NSDictionary(contentsOf: bundle.appendingPathComponent("Info.plist")) as? [String: Any]
-            let name = (info?["CFBundleExecutable"] as? String)
-                ?? bundle.deletingPathExtension().lastPathComponent
-            let url = bundle.appendingPathComponent(name)
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return nil }
-            return url
-        }
-
-        func frameworks(in container: URL, depth: Int = 0) {
-            guard depth < 4 else { return }
-            let dir = container.appendingPathComponent("Frameworks", isDirectory: true)
-            guard let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { return }
-            for item in items {
-                let ext = item.pathExtension.lowercased()
-                if ext == "framework" {
-                    consider(exe(in: item))
-                    frameworks(in: item, depth: depth + 1)
-                } else if ext == "dylib" {
-                    consider(item)
-                }
-            }
-        }
-
-        consider(exe(in: root))
-        frameworks(in: root)
-        for folder in ["PlugIns", "Extensions"] {
-            let dir = root.appendingPathComponent(folder, isDirectory: true)
-            if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
-                for item in items where item.pathExtension.lowercased() == "appex" {
-                    consider(exe(in: item))
-                    frameworks(in: item)
-                }
-            }
-        }
-        // Skip Watch + App Clips — same hang/soft policy as FairPlayDecrypt.collectMachOs.
-        return out
+        try collectMachOs(under: root, progress: nil)
     }
 }
