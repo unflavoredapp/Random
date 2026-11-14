@@ -1,80 +1,92 @@
 //
 //  LocalOTAServer.swift
-//  On-device AirShare install the way full AirShare does it: a Vapor HTTPS server on
-//  the device (NIOSSL) serving an itms-services manifest + the signed IPA.
+//  On-device AirShare install: a Vapor HTTPS server on the device (NIOSSL) serving
+//  an itms-services manifest + the signed IPA.
 //
-//  Any domain works: point `*.<domain>` at 127.0.0.1 and let certs.yml issue
-//  a Let's Encrypt wildcard for it. airshare.lol is just the default whose cert
-//  ships in the bundle. The cert is one WE issue: .github/workflows/certs.yml runs certbot (DNS-01) and
-//  publishes server.crt / server.pem / pack.json on the `certs` branch. A copy
-//  ships in the bundle (Build.yml bakes the latest one in) and the app refreshes
-//  from the branch before expiry. iOS trusts the chain, connects to
-//  loopback as ota.airshare.lol, installs — no network needed for the install itself.
+//  Default domain is tetherless.dev — the backloop.dev-style loopback HTTPS
+//  replacement. Point `*.tetherless.dev` at 127.0.0.1 (apex hosts pack.json on
+//  the VPS). Default cert mode pulls https://tetherless.dev/pack.json; OTABootstrap
+//  installs it on every launch so OTA is ready without a Settings visit.
+//  Any other domain still works: `*.<domain>` → 127.0.0.1 + a covering cert.
 //
 
 import Foundation
+import Security
 import Vapor
 import NIOSSL
 
 // MARK: - Config
 
 nonisolated enum ServerConfig {
-    /// Bring-your-own domain. Requirements: `*.<domain>` (and ideally `<domain>`) have an
-    /// A record → 127.0.0.1, and certs.yml has issued a wildcard cert for it.
-    /// Default is airshare.lol, whose cert ships in the bundle.
-    static let defaultDomain = "airshare.lol"
+    /// Bring-your-own domain. Requirement: `*.<domain>` A → 127.0.0.1.
+    /// Apex stays on the VPS for pack hosting. Default: tetherless.dev.
+    static let defaultDomain = "tetherless.dev"
     static var certDomain: String {
         let v = UserDefaults.standard.string(forKey: "uzd_cert_domain") ?? ""
-        return (v.isEmpty || v.contains("zefv.dev")) ? defaultDomain : v   // legacy zefv.dev → airshare.lol
+        // Legacy loopback domains → tetherless.dev (new backloop.dev stand-in).
+        if v.isEmpty || v.contains("zefv.dev") || v == "airshare.lol" || v == "backloop.dev" { return defaultDomain }
+        return v
     }
     static func setCertDomain(_ d: String) { UserDefaults.standard.set(d, forKey: "uzd_cert_domain") }
 
-    /// SNI + manifest host. Must be under `certDomain` and covered by the cert's SANs.
-    /// Default `ota.airshare.lol`: on Cloudflare, `*.airshare.lol` points at the VPS (user
-    /// subdomains), so the AirShare host is a dedicated label with its own A record → 127.0.0.1.
-    /// `ota.airshare.lol` is one label under the wildcard, so the *.airshare.lol cert covers it.
-    static let defaultInstallHost = "ota.airshare.lol"
+    /// SNI + manifest host. One label under `certDomain`, covered by `*.<domain>`.
+    /// Auto-picked and persisted so only wildcard DNS is required (no fixed subdomain).
+    static var defaultInstallHost: String { autoInstallHost(for: defaultDomain) }
     static var installHost: String {
         let v = UserDefaults.standard.string(forKey: "uzd_install_host") ?? ""
-        if !v.isEmpty && !v.contains("zefv.dev") { return v }
-        return certDomain == defaultDomain ? defaultInstallHost : "ota.\(certDomain)"
+        if !v.isEmpty,
+           !v.contains("zefv.dev"),
+           !v.hasSuffix(".airshare.lol"),
+           !v.hasSuffix(".backloop.dev") {
+            return v
+        }
+        return autoInstallHost(for: certDomain)
     }
     static func setInstallHost(_ h: String) { UserDefaults.standard.set(h, forKey: "uzd_install_host") }
+    private static func autoInstallHost(for domain: String) -> String {
+        let key = "uzd_install_host_auto_\(domain)"
+        if let h = UserDefaults.standard.string(forKey: key), !h.isEmpty, h.hasSuffix(".\(domain)") { return h }
+        let label = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+        let h = "\(label).\(domain)"
+        UserDefaults.standard.set(h, forKey: key)
+        return h
+    }
 
-    /// Bundled Let's Encrypt pair from AirShare (Sources/Resources):
+    /// Optional bundled pair (Sources/Resources):
     ///   server.crt ← fullchain.pem   server.pem ← privkey.pem
     static let certResource = "server"
 
-    /// AirShare TLS source:
-    ///   "public" — the airshare.lol wildcard cert, issued and auto-renewed on the VPS
-    ///              (certbot + Cloudflare DNS-01) and pulled from airshare.lol.
+    /// OTA TLS source:
+    ///   "public" — pack from tetherless.dev (default; installed on every launch).
     ///   "custom" — the user's own cert + key for their own domain (imported PEM).
     ///   "local"  — our own root CA (no DNS, needs the root profile installed).
     static var certMode: String { UserDefaults.standard.string(forKey: "uzd_cert_mode") ?? "public" }
     static func setCertMode(_ m: String) { UserDefaults.standard.set(m, forKey: "uzd_cert_mode") }
     static let certModes = ["public", "custom", "local"]
 
-    /// Where the "public" cert comes from. The VPS serves the live wildcard pair
-    /// (fullchain + key, JSON) behind a shared token; certbot renews it there.
-    static let defaultCertSourceURL = "https://airshare.lol/ota/cert.php"
+    /// Where the "public" cert comes from. Prefer Feather/backloop pack.json
+    /// (`cert` + `key1`/`key2`) at tetherless.dev; a VPS JSON cert.php also works.
+    static let defaultCertSourceURL = "https://tetherless.dev/pack.json"
     static var certSourceURL: String {
         let v = UserDefaults.standard.string(forKey: "uzd_cert_source_url") ?? ""
-        return (v.isEmpty || v.contains("zefv.dev")) ? defaultCertSourceURL : v
+        if v.isEmpty || v.contains("zefv.dev") || v.contains("airshare.lol") || v.contains("mrzefv.com") {
+            return defaultCertSourceURL
+        }
+        return v
     }
     static func setCertSourceURL(_ u: String) { UserDefaults.standard.set(u, forKey: "uzd_cert_source_url") }
-    static let defaultCertSourceToken = "airshare-ota-2026"
+    /// Pack.json needs no token; legacy cert.php tokens are cleared on migration.
+    static let defaultCertSourceToken = ""
     static var certSourceToken: String {
         let v = UserDefaults.standard.string(forKey: "uzd_cert_source_token") ?? ""
-        return (v.isEmpty || v == "zefv-ota-2026") ? defaultCertSourceToken : v
+        if v.isEmpty || v == "zefv-ota-2026" || v == "airshare-ota-2026" { return defaultCertSourceToken }
+        return v
     }
     static func setCertSourceToken(_ t: String) { UserDefaults.standard.set(t, forKey: "uzd_cert_source_token") }
 
-    /// Hand-rolled cert pipeline: .github/workflows/certs.yml runs certbot
-    /// (DNS-01) for *.airshare.lol and commits server.crt / server.pem / pack.json
-    /// to the `certs` branch. The app reads them through the GitHub Contents
-    /// API with its own token, so private repos work too.
-    static var certRepoOwner: String { UserDefaults.standard.string(forKey: "uzd_cert_owner") ?? "mrzefv" }
-    static var certRepoName:  String { UserDefaults.standard.string(forKey: "uzd_cert_repo")  ?? "unzip-drop" }
+    /// Optional GitHub certs-branch fallback (pack.json / server.crt / server.pem / ca.crt).
+    static var certRepoOwner: String { UserDefaults.standard.string(forKey: "uzd_cert_owner") ?? "unflavoredapp" }
+    static var certRepoName:  String { UserDefaults.standard.string(forKey: "uzd_cert_repo")  ?? "Random" }
     static var certBranch:    String { UserDefaults.standard.string(forKey: "uzd_cert_branch") ?? "certs" }
     static func setCertSource(owner: String, repo: String, branch: String) {
         UserDefaults.standard.set(owner, forKey: "uzd_cert_owner")
@@ -93,8 +105,8 @@ nonisolated enum ServerConfig {
         UserDefaults.standard.set(hmac, forKey: "uzd_eab_hmac")
     }
 
-    /// Legacy fallback (AirShare's endpoint), tried only if the GitHub source fails.
-    static let refreshURL = URL(string: "https://mrzefv.com/certs/pack.json")!
+    /// Feather / backloop-style pack.json fallback used when the primary cert source fails.
+    static let refreshURL = URL(string: "https://tetherless.dev/pack.json")!
     static let refreshBufferDays = 21
 }
 
@@ -104,6 +116,7 @@ nonisolated enum ZefvCert {
     static var docs: URL { FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0] }
     static var cachedCrt: URL { docs.appendingPathComponent("refreshed-server.crt") }
     static var cachedKey: URL { docs.appendingPathComponent("refreshed-server.pem") }
+    static var cachedCA:  URL { docs.appendingPathComponent("refreshed-ca.crt") }
     static var metaURL: URL { docs.appendingPathComponent("refreshed-cert.json") }
 
     static var bundledCrt: URL? { Bundle.main.url(forResource: ServerConfig.certResource, withExtension: "crt") }
@@ -202,7 +215,7 @@ nonisolated enum ZefvCert {
         var errorDescription: String? {
             switch self {
             case .unavailable: return "server.crt / server.pem aren't in the bundle and no refreshed copy exists."
-            case .badPack(let m): return "Cert refresh (mrzefv.com/certs/pack.json): \(m)"
+            case .badPack(let m): return "Cert refresh (tetherless.dev/pack.json): \(m)"
             }
         }
     }
@@ -213,20 +226,33 @@ nonisolated enum ZefvCert {
         let expires: String?
     }
 
-    /// Pull a fresh chain + key. Primary: the VPS endpoint (certbot + Cloudflare
-    /// auto-renews there, so this is always the live wildcard pair).
-    /// Fallback: AirShare's pack.json. The `token` argument is kept for call-site
-    /// compatibility; the VPS uses its own shared token (ServerConfig.certSourceToken).
+    /// Pull a fresh chain + key. Primary: tetherless.dev cert source (pack.json or cert.php).
+    /// The `token` argument is kept for call-site compatibility.
     static func fetch(token: String? = nil) async throws -> Meta {
-        try await fetchFromVPS()
+        do { return try await fetchFromVPS() }
+        catch let primary {
+            do { return try await fetchFromURL(ServerConfig.refreshURL) }
+            catch { throw primary }
+        }
     }
 
-    /// VPS JSON: { "cert": "<fullchain PEM>", "key": "<privkey PEM>", "not_after": "ISO8601", "sans": [...] }
+    /// VPS / Feather pack JSON. Accepts:
+    ///   { "cert", "key", "not_after?", "sans?" }           — cert.php style
+    ///   { "cert", "key1", "key2", "ca?", "info"? }         — Feather / backloop pack.json
     private struct VPSPack: Decodable {
         let cert: String
-        let key: String
+        let key: String?
+        let key1: String?
+        let key2: String?
+        let ca: String?
         let not_after: String?
         let sans: [String]?
+        var privateKey: String? {
+            if let key, !key.isEmpty { return key }
+            let a = key1 ?? "", b = key2 ?? ""
+            let joined = a + b
+            return joined.isEmpty ? nil : joined
+        }
     }
 
     static func fetchFromVPS() async throws -> Meta {
@@ -234,19 +260,27 @@ nonisolated enum ZefvCert {
         var req = URLRequest(url: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.timeoutInterval = 20
-        req.setValue(ServerConfig.certSourceToken, forHTTPHeaderField: "X-OTA-Token")
+        let token = ServerConfig.certSourceToken
+        if !token.isEmpty { req.setValue(token, forHTTPHeaderField: "X-OTA-Token") }
         req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code < 400, !data.isEmpty else {
-            throw CertError.badPack("\(url.host ?? "VPS") → HTTP \(code). Try again in a moment.")
+            throw CertError.badPack("\(url.host ?? "tetherless.dev") → HTTP \(code). Check the cert source URL in Settings › Decrypt.Team Domain.")
         }
-        let pack: VPSPack
-        do { pack = try JSONDecoder().decode(VPSPack.self, from: data) } catch { throw CertError.badPack("VPS returned an unreadable cert pack") }
-        guard pack.cert.contains("BEGIN CERTIFICATE"), pack.key.contains("PRIVATE KEY") else {
-            throw CertError.badPack("VPS pack is missing the cert or key")
+        // Feather pack.json embeds PEMs; GitHub-style pack.json only names files.
+        if let pack = try? JSONDecoder().decode(VPSPack.self, from: data),
+           pack.cert.contains("BEGIN CERTIFICATE"),
+           let key = pack.privateKey, key.contains("PRIVATE KEY") {
+            var chain = pack.cert
+            let caPEM = pack.ca.flatMap { $0.contains("BEGIN CERTIFICATE") ? $0 : nil }
+            if let caPEM, !chain.contains(caPEM) {
+                chain += chain.hasSuffix("\n") ? caPEM : "\n" + caPEM
+            }
+            return try store(chain: Data(chain.utf8), key: Data(key.utf8),
+                             expires: pack.not_after, caPEM: caPEM.map { Data($0.utf8) })
         }
-        return try store(chain: Data(pack.cert.utf8), key: Data(pack.key.utf8), expires: pack.not_after)
+        return try await fetchFromURL(url)
     }
 
     // MARK: Bring-your-own cert (mode "custom")
@@ -313,18 +347,33 @@ nonisolated enum ZefvCert {
             return d
         }
         let packData = try await raw("pack.json")
+        if let pack = try? JSONDecoder().decode(VPSPack.self, from: packData),
+           pack.cert.contains("BEGIN CERTIFICATE"),
+           let key = pack.privateKey, key.contains("PRIVATE KEY") {
+            let caPEM = pack.ca.flatMap { $0.contains("BEGIN CERTIFICATE") ? $0 : nil }
+            return try store(chain: Data(pack.cert.utf8), key: Data(key.utf8),
+                             expires: pack.not_after, caPEM: caPEM.map { Data($0.utf8) })
+        }
         let m: Manifest
         do { m = try JSONDecoder().decode(Manifest.self, from: packData) } catch { throw CertError.badPack("unreadable pack.json") }
         guard let keyFile = m.key, !keyFile.isEmpty else { throw CertError.badPack("pack.json has no key entry") }
         let chain = try await raw(m.bundle)
         let key   = try await raw(keyFile)
-        return try store(chain: chain, key: key, expires: m.expires)
+        let ca = try? await raw("ca.crt")
+        return try store(chain: chain, key: key, expires: m.expires, caPEM: ca)
     }
 
     static func fetchFromURL(_ url: URL) async throws -> Meta {
         var req = URLRequest(url: url); req.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode ?? 0 < 400 else { throw CertError.badPack("HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)") }
+        if let pack = try? JSONDecoder().decode(VPSPack.self, from: data),
+           pack.cert.contains("BEGIN CERTIFICATE"),
+           let key = pack.privateKey, key.contains("PRIVATE KEY") {
+            let caPEM = pack.ca.flatMap { $0.contains("BEGIN CERTIFICATE") ? $0 : nil }
+            return try store(chain: Data(pack.cert.utf8), key: Data(key.utf8),
+                             expires: pack.not_after, caPEM: caPEM.map { Data($0.utf8) })
+        }
         let m: Manifest
         do { m = try JSONDecoder().decode(Manifest.self, from: data) } catch { throw CertError.badPack("unreadable pack.json") }
         guard let keyFile = m.key, !keyFile.isEmpty else { throw CertError.badPack("pack.json has no key entry") }
@@ -335,15 +384,24 @@ nonisolated enum ZefvCert {
             guard (r as? HTTPURLResponse)?.statusCode ?? 0 < 400, !d.isEmpty else { throw CertError.badPack("couldn't download \(name)") }
             return d
         }
-        return try store(chain: try await get(m.bundle), key: try await get(keyFile), expires: m.expires)
+        let ca = try? await get("ca.crt")
+        return try store(chain: try await get(m.bundle), key: try await get(keyFile), expires: m.expires, caPEM: ca)
     }
 
-    /// Validate (NIOSSL must parse both, key must match the leaf's SAN set) then cache.
-    private static func store(chain: Data, key: Data, expires: String?) throws -> Meta {
+    /// Validate (NIOSSL must parse both) then cache. Optionally keep the pack CA for trust profile install.
+    private static func store(chain: Data, key: Data, expires: String?, caPEM: Data? = nil) throws -> Meta {
         _ = try NIOSSLCertificate.fromPEMBytes(Array(chain))
         _ = try NIOSSLPrivateKey(bytes: Array(key), format: .pem)
         try chain.write(to: cachedCrt, options: .atomic)
         try key.write(to: cachedKey, options: .atomic)
+        if let caPEM { try caPEM.write(to: cachedCA, options: .atomic) }
+        // Feather-compatible names in Documents (debugging / external tools).
+        try? chain.write(to: docs.appendingPathComponent("server.crt"), options: .atomic)
+        try? key.write(to: docs.appendingPathComponent("server.pem"), options: .atomic)
+        if let caPEM { try? caPEM.write(to: docs.appendingPathComponent("ca.crt"), options: .atomic) }
+        let sans = sans(fromPEM: chain)
+        let cn = sans.first(where: { $0.hasPrefix("*.") }) ?? sans.first ?? ServerConfig.installHost
+        try? cn.write(to: docs.appendingPathComponent("commonName.txt"), atomically: true, encoding: .utf8)
         let exp = expires.flatMap { ISO8601DateFormatter().date(from: $0) } ?? notAfter(fromPEM: chain)
         let meta = Meta(notAfter: exp, fetchedAt: Date())
         let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601
@@ -357,8 +415,75 @@ nonisolated enum ZefvCert {
         return try? await fetch(token: token)
     }
 
+    /// Always pull the public pack (ignores the near-expiry buffer). Used on launch.
+    /// Tries tetherless.dev first, then the GitHub `certs` branch as fallback.
+    @discardableResult
+    static func installPublicPack(token: String? = nil) async -> Meta? {
+        if let meta = try? await fetch(token: token) { return meta }
+        return try? await fetchFromGitHub(token: token)
+    }
+
     static func clearCache() {
-        for u in [cachedCrt, cachedKey, metaURL] { try? FileManager.default.removeItem(at: u) }
+        for u in [cachedCrt, cachedKey, cachedCA, metaURL] { try? FileManager.default.removeItem(at: u) }
+    }
+
+    /// True when the pack's CA is present in the system trust store (Full Trust enabled).
+    static func isPackCATrusted() -> Bool {
+        guard let pem = try? String(contentsOf: cachedCA),
+              let der = pemToDER(pem) else { return false }
+        guard let cert = SecCertificateCreateWithData(nil, der as CFData) else { return false }
+        var trust: SecTrust?
+        guard SecTrustCreateWithCertificates(cert, SecPolicyCreateBasicX509(), &trust) == errSecSuccess,
+              let trust else { return false }
+        var err: CFError?
+        return SecTrustEvaluateWithError(trust, &err)
+    }
+
+    /// Writes a .mobileconfig that installs the pack CA as a trusted root.
+    static func writePackCATrustProfile() -> URL? {
+        guard let pem = try? String(contentsOf: cachedCA),
+              let der = pemToDER(pem) else { return nil }
+        let payloadUUID = UUID().uuidString
+        let profileUUID = UUID().uuidString
+        let certB64 = der.base64EncodedString()
+        let xml = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+        <plist version="1.0">
+        <dict>
+          <key>PayloadContent</key>
+          <array>
+            <dict>
+              <key>PayloadType</key><string>com.apple.security.root</string>
+              <key>PayloadVersion</key><integer>1</integer>
+              <key>PayloadIdentifier</key><string>team.decrypt.tetherless.packca.\(payloadUUID)</string>
+              <key>PayloadUUID</key><string>\(payloadUUID)</string>
+              <key>PayloadDisplayName</key><string>Decrypt.Team Tetherless OTA Root</string>
+              <key>PayloadContent</key>
+              <data>\(certB64)</data>
+            </dict>
+          </array>
+          <key>PayloadType</key><string>Configuration</string>
+          <key>PayloadVersion</key><integer>1</integer>
+          <key>PayloadIdentifier</key><string>team.decrypt.tetherless.packca.profile.\(profileUUID)</string>
+          <key>PayloadUUID</key><string>\(profileUUID)</string>
+          <key>PayloadDisplayName</key><string>Decrypt.Team OTA Trust (tetherless.dev)</string>
+          <key>PayloadDescription</key><string>Trusts the tetherless.dev OTA certificate authority so on-device installs work. After installing, enable Full Trust in Settings › General › About › Certificate Trust Settings.</string>
+          <key>PayloadRemovalDisallowed</key><false/>
+        </dict>
+        </plist>
+        """
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("DecryptTeam-Tetherless-OTA-Trust.mobileconfig")
+        guard let data = xml.data(using: .utf8) else { return nil }
+        try? data.write(to: url)
+        return url
+    }
+
+    private static func pemToDER(_ pem: String) -> Data? {
+        guard let a = pem.range(of: "-----BEGIN CERTIFICATE-----"),
+              let b = pem.range(of: "-----END CERTIFICATE-----") else { return nil }
+        let b64 = pem[a.upperBound..<b.lowerBound].components(separatedBy: .whitespacesAndNewlines).joined()
+        return Data(base64Encoded: b64)
     }
 
     // MARK: notAfter from the leaf cert (minimal DER walk)
@@ -846,7 +971,7 @@ nonisolated final class LocalOTAServer: Identifiable, @unchecked Sendable {
 }
 
 
-// MARK: - VPS status + install analytics (airshare.lol/ota/status.php · event.php)
+// MARK: - VPS status + install analytics (tetherless.dev /ota/status.php · event.php)
 
 nonisolated enum ZefvVPS {
     /// Derived from the cert source URL so a custom source moves everything together.

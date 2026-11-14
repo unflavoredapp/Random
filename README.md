@@ -30,3 +30,11 @@ yur
 
 AirShare can install signed apps directly on-device (built-in local VPN + device pairing) as an alternative to OTA.
 Settings › Install Method. See `NATIVE_INSTALL.md`.
+
+## On-device OTA (tetherless.dev)
+
+Default OTA uses `*.tetherless.dev` as the backloop.dev-style loopback HTTPS host:
+
+1. DNS: `*.tetherless.dev` → `127.0.0.1` (apex hosts `pack.json` on the VPS)
+2. Generate & deploy the pack — see `server/ota/tetherless-ota.md`
+3. App pulls the pack on launch; enable Full Trust for the pack CA once

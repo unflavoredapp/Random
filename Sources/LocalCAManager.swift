@@ -333,11 +333,11 @@ nonisolated enum OTAFiles {
         return out
     }
 
-    /// The public chain currently used in airshare.lol / own-cert mode (no key).
+    /// The public chain currently used in tetherless.dev / own-cert mode (no key).
     @discardableResult
     static func exportPublicChain() -> [URL] {
         guard let crt = ZefvCert.crtURL, let data = try? Data(contentsOf: crt) else { return [] }
-        let name = ServerConfig.certMode == "custom" ? "own-cert-fullchain.pem" : "airshare.lol-fullchain.pem"
+        let name = ServerConfig.certMode == "custom" ? "own-cert-fullchain.pem" : "tetherless.dev-fullchain.pem"
         let u = folder.appendingPathComponent(name)
         return (try? data.write(to: u, options: .atomic)) != nil ? [u] : []
     }
