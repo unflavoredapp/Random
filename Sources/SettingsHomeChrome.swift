@@ -197,32 +197,9 @@ struct SettingsAppleIDCard: View {
             Spacer(minLength: 0)
         }
 
-        if isPreparing && !store.storeReady {
-            HStack(spacing: 10) {
-                ProgressView().tint(TetherlessPalette.accent)
-                Text("Signing in for Store access…")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-            }
-        } else if store.storeNeedsVerification || !(store.storefrontSession()?.isUsable == true) {
-            // Niche path: Apple ID signed in, but MZFinance still needs a code / session.
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.title3)
-                    .foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Store download needs a code")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Text("Easiest: Sign Out, then sign in once — the same 2FA unlocks Store downloads automatically. Or enter a fresh 6-digit code below.")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.55))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            SettingsStoreCodeEntry()
-        } else {
+        // Target chrome: green “Signed in for Store access” with the same Apple ID email
+        // once the shared passwordToken session exists — never hide that behind a spinner.
+        if store.storefrontSession()?.isUsable == true {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "checkmark.seal.fill")
                     .font(.title3)
@@ -267,6 +244,41 @@ struct SettingsAppleIDCard: View {
                 .padding(.vertical, 4)
             }
             .buttonStyle(.plain)
+        } else if store.storeConnecting || isPreparing {
+            HStack(spacing: 10) {
+                ProgressView().tint(TetherlessPalette.accent)
+                Text("Signing in for Store access…")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+            }
+        } else if store.storeNeedsVerification {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Store download needs a code")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text("Easiest: Sign Out, then sign in once — the same 2FA unlocks Store downloads automatically. Or enter a fresh 6-digit code below.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            SettingsStoreCodeEntry()
+        } else {
+            // Portal signed in; store session not loaded yet — reconnect with the same password.
+            HStack(spacing: 10) {
+                ProgressView().tint(TetherlessPalette.accent)
+                Text("Signing in for Store access…")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+            }
+            .task {
+                await store.reconnectStoreSessionIfNeeded()
+            }
         }
     }
 
@@ -279,7 +291,7 @@ struct SettingsAppleIDCard: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
             }
-            Text("One sign-in covers both app signing and Store downloads. Apple may ask for a verification code for each.")
+            Text("One sign-in covers both app signing and Store downloads with the same session.")
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)

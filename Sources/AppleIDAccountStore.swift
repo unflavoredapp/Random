@@ -84,6 +84,8 @@ final class AppleIDStore: ObservableObject {
     @Published var statusMessage: String?
     @Published var presentedDisplayCode: String?
     @Published private(set) var storeReady = false
+    /// True while MZFinance authenticate runs after Apple ID sign-in (Settings spinner).
+    @Published private(set) var storeConnecting = false
     /// True when the active 2FA challenge is SMS (text to trusted phone).
     @Published private(set) var twoFactorUsesSMS = false
     /// Obfuscated phone hint for SMS 2FA UI (e.g. ••••42).
@@ -230,16 +232,31 @@ final class AppleIDStore: ObservableObject {
     private func quietlyRefreshStorefrontIfNeeded() async {
         guard activeAccount != nil else { return }
         if let existing = storefrontSession(), existing.isUsable { return }
-        // Missing / unreadable store session — try silent re-auth with saved password.
-        storefrontNeedsRefresh = true
-        do {
-            _ = try await ensureStorefrontSession(forceRefresh: true)
-            statusMessage = nil
-            lastError = nil
-        } catch {
-            // Keep Apple ID signed in; Owned/decrypt will surface a refresh tip when needed.
-            storefrontNeedsRefresh = false
+        await reconnectStoreSessionIfNeeded()
+    }
+
+    /// Settings: finish “Signed in for Store access” using the saved Apple ID password (same session).
+    func reconnectStoreSessionIfNeeded() async {
+        guard activeAccount != nil else { return }
+        if let existing = storefrontSession(), existing.isUsable {
+            storeNeedsVerification = false
+            storeConnecting = false
+            return
         }
+        guard !storeConnecting else { return }
+        guard let email = activeAccount?.email, !email.isEmpty,
+              let aid = activeAccountID,
+              let password = passwordForAccount(id: aid), !password.isEmpty else {
+            storeNeedsVerification = true
+            return
+        }
+        await connectStoreSession(
+            email: email,
+            password: password,
+            authCode: pendingStoreAuthCode,
+            prefetched: nil,
+            teamName: activeAccount?.teamName
+        )
     }
 
     // MARK: Auth — Settings / Decrypt API
@@ -537,12 +554,14 @@ final class AppleIDStore: ObservableObject {
         draftPassword = ""
         verificationCode = ""
         storeReady = false
+        storeConnecting = false
         storefrontNeedsRefresh = false
         statusMessage = nil
         lastError = nil
         presentedDisplayCode = nil
         twoFactorUsesSMS = false
         twoFactorPhoneHint = nil
+        pendingStoreSession = nil
         authPhase = .idle
         UserDefaults.standard.set(false, forKey: Self.storeReadyKey)
         save()
@@ -912,68 +931,89 @@ final class AppleIDStore: ObservableObject {
         twoFactorUsesSMS = false
         twoFactorPhoneHint = nil
         lastError = nil
-        // Account is signed in immediately — store session is best-effort after this.
+        // Apple ID row can show Signed in immediately; Store Access keeps its own spinner
+        // until the same-session passwordToken is persisted (green check target).
         storeReady = true
         UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
-
-        // iTunes Store passwordToken for silent purchase/download.
-        // Prefer the session minted with the *same* sign-in 2FA (submitTwoFactor) so the
-        // user never has to enter a second Store-only code.
-        statusMessage = "Connecting App Store download session…"
-        if let prefetched = pendingStoreSession, prefetched.isUsable {
-            persistStoreSession(prefetched)
-            storeNeedsVerification = false
-            pendingStoreSession = nil
-            pendingStoreAuthCode = nil
-            statusMessage = session.teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
-                ?? "Signed in · free & purchased downloads ready"
-        } else {
-            pendingStoreSession = nil
-            do {
-                let store = try await AppStoreClient.shared.authenticate(
-                    email: email,
-                    password: password,
-                    authCode: pendingStoreAuthCode
-                )
-                persistStoreSession(store)
-                storeNeedsVerification = false
-                pendingStoreAuthCode = nil
-                statusMessage = session.teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
-                    ?? "Signed in · free & purchased downloads ready"
-            } catch AppStoreClientError.needsTwoFactor {
-                // One more try without a code — some accounts unlock store after GSA alone.
-                if let store = try? await AppStoreClient.shared.authenticate(
-                    email: email,
-                    password: password,
-                    authCode: nil
-                ), store.isUsable {
-                    persistStoreSession(store)
-                    storeNeedsVerification = false
-                    pendingStoreAuthCode = nil
-                    statusMessage = session.teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
-                        ?? "Signed in · free & purchased downloads ready"
-                } else {
-                    // Only ask for another code when the sign-in 2FA never minted a store session.
-                    storeNeedsVerification = true
-                    statusMessage = "Signed in — tap Resend text message once if downloads ask for a code"
-                }
-            } catch {
-                storeNeedsVerification = storefrontSession()?.isUsable != true
-                if storeNeedsVerification {
-                    statusMessage = "Signed in — tap Resend text message once if downloads ask for a code"
-                } else {
-                    pendingStoreAuthCode = nil
-                    statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
-                }
-            }
-        }
-
         save()
+
+        await connectStoreSession(
+            email: email,
+            password: password,
+            authCode: pendingStoreAuthCode,
+            prefetched: pendingStoreSession,
+            teamName: session.teamName
+        )
+        pendingStoreSession = nil
+
         activatePreferredSigningCertificate()
         await finishPreparing()
     }
 
+    /// Mint / persist iTunes Store session with the Apple ID password (+ optional same 2FA).
+    /// On success Settings shows “Signed in for Store access” with the same email.
+    private func connectStoreSession(
+        email: String,
+        password: String,
+        authCode: String?,
+        prefetched: StorefrontSession?,
+        teamName: String?
+    ) async {
+        storeConnecting = true
+        statusMessage = "Connecting App Store download session…"
+        defer { storeConnecting = false }
+
+        if let prefetched, prefetched.isUsable {
+            persistStoreSession(prefetched)
+            storeNeedsVerification = false
+            pendingStoreAuthCode = nil
+            statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
+                ?? "Signed in · free & purchased downloads ready"
+            return
+        }
+
+        do {
+            let store = try await AppStoreClient.shared.authenticate(
+                email: email,
+                password: password,
+                authCode: authCode
+            )
+            persistStoreSession(store)
+            storeNeedsVerification = false
+            pendingStoreAuthCode = nil
+            statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
+                ?? "Signed in · free & purchased downloads ready"
+            return
+        } catch AppStoreClientError.needsTwoFactor {
+            // Same password, no code — some accounts unlock store after GSA alone.
+            if let store = try? await AppStoreClient.shared.authenticate(
+                email: email,
+                password: password,
+                authCode: nil
+            ), store.isUsable {
+                persistStoreSession(store)
+                storeNeedsVerification = false
+                pendingStoreAuthCode = nil
+                statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
+                    ?? "Signed in · free & purchased downloads ready"
+                return
+            }
+        } catch {
+            // Fall through to usable-session / verification handling below.
+        }
+
+        if storefrontSession()?.isUsable == true {
+            storeNeedsVerification = false
+            pendingStoreAuthCode = nil
+            statusMessage = teamName.map { "Signed in · \($0)" } ?? "Signed in"
+        } else {
+            storeNeedsVerification = true
+            statusMessage = "Signed in — tap Resend text message once if downloads ask for a code"
+        }
+    }
+
     private func finishPreparing() async {
+        storeConnecting = false
         storeReady = true
         UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
         withAnimation(.snappy) { authPhase = .idle }
