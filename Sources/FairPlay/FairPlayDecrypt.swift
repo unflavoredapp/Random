@@ -246,6 +246,12 @@ enum FairPlayDecrypt {
     }
 
     /// Copy installed App Store .app → Payload, decrypt from live install path, zip IPA.
+    ///
+    /// Important: do **not** full-tree-copy before FairPlay. Large apps (Telegram, eBay, …)
+    /// hang for minutes on stock iOS when `copyItem` hits sandbox-slow files, and the UI
+    /// used to sit forever on “Copying app bundle…”. Flow is now:
+    /// 1) decrypt Mach-Os from the live install path into Payload (creates those paths)
+    /// 2) copy remaining resources with progress + per-file timeout/skip
     static func decryptInstalledApp(
         bundleID: String,
         displayName: String,
@@ -266,15 +272,32 @@ enum FairPlayDecrypt {
         let payload = work.appendingPathComponent("Payload", isDirectory: true)
         let destApp = payload.appendingPathComponent(source.lastPathComponent)
         try fm.createDirectory(at: payload, withIntermediateDirectories: true)
+        try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
 
-        progress?("Copying app bundle…")
-        try copyAppTree(from: source, to: destApp)
+        // Seed Info.plist early so role/main-exe helpers work on the dest tree.
+        let infoName = "Info.plist"
+        let srcInfo = source.appendingPathComponent(infoName)
+        if fm.fileExists(atPath: srcInfo.path) {
+            _ = copyFileChunked(from: srcInfo, to: destApp.appendingPathComponent(infoName), timeout: 15)
+        }
 
-        progress?("Decrypting Mach-Os…")
+        progress?("Decrypting Mach-Os from install path…")
         var report = try decryptMachOs(readingFrom: source, writingTo: destApp, progress: progress)
         report.sourcePath = source.path
         report.usedInstalledPath = true
         progress?(report.summary)
+
+        progress?("Copying app resources…")
+        let copied = try copyAppResources(
+            from: source,
+            to: destApp,
+            skipRelativePaths: Set(report.decrypted + report.plain + report.failed + report.softFailed),
+            progress: progress
+        )
+        if copied == 0 && report.decrypted.isEmpty && report.plain.isEmpty {
+            throw FairPlayDecryptError.failed("Couldn't copy any files from \(source.lastPathComponent).")
+        }
+        progress?("Copied \(copied) resource file(s)")
 
         try hardenDecryptedApp(at: destApp, report: &report)
         return try zipDecryptedPayload(payload, displayName: displayName, report: report)
@@ -565,7 +588,7 @@ enum FairPlayDecrypt {
                 // Restore install/IPA copy so packaging still has a complete tree for soft-fail roles.
                 try? fm.removeItem(at: outFile)
                 if sourceApp != destApp {
-                    try? fm.copyItem(at: file, to: outFile)
+                    _ = copyFileChunked(from: file, to: outFile, timeout: 60)
                 }
                 if role.isRequired {
                     report.failed.append(rel)
@@ -583,7 +606,7 @@ enum FairPlayDecrypt {
         } else if rc == 1 {
             try? fm.removeItem(at: tmp)
             if sourceApp != destApp, !fm.fileExists(atPath: outFile.path) {
-                try? fm.copyItem(at: file, to: outFile)
+                _ = copyFileChunked(from: file, to: outFile, timeout: 60)
             }
             report.plain.append(rel)
         } else {
@@ -599,7 +622,7 @@ enum FairPlayDecrypt {
             } else {
                 // Keep whatever was copied into dest (may still be encrypted).
                 if sourceApp != destApp, !fm.fileExists(atPath: outFile.path) {
-                    try? fm.copyItem(at: file, to: outFile)
+                    _ = copyFileChunked(from: file, to: outFile, timeout: 60)
                 }
                 report.softFailed.append(rel)
             }
@@ -873,40 +896,118 @@ enum FairPlayDecrypt {
         return base.isEmpty ? "App" : base
     }
 
-    /// Copy app tree, skipping unreadable SC_Info (sandbox); FairPlay still reads licenses from `source`.
-    private static func copyAppTree(from source: URL, to dest: URL) throws {
+    /// Copy non-Mach-O resources into the Payload app after FairPlay has written decrypted binaries.
+    /// Skips SC_Info / _CodeSignature, already-written Mach-Os, and files that hang past a timeout.
+    @discardableResult
+    private static func copyAppResources(
+        from source: URL,
+        to dest: URL,
+        skipRelativePaths: Set<String>,
+        progress: ((String) -> Void)?
+    ) throws -> Int {
         let fm = FileManager.default
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
         guard let enumerator = fm.enumerator(
             at: source,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey],
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey],
             options: [.skipsHiddenFiles]
         ) else {
             throw FairPlayDecryptError.failed("Couldn't enumerate app bundle.")
         }
+
         var copied = 0
+        var skipped = 0
+        var seen = 0
+        let started = Date()
+
         for case let item as URL in enumerator {
+            let name = item.lastPathComponent
+            // Don't descend into FairPlay / signature trees (sandbox often stalls here).
+            if name == "SC_Info" || name == "_CodeSignature" {
+                enumerator.skipDescendants()
+                continue
+            }
+
+            let vals = try? item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey])
+            if vals?.isDirectory == true {
+                let rel = relativePath(item, under: source)
+                try? fm.createDirectory(at: dest.appendingPathComponent(rel), withIntermediateDirectories: true)
+                continue
+            }
+            if vals?.isSymbolicLink == true { continue }
+
             let rel = relativePath(item, under: source)
+            if skipRelativePaths.contains(rel) { continue }
+            if rel.hasPrefix("SC_Info/") || rel.contains("/SC_Info/") { continue }
+            if rel.hasPrefix("_CodeSignature/") || rel.contains("/_CodeSignature/") { continue }
+
+            seen += 1
+            if seen == 1 || seen % 25 == 0 {
+                let elapsed = Int(Date().timeIntervalSince(started))
+                progress?("Copying resources… \(copied) ok · \(skipped) skipped · \(seen) seen (\(elapsed)s)")
+            }
+
             let target = dest.appendingPathComponent(rel)
-            if item.path.contains("/SC_Info") || item.lastPathComponent == "SC_Info" {
-                continue
-            }
-            var isDir: ObjCBool = false
-            if fm.fileExists(atPath: item.path, isDirectory: &isDir), isDir.boolValue {
-                try? fm.createDirectory(at: target, withIntermediateDirectories: true)
-                continue
-            }
-            let isLink = (try? item.resourceValues(forKeys: [.isSymbolicLinkKey]).isSymbolicLink) ?? false
-            if isLink { continue }
+            if fm.fileExists(atPath: target.path) { continue }
             try? fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? fm.removeItem(at: target)
-            if (try? fm.copyItem(at: item, to: target)) != nil {
+
+            let size = Int64(vals?.fileSize ?? 0)
+            // Large assets get a longer budget; tiny files stay snappy.
+            let timeout: TimeInterval = size > 32 * 1024 * 1024 ? 90 : (size > 4 * 1024 * 1024 ? 45 : 20)
+            if copyFileChunked(from: item, to: target, timeout: timeout) {
                 copied += 1
+            } else {
+                skipped += 1
+                try? fm.removeItem(at: target)
             }
         }
-        if copied == 0 {
-            throw FairPlayDecryptError.failed("Couldn't copy any files from \(source.lastPathComponent).")
+
+        progress?("Resources: \(copied) copied · \(skipped) skipped · \(seen) scanned")
+        return copied
+    }
+
+    /// Chunked copy that can time out — `FileManager.copyItem` on App Store containers
+    /// can block indefinitely on stock iOS with no progress.
+    @discardableResult
+    private static func copyFileChunked(from source: URL, to dest: URL, timeout: TimeInterval) -> Bool {
+        let fm = FileManager.default
+        guard let reader = try? FileHandle(forReadingFrom: source) else { return false }
+        defer { try? reader.close() }
+
+        fm.createFile(atPath: dest.path, contents: nil)
+        guard let writer = try? FileHandle(forWritingTo: dest) else {
+            try? fm.removeItem(at: dest)
+            return false
         }
+        defer { try? writer.close() }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        let chunk = 1024 * 1024
+        while true {
+            if Date() > deadline { return false }
+            let data: Data
+            do {
+                if #available(iOS 13.4, *) {
+                    guard let piece = try reader.read(upToCount: chunk) else { break }
+                    data = piece
+                } else {
+                    data = reader.readData(ofLength: chunk)
+                }
+            } catch {
+                return false
+            }
+            if data.isEmpty { break }
+            do {
+                if #available(iOS 13.4, *) {
+                    try writer.write(contentsOf: data)
+                } else {
+                    writer.write(data)
+                }
+            } catch {
+                return false
+            }
+        }
+        return true
     }
 }
 
