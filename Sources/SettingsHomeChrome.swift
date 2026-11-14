@@ -214,7 +214,7 @@ struct SettingsAppleIDCard: View {
                     Text("Store download needs a code")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text("Enter the 6-digit code so Decrypt can fetch free & purchased apps. You stay signed in.")
+                    Text("Easiest: Sign Out, then sign in once — the same 2FA unlocks Store downloads automatically. Or enter a fresh 6-digit code below.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.55))
                         .fixedSize(horizontal: false, vertical: true)
