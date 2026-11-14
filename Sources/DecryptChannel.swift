@@ -29,7 +29,7 @@ enum DecryptChannel: String, CaseIterable, Identifiable {
     var blurb: String {
         switch self {
         case .device:
-            return "FairPlay decrypt with this iPhone’s App Store keys (mremap). Opens the App Store for your Apple ID if the app isn’t installed yet — no Telegram."
+            return "Silent App Store purchase/download when possible, then FairPlay decrypt with this iPhone’s keys (mremap). Falls back to App Store install if needed — no Telegram."
         case .telegram:
             return "Queue through the server’s Telegram bridge to @FastDecryptBot. Works for App Store links you don’t have installed locally."
         }

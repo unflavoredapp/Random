@@ -23,11 +23,16 @@ struct AppleIDAccount: Identifiable, Codable, Equatable, Hashable {
     var deviceUDIDs: [String] = []
     /// Serialized AppleAuthSession for Developer Portal.
     var portalSessionJSON: Data? = nil
+    /// Serialized StorefrontSession for silent purchase/download (ipatool-style).
+    var storeSessionJSON: Data? = nil
     var teamID: String? = nil
     var teamName: String? = nil
 
     var displayName: String { label.isEmpty ? email : "\(label) · \(email)" }
     var statusLabel: String {
+        if storeSessionJSON != nil {
+            return "Store download ready"
+        }
         if !linkedCertificateIDs.isEmpty {
             return "\(linkedCertificateIDs.count) linked cert\(linkedCertificateIDs.count == 1 ? "" : "s")"
         }
@@ -75,6 +80,8 @@ final class AppleIDStore: ObservableObject {
     @Published var statusMessage: String?
     @Published var presentedDisplayCode: String?
     @Published private(set) var storeReady = false
+    /// Last 2FA code — reused once for iTunes Store authenticate after GSA succeeds.
+    private var pendingStoreAuthCode: String?
 
     var activeID: String? {
         get { activeAccountID }
@@ -176,6 +183,7 @@ final class AppleIDStore: ObservableObject {
             authPhase = .idle
             lastError = error.localizedDescription
             Keychain.deleteSecret(Self.passwordPrefix + "pending")
+            pendingStoreAuthCode = nil
             GSAAuthClient.shared.cancel()
         }
     }
@@ -194,6 +202,7 @@ final class AppleIDStore: ObservableObject {
         }
         lastError = nil
         authPhase = .verifying
+        pendingStoreAuthCode = digits
         do {
             let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
             let pw = Keychain.getSecret(Self.passwordPrefix + "pending") ?? ""
@@ -211,6 +220,7 @@ final class AppleIDStore: ObservableObject {
     func cancelTwoFactor() {
         GSAAuthClient.shared.cancel()
         Keychain.deleteSecret(Self.passwordPrefix + "pending")
+        pendingStoreAuthCode = nil
         authPhase = accounts.isEmpty ? .idle : .idle
         lastError = nil
         verificationCode = ""
@@ -381,6 +391,40 @@ final class AppleIDStore: ObservableObject {
         return try? JSONDecoder().decode(AppleAuthSession.self, from: data)
     }
 
+    /// iTunes Store session for silent purchase/download.
+    func storefrontSession() -> StorefrontSession? {
+        guard let data = activeAccount?.storeSessionJSON else { return nil }
+        return try? JSONDecoder().decode(StorefrontSession.self, from: data)
+    }
+
+    /// Ensure a usable storefront session (re-auth with saved password if needed).
+    func ensureStorefrontSession() async throws -> StorefrontSession {
+        if let existing = storefrontSession(), existing.isUsable {
+            return existing
+        }
+        guard let email = activeAccount?.email, !email.isEmpty else {
+            throw AppStoreClientError.message("Sign in under Store Access first.")
+        }
+        guard let password = Keychain.getSecret(Self.passwordPrefix + (activeAccountID ?? "")), !password.isEmpty else {
+            throw AppStoreClientError.message("Missing Apple ID password — sign in again under Store Access.")
+        }
+        let session = try await AppStoreClient.shared.authenticate(
+            email: email,
+            password: password,
+            authCode: pendingStoreAuthCode
+        )
+        pendingStoreAuthCode = nil
+        persistStoreSession(session)
+        return session
+    }
+
+    private func persistStoreSession(_ store: StorefrontSession) {
+        guard let idx = accounts.firstIndex(where: { $0.email.caseInsensitiveCompare(store.email) == .orderedSame })
+                ?? accounts.firstIndex(where: { $0.id == activeAccountID }) else { return }
+        accounts[idx].storeSessionJSON = try? JSONEncoder().encode(store)
+        save()
+    }
+
     func activatePreferredSigningCertificate() {
         if let id = preferredSigningCertificateID() {
             CertificateStore.shared.activeID = id
@@ -458,7 +502,27 @@ final class AppleIDStore: ObservableObject {
         draftPassword = ""
         verificationCode = ""
         lastError = nil
-        statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
+
+        // Also establish iTunes Store passwordToken for silent purchase/download.
+        statusMessage = "Connecting App Store download session…"
+        do {
+            let store = try await AppStoreClient.shared.authenticate(
+                email: email,
+                password: password,
+                authCode: pendingStoreAuthCode
+            )
+            persistStoreSession(store)
+            statusMessage = session.teamName.map { "Signed in · \($0) · silent download ready" }
+                ?? "Signed in · silent download ready"
+        } catch AppStoreClientError.needsTwoFactor {
+            statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
+            // Store download will prompt/re-auth on first silent decrypt if needed.
+        } catch {
+            statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
+            // Non-fatal — portal auth still works; silent download retries later.
+        }
+        pendingStoreAuthCode = nil
+
         save()
         activatePreferredSigningCertificate()
         await finishPreparing()
