@@ -668,7 +668,11 @@ struct StoreDeviceSpoofCard: View {
 
     private func isSelected(_ profile: StoreSpoofProfile) -> Bool {
         if profile.id == "device" { return !spoof.enabled }
+        if profile.id == "newest" {
+            return spoof.enabled && spoof.preferLatestPackage
+        }
         return spoof.enabled
+            && !spoof.preferLatestPackage
             && spoof.iosVersion == profile.iosVersion
             && (profile.deviceModel == nil || spoof.deviceModel == profile.deviceModel)
     }
@@ -919,8 +923,7 @@ struct SettingsKeepAppsAliveCard: View {
                 }
 
                 Button {
-                    AppleIDStore.shared.activatePreferredSigningCertificate()
-                    updater.refreshAll()
+                    SideloadSurvival.refreshAllWithKeepAlive()
                 } label: {
                     HStack {
                         if updater.busy {

@@ -59,6 +59,11 @@ struct SettingsView: View {
                     SettingsDisableNotificationsRow()
                     SettingsBackgroundSideloadingRow()
                     SettingsKeepAppsAliveCard()
+                    SideloadSurvivalCard()
+                    InstallAutopilotCard()
+                    PairingWizardCard()
+                    MultiDeviceUDIDCard()
+                    VaultBackupCard()
 
                     Text("MORE")
                         .font(.system(size: 12, weight: .semibold))

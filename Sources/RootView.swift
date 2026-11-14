@@ -68,6 +68,8 @@ struct RootView: View {
             Task.detached(priority: .utility) { try? await Task.sleep(nanoseconds: 8_000_000_000); await StorageCleaner.run() }
             Task { _ = await LibraryCache.shared.refresh() }
             await SourceStore.shared.warmUpAtLaunch()
+            _ = InstallAutopilot.apply()
+            SideloadSurvival.refreshExpiryLoop()
             WidgetDataManager.shared.refresh()
             _ = await PortalStorage.cleanupStaleTemporaryFiles()
             await LocalSourceUpdateWatcher.shared.scanAllSources(reason: "launch")
