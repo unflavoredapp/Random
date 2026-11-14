@@ -86,6 +86,14 @@ final class DecryptCompanionController: ObservableObject {
 struct DecryptCompanionConsole: View {
     @ObservedObject private var companion = DecryptCompanionController.shared
     @ObservedObject private var client = DecryptClient.shared
+    /// Host sheet can dismiss; the installed companion app should not.
+    var showsDismiss: Bool = true
+    @Binding var shareURL: URL?
+
+    init(showsDismiss: Bool = true, shareURL: Binding<URL?> = .constant(nil)) {
+        self.showsDismiss = showsDismiss
+        self._shareURL = shareURL
+    }
 
     var body: some View {
         ZStack {
@@ -125,23 +133,35 @@ struct DecryptCompanionConsole: View {
 
     private var header: some View {
         HStack {
-            Button {
-                companion.dismiss()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(.white.opacity(0.45))
+            if showsDismiss {
+                Button {
+                    companion.dismiss()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Color.clear.frame(width: 28, height: 28)
             }
-            .buttonStyle(.plain)
             Spacer()
             Text("Tetherless Decrypt")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.white)
             Spacer()
-            // Balance the close button.
-            Image(systemName: "xmark.circle.fill")
-                .font(.title3)
-                .foregroundStyle(.clear)
+            if companion.done, companion.finishedURL != nil {
+                Button {
+                    shareURL = companion.finishedURL
+                } label: {
+                    Image(systemName: "square.and.arrow.up.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Color.clear.frame(width: 28, height: 28)
+            }
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)
