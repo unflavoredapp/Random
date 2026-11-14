@@ -19,7 +19,7 @@
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>team.decrypt.yg12yoccq4.scan</string>
+		<string>dev.tetherless.app.scan</string>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).userTask.*</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>

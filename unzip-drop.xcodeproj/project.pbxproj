@@ -443,7 +443,7 @@
 				);
 				MARKETING_VERSION = 3.7;
 				ONLY_ACTIVE_ARCH = YES;
-				PRODUCT_BUNDLE_IDENTIFIER = team.decrypt.yg12yoccq4;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -489,7 +489,7 @@
 				);
 				MARKETING_VERSION = 3.7;
 				ONLY_ACTIVE_ARCH = NO;
-				PRODUCT_BUNDLE_IDENTIFIER = team.decrypt.yg12yoccq4;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
@@ -518,7 +518,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 3.7;
-				PRODUCT_BUNDLE_IDENTIFIER = team.decrypt.yg12yoccq4.r656g;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app.r656g";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -547,7 +547,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 3.7;
-				PRODUCT_BUNDLE_IDENTIFIER = team.decrypt.yg12yoccq4.r656g;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app.r656g";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -575,7 +575,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 3.7;
-				PRODUCT_BUNDLE_IDENTIFIER = team.decrypt.yg12yoccq4.n88r1;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app.n88r1";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
@@ -603,7 +603,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 3.7;
-				PRODUCT_BUNDLE_IDENTIFIER = team.decrypt.yg12yoccq4.n88r1;
+				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app.n88r1";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;

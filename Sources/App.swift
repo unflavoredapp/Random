@@ -49,7 +49,7 @@ struct UnzipDropApp: App {
                     }
                 }
         }
-        .backgroundTask(.appRefresh("team.decrypt.yg12yoccq4.scan")) {
+        .backgroundTask(.appRefresh("dev.tetherless.app.scan")) {
             await LocalSourceUpdateWatcher.shared.scanAllSources(reason: "background")
         }
     }
