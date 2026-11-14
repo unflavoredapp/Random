@@ -440,8 +440,9 @@ final class AppleIDStore: ObservableObject {
             }
             return "Enter the 6-digit code texted to your phone."
         }
-        // System sheets overlay THIS app: Allow (map / MacBook Pro) then the 6-digit code.
-        return "Watch for Apple’s Allow sheet (map) and verification code on this iPhone — turn Focus off if they don’t appear. Then enter the code below."
+        // System sheets overlay THIS app when we sign in as the spoofed MacBook/iPhone.
+        let device = AuthClientSpoof.current.displayName
+        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off if they don’t appear. Then enter the code below."
     }
 
     /// Force another trusted-device push (Settings “Send again to devices”).

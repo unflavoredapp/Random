@@ -386,6 +386,7 @@ struct SettingsAppleIDCard: View {
                     }
                 }
 
+                AuthClientSpoofCard()
                 StoreDeviceSpoofCard()
                 PhoneDecryptWorkerCard()
             }
@@ -530,7 +531,8 @@ struct SettingsAppleIDCard: View {
             }
             return "Enter the 6-digit code texted to your phone."
         }
-        return "Watch for Apple’s Allow sheet (map) and verification code on this iPhone — turn Focus off if they don’t appear. Then enter the code below."
+        let device = AuthClientSpoof.current.displayName
+        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off if they don’t appear. Then enter the code below."
     }
 
     private var accountList: some View {
@@ -757,6 +759,86 @@ struct PhoneDecryptWorkerCard: View {
                 }
             }
         }
+    }
+}
+
+/// Spoof MacBook / iPhone AuthKit identity for Apple ID sign-in (HSA2 Allow + code sheets).
+struct AuthClientSpoofCard: View {
+    @State private var spoof = AuthClientSpoof.current
+    private let profiles = AuthClientProfile.builtIn
+
+    var body: some View {
+        GlassCard(corner: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: "laptopcomputer.and.iphone")
+                        .foregroundStyle(TetherlessPalette.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Sign-in device identity")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text("Claims a MacBook or another iPhone when requesting Apple’s Allow + verification code sheets. MacBook usually overlays this phone; iPhone may push to other trusted devices.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.45))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Text(spoof.summaryLabel)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(profiles) { profile in
+                            Button {
+                                spoof.apply(profile)
+                                persist()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(profile.title)
+                                        .font(.caption.weight(.bold))
+                                        .foregroundStyle(.white)
+                                    Text(profile.detail)
+                                        .font(.caption2)
+                                        .foregroundStyle(.white.opacity(0.45))
+                                        .lineLimit(1)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(
+                                    spoof.profileID == profile.id
+                                        ? TetherlessPalette.accent.opacity(0.35)
+                                        : Color.black.opacity(0.28),
+                                    in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .strokeBorder(
+                                            spoof.profileID == profile.id
+                                                ? TetherlessPalette.accent.opacity(0.7)
+                                                : .white.opacity(0.08),
+                                            lineWidth: 1
+                                        )
+                                )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                Text(spoof.clientInfo)
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.35))
+                    .lineLimit(3)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .onAppear { spoof = AuthClientSpoof.current }
+    }
+
+    private func persist() {
+        AuthClientSpoof.current = spoof
     }
 }
 
