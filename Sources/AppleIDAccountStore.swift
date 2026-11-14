@@ -438,8 +438,26 @@ final class AppleIDStore: ObservableObject {
             }
             return "Enter the 6-digit code texted to your phone."
         }
-        // Matches the system “Apple Account Verification Code” sheet copy.
-        return "Enter the code shown on one of your Apple devices."
+        // Push appears on *other* trusted devices (not this iPhone). Focus can hide it.
+        return "Check your other Apple devices for “Apple Account Sign In Requested”, tap Allow, then enter the code shown. Turn Focus off if nothing appears."
+    }
+
+    /// Force another trusted-device push (Settings “Send again to devices”).
+    func requestTrustedDevicePush() async {
+        lastError = nil
+        authPhase = .verifying
+        statusMessage = "Sending sign-in request to your other Apple devices…"
+        do {
+            _ = try await GSAAuthClient.shared.requestTrustedDevicePush()
+            refreshTwoFactorChannelFromGSA()
+            authPhase = .awaitingTwoFactor
+            statusMessage = twoFactorPromptMessage()
+        } catch {
+            refreshTwoFactorChannelFromGSA()
+            authPhase = GSAAuthClient.shared.hasPendingTwoFactor ? .awaitingTwoFactor : .idle
+            lastError = error.localizedDescription
+            statusMessage = "Couldn't reach your other devices. Tap Text me a code, or turn Focus off and try Send again."
+        }
     }
 
     func submitVerificationCode() {
