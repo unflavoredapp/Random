@@ -469,6 +469,22 @@ struct DecryptView: View {
         }
     }
 
+    /// Only show the one-time App Store key hint when FairPlay/keys look like the failure mode.
+    private static func shouldShowAppStoreKeyHint(_ error: String?) -> Bool {
+        guard let error, !error.isEmpty else { return true }
+        let e = error.lowercased()
+        if e.contains("pair") || e.contains("on-disk path") || e.contains("timed out") { return false }
+        if e.contains("sign in under") || e.contains("store access") { return false }
+        return e.contains("fairplay")
+            || e.contains("cryptid")
+            || e.contains("encrypted")
+            || e.contains("app store")
+            || e.contains("decryption key")
+            || e.contains("sc_info")
+            || e.contains("license")
+            || e.contains("decrypt failed")
+    }
+
     // MARK: Cards
 
     private func resultAppCard(_ app: DecryptApp, downloading: Bool) -> some View {
@@ -581,7 +597,10 @@ struct DecryptView: View {
                 if c.phase == .failed {
                     Text(c.error ?? "Decrypt failed.")
                         .font(.caption).foregroundStyle(.orange)
-                    DecryptAppStoreSignInHint(compact: true)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if Self.shouldShowAppStoreKeyHint(c.error) {
+                        DecryptAppStoreSignInHint(compact: true)
+                    }
                     Button("Dismiss") { c.reset() }
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.55))

@@ -221,29 +221,50 @@ struct AppleIDManageView: View {
     // MARK: Actions
 
     private func reloadPortal() async {
-        guard let auth else { return }
+        guard let auth = store.portalSession() else {
+            error = "Sign in under Store Access first."
+            return
+        }
         busy = true; error = nil
         defer { busy = false }
         do {
-            let teams = try await DeveloperPortalClient.shared.listTeams(auth: auth)
-            guard let team = teams.first else {
-                error = "No developer team on this Apple ID."
-                return
-            }
-            self.team = team
-            async let c = DeveloperPortalClient.shared.listCertificates(auth: auth, team: team)
-            async let d = DeveloperPortalClient.shared.listDevices(auth: auth, team: team)
-            async let a = DeveloperPortalClient.shared.listAppIDs(auth: auth, team: team)
-            portalCerts = try await c
-            portalDevices = try await d
-            portalAppIDs = try await a
-            // Mirror into local account metadata
-            for app in portalAppIDs { store.addAppID(app.bundleID) }
-            for dev in portalDevices { store.addDeviceUDID(dev.udid) }
-            status = "Updated from Developer Portal · \(portalCerts.count) certs"
+            try await loadPortal(using: auth)
         } catch {
+            if AppleIDStore.isPortalSessionExpired(error) {
+                status = "Session expired — refreshing…"
+                do {
+                    let fresh = try await store.refreshPortalSession()
+                    try await loadPortal(using: fresh)
+                    return
+                } catch AppleAuthError.needsTwoFactor {
+                    self.error = "Session expired — enter the verification code under Store Access, then tap Refresh."
+                    return
+                } catch {
+                    self.error = error.localizedDescription
+                    return
+                }
+            }
             self.error = error.localizedDescription
         }
+    }
+
+    private func loadPortal(using auth: AppleAuthSession) async throws {
+        let teams = try await DeveloperPortalClient.shared.listTeams(auth: auth)
+        guard let team = teams.first else {
+            error = "No developer team on this Apple ID."
+            return
+        }
+        self.team = team
+        async let c = DeveloperPortalClient.shared.listCertificates(auth: auth, team: team)
+        async let d = DeveloperPortalClient.shared.listDevices(auth: auth, team: team)
+        async let a = DeveloperPortalClient.shared.listAppIDs(auth: auth, team: team)
+        portalCerts = try await c
+        portalDevices = try await d
+        portalAppIDs = try await a
+        for app in portalAppIDs { store.addAppID(app.bundleID) }
+        for dev in portalDevices { store.addDeviceUDID(dev.udid) }
+        status = "Updated from Developer Portal · \(portalCerts.count) certs"
+        error = nil
     }
 
     private func revoke(_ cert: DevCertificate) async {

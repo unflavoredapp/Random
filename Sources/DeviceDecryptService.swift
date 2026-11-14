@@ -189,6 +189,10 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.select(app)
             DecryptClient.shared.start(url: app.url, version: version, display: app.name)
         case .device:
+            DecryptClient.shared.select(app)
+            DecryptClient.shared.phase = .running
+            DecryptClient.shared.message = "Starting decrypt…"
+            DecryptClient.shared.error = nil
             let deviceApp = DeviceApp(
                 bundleID: app.bundle.isEmpty ? app.id : app.bundle,
                 name: app.name,
@@ -215,13 +219,13 @@ final class DeviceDecryptService: ObservableObject {
                 throw DecryptError("Missing bundle ID — search again or paste an App Store link.")
             }
             if let installed = await resolveInstalledAppURL(bundleID: bid) {
-                status = "Decrypting \(app.name) on this device…"
+                publishDecryptProgress("Decrypting \(app.name) on this device…")
                 let clear = try FairPlayDecrypt.decryptInstalledApp(
                     bundleID: bid,
                     displayName: app.name,
                     knownPath: installed.path
                 ) { [weak self] msg in
-                    Task { @MainActor in self?.status = msg }
+                    Task { @MainActor in self?.publishDecryptProgress(msg) }
                 }
                 finishSuccess(url: clear, name: app.name)
                 return
@@ -241,11 +245,20 @@ final class DeviceDecryptService: ObservableObject {
                 storeURL: link
             )
         } catch {
-            lastError = error.localizedDescription
+            let text = error.localizedDescription
+            lastError = text
             DecryptClient.shared.phase = .failed
-            DecryptClient.shared.error = error.localizedDescription
+            DecryptClient.shared.error = text
+            DecryptClient.shared.message = text
             status = ""
         }
+    }
+
+    private func publishDecryptProgress(_ message: String) {
+        status = message
+        DecryptClient.shared.phase = .running
+        DecryptClient.shared.message = message
+        DecryptClient.shared.error = nil
     }
 
     /// ipatool-style silent buy + CDN download, then FairPlay. Returns true if finished successfully.
