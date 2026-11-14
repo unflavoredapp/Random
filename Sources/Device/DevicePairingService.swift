@@ -25,7 +25,7 @@ private nonisolated final class PairingOperation: @unchecked Sendable {
         let identityJSON: String? = (try? DevicePairingStore.load()).flatMap { $0 }
             .flatMap { try? JSONEncoder().encode($0) }
             .flatMap { String(data: $0, encoding: .utf8) }
-        let error = ksign_pairing_run_ex(handle, "Decrypt.Team", nil, 0, identityJSON, { context, event, payload in
+        let error = ksign_pairing_run_ex(handle, "TetherLess", nil, 0, identityJSON, { context, event, payload in
             guard let context, let payload else { return }
             Unmanaged<PairingOperation>.fromOpaque(context).takeUnretainedValue()
                 .event(event, String(cString: payload))
@@ -133,7 +133,7 @@ final class DevicePairingService: NSObject, ObservableObject, NetServiceDelegate
         } else if event == 1 {
             pin = text
             let content = UNMutableNotificationContent()
-            content.title = "Decrypt.Team pairing code"
+            content.title = "TetherLess pairing code"
             content.body = "Enter \(text) in Settings to finish pairing."
             content.sound = .default
             content.interruptionLevel = .timeSensitive
@@ -142,7 +142,7 @@ final class DevicePairingService: NSObject, ObservableObject, NetServiceDelegate
 #if compiler(>=6.2)
             if #available(iOS 26.0, *), let task = continuedTask as? BGContinuedProcessingTask {
                 task.progress.completedUnitCount = 1
-                task.updateTitle("Pair with Decrypt.Team", subtitle: "Enter code \(text) in Settings")
+                task.updateTitle("Pair with TetherLess", subtitle: "Enter code \(text) in Settings")
             }
 
 #endif
@@ -150,7 +150,7 @@ final class DevicePairingService: NSObject, ObservableObject, NetServiceDelegate
     }
 
     func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
-        advertisementError = DeviceSetupError("Decrypt.Team could not advertise for pairing. Allow Local Network access in Settings, connect to Wi-Fi, and try again.")
+        advertisementError = DeviceSetupError("TetherLess could not advertise for pairing. Allow Local Network access in Settings, connect to Wi-Fi, and try again.")
         cancel()
     }
 
@@ -161,7 +161,7 @@ final class DevicePairingService: NSObject, ObservableObject, NetServiceDelegate
 #if compiler(>=6.2)
         if #available(iOS 26.0, *) {
             let request = BGContinuedProcessingTaskRequest(identifier: Self.taskID,
-                title: "Pair with Decrypt.Team", subtitle: "Open Developer Mode in Settings")
+                title: "Pair with TetherLess", subtitle: "Open Developer Mode in Settings")
             request.strategy = .fail
             try? BGTaskScheduler.shared.submit(request)
         }
@@ -177,7 +177,7 @@ final class DevicePairingService: NSObject, ObservableObject, NetServiceDelegate
         task.progress.totalUnitCount = 2
         task.progress.completedUnitCount = pin == nil ? 0 : 1
         task.expirationHandler = { [weak self] in Task { @MainActor in self?.cancel() } }
-        if let pin { task.updateTitle("Pair with Decrypt.Team", subtitle: "Enter code \(pin) in Settings") }
+        if let pin { task.updateTitle("Pair with TetherLess", subtitle: "Enter code \(pin) in Settings") }
         if backgroundTask != .invalid {
             UIApplication.shared.endBackgroundTask(backgroundTask)
             backgroundTask = .invalid

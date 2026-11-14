@@ -85,7 +85,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         let deepLink = "airshare://install?signedID=\(entry.id)"
         let content = UNMutableNotificationContent()
         content.title = "\(entry.name) is ready"
-        content.body = "Tap to open Decrypt.Team and install the signed app."
+        content.body = "Tap to open TetherLess and install the signed app."
         content.sound = .default
         content.userInfo = [
             "deepLink": deepLink,
@@ -108,7 +108,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         guard notificationsEnabled else { return }
         let content = UNMutableNotificationContent()
         content.title = "\(app.name) \(app.version) is available"
-        content.body = "A new version was found in \(source.name). Open Decrypt.Team to update."
+        content.body = "A new version was found in \(source.name). Open TetherLess to update."
         content.sound = .default
         content.userInfo = [
             "type": "source-update",
@@ -128,7 +128,7 @@ final class NotificationManager: NSObject, ObservableObject, UNUserNotificationC
         guard notificationsEnabled else { return }
         let content = UNMutableNotificationContent()
         content.title = "Update signing failed"
-        content.body = "Decrypt.Team found \(app.name) \(app.version), but automatic signing failed. Tap to review Decrypt.Team."
+        content.body = "TetherLess found \(app.name) \(app.version), but automatic signing failed. Tap to review TetherLess."
         content.sound = .default
         content.userInfo = ["type": "source-update-failed", "deepLink": "airshare://updates?bundleID=\(app.bundle.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? app.bundle)", "reason": reason]
         let request = UNNotificationRequest(identifier: "source-update-failed-\(app.bundle)-\(app.version)", content: content, trigger: UNTimeIntervalNotificationTrigger(timeInterval: 1, repeats: false))

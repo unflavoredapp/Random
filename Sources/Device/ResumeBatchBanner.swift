@@ -44,7 +44,7 @@ struct ResumeBatchBanner: View {
             Image(systemName: "arrow.clockwise.circle.fill").font(.system(size: 22)).foregroundStyle(Theme.accent)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.text).lineLimit(1)
-                Text("Decrypt.Team was closed mid-batch · \(detail)").font(.system(size: 11)).foregroundStyle(Theme.subtle).lineLimit(1)
+                Text("TetherLess was closed mid-batch · \(detail)").font(.system(size: 11)).foregroundStyle(Theme.subtle).lineLimit(1)
             }
             Spacer(minLength: 6)
             Button("Resume", action: resume).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.accent)

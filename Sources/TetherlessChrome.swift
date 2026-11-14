@@ -1,6 +1,6 @@
 //
 //  TetherlessChrome.swift
-//  Visual shell matching the Tetherless glassmorphism UI (purple→teal gradient,
+//  Visual shell matching the TetherLess glassmorphism UI (purple→teal gradient,
 //  glass cards, floating capsule tab bar). Backends stay in existing views.
 //
 

@@ -53,20 +53,20 @@ final class OTAInstaller: ObservableObject {
             case .trollStoreNotInstalled:
                 return "TrollStore isn't installed on this device (or it's hidden under a disguised icon iOS doesn't recognize by its usual name)."
             case .rootNotTrusted:
-                return "Your local root CA isn't trusted on this device yet, so Safari would reject the install silently. Settings › Decrypt.Team › Local CA: Install trust profile, then enable it in Settings › General › About › Certificate Trust Settings."
+                return "Your local root CA isn't trusted on this device yet, so Safari would reject the install silently. Settings › TetherLess › Local CA: Install trust profile, then enable it in Settings › General › About › Certificate Trust Settings."
             case .hostNotCovered(let h, let mode, let sans):
                 let covering = sans.isEmpty ? "nothing readable" : sans.joined(separator: ", ")
                 if mode == "local" {
                     return "Your local leaf covers \(covering) — not \(h). Settings › Local CA: set host to \(h) and Re-issue leaf (instant, no profile needed again)."
                 }
-                return "The loaded ACME cert covers \(covering) — not \(h). Set the Decrypt.Team domain to match, or renew a cert for it in Settings › Decrypt.Team Domain. Or switch Cert mode to Fully local."
+                return "The loaded ACME cert covers \(covering) — not \(h). Set the TetherLess domain to match, or renew a cert for it in Settings › TetherLess Domain. Or switch Cert mode to Fully local."
             case .noLocalLeaf(let h):
                 return "Cert mode is Fully local but no leaf has been issued yet. Settings › Local CA: create the CA and issue a leaf for \(h)."
             case .hostNotLoopback(let h):
-                return "\(h) doesn't resolve to 127.0.0.1, so iOS silently drops the install prompt — there's no error dialog for this, it just never appears. Point a DNS A record for \(h) at 127.0.0.1, or use a free loopback name under *.tetherless.dev. Check it in Settings › Local CA / Decrypt.Team Domain."
+                return "\(h) doesn't resolve to 127.0.0.1, so iOS silently drops the install prompt — there's no error dialog for this, it just never appears. Point a DNS A record for \(h) at 127.0.0.1, or use a free loopback name under *.tetherless.dev. Check it in Settings › Local CA / TetherLess Domain."
             case .ipaMissing: return "Signed IPA not found on disk."
             case .openFailed:
-                return "iOS refused the itms-services URL. Check the Decrypt.Team host resolves to 127.0.0.1 and matches the active cert (see Settings › Decrypt.Team Domain — Active cert)."
+                return "iOS refused the itms-services URL. Check the TetherLess host resolves to 127.0.0.1 and matches the active cert (see Settings › TetherLess Domain — Active cert)."
             }
         }
     }
@@ -99,7 +99,7 @@ final class OTAInstaller: ObservableObject {
                 throw InstallError.hostNotCovered(host: host, mode: mode, sans: LocalCAManager.leafSANs())
             }
         } else if mode == "custom" {
-            guard ZefvCert.hasCustom else { throw ZefvCert.CertError.badPack("No custom cert imported yet — Settings › Decrypt.Team Domain › Own TLS cert.") }
+            guard ZefvCert.hasCustom else { throw ZefvCert.CertError.badPack("No custom cert imported yet — Settings › TetherLess Domain › Own TLS cert.") }
             let sans = ZefvCert.customSANs
             guard ZefvCert.covers(host, sans: sans) else {
                 throw InstallError.hostNotCovered(host: host, mode: mode, sans: sans)

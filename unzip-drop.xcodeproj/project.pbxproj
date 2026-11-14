@@ -510,7 +510,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirShareDeviceTunnel/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "06•∆B682";
+				INFOPLIST_KEY_CFBundleDisplayName = TetherLess;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -539,7 +539,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirShareDeviceTunnel/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "06•∆B682";
+				INFOPLIST_KEY_CFBundleDisplayName = TetherLess;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -567,7 +567,7 @@
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirShareLiveActivity/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "06•∆B682";
+				INFOPLIST_KEY_CFBundleDisplayName = TetherLess;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -595,7 +595,7 @@
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirShareLiveActivity/Info.plist;
-				INFOPLIST_KEY_CFBundleDisplayName = "06•∆B682";
+				INFOPLIST_KEY_CFBundleDisplayName = TetherLess;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.1;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",

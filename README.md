@@ -1,14 +1,18 @@
+# TetherLess
+
+On-device sideloading — pair, sign, install. No computer required.
+
 ## ADID identity
 
 New installations mint a cryptographically-random `AS-XXXXXX-XX` ADID on first use. The ID is stored in Keychain and is not derived from hardware or display fingerprints.
 
-Administrators can reassign the ADID of their authenticated admin account from Settings → Account. The app calls `account.php` with `action=admin_set_mdid`; the server must atomically update the account ADID and its ADID-based role mapping before returning the canonical ADID. AirShare only changes its local Keychain value after that server response.
+Administrators can reassign the ADID of their authenticated admin account from Settings → Account. The app calls `account.php` with `action=admin_set_mdid`; the server must atomically update the account ADID and its ADID-based role mapping before returning the canonical ADID. TetherLess only changes its local Keychain value after that server response.
 
 See `MDID_IDENTITY.md` for the API contract.
 
 ## Local Analysis Center
 
-The AVX512/AirShare analysis stack is local-first and does not require a remote analysis service. The same annotated `UCFunction` feeds the Disassembler Browser, CFG Viewer, Pseudocode Viewer, and Analysis Center.
+The AVX512/TetherLess analysis stack is local-first and does not require a remote analysis service. The same annotated `UCFunction` feeds the Disassembler Browser, CFG Viewer, Pseudocode Viewer, and Analysis Center.
 
 Analysis Center currently exposes:
 - Overview / local analysis statistics
@@ -28,7 +32,7 @@ yur
 
 ## Native install
 
-AirShare can install signed apps directly on-device (built-in local VPN + device pairing) as an alternative to OTA.
+TetherLess can install signed apps directly on-device (built-in local VPN + device pairing) as an alternative to OTA.
 Settings › Install Method. See `NATIVE_INSTALL.md`.
 
 ## On-device OTA (tetherless.dev)

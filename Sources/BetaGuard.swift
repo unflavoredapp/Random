@@ -95,7 +95,7 @@ struct BetaRevokedOverlay: View {
                         .font(.system(size: 15)).foregroundStyle(Theme.subtle).multilineTextAlignment(.center)
                     if guardState.removing { ProgressView().tint(Theme.accent) }
                     if let e = guardState.removeError {
-                        Text("Couldn't remove it automatically: \(e)\nDelete Decrypt.Team from the Home Screen to finish.")
+                        Text("Couldn't remove it automatically: \(e)\nDelete TetherLess from the Home Screen to finish.")
                             .font(.footnote).foregroundStyle(.orange).multilineTextAlignment(.center)
                         Button("Try again") { Task { await BetaGuard.shared.removeSelf() } }
                             .font(.system(size: 16, weight: .semibold)).foregroundStyle(Theme.accent)

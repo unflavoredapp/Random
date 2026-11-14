@@ -1,6 +1,6 @@
 //
 //  PairHomeView.swift
-//  Tetherless-style Pair tab — wraps DeviceInstallationManager / DevicePairingService.
+//  TetherLess-style Pair tab — wraps DeviceInstallationManager / DevicePairingService.
 //
 
 import SwiftUI
@@ -28,7 +28,7 @@ struct PairHomeView: View {
     }
 
     var body: some View {
-        ScreenScroll(title: "Tetherless") {
+        ScreenScroll(title: "TetherLess") {
             VStack(spacing: 10) {
                 Image(systemName: "iphone")
                     .font(.system(size: 76, weight: .regular))

@@ -1,6 +1,6 @@
 //
 //  DecryptHomeChrome.swift
-//  Lightweight Tetherless-style header for the Decrypt tab (hero + setup card).
+//  Lightweight TetherLess-style header for the Decrypt tab (hero + setup card).
 //  The existing DecryptView search/backend stays underneath.
 //
 

@@ -422,7 +422,7 @@ struct NativeInstallBanner: View {
                     Text("Pairing code \(pin) — enter it in Settings › Developer Mode.")
                         .font(.caption.monospacedDigit())
                 } else {
-                    Text("Open Settings › Privacy & Security › Developer Mode and choose Pair with Decrypt.Team.")
+                    Text("Open Settings › Privacy & Security › Developer Mode and choose Pair with TetherLess.")
                         .font(.caption)
                 }
             } else if installer.stage == .done, !installer.timingSummary.isEmpty {

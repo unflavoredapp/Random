@@ -323,7 +323,7 @@ private struct RepoDetailScreen: View {
         ZStack {
             HStack(spacing: 8) {
                 Image(systemName: "archivebox.fill").foregroundStyle(Theme.accent)
-                Text("UNZIP DROP").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
+                Text("TETHERLESS").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
                 Spacer()
             }
             Text(repo.name).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.subtle)

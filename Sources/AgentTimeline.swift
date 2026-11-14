@@ -300,7 +300,7 @@ struct AgentStepRow: View {
     }
 }
 
-/// "⠿ Decrypt.Team is working…" with a drifting shimmer and live elapsed time.
+/// "⠿ TetherLess is working…" with a drifting shimmer and live elapsed time.
 struct AgentWorkingRow: View {
     let text: String
     var since: Date? = nil
@@ -342,7 +342,7 @@ struct AgentSummary {
         • Size: \(sizeLine)
         • Files signed: \(filesSigned)\(warnings > 0 ? "  • Warnings: \(warnings)" : "")
         • Time: \(AgentStepParser.fmt(duration))
-        • Signed with Decrypt.Team · ADID \(mdid)
+        • Signed with TetherLess · ADID \(mdid)
         """
     }
 }

@@ -1,6 +1,6 @@
 //
 //  FilesHomeView.swift
-//  Tetherless-style Files tab — Signed / Unsigned folders over existing stores.
+//  TetherLess-style Files tab — Signed / Unsigned folders over existing stores.
 //
 
 import SwiftUI

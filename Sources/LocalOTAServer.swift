@@ -266,7 +266,7 @@ nonisolated enum ZefvCert {
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code < 400, !data.isEmpty else {
-            throw CertError.badPack("\(url.host ?? "tetherless.dev") → HTTP \(code). Check the cert source URL in Settings › Decrypt.Team Domain.")
+            throw CertError.badPack("\(url.host ?? "tetherless.dev") → HTTP \(code). Check the cert source URL in Settings › TetherLess Domain.")
         }
         // Feather pack.json embeds PEMs; GitHub-style pack.json only names files.
         if let pack = try? JSONDecoder().decode(VPSPack.self, from: data),
@@ -458,7 +458,7 @@ nonisolated enum ZefvCert {
               <key>PayloadVersion</key><integer>1</integer>
               <key>PayloadIdentifier</key><string>team.decrypt.tetherless.packca.\(payloadUUID)</string>
               <key>PayloadUUID</key><string>\(payloadUUID)</string>
-              <key>PayloadDisplayName</key><string>Decrypt.Team Tetherless OTA Root</string>
+              <key>PayloadDisplayName</key><string>TetherLess OTA Root</string>
               <key>PayloadContent</key>
               <data>\(certB64)</data>
             </dict>
@@ -467,13 +467,13 @@ nonisolated enum ZefvCert {
           <key>PayloadVersion</key><integer>1</integer>
           <key>PayloadIdentifier</key><string>team.decrypt.tetherless.packca.profile.\(profileUUID)</string>
           <key>PayloadUUID</key><string>\(profileUUID)</string>
-          <key>PayloadDisplayName</key><string>Decrypt.Team OTA Trust (tetherless.dev)</string>
+          <key>PayloadDisplayName</key><string>TetherLess OTA Trust (tetherless.dev)</string>
           <key>PayloadDescription</key><string>Trusts the tetherless.dev OTA certificate authority so on-device installs work. After installing, enable Full Trust in Settings › General › About › Certificate Trust Settings.</string>
           <key>PayloadRemovalDisallowed</key><false/>
         </dict>
         </plist>
         """
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("DecryptTeam-Tetherless-OTA-Trust.mobileconfig")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("TetherLess-OTA-Trust.mobileconfig")
         guard let data = xml.data(using: .utf8) else { return nil }
         try? data.write(to: url)
         return url
@@ -617,7 +617,7 @@ nonisolated enum CertSourceLinker {
         if !missing.isEmpty {
             let client = GitHubClient(owner: owner, repo: repo, branch: defaultBranch, token: token)
             do {
-                _ = try await client.push(files: missing, subpath: "", message: forceUpdate ? "Update Decrypt.Team cert pipeline (certbot via Actions)" : "Add Decrypt.Team cert pipeline (certbot via Actions)", progress: { _, _ in })
+                _ = try await client.push(files: missing, subpath: "", message: forceUpdate ? "Update TetherLess cert pipeline (certbot via Actions)" : "Add TetherLess cert pipeline (certbot via Actions)", progress: { _, _ in })
                 rep.installedFiles = missing.map(\.path)
             } catch {
                 throw GitHubError.badConfig("Installing the workflow failed: \(error.localizedDescription) — the token needs Workflows: Read and write to add .github/workflows files.")
@@ -634,7 +634,7 @@ nonisolated enum CertSourceLinker {
                 guard c == 201, let sha = j["sha"] as? String else { throw GitHubError.badConfig("blob failed (\(c))") }
                 return sha
             }
-            let readme = try await blob("# Decrypt.Team certs\n\nPublished by `.github/workflows/certs.yml`: server.crt (fullchain), server.pem (key), pack.json, challenge.json.\n")
+            let readme = try await blob("# TetherLess certs\n\nPublished by `.github/workflows/certs.yml`: server.crt (fullchain), server.pem (key), pack.json, challenge.json.\n")
             let board  = try await blob("{\"records\":[],\"updatedAt\":\"\",\"instructions\":\"Linked. Tap Renew now in the app to issue your first cert.\"}\n")
             let (tc, tj) = try await gh("\(base)/git/trees", token: token, method: "POST", body: ["tree": [
                 ["path": "README.md",      "mode": "100644", "type": "blob", "sha": readme],
@@ -869,7 +869,7 @@ nonisolated final class OTATrace: @unchecked Sendable {
             return "installd never connected. iOS showed the sheet but couldn't reach https://\(ServerConfig.installHost) — usually TLS: the cert isn't trusted by installd (Certificate Trust Settings toggle off), or the host isn't resolving to 127.0.0.1 from installd's resolver."
         }
         if !manifestFetched {
-            return "installd connected but never got the manifest. Check the Decrypt.Team host matches the cert SANs exactly (see Certificate inspector)."
+            return "installd connected but never got the manifest. Check the TetherLess host matches the cert SANs exactly (see Certificate inspector)."
         }
         if !ipaFetched {
             return "Manifest delivered but the IPA was never downloaded. installd rejected the manifest — bundle-identifier / bundle-version mismatch with the IPA, or the display-image PNG failed."

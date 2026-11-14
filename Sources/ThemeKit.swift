@@ -102,7 +102,7 @@ final class AppTheme: ObservableObject {
         particleTouch   = ParticleTouchMode(rawValue: d.string(forKey: "as_p_touch") ?? "") ?? .grab
         accentHex  = Theme.accentHex
         isDark     = Theme.isDark
-        // Plain by default so the purple→teal AppBackground reads cleanly (Tetherless look).
+        // Plain by default so the purple→teal AppBackground reads cleanly (TetherLess look).
         background = ThemeBackground(rawValue: d.string(forKey: Theme.keyBackground) ?? "") ?? .none
     }
     private func bump() { if !cycling { revision &+= 1 } }

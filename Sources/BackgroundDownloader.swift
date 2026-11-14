@@ -495,7 +495,7 @@ nonisolated final class IPADownloader: NSObject, URLSessionDownloadDelegate, @un
             guard UIApplication.shared.applicationState != .active else { return }
             let c = UNMutableNotificationContent()
             c.title = "Downloaded \(name)"
-            c.body = "Ready to sign in Decrypt.Team."
+            c.body = "Ready to sign in TetherLess."
             c.sound = .default
             let req = UNNotificationRequest(identifier: "airshare.download.\(name)", content: c, trigger: nil)
             try? await UNUserNotificationCenter.current().add(req)

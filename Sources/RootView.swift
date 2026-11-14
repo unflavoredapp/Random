@@ -1,6 +1,6 @@
 //
 //  RootView.swift
-//  Tetherless glass shell: Pair · Files · Library · Decrypt · Settings.
+//  TetherLess glass shell: Pair · Files · Library · Decrypt · Settings.
 //  Existing backends (pairing, inbox/signed stores, decrypt API, settings,
 //  SigningSheet, GitHub hub) stay wired underneath.
 //
@@ -243,7 +243,7 @@ struct GitHubHubScreen: View {
             ZStack {
                 HStack(spacing: 8) {
                     Image(systemName: "archivebox.fill").foregroundStyle(Theme.accent)
-                    Text("UNZIP DROP").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
+                    Text("TETHERLESS").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
                     Spacer()
                 }
                 Text("GitHub").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.subtle)

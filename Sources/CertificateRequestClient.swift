@@ -193,7 +193,7 @@ struct CertificateRequestView: View {
                         .textInputAutocapitalization(.characters).autocorrectionDisabled() }
                     label("Why do you need a certificate?")
                     editor($reason)
-                    label("How will this benefit Decrypt.Team?")
+                    label("How will this benefit TetherLess?")
                     editor($benefit)
 
                     if let error = client.error { Text(error).font(.caption).foregroundStyle(.orange) }

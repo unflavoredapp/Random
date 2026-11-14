@@ -119,7 +119,7 @@ struct CertificatesScreen: View {
         .alert("About certificates", isPresented: $showInfo) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Decrypt.Team signs apps with the active certificate. Development and ad-hoc profiles only install on devices listed inside them, so check that this device shows as included.")
+            Text("TetherLess signs apps with the active certificate. Development and ad-hoc profiles only install on devices listed inside them, so check that this device shows as included.")
         }
         .alert("About your request", isPresented: $showStepInfo) {
             Button("OK", role: .cancel) {}
@@ -141,7 +141,7 @@ struct CertificatesScreen: View {
         .alert("Provided by your admin", isPresented: $showLockedInfo) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("This certificate was attached to your account by Decrypt.Team staff. You can sign with it, but it can't be exported, removed, or included in a local backup on any device.")
+            Text("This certificate was attached to your account by TetherLess staff. You can sign with it, but it can't be exported, removed, or included in a local backup on any device.")
         }
     }
 

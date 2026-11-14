@@ -53,11 +53,11 @@ enum TutorialLibrary {
                 body: "Create an empty repo on github.com (private is fine). Settings › Repository: owner + repo + branch. That's where zips you drop get pushed and where the Build tab watches runs."),
             TutorialStep(
                 title: "Link the certs folder (one tap)",
-                body: "Settings › Decrypt.Team Domain › Cert repo: same owner/repo (or a separate one), your Let's Encrypt email, tap Link repo. First link-up installs the certbot workflow into the repo and creates the `certs` folder (a branch) automatically. Nothing to create by hand.",
+                body: "Settings › TetherLess Domain › Cert repo: same owner/repo (or a separate one), your Let's Encrypt email, tap Link repo. First link-up installs the certbot workflow into the repo and creates the `certs` folder (a branch) automatically. Nothing to create by hand.",
                 tip: "Linking is idempotent — tap it again any time; it only adds what's missing."),
             TutorialStep(
                 title: "Point your domain (optional)",
-                body: "Skip this to use tetherless.dev (*.tetherless.dev → 127.0.0.1; apex hosts the pack). For your own domain: at your DNS host add an A record `*` → 127.0.0.1. Then Settings › Decrypt.Team Domain: type the domain, tap Check — it should say → 127.0.0.1 ✓. Save."),
+                body: "Skip this to use tetherless.dev (*.tetherless.dev → 127.0.0.1; apex hosts the pack). For your own domain: at your DNS host add an A record `*` → 127.0.0.1. Then Settings › TetherLess Domain: type the domain, tap Check — it should say → 127.0.0.1 ✓. Save."),
             TutorialStep(
                 title: "Issue the cert",
                 body: "Tap Renew now. Within a minute the DNS challenge card shows a TXT name and value — add it at your DNS host, the workflow notices and continues; a second value follows for the apex, add it too (keep both). When it finishes, Pull latest. Done — installs now go over https://mr.<your domain>."),
@@ -80,10 +80,10 @@ enum TutorialLibrary {
                 tip: "This DNS step is separate from trust. If the host doesn't resolve to 127.0.0.1, iOS silently never shows the install sheet."),
             TutorialStep(
                 title: "Switch to Fully local",
-                body: "Settings › Decrypt.Team Domain › Certificate mode › Fully local. The Active cert card shows exactly which cert is live and whether it matches your host."),
+                body: "Settings › TetherLess Domain › Certificate mode › Fully local. The Active cert card shows exactly which cert is live and whether it matches your host."),
             TutorialStep(
                 title: "Create the CA and issue a leaf",
-                body: "Settings › Decrypt.Team Domain › Open local CA settings › enter the host › Create CA & issue leaf. Tap Check to confirm the host resolves to 127.0.0.1."),
+                body: "Settings › TetherLess Domain › Open local CA settings › enter the host › Create CA & issue leaf. Tap Check to confirm the host resolves to 127.0.0.1."),
             TutorialStep(
                 title: "Inspect, then install the trust profile",
                 body: "Tap View profile contents first — it's plain XML with one payload: your root cert. Then Install profile → Settings walks you through it. Finally: Settings › General › About › Certificate Trust Settings › toggle ᴍƦᴢᴇꜰΛ Local Root CA on.",
@@ -99,7 +99,7 @@ enum TutorialLibrary {
 
     // 0b. Certs in depth
     static let certs = Tutorial(
-        id: "certs", icon: "lock.shield.fill", title: "How the Decrypt.Team cert works",
+        id: "certs", icon: "lock.shield.fill", title: "How the TetherLess cert works",
         subtitle: "Loopback domain + Let's Encrypt wildcard, issued by Actions", minutes: 6,
         steps: [
             TutorialStep(
@@ -126,30 +126,30 @@ enum TutorialLibrary {
     // 0c. Signing certificates — what the Certificates screen manages (opened from its Help and Support button)
     static let signingCerts = Tutorial(
         id: "signing-certs", icon: "checkmark.seal.fill", title: "Your signing certificates",
-        subtitle: "Get, import and manage the certificate Decrypt.Team signs apps with", minutes: 4,
+        subtitle: "Get, import and manage the certificate TetherLess signs apps with", minutes: 4,
         steps: [
             TutorialStep(
                 title: "What a certificate is",
-                body: "A signing certificate is two files plus a password: the .p12 (your signing identity), the .mobileprovision (the profile that says which devices may run what you sign) and the .p12's password. Decrypt.Team signs every app with the certificate marked ACTIVE on this screen."),
+                body: "A signing certificate is two files plus a password: the .p12 (your signing identity), the .mobileprovision (the profile that says which devices may run what you sign) and the .p12's password. TetherLess signs every app with the certificate marked ACTIVE on this screen."),
             TutorialStep(
                 title: "Get one",
-                body: "With no certificate yet you get two options. Request a Certificate asks Decrypt.Team staff for one for this device; requests are reviewed by hand, and when yours is approved it appears here by itself, so you don't need to keep the screen open. Add Certificate imports a certificate you already have.",
+                body: "With no certificate yet you get two options. Request a Certificate asks TetherLess staff for one for this device; requests are reviewed by hand, and when yours is approved it appears here by itself, so you don't need to keep the screen open. Add Certificate imports a certificate you already have.",
                 tip: "You can cancel a pending request from the Activation process card."),
             TutorialStep(
                 title: "Import your own",
-                body: "In Add Certificate, pick the .p12 and the .mobileprovision together, or a single .zip that contains both. A .txt file in the zip is read as the password (a leading \"password:\" label is fine). Pick exactly one of each; if there are two .p12 files or two profiles, Decrypt.Team asks you to choose just one.",
+                body: "In Add Certificate, pick the .p12 and the .mobileprovision together, or a single .zip that contains both. A .txt file in the zip is read as the password (a leading \"password:\" label is fine). Pick exactly one of each; if there are two .p12 files or two profiles, TetherLess asks you to choose just one.",
                 code: "MyCert.zip\n├── MyCert.p12\n├── MyCert.mobileprovision\n└── password.txt",
-                codeTitle: "A .zip Decrypt.Team can import in one go"),
+                codeTitle: "A .zip TetherLess can import in one go"),
             TutorialStep(
                 title: "Make sure it covers this phone",
-                body: "Development and ad-hoc profiles only install on devices listed inside them. Set your UDID on the device card at the top and every certificate shows whether its profile includes this phone. Decrypt.Team fills the UDID in for you when the certificate is named after it, or when the profile lists exactly one device.",
+                body: "Development and ad-hoc profiles only install on devices listed inside them. Set your UDID on the device card at the top and every certificate shows whether its profile includes this phone. TetherLess fills the UDID in for you when the certificate is named after it, or when the profile lists exactly one device.",
                 tip: "\"Unable to Install\" almost always means this phone's UDID isn't in the profile."),
             TutorialStep(
                 title: "Use, Export, Remove",
-                body: "Use makes a certificate the active one. Export, on the active certificate, saves it as a .zip (.p12, profile and password.txt) that you can import on another device. Remove deletes it from Decrypt.Team; apps you already signed with it keep working until its profile expires."),
+                body: "Use makes a certificate the active one. Export, on the active certificate, saves it as a .zip (.p12, profile and password.txt) that you can import on another device. Remove deletes it from TetherLess; apps you already signed with it keep working until its profile expires."),
             TutorialStep(
                 title: "Certificates provided by your admin",
-                body: "A certificate attached to your account by Decrypt.Team staff shows a lock and PROVIDED BY ADMIN · CAN'T EXPORT. You can sign with it like any other, but it can't be exported, removed or included in a backup on any device. Tap Can't export to see why."),
+                body: "A certificate attached to your account by TetherLess staff shows a lock and PROVIDED BY ADMIN · CAN'T EXPORT. You can sign with it like any other, but it can't be exported, removed or included in a backup on any device. Tap Can't export to see why."),
             TutorialStep(
                 title: "Watch the expiry date",
                 body: "Each certificate shows when its profile expires and how many days are left. Once it expires, apps signed with it stop opening; add or request a new certificate and sign them again.",
@@ -167,7 +167,7 @@ enum TutorialLibrary {
                 tip: "If every app fails, it's the certificate or the profile. If only one app fails, it's that app's entitlements or extensions."),
             TutorialStep(
                 title: "1 \u{00B7} This phone isn't in the profile",
-                body: "Development and ad-hoc profiles only install on devices whose UDID is listed inside them. On the Certificates screen, set your UDID once; each certificate then shows whether its profile includes this phone. If it doesn't, no setting in Decrypt.Team can fix it: use a certificate whose profile includes this phone, or have the UDID added and get a new profile.",
+                body: "Development and ad-hoc profiles only install on devices whose UDID is listed inside them. On the Certificates screen, set your UDID once; each certificate then shows whether its profile includes this phone. If it doesn't, no setting in TetherLess can fix it: use a certificate whose profile includes this phone, or have the UDID added and get a new profile.",
                 tip: "This is the cause most of the time."),
             TutorialStep(
                 title: "2 \u{00B7} The certificate was revoked",
@@ -189,7 +189,7 @@ enum TutorialLibrary {
                 tip: "Randomize bundle ID gives the copy separate data, so it won't see the original's logins or files."),
             TutorialStep(
                 title: "7 \u{00B7} The app doesn't support this phone or iOS version",
-                body: "Some IPAs limit which device models may install them; Decrypt.Team removes that limit automatically every time it signs. If the message says the app needs a newer iOS, Force min iOS 12.0 in the sign sheet lowers the requirement, but an app that really uses newer iOS features can still crash on launch.",
+                body: "Some IPAs limit which device models may install them; TetherLess removes that limit automatically every time it signs. If the message says the app needs a newer iOS, Force min iOS 12.0 in the sign sheet lowers the requirement, but an app that really uses newer iOS features can still crash on launch.",
                 tip: "Still failing after all of this? Download the IPA again. A partly downloaded file fails the same integrity check."),
         ])
 
@@ -212,7 +212,7 @@ enum TutorialLibrary {
                 tip: "Free Apple ID certificates last only 7 days and allow 3 sideloaded apps at once."),
             TutorialStep(
                 title: "Crashes the instant it opens",
-                body: "Apps taken straight from the App Store are encrypted (FairPlay) and can only run with Apple's own signature. Decrypt.Team checks this when you sign: if the sign sheet says FairPlay ENCRYPTED, the app will crash after re-signing. Get a decrypted copy from the Decrypt tab, then sign that.",
+                body: "Apps taken straight from the App Store are encrypted (FairPlay) and can only run with Apple's own signature. TetherLess checks this when you sign: if the sign sheet says FairPlay ENCRYPTED, the app will crash after re-signing. Get a decrypted copy from the Decrypt tab, then sign that.",
                 tip: "Check the encryption line in the sign sheet before signing any IPA whose source you don't know."),
             TutorialStep(
                 title: "Crashes after injecting a tweak",
@@ -230,7 +230,7 @@ enum TutorialLibrary {
         steps: [
             TutorialStep(
                 title: "Why we recommend iOS 27",
-                body: "On iOS 27 Decrypt.Team can pair with your iPhone and install apps directly over a private VPN that runs only on the phone. Nothing goes through a website, there's no install link or \u{201C}Would like to install\u{201D} prompt, and installs keep going in the background. On older iOS versions Decrypt.Team can only use the classic install-link method (OTA). Native installs need iOS 27 because that's where pairing can be created on the phone itself.",
+                body: "On iOS 27 TetherLess can pair with your iPhone and install apps directly over a private VPN that runs only on the phone. Nothing goes through a website, there's no install link or \u{201C}Would like to install\u{201D} prompt, and installs keep going in the background. On older iOS versions TetherLess can only use the classic install-link method (OTA). Native installs need iOS 27 because that's where pairing can be created on the phone itself.",
                 tip: "Everything you already have keeps working after you update; your certificates and signed apps stay where they are."),
             TutorialStep(
                 title: "1 \u{00B7} Update to iOS 27",
@@ -241,21 +241,21 @@ enum TutorialLibrary {
                 tip: "If Developer Mode is ever turned off or reset, pair again (step 5)."),
             TutorialStep(
                 title: "3 \u{00B7} Allow Local Network and connect to Wi-Fi",
-                body: "Decrypt.Team finds the phone's pairing service over the local network. When iOS asks whether Decrypt.Team may find devices on your local network, tap Allow. If you said no earlier, turn it back on in Settings \u{203A} Privacy & Security \u{203A} Local Network \u{203A} Decrypt.Team. Stay on Wi-Fi during setup."),
+                body: "TetherLess finds the phone's pairing service over the local network. When iOS asks whether TetherLess may find devices on your local network, tap Allow. If you said no earlier, turn it back on in Settings \u{203A} Privacy & Security \u{203A} Local Network \u{203A} TetherLess. Stay on Wi-Fi during setup."),
             TutorialStep(
                 title: "4 \u{00B7} Run Setup",
-                body: "In Decrypt.Team, open Settings \u{203A} Install Method to get to the Connection Controller, then tap Setup. When iOS asks to add a VPN configuration, tap Allow. This VPN never leaves the phone; it's the private road installs travel on.",
-                tip: "iOS runs one VPN at a time, so this can turn off another VPN while Decrypt.Team is installing."),
+                body: "In TetherLess, open Settings \u{203A} Install Method to get to the Connection Controller, then tap Setup. When iOS asks to add a VPN configuration, tap Allow. This VPN never leaves the phone; it's the private road installs travel on.",
+                tip: "iOS runs one VPN at a time, so this can turn off another VPN while TetherLess is installing."),
             TutorialStep(
                 title: "5 \u{00B7} Enter the pairing code",
-                body: "Decrypt.Team shows a pairing code. Go to Settings \u{203A} Privacy & Security \u{203A} Developer Mode \u{203A} Pair with Decrypt.Team and type it in. Back in Decrypt.Team, the Pairing, VPN, Tunnel and Device lights turn green and it says Connected."),
+                body: "TetherLess shows a pairing code. Go to Settings \u{203A} Privacy & Security \u{203A} Developer Mode \u{203A} Pair with TetherLess and type it in. Back in TetherLess, the Pairing, VPN, Tunnel and Device lights turn green and it says Connected."),
             TutorialStep(
                 title: "6 \u{00B7} Switch to Native",
-                body: "In the Connection Controller, set Install method to Native. From now on, Install sends apps straight to the phone. Decrypt.Team reconnects by itself before each install, so you don't need to open this screen again.",
-                tip: "If setup can't create the VPN, your copy of Decrypt.Team wasn't signed with VPN permission. Reinstall the official Decrypt.Team build."),
+                body: "In the Connection Controller, set Install method to Native. From now on, Install sends apps straight to the phone. TetherLess reconnects by itself before each install, so you don't need to open this screen again.",
+                tip: "If setup can't create the VPN, your copy of TetherLess wasn't signed with VPN permission. Reinstall the official TetherLess build."),
             TutorialStep(
                 title: "What you get",
-                body: "\u{2022} No install link, no domain and no HTTPS certificate: apps go straight onto the phone.\n\u{2022} Installs finish in the background, with progress in a notification, so you can leave Decrypt.Team.\n\u{2022} Automatic app updates, optionally only on Wi-Fi or while charging, with Skip and Roll back if an update misbehaves.\n\u{2022} Batch installs and app sets: pick several signed apps and install them in one go.\n\u{2022} Uninstall apps from the phone right inside Decrypt.Team.\n\u{2022} The install queue (download, sign and install) runs hands-free, because no install prompt has to be tapped.\n\u{2022} Restore VPN reconnects in one tap, or from a Shortcut, if the connection drops."),
+                body: "\u{2022} No install link, no domain and no HTTPS certificate: apps go straight onto the phone.\n\u{2022} Installs finish in the background, with progress in a notification, so you can leave TetherLess.\n\u{2022} Automatic app updates, optionally only on Wi-Fi or while charging, with Skip and Roll back if an update misbehaves.\n\u{2022} Batch installs and app sets: pick several signed apps and install them in one go.\n\u{2022} Uninstall apps from the phone right inside TetherLess.\n\u{2022} The install queue (download, sign and install) runs hands-free, because no install prompt has to be tapped.\n\u{2022} Restore VPN reconnects in one tap, or from a Shortcut, if the connection drops."),
             TutorialStep(
                 title: "Can't update yet?",
                 body: "Keep using OTA, the classic install-link method; it works on older iOS versions. Advanced users can also choose the Manual connection in the Connection Controller, which uses a pairing file made on a computer plus their own local VPN.",
@@ -278,7 +278,7 @@ enum TutorialLibrary {
                 tip: "Keep one FLEX.dylib in Files. You'll inject it into every app you want to explore."),
             TutorialStep(
                 title: "Inject FLEX into the target IPA",
-                body: "In Decrypt.Team, open the IPA › Sign › Extra dylibs › add FLEX.dylib. Decrypt.Team copies it into the app bundle, adds an LC_LOAD_DYLIB to the main binary, signs everything with your cert and installs. No jailbreak needed — the app now loads FLEX at launch.",
+                body: "In TetherLess, open the IPA › Sign › Extra dylibs › add FLEX.dylib. TetherLess copies it into the app bundle, adds an LC_LOAD_DYLIB to the main binary, signs everything with your cert and installs. No jailbreak needed — the app now loads FLEX at launch.",
                 tip: "Same flow you'll use later for your own dylib. FLEX first, your tweak second."),
             TutorialStep(
                 title: "Open the explorer",
@@ -344,11 +344,11 @@ enum TutorialLibrary {
     // 3. Build + inject pipeline
     static let pipeline = Tutorial(
         id: "pipeline", icon: "arrow.triangle.branch", title: "Build & inject from your phone",
-        subtitle: "Template → Push → Build tab → Decrypt.Team", minutes: 6,
+        subtitle: "Template → Push → Build tab → TetherLess", minutes: 6,
         steps: [
             TutorialStep(
                 title: "Generate the dylib template",
-                body: "Settings › Templates › Dylib. Name it, paste the target bundle id (FLEX › Info shows it, or Decrypt.Team's IPA info), Generate. The workspace now holds Makefile, Tweak.xm, filter plist, control and a build.yml."),
+                body: "Settings › Templates › Dylib. Name it, paste the target bundle id (FLEX › Info shows it, or TetherLess's IPA info), Generate. The workspace now holds Makefile, Tweak.xm, filter plist, control and a build.yml."),
             TutorialStep(
                 title: "Push it",
                 body: "Create an empty repo on github.com, set it in Settings › Repository, then Push. Your token needs Contents + Workflows: Read and write (the template contains .github/workflows)."),
@@ -360,7 +360,7 @@ enum TutorialLibrary {
                 body: "When the run completes, the artifacts list shows the build output. IPA artifacts jump straight into the Sign tab; a dylib artifact opens the share sheet — Save to Files, then add it as an extra dylib when signing."),
             TutorialStep(
                 title: "Sign & install",
-                body: "Sign tab › pick the target IPA › Sign with your cert › Install. The install runs over the on-device loopback Decrypt.Team server, same as Decrypt.Team. For dylib injection keep using Decrypt.Team's extra-dylibs step (keep FLEX in while iterating). Console / FLEX › System Log shows your [Tweak] loaded line first.",
+                body: "Sign tab › pick the target IPA › Sign with your cert › Install. The install runs over the on-device loopback TetherLess server, same as TetherLess. For dylib injection keep using TetherLess's extra-dylibs step (keep FLEX in while iterating). Console / FLEX › System Log shows your [Tweak] loaded line first.",
                 tip: "Iterate: edit Tweak.xm in Contents → Push → Build → re-sign. Whole loop runs from the phone."),
             TutorialStep(
                 title: "Ship",
@@ -383,7 +383,7 @@ struct TutorialsListScreen: View {
                 ZStack {
                     HStack(spacing: 8) {
                         Image(systemName: "archivebox.fill").foregroundStyle(Theme.accent)
-                        Text("UNZIP DROP").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
+                        Text("TETHERLESS").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
                         Spacer()
                     }
                     Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.subtle)
@@ -454,7 +454,7 @@ struct TutorialScreen: View {
             ZStack {
                 HStack(spacing: 8) {
                     Image(systemName: "archivebox.fill").foregroundStyle(Theme.accent)
-                    Text("UNZIP DROP").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
+                    Text("TETHERLESS").font(.system(size: 15, weight: .heavy, design: .rounded)).kerning(1).foregroundStyle(Theme.text)
                     Spacer()
                 }
                 Text("Tutorial").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.subtle)
