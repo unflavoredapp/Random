@@ -33,7 +33,7 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 - **Keep apps alive** — resign in one tap, Refresh All at once, or automate it with a Shortcut so your apps (and TetherLess itself) never expire — even while your iPhone is locked.
 - **Built-in Files** — manage IPAs, tweaks, and downloads without leaving the app.
 - **Custom certificate mode** — bring your own paid certificate to install over the air, with no pairing or VPN.
-- **Manage your Apple ID** — view your signing certificates, App IDs, and devices, and revoke a certificate to free a slot — right in the app, no Apple Developer portal needed.
+- **Manage your Apple ID** — view your signing certificates, App IDs, and devices from Apple’s Developer services, and revoke a certificate to free a free-tier slot — in the app.
 
 | Area | What you get |
 | --- | --- |

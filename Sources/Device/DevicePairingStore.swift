@@ -27,6 +27,10 @@ nonisolated struct DevicePairingRecord: Codable {
 }
 
 nonisolated enum DevicePairingStore {
+    static var hasSavedPairing: Bool {
+        (try? load()) != nil
+    }
+
     private static var query: [String: Any] {
         [kSecClass as String: kSecClassGenericPassword,
          kSecAttrService as String: (Bundle.main.bundleIdentifier ?? "AirShare") + ".device-pairing",

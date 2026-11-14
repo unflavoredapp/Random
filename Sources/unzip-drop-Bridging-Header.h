@@ -7,6 +7,8 @@
 
 #import "zsign/zsign.hpp"
 #import "LocalCA.h"
+#import "FairPlay/fpcore.h"
+#import "AppleServices/PKCS12Builder.h"
 
 #import "Disassembler/UCDisassembler.h"
 #import "Disassembler/UCDisasmViewController.h"

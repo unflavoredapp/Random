@@ -53,6 +53,9 @@ enum AppStoreDecryptGuide {
         UIApplication.shared.open(url)
     }
 
-    static let failureHint =
-        "If decrypt failed right after the download, this Apple ID may never have signed in to the App Store on this iPhone. Sign in once in the App Store (or Settings → your name → Media & Purchases), then try again. That one-time step stores the decryption keys on the device."
+    nonisolated static var failureHint: String {
+        let email = UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache") ?? ""
+        let who = email.isEmpty ? "this Apple ID" : email
+        return "If decrypt failed right after the download, \(who) may never have signed in to the App Store on this iPhone. Sign in once in the App Store (or Settings → your name → Media & Purchases) with that account, then try again. That one-time step stores the decryption keys on the device."
+    }
 }

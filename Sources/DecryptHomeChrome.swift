@@ -189,10 +189,21 @@ struct DecryptDeviceAppsSection: View {
                         .foregroundStyle(.white.opacity(0.55))
                 }
 
-                if drm.isEmpty && !device.loading {
-                    Text(NativeInstaller.isSelected
-                          ? "No App Store apps listed yet. Tap refresh after pairing."
-                          : "Set Install method to Native in Settings to list apps on this device.")
+                if !NativeInstaller.isSelected {
+                    Text("Set Install method to Native in Settings, then pair this iPhone — Decrypt lists App Store apps from the device connection.")
+                        .font(.footnote)
+                        .foregroundStyle(.orange.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if !(DevicePairingStore.hasSavedPairing) {
+                    Text("Pair this iPhone on the Pair tab first. On-device decrypt needs the Native connection.")
+                        .font(.footnote)
+                        .foregroundStyle(.orange.opacity(0.9))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Open Pair") { AppNav.shared.go(AppTab.pair.rawValue) }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                } else if drm.isEmpty && !device.loading {
+                    Text("No App Store apps listed yet. Tap refresh after pairing completes.")
                         .font(.footnote)
                         .foregroundStyle(.white.opacity(0.45))
                 }
@@ -221,7 +232,7 @@ struct DecryptDeviceAppsSection: View {
                                 .background(TetherlessPalette.accent, in: Capsule())
                         }
                         .buttonStyle(.plain)
-                        .disabled(decrypting.busy || DecryptClient.shared.busy)
+                        .disabled(decrypting.busy || DecryptClient.shared.busy || !NativeInstaller.isSelected || !(DevicePairingStore.hasSavedPairing))
                     }
                     .padding(.vertical, 4)
                 }
@@ -333,6 +344,11 @@ struct DecryptAppStoreSignInHint: View {
                     .foregroundStyle(.white.opacity(0.45))
                     .fixedSize(horizontal: false, vertical: true)
 
+                if !email.isEmpty {
+                    Text("Active Store account: \(email)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent.opacity(0.9))
+                }
                 actionButtons(showAck: !email.isEmpty)
             }
         }
@@ -340,6 +356,11 @@ struct DecryptAppStoreSignInHint: View {
 
     private var compactBody: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if !email.isEmpty {
+                Text("Active Store account: \(email)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent.opacity(0.9))
+            }
             Text(AppStoreDecryptGuide.failureHint)
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.65))
