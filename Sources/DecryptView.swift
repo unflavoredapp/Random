@@ -305,90 +305,116 @@ private extension Int {
 struct DecryptView: View {
     @ObservedObject private var liveTheme = AppTheme.shared   // re-read accent live (auto-cycle) without rebuilding
     @ObservedObject private var c = DecryptClient.shared
+    @AppStorage("AirShare.decryptOneTimeSetupDone") private var setupDone = false
     @State private var query = ""
     @State private var versionsOpen = false
-    @State private var showSearch = false
+    @State private var showSearch = true
+    @State private var setupRunning = false
+    @State private var setupSubtitle = "Decrypting device compatibility files…"
     @FocusState private var searchFocused: Bool
+
+    private var showingSetupGate: Bool { !setupDone || setupRunning }
+    private var showingBrowseIdle: Bool {
+        setupDone && !setupRunning && c.results.isEmpty && c.selected == nil && c.phase == .idle && query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2
+    }
 
     var body: some View {
         ZStack {
-            Theme.bg.ignoresSafeArea().task { await c.refreshQuota() }
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 12) {
-                    if showSearch {
-                        HStack(spacing: 8) {
-                            Image(systemName: "magnifyingglass").foregroundStyle(Theme.subtle)
-                            TextField("Search the App Store or paste a link", text: $query)
-                                .autocorrectionDisabled().textInputAutocapitalization(.never).foregroundStyle(Theme.text)
-                                .focused($searchFocused).submitLabel(.search)
-                                .onSubmit { Task { await c.search(query) }; closeSearch() }
-                        }
-                        .padding(.horizontal, 14).padding(.vertical, 11)
-                        .background(Color.white.opacity(0.06)).clipShape(Capsule())
-                        .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-                    if c.searching {
-                        HStack { Spacer(); ProgressView().tint(Theme.accent); Spacer() }.padding(.vertical, 6)
-                    }
-                    if let q = c.quota {
-                        HStack(spacing: 6) {
-                            Image(systemName: q.unlimited ? "infinity" : "lock.open.fill").font(.system(size: 11))
-                            Text(q.summary).font(.system(size: 12, weight: .semibold))
-                            if q.tier == "guest" { Text("\u{00B7} sign in for more").font(.system(size: 12)).foregroundStyle(Theme.subtle) }
-                        }
-                        .foregroundStyle(q.exhausted ? Color.orange : Theme.subtle)
-                        .frame(maxWidth: .infinity)
-                    }
-                    if let err = c.error, c.phase != .failed {
-                        Card { Text(err).font(.caption).foregroundStyle(.orange) }
-                    }
-                    if !c.results.isEmpty { resultsCard }
-                    if let app = c.selected { selectedCard(app) }
-                    if c.phase != .idle { jobCard }
-                    if c.results.isEmpty && c.selected == nil && c.phase == .idle { emptyCard }
-                    if !c.history.isEmpty { historyCard }
-                }
-                .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 24)
+            Theme.bg.ignoresSafeArea().task {
+                await c.refreshQuota()
+                if setupDone { await c.loadHistory() }
             }
-            .safeAreaInset(edge: .top, spacing: 0) {
-                TabTitleBar(title: "Decrypt", custom: AnyView(botTitle)) {
-                    HStack(spacing: 14) {
-                        Button { openSearch() } label: {
-                            Image(systemName: "magnifyingglass").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.accent)
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 16) {
+                    if showingSetupGate {
+                        DecryptHeroBlock()
+                        if setupRunning {
+                            DecryptSetupCard(phase: .running(subtitle: setupSubtitle))
+                        } else {
+                            DecryptSetupCard(phase: .needed, onBegin: beginSetup)
                         }
-                        .buttonStyle(.plain).disabled(c.busy).opacity(c.busy ? 0.4 : 1)
-                        Image(systemName: "lock.fill").font(.system(size: 18, weight: .semibold)).foregroundStyle(Theme.accent)
+                    } else {
+                        if showingBrowseIdle { DecryptHeroBlock() }
+
+                        if showSearch {
+                            HStack(spacing: 8) {
+                                Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.55))
+                                TextField("Search the App Store or paste a link", text: $query)
+                                    .autocorrectionDisabled().textInputAutocapitalization(.never).foregroundStyle(.white)
+                                    .focused($searchFocused).submitLabel(.search)
+                                    .onSubmit { Task { await c.search(query) } }
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 13)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
+                        }
+
+                        if c.searching {
+                            HStack { Spacer(); ProgressView().tint(TetherlessPalette.accent); Spacer() }.padding(.vertical, 6)
+                        }
+                        if let q = c.quota {
+                            HStack(spacing: 6) {
+                                Image(systemName: q.unlimited ? "infinity" : "lock.open.fill").font(.system(size: 11))
+                                Text(q.summary).font(.system(size: 12, weight: .semibold))
+                                if q.tier == "guest" { Text("\u{00B7} sign in for more").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)) }
+                            }
+                            .foregroundStyle(q.exhausted ? Color.orange : .white.opacity(0.55))
+                            .frame(maxWidth: .infinity)
+                        }
+                        if let err = c.error, c.phase != .failed {
+                            GlassCard { Text(err).font(.caption).foregroundStyle(.orange) }
+                        }
+                        if !c.results.isEmpty { resultsCard }
+                        if let app = c.selected { selectedCard(app) }
+                        if c.phase != .idle { jobCard }
+                        if !c.history.isEmpty { historyCard }
                     }
                 }
+                .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 120)
             }
         }
         .task(id: query) {
+            guard setupDone, !setupRunning else { return }
             try? await Task.sleep(nanoseconds: 450_000_000)
             if Task.isCancelled { return }
             await c.search(query)
         }
-        .task { await c.loadHistory() }
         .onAppear { consumePendingQuery() }
         .onChange(of: c.pendingQuery) { _ in consumePendingQuery() }
+    }
+
+    private func beginSetup() {
+        guard !setupRunning else { return }
+        setupRunning = true
+        setupSubtitle = "Decrypting device compatibility files…"
+        Task {
+            await c.refreshQuota()
+            try? await Task.sleep(nanoseconds: 900_000_000)
+            if Task.isCancelled { return }
+            setupSubtitle = "Finishing local decrypt setup…"
+            await c.loadHistory()
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            if Task.isCancelled { return }
+            withAnimation(.snappy(duration: 0.3)) {
+                setupDone = true
+                setupRunning = false
+                showSearch = true
+            }
+        }
     }
 
     /// An app sent over from the Library: show its name in the search box (the debounced search then runs by itself).
     private func consumePendingQuery() {
         guard let name = c.pendingQuery else { return }
         c.pendingQuery = nil
+        if !setupDone {
+            // Finish the gate first so Library deep-links can search immediately after.
+            setupDone = true
+        }
         if !c.busy { c.clearSelection() }
         query = name
         withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { showSearch = true }
-    }
-
-    private func openSearch() {
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { showSearch = true }
         searchFocused = true
-    }
-
-    private func closeSearch() {
-        searchFocused = false
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { showSearch = false }
     }
 
     /// Percent parsed from the server message ("... 6%"), nil when none is reported.
@@ -400,50 +426,14 @@ struct DecryptView: View {
         return Swift.min(Swift.max(v, 0), 100) / 100
     }
 
-    /// Title: bot icon in a square + "FastDecryptBot". Tapping opens the bot in Telegram.
-    private var botTitle: some View {
-        Button {
-            if let u = URL(string: "https://t.me/FastDecryptBot") { UIApplication.shared.open(u) }
-        } label: {
-            HStack(spacing: 8) {
-                Group {
-                    if UIImage(named: "fastdecrypt_logo") != nil {
-                        Image("fastdecrypt_logo").resizable().scaledToFill()
-                    } else {
-                        ZStack { Color(red: 0.55, green: 0.08, blue: 0.08); Image(systemName: "lock.open.fill").foregroundStyle(.white) }
-                    }
-                }
-                .frame(width: 28, height: 28)
-                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                Text("FastDecryptBot").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text)
-                    .lineLimit(1).minimumScaleFactor(0.7)
-            }
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Open FastDecryptBot in Telegram")
-    }
-
     // MARK: Cards
 
-    private var emptyCard: some View {
-        Card {
-            HStack(spacing: 12) {
-                Image(systemName: "lock.open.fill").font(.system(size: 22)).foregroundStyle(Theme.accent).frame(width: 30)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Decrypt any App Store app").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-                    Text("Search above or paste an apps.apple.com link. The decrypted IPA lands in your Library, ready to sign.")
-                        .font(.system(size: 12)).foregroundStyle(Theme.subtle)
-                }
-            }
-        }
-    }
 
     private var resultsCard: some View {
         Card {
             VStack(spacing: 0) {
                 ForEach(Array(c.results.enumerated()), id: \.element.id) { idx, app in
-                    Button { c.select(app); query = ""; closeSearch(); versionsOpen = false } label: {
+                    Button { c.select(app); query = ""; searchFocused = false; versionsOpen = false } label: {
                         appRow(icon: app.icon, title: app.name, subtitle: [app.dev, app.version.isEmpty ? "" : "v\(app.version)"].filter { !$0.isEmpty }.joined(separator: " · "), trailing: "chevron.right")
                     }
                     .buttonStyle(.plain)

@@ -8,6 +8,7 @@ import SwiftUI
 struct PairHomeView: View {
     @ObservedObject private var manager = DeviceInstallationManager.shared
     @ObservedObject private var installer = NativeInstaller.shared
+    @ObservedObject private var pairing = DevicePairingService.shared
 
     @State private var confirmReset = false
 
@@ -21,7 +22,11 @@ struct PairHomeView: View {
         switch manager.phase {
         case .idle: return "Tap Start Pairing below, then on this iPhone go to Settings → Privacy & Security → Developer Mode."
         case .connecting: return "Starting the local VPN tunnel…"
-        case .pairing: return "Enter the pairing code under Settings → Privacy & Security → Developer Mode."
+        case .pairing:
+            if pairing.pin != nil {
+                return "Enter this code under Settings → Privacy & Security → Developer Mode → Pair with TetherLess."
+            }
+            return "Open Settings → Privacy & Security → Developer Mode and choose Pair with TetherLess…"
         case .ready, .configured: return "Native install connection is ready."
         case .failed(let msg): return msg
         }
@@ -45,6 +50,19 @@ struct PairHomeView: View {
                     StatusRow(kind: .ok, title: "Paired", subtitle: phaseSubtitle)
                 } else if case .failed = manager.phase {
                     StatusRow(kind: .warning, title: "Pairing failed", subtitle: phaseSubtitle)
+                } else if manager.phase == .pairing, let pin = pairing.pin {
+                    VStack(alignment: .leading, spacing: 14) {
+                        StatusRow(kind: .busy, title: "Pairing…", subtitle: "Enter this code in Settings")
+                        Text(pin)
+                            .font(.system(size: 44, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 4)
+                            .accessibilityLabel("Pairing code \(pin)")
+                        Text(phaseSubtitle)
+                            .font(.callout)
+                            .foregroundStyle(.white.opacity(0.65))
+                    }
                 } else if busy {
                     StatusRow(kind: .busy, title: "Pairing…", subtitle: phaseSubtitle)
                 } else {
