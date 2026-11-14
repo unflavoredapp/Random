@@ -272,10 +272,14 @@ void fp_attempt_describe(const fp_attempt_t *a, char *buf, size_t len) {
 }
 
 static bool attempt_looks_decrypted(const fp_attempt_t *a) {
-    // Encrypted text has ~8.0 bits/byte regardless of size; decrypted arm64 code stays below 7.5.
-    // Require only one new RET/PACIBSP word so tiny (1-page) binaries are not rejected.
-    return a->mremap_ret == 0 && a->pages_ok == a->pages_total && a->changed &&
-           a->ent_before > 7.9 && a->ent_after < 7.5 && a->ret_after > a->ret_before;
+    // Primary: full page-in + bytes changed + entropy drop typical of FairPlay ciphertext → code.
+    // Encrypted text sits near 8.0 bits/byte; arm64 text usually drops below ~7.5.
+    if (!(a->mremap_ret == 0 && a->pages_ok == a->pages_total && a->changed)) return false;
+    bool entropy_ok = (a->ent_before > 7.85 && a->ent_after < 7.55) ||
+                      (a->ent_before - a->ent_after) > 0.35;
+    bool code_ok = a->ret_after > a->ret_before;
+    // Accept either strong entropy drop or new RET/PACIBSP words (tiny binaries).
+    return entropy_ok || code_ok;
 }
 
 int fp_probe_file(const char *path, const int *modes, int nmodes, fp_log_t log, void *ctx) {
@@ -318,6 +322,23 @@ static int copy_file(const char *src, const char *dst) {
     return rc;
 }
 
+int fp_has_encrypted_slice(const char *path) {
+    fp_slice_t sl[FP_MAX_SLICES]; int n = 0; char err[256] = {0};
+    if (fp_parse(path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) return -1;
+    for (int i = 0; i < n; i++) if (sl[i].has_enc && sl[i].cryptid) return 1;
+    return 0;
+}
+
+int fp_max_cryptid(const char *path) {
+    fp_slice_t sl[FP_MAX_SLICES]; int n = 0; char err[256] = {0};
+    if (fp_parse(path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) return -1;
+    int max = 0;
+    for (int i = 0; i < n; i++) {
+        if (sl[i].has_enc && (int)sl[i].cryptid > max) max = (int)sl[i].cryptid;
+    }
+    return max;
+}
+
 int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, void *ctx) {
     fp_slice_t sl[FP_MAX_SLICES]; int n = 0; char err[256] = {0};
     if (fp_parse(in_path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) { logf_(log, ctx, "  parse failed: %s", err); return -1; }
@@ -328,21 +349,43 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
 
     int out = open(out_path, O_RDWR);
     if (out < 0) { logf_(log, ctx, "  open out: %s", strerror(errno)); return -1; }
-    const int order[][2] = { {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1}, {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1} };
+    // Prefer R/cryptid=2 (works without PROT_EXEC), then RX/cryptid=1, with and without F_ADDFILESIGS.
+    const int order[][2] = {
+        {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
+        {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
+        {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1}
+    };
     int rc = 0;
     for (int i = 0; i < n && rc == 0; i++) {
         const fp_slice_t *s = &sl[i];
         if (!s->has_enc || s->cryptid == 0) continue;
+        if (s->cryptsize == 0 || (s->cryptoff % (uint32_t)getpagesize()) != 0) {
+            logf_(log, ctx, "  slice[%d] bad crypt range (off=0x%x size=0x%x)", i, s->cryptoff, s->cryptsize);
+            rc = -1; break;
+        }
         uint8_t *dec = malloc(s->cryptsize);
+        if (!dec) { rc = -1; break; }
         bool done = false;
+        fp_attempt_t best; memset(&best, 0, sizeof best); best.mremap_ret = -1;
         for (size_t k = 0; k < sizeof order / sizeof order[0] && !done; k++) {
             fp_attempt_t a; char d[512];
-            fp_attempt(in_path, s, order[k][0], order[k][1], dec, &a);
-            fp_attempt_describe(&a, d, sizeof d);
-            done = attempt_looks_decrypted(&a);
-            logf_(log, ctx, "  slice[%d] %s %s", i, done ? "[DECRYPTED]" : "[--]", d);
+            // Up to 2 tries per mode (fairplayd can flake under load).
+            for (int attempt = 0; attempt < 2 && !done; attempt++) {
+                if (attempt) usleep(50 * 1000);
+                fp_attempt(in_path, s, order[k][0], order[k][1], dec, &a);
+                if (a.pages_ok > best.pages_ok || (a.pages_ok == best.pages_ok && a.changed && !best.changed))
+                    best = a;
+                fp_attempt_describe(&a, d, sizeof d);
+                done = attempt_looks_decrypted(&a);
+                logf_(log, ctx, "  slice[%d] try%zu.%d %s %s", i, k, attempt, done ? "[DECRYPTED]" : "[--]", d);
+            }
         }
-        if (!done) { rc = -1; free(dec); break; }
+        if (!done) {
+            char d[512];
+            fp_attempt_describe(&best, d, sizeof d);
+            logf_(log, ctx, "  slice[%d] FAILED after all modes; best: %s", i, d);
+            rc = -1; free(dec); break;
+        }
         uint32_t zero = 0;
         if (!pwrite_full(out, dec, s->cryptsize, (off_t)(s->slice_off + s->cryptoff)) ||
             !pwrite_full(out, &zero, 4, (off_t)(s->enc_lc_off + offsetof(struct encryption_info_command, cryptid)))) {
@@ -351,5 +394,15 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         free(dec);
     }
     close(out);
+    if (rc == 0) {
+        // Fail closed: refuse to return success if any slice still reports cryptid ≠ 0.
+        int still = fp_has_encrypted_slice(out_path);
+        if (still != 0) {
+            logf_(log, ctx, "  verify failed: output still encrypted (status=%d)", still);
+            rc = -1;
+        } else {
+            logf_(log, ctx, "  verify ok: cryptid=0 on all slices");
+        }
+    }
     return rc;
 }

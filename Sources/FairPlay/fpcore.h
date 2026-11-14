@@ -50,3 +50,7 @@ int  fp_probe_file(const char *path, const int *modes, int nmodes, fp_log_t log,
 // Decrypt in_path -> out_path. Returns 0 on success, 1 if file was not encrypted (copied as-is), -1 on failure.
 int  fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, void *ctx);
 bool fp_is_macho(const char *path);
+// Returns 1 if any slice still has cryptid ≠ 0, 0 if clear / no encryption LC, -1 on parse error.
+int  fp_has_encrypted_slice(const char *path);
+// Highest cryptid across slices (0 = clear). -1 on parse error.
+int  fp_max_cryptid(const char *path);
