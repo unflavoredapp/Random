@@ -518,6 +518,16 @@ struct DecryptView: View {
         }
     }
 
+    /// Yellow-wall / store 2FA failures — show inline code entry instead of only a tip.
+    private static func needsStoreVerification(_ error: String?) -> Bool {
+        guard let error, !error.isEmpty else { return false }
+        let e = error.lowercased()
+        return e.contains("verification code")
+            || e.contains("two-factor")
+            || e.contains("2fa")
+            || e.contains("submit code")
+    }
+
     /// Only show the one-time App Store key hint when FairPlay/keys look like the failure mode.
     private static func shouldShowAppStoreKeyHint(_ error: String?) -> Bool {
         guard let error, !error.isEmpty else { return false }
@@ -677,6 +687,9 @@ struct DecryptView: View {
                     Text(c.error ?? "Decrypt failed.")
                         .font(.caption).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
+                    if Self.needsStoreVerification(c.error) || AppleIDStore.shared.storeNeedsVerification {
+                        DecryptStoreCodeEntry(retryApp: app)
+                    }
                     FailurePlaybookCard(errorText: c.error)
                     if Self.shouldShowAppStoreKeyHint(c.error) {
                         DecryptAppStoreSignInHint(compact: true)
@@ -736,6 +749,74 @@ struct DecryptView: View {
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.225, style: .continuous))
+    }
+}
+
+// MARK: - Inline Store 2FA (Decrypt tab)
+
+/// Enter the App Store 6-digit code without leaving Decrypt / signing out.
+private struct DecryptStoreCodeEntry: View {
+    let retryApp: DecryptApp
+    @ObservedObject private var store = AppleIDStore.shared
+    @State private var code = ""
+    @State private var busy = false
+    @State private var localError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Enter the 6-digit code from a trusted device (or Text me a code under Store Access). You stay signed in.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                TextField("123456", text: $code)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .font(.body.monospacedDigit().weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .foregroundStyle(.white)
+                Button {
+                    Task { await submit() }
+                } label: {
+                    if busy {
+                        ProgressView().tint(.white)
+                            .frame(width: 44, height: 36)
+                    } else {
+                        Text("Submit")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(TetherlessPalette.accent, in: Capsule())
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(busy || code.filter(\.isNumber).count < 6)
+            }
+            if let localError, !localError.isEmpty {
+                Text(localError)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    private func submit() async {
+        busy = true
+        localError = nil
+        defer { busy = false }
+        do {
+            _ = try await store.submitStoreVerificationCode(code)
+            code = ""
+            DecryptClient.shared.reset()
+            // Retry the same search result now that the store session is ready.
+            DeviceDecryptService.shared.decryptFromSearch(retryApp)
+        } catch {
+            localError = error.localizedDescription
+        }
     }
 }
 

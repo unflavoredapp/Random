@@ -406,13 +406,7 @@ extension FairPlayDecrypt {
                 }
             }
         }
-        // Skip Watch — FairPlayed deletes it.
-        let clips = root.appendingPathComponent("AppClips", isDirectory: true)
-        if let items = try? fm.contentsOfDirectory(at: clips, includingPropertiesForKeys: nil) {
-            for item in items where item.pathExtension.lowercased() == "app" {
-                consider(exe(in: item))
-            }
-        }
+        // Skip Watch + App Clips — same hang/soft policy as FairPlayDecrypt.collectMachOs.
         return out
     }
 }

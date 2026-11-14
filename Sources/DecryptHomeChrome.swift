@@ -191,11 +191,9 @@ struct DecryptOwnedStoreAppsSection: View {
                             .fixedSize(horizontal: false, vertical: true)
                         if loadError.localizedCaseInsensitiveContains("verification")
                             || loadError.localizedCaseInsensitiveContains("2fa")
-                            || loadError.localizedCaseInsensitiveContains("two-factor") {
-                            Text("Tip: Settings › Store Access → enter the 6-digit code (or tap Text me a code). Stay signed in, then refresh Owned.")
-                                .font(.caption2)
-                                .foregroundStyle(.white.opacity(0.45))
-                                .fixedSize(horizontal: false, vertical: true)
+                            || loadError.localizedCaseInsensitiveContains("two-factor")
+                            || AppleIDStore.shared.storeNeedsVerification {
+                            OwnedStoreCodeEntry(onSuccess: { await refresh() })
                         } else if loadError.localizedCaseInsensitiveContains("204")
                             || loadError.localizedCaseInsensitiveContains("403")
                             || loadError.localizedCaseInsensitiveContains("expired") {
@@ -252,9 +250,75 @@ struct DecryptOwnedStoreAppsSection: View {
         defer { loading = false }
         do {
             owned = try await DeviceDecryptService.shared.ownedStoreApps()
+        } catch AppStoreClientError.needsTwoFactor {
+            owned = []
+            loadError = error.localizedDescription
+            AppleIDStore.shared.noteStoreNeedsVerification()
         } catch {
             owned = []
             loadError = error.localizedDescription
+            if error.localizedDescription.localizedCaseInsensitiveContains("verification") {
+                AppleIDStore.shared.noteStoreNeedsVerification()
+            }
+        }
+    }
+}
+
+/// Inline 6-digit App Store code for Owned history (no Sign Out).
+private struct OwnedStoreCodeEntry: View {
+    var onSuccess: () async -> Void
+    @ObservedObject private var store = AppleIDStore.shared
+    @State private var code = ""
+    @State private var busy = false
+    @State private var localError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Enter the 6-digit code — stay signed in.")
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
+            HStack(spacing: 10) {
+                TextField("123456", text: $code)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .font(.body.monospacedDigit().weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .foregroundStyle(.white)
+                Button {
+                    Task { await submit() }
+                } label: {
+                    if busy {
+                        ProgressView().tint(.white).frame(width: 44, height: 36)
+                    } else {
+                        Text("Submit")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(TetherlessPalette.accent, in: Capsule())
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(busy || code.filter(\.isNumber).count < 6)
+            }
+            if let localError, !localError.isEmpty {
+                Text(localError).font(.caption2).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func submit() async {
+        busy = true
+        localError = nil
+        defer { busy = false }
+        do {
+            _ = try await store.submitStoreVerificationCode(code)
+            code = ""
+            await onSuccess()
+        } catch {
+            localError = error.localizedDescription
         }
     }
 }
@@ -293,7 +357,7 @@ struct DecryptDeviceAppsSection: View {
                     }
                 }
 
-                Text("Decrypts main, frameworks, widgets, and App Clips with this device’s FairPlay keys (Watch skipped — not decryptable on iPhone). Pair with Native install if the list is empty.")
+                Text("Decrypts main, frameworks, and widgets with this device’s FairPlay keys (Watch + App Clips skipped — avoid install-path hangs). Pair with Native install if the list is empty.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)

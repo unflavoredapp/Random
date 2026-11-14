@@ -88,6 +88,8 @@ final class AppleIDStore: ObservableObject {
     @Published private(set) var twoFactorUsesSMS = false
     /// Obfuscated phone hint for SMS 2FA UI (e.g. ••••42).
     @Published private(set) var twoFactorPhoneHint: String?
+    /// True after App Store auth asked for a 6-digit code (Decrypt shows inline entry).
+    @Published private(set) var storeNeedsVerification = false
     /// Last 2FA code — reused once for iTunes Store authenticate after GSA succeeds.
     private var pendingStoreAuthCode: String?
     /// Soft flag: next ensure should re-auth without wiping the persisted store token first.
@@ -581,10 +583,16 @@ final class AppleIDStore: ObservableObject {
         storefrontNeedsRefresh = true
     }
 
+    func noteStoreNeedsVerification() {
+        storeNeedsVerification = true
+    }
+
     /// Ensure a usable storefront session (re-auth with saved password if needed).
     func ensureStorefrontSession(forceRefresh: Bool = false) async throws -> StorefrontSession {
         let refresh = forceRefresh || storefrontNeedsRefresh
-        if !refresh, let existing = storefrontSession(), existing.isUsable {
+        let prior = storefrontSession()
+        if !refresh, let existing = prior, existing.isUsable {
+            storeNeedsVerification = false
             return existing
         }
         guard let email = activeAccount?.email, !email.isEmpty else {
@@ -602,24 +610,46 @@ final class AppleIDStore: ObservableObject {
             )
             pendingStoreAuthCode = nil
             storefrontNeedsRefresh = false
+            storeNeedsVerification = false
             persistStoreSession(session)
             return session
         } catch AppStoreClientError.needsTwoFactor {
-            // Prefer the existing store token over a 2FA wall — Owned/purchaseHistory can
-            // still succeed with a prior passwordToken. Only hard-fail when we have none.
-            if let existing = storefrontSession(), existing.isUsable {
+            // Prefer any existing store token over a 2FA wall — download/history often
+            // still work. Only hard-fail when we have none (or it isn't usable).
+            if let existing = prior, existing.isUsable {
                 storefrontNeedsRefresh = false
+                storeNeedsVerification = false
                 return existing
             }
-            throw AppStoreClientError.message(
-                "App Store needs a one-time verification code. Open Settings › Store Access, enter the 6-digit code (stay signed in), then tap refresh on Owned."
-            )
+            storeNeedsVerification = true
+            throw AppStoreClientError.needsTwoFactor
         } catch {
-            if let existing = storefrontSession(), existing.isUsable {
+            if let existing = prior, existing.isUsable {
                 storefrontNeedsRefresh = false
+                storeNeedsVerification = false
                 return existing
             }
             throw error
+        }
+    }
+
+    /// Complete App Store (MZFinance) 2FA without signing out — then silent download works.
+    func submitStoreVerificationCode(_ code: String) async throws -> StorefrontSession {
+        let digits = code.filter(\.isNumber)
+        guard digits.count == 6 else {
+            throw AppStoreClientError.message("Enter the 6-digit verification code.")
+        }
+        pendingStoreAuthCode = digits
+        storefrontNeedsRefresh = true
+        do {
+            let session = try await ensureStorefrontSession(forceRefresh: true)
+            storeNeedsVerification = false
+            return session
+        } catch AppStoreClientError.needsTwoFactor {
+            storeNeedsVerification = true
+            throw AppStoreClientError.message(
+                "Incorrect or expired code — request a new one under Settings › Store Access (Text me a code), then retry."
+            )
         }
     }
 
@@ -727,12 +757,16 @@ final class AppleIDStore: ObservableObject {
                 ?? "Signed in · silent download ready"
         } catch AppStoreClientError.needsTwoFactor {
             statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
-            // Store download will prompt/re-auth on first silent decrypt if needed.
+            // Keep pendingStoreAuthCode only if unused; store still needs a code on first download.
+            storeNeedsVerification = true
         } catch {
             statusMessage = session.teamName.map { "Signed in · \($0)" } ?? "Signed in"
             // Non-fatal — portal auth still works; silent download retries later.
         }
-        pendingStoreAuthCode = nil
+        // Clear only after a successful store session (or non-2FA failure).
+        if storefrontSession()?.isUsable == true || storeNeedsVerification == false {
+            pendingStoreAuthCode = nil
+        }
 
         save()
         activatePreferredSigningCertificate()
