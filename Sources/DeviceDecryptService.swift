@@ -342,7 +342,12 @@ final class DeviceDecryptService: ObservableObject {
         guard let adam = try await resolveAdamId(bundleID: bundleID, storeURL: storeURL) else {
             throw DecryptError("Couldn't resolve an App Store id for \(displayName). Try another search result.")
         }
-        publishDecryptProgress("Silent App Store session…")
+        let spoof = StoreDeviceSpoof.current
+        if spoof.enabled {
+            publishDecryptProgress("Silent App Store session · spoof \(spoof.summaryLabel)…")
+        } else {
+            publishDecryptProgress("Silent App Store session…")
+        }
         let account = try await AppleIDStore.shared.ensureStorefrontSession()
 
         var pinned = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

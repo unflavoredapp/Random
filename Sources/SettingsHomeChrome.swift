@@ -447,18 +447,19 @@ struct SettingsAppleIDCard: View {
 /// Spoof claimed iOS / device model on App Store download requests (variant selection).
 struct StoreDeviceSpoofCard: View {
     @State private var spoof = StoreDeviceSpoof.current
+    private let profiles = StoreSpoofProfile.builtIn(realModel: StoreDeviceSpoof.realModelIdentifier())
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             Toggle(isOn: Binding(
                 get: { spoof.enabled },
-                set: { spoof.enabled = $0; StoreDeviceSpoof.current = spoof }
+                set: { spoof.enabled = $0; persist() }
             )) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Spoof Store iOS / device")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text("Changes the App Store User-Agent so Apple can serve a package for another iOS version. Does not change this iPhone’s real OS.")
+                    Text("Tells buy.itunes which iOS/device you are so Apple can pick a matching IPA variant. Does not change this iPhone’s real OS. Strongest when downloading latest (unpinned); version pins still win when set.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.45))
                         .fixedSize(horizontal: false, vertical: true)
@@ -466,58 +467,182 @@ struct StoreDeviceSpoofCard: View {
             }
             .tint(TetherlessPalette.accent)
 
-            if spoof.enabled {
-                HStack(spacing: 10) {
-                    TextField("iOS version", text: Binding(
-                        get: { spoof.iosVersion },
-                        set: { spoof.iosVersion = $0; StoreDeviceSpoof.current = spoof }
-                    ))
-                    .keyboardType(.decimalPad)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.28), in: Capsule())
+            Text(spoof.summaryLabel)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(spoof.enabled ? TetherlessPalette.accent : .white.opacity(0.45))
 
-                    TextField("Build (opt.)", text: Binding(
-                        get: { spoof.build },
-                        set: { spoof.build = $0; StoreDeviceSpoof.current = spoof }
-                    ))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.28), in: Capsule())
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(profiles) { profile in
+                        Button {
+                            spoof.apply(profile)
+                            persist()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(profile.title)
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.white)
+                                Text(profile.detail)
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.45))
+                                    .lineLimit(1)
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(
+                                isSelected(profile)
+                                    ? TetherlessPalette.accent.opacity(0.35)
+                                    : Color.black.opacity(0.28),
+                                in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            )
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                    .strokeBorder(
+                                        isSelected(profile) ? TetherlessPalette.accent.opacity(0.7) : .white.opacity(0.08),
+                                        lineWidth: 1
+                                    )
+                            )
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
+            }
 
-                Menu {
-                    ForEach(StoreDeviceSpoof.modelPresets, id: \.model) { preset in
-                        Button(preset.label) {
-                            spoof.deviceModel = preset.model
-                            StoreDeviceSpoof.current = spoof
+            if spoof.enabled {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("iOS version")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(StoreDeviceSpoof.iosVersionPresets, id: \.self) { ver in
+                                Button {
+                                    spoof.iosVersion = ver
+                                    spoof.build = StoreDeviceSpoof.defaultBuild(forIOS: ver) ?? spoof.build
+                                    persist()
+                                } label: {
+                                    Text(ver)
+                                        .font(.caption.weight(.semibold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(
+                                            spoof.iosVersion == ver
+                                                ? TetherlessPalette.accent.opacity(0.4)
+                                                : Color.black.opacity(0.28),
+                                            in: Capsule()
+                                        )
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
                     }
-                } label: {
-                    HStack {
-                        Text(spoof.deviceModel.isEmpty ? "Device model" : spoof.deviceModel)
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(.white)
-                        Spacer()
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.45))
-                    }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.28), in: Capsule())
-                }
 
-                Text("UA preview: \(spoof.storeUserAgent(fallbackConfigurator: "Configurator"))")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.35))
-                    .lineLimit(2)
+                    HStack(spacing: 10) {
+                        TextField("iOS version", text: Binding(
+                            get: { spoof.iosVersion },
+                            set: {
+                                spoof.iosVersion = $0
+                                if spoof.build.isEmpty {
+                                    spoof.build = StoreDeviceSpoof.defaultBuild(forIOS: $0) ?? ""
+                                }
+                                persist()
+                            }
+                        ))
+                        .keyboardType(.decimalPad)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.black.opacity(0.28), in: Capsule())
+
+                        TextField("Build", text: Binding(
+                            get: { spoof.build },
+                            set: { spoof.build = $0; persist() }
+                        ))
+                        .textInputAutocapitalization(.characters)
+                        .autocorrectionDisabled()
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.black.opacity(0.28), in: Capsule())
+                    }
+
+                    Menu {
+                        ForEach(StoreDeviceSpoof.modelPresets, id: \.model) { preset in
+                            Button(preset.label) {
+                                spoof.deviceModel = preset.model
+                                spoof.hardwarePlatform = StoreDeviceSpoof.hardwarePlatform(forModel: preset.model) ?? ""
+                                persist()
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text(modelMenuLabel)
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.45))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.black.opacity(0.28), in: Capsule())
+                    }
+
+                    Menu {
+                        ForEach(StoreUserAgentStyle.allCases, id: \.self) { style in
+                            Button(style.label) {
+                                spoof.style = style
+                                persist()
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Text("UA style · \(spoof.style.label)")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.45))
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(Color.black.opacity(0.28), in: Capsule())
+                    }
+
+                    Text("Real device: iOS \(UIDevice.current.systemVersion) · \(StoreDeviceSpoof.realModelIdentifier())")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.35))
+                    Text(spoof.storeUserAgent(fallbackConfigurator: "Configurator/2.15"))
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.35))
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
         .padding(.top, 4)
         .onAppear { spoof = StoreDeviceSpoof.current }
+    }
+
+    private var modelMenuLabel: String {
+        if let match = StoreDeviceSpoof.modelPresets.first(where: { $0.model == spoof.deviceModel }) {
+            return "\(match.label) · \(match.model)"
+        }
+        return spoof.deviceModel.isEmpty ? "Device model" : spoof.deviceModel
+    }
+
+    private func isSelected(_ profile: StoreSpoofProfile) -> Bool {
+        if profile.id == "device" { return !spoof.enabled }
+        return spoof.enabled
+            && spoof.iosVersion == profile.iosVersion
+            && (profile.deviceModel == nil || spoof.deviceModel == profile.deviceModel)
+    }
+
+    private func persist() {
+        StoreDeviceSpoof.current = spoof
     }
 }
 

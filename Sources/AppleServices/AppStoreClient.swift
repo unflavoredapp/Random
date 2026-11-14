@@ -707,13 +707,10 @@ final class AppStoreClient: ObservableObject {
             "X-Apple-Store-Front": account.storeFront,
             "X-Token": account.passwordToken
         ]
-        let spoof = StoreDeviceSpoof.current
-        headers["X-Apple-I-Device-Type"] = "1"
-        headers["X-Apple-Client-Application"] = "Software"
-        if spoof.enabled {
-            headers["X-Apple-I-Requested-Model"] = spoof.effectiveModel
-            // Hint claimed OS to storefront selection (best-effort; UA is primary).
-            headers["X-Apple-I-OS-Version"] = spoof.effectiveIOSVersion
+        // Always advertise device/OS identity (real or spoofed) — UA alone is not enough
+        // for every buy.itunes / redownload path.
+        for (k, v) in StoreDeviceSpoof.current.storeIdentityHeaders() {
+            headers[k] = v
         }
         return headers
     }
@@ -777,7 +774,13 @@ final class AppStoreClient: ObservableObject {
     }
 
     private func downloadFile(from url: URL, to destination: URL) async throws {
-        let (tmp, resp) = try await session.download(from: url)
+        var req = URLRequest(url: url)
+        req.setValue(storeUserAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        for (k, v) in StoreDeviceSpoof.current.storeIdentityHeaders() {
+            req.setValue(v, forHTTPHeaderField: k)
+        }
+        let (tmp, resp) = try await session.download(for: req)
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else {
             throw AppStoreClientError.network("IPA CDN download failed (HTTP \(status)).")
