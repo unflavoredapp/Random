@@ -542,56 +542,22 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       const TCSS = CSS + "label{display:block;margin:12px 0 4px;font-size:13px;color:#9a9a9a}input[type=text],input[type=password],input[type=tel]{width:100%;height:44px;padding:0 12px;border:1px solid #333;border-radius:11px;background:#0b0b0b;color:#fff;font:16px system-ui;outline:0}input:focus{border-color:var(--acc)}.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:#f33}.dot.ok{background:#2fd16b}.mm{color:#9a9a9a;font-size:12px}.sm.danger{border-color:#7a2318;color:#f66}code.k{background:#111;border:1px solid #292929;border-radius:8px;padding:2px 7px}";
       web.get("/admin/telegram", auth, async (req, res) => {
         const s = await T.status();
-        const state = !s.lib ? "The <code class=\"k\">telegram</code> package isn't installed. Run <code class=\"k\">cd /opt/airshare-telegram &amp;&amp; npm i telegram &amp;&amp; pm2 restart airshare</code>."
-          : s.authed ? `Connected as <b>${esc(s.who.name || "account")}</b>${s.who.username ? " (@" + esc(s.who.username) + ")" : ""}. Requests go to <b>@${esc(s.bot)}</b>.`
-          : s.hasKeys ? "Not logged in. Add your phone below." + (s.error ? " (" + esc(s.error) + ")" : "") : "Add your API id and hash first.";
+        const state = s.authed
+          ? `Own bot <b>@${esc(s.bot || s.who.username || "")}</b> is configured. Jobs wait for the <b>iPhone worker</b> (TetherLess › Settings › Phone Worker).`
+          : (s.error ? esc(s.error) : "Set <code class=\"k\">TELEGRAM_BOT_TOKEN</code> on the server.");
+        const worker = s.workerConfigured
+          ? "Worker token configured (<code class=\"k\">DECRYPT_WORKER_TOKEN</code>)."
+          : "Set <code class=\"k\">DECRYPT_WORKER_TOKEN</code> and enter the same token in the iOS app.";
         res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'unsafe-inline'" });
         res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="dark"><title>Telegram \u00b7 Admin</title><style>${TCSS}</style></head><body><div class="w"><div class="lay">${menu("/admin/telegram")}<main class="main">
-<h1>Telegram</h1><div class="flash" id="fl" hidden></div>
-<div class="box"><span class="dot${s.authed ? " ok" : ""}"></span>${state}
-<p class="mm">Decrypt build ${esc(s.build || "old")} \u00b7 max file ${esc(s.maxGb || 1.5)} GB</p>
-<p class="mm">The lock icon on the site sends App Store links from this account to @${esc(s.bot)} and returns the IPA to the visitor. Use a dedicated account if you can.</p></div>
-<h2>1 \u00b7 API KEYS</h2><div class="box"><p class="mm" style="margin-top:0">From my.telegram.org &rarr; API development tools.</p>
-<label for="ai">api_id</label><input id="ai" type="text" inputmode="numeric" autocomplete="off" value="${esc(s.apiId)}" placeholder="12345678">
-<label for="ah">api_hash</label><input id="ah" type="password" autocomplete="off" placeholder="${s.hasKeys ? "saved (enter to replace)" : "32 hex characters"}">
-<div class="acts"><button class="btn" type="button" id="k">Save keys</button></div></div>
-<h2>2 \u00b7 LOG IN</h2><div class="box">
-<label for="ph">Phone (with country code)</label><input id="ph" type="tel" autocomplete="off" placeholder="+15551234567">
-<div class="acts"><button class="btn" type="button" id="sc">Send code</button></div>
-<div id="cb" hidden><label for="cd">Code from Telegram</label><input id="cd" type="text" inputmode="numeric" autocomplete="off" placeholder="12345">
-<div class="acts"><button class="btn" type="button" id="si">Sign in</button></div></div>
-<div id="pb" hidden><label for="pw">2-step verification password</label><input id="pw" type="password" autocomplete="off">
-<div class="acts"><button class="btn" type="button" id="sp">Sign in</button></div></div></div>
-<details class="box"><summary style="cursor:pointer;color:var(--acc);font-weight:600">Or paste a session string</summary><label for="ss">gramjs StringSession</label><input id="ss" type="password" autocomplete="off"><div class="acts"><button class="btn" type="button" id="us">Use session</button></div></details>
-${s.authed ? '<div class="acts"><button class="sm danger" type="button" id="lo">Log out of Telegram</button></div>' : ""}
-</main></div></div>
-<script>
-(function(){
-var T=${JSON.stringify(csrf)};
-function $(i){return document.getElementById(i);}
-function flash(t,bad){var f=$('fl');f.textContent=t;f.hidden=false;f.style.borderColor=bad?'#f33':'';f.style.color=bad?'#f66':'';window.scrollTo(0,0);}
-function post(u,o){o.csrf=T;return fetch(u,{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify(o)}).then(function(r){return r.json();});}
-function ok(m){sessionStorage.setItem('adm:m',m);location.reload();}
-var m=sessionStorage.getItem('adm:m');if(m){sessionStorage.removeItem('adm:m');flash(m);}
-function run(b,p,f){b.disabled=true;p.then(function(j){b.disabled=false;f(j);}).catch(function(){b.disabled=false;flash('Network error.',true);});}
-$('k').onclick=function(){run(this,post('/admin/telegram/keys',{api_id:$('ai').value,api_hash:$('ah').value}),function(j){j.ok?ok('Keys saved.'):flash(j.error,true);});};
-$('sc').onclick=function(){run(this,post('/admin/telegram/code',{phone:$('ph').value}),function(j){if(j.ok){$('cb').hidden=false;flash(j.viaApp?'Code sent. Check your Telegram app.':'Code sent by SMS.');}else flash(j.error,true);});};
-$('si').onclick=function(){run(this,post('/admin/telegram/signin',{code:$('cd').value}),function(j){if(j.ok)ok('Logged in.');else if(j.need2fa){$('pb').hidden=false;flash('This account has 2-step verification. Enter the password.');}else flash(j.error,true);});};
-$('sp').onclick=function(){run(this,post('/admin/telegram/signin',{password:$('pw').value}),function(j){j.ok?ok('Logged in.'):flash(j.error||'Failed.',true);});};
-$('us').onclick=function(){run(this,post('/admin/telegram/session',{session:$('ss').value}),function(j){j.ok?ok('Session saved.'):flash(j.error,true);});};
-if($('lo'))$('lo').onclick=function(){if(!confirm('Log out of Telegram? Decrypt stops working until you log in again.'))return;run(this,post('/admin/telegram/logout',{}),function(j){ok('Logged out.');});};
-})();
-</script></body></html>`);
+<h1>Telegram decrypt bot</h1>
+<div class="box"><span class="dot${s.authed && s.workerConfigured ? " ok" : ""}"></span>${state}
+<p class="mm">${worker}</p>
+<p class="mm">Build ${esc(s.build || "")} \u00b7 mode ${esc(s.mode || "phone-worker")} \u00b7 waiting ${esc(String(s.waiting || 0))}</p>
+<p class="mm">FastDecryptBot / GramJS userbot login is removed. Create a bot with <b>@BotFather</b>, set env <code class=\"k\">TELEGRAM_BOT_TOKEN</code>, optional <code class=\"k\">TELEGRAM_BOT_USERNAME</code> and <code class=\"k\">TELEGRAM_ALLOWED_IDS</code> (comma chat ids).</p>
+<p class="mm">Keep TetherLess open on the signed-in iPhone with Phone Worker enabled so FairPlay can run.</p></div>
+</main></div></div></body></html>`);
       });
-      web.post("/admin/telegram/keys", auth, tjson, tguard, async (req, res) => {
-        const b = req.body || {};
-        const err = await T.setKeys(b.api_id, b.api_hash);
-        return err ? tj(res, 400, err) : res.json({ ok: true });
-      });
-      web.post("/admin/telegram/code", auth, tjson, tguard, async (req, res) => { const r = await T.sendCode((req.body || {}).phone); return r.error ? tj(res, 400, r.error) : res.json(r); });
-      web.post("/admin/telegram/signin", auth, tjson, tguard, async (req, res) => { const b = req.body || {}; const r = await T.signIn(b.code, b.password); return r.error ? tj(res, 400, r.error) : res.json(r.need2fa ? { ok: false, need2fa: true } : { ok: true }); });
-      web.post("/admin/telegram/session", auth, tjson, tguard, async (req, res) => { const err = await T.useSession((req.body || {}).session); return err ? tj(res, 400, err) : res.json({ ok: true }); });
-      web.post("/admin/telegram/logout", auth, tjson, tguard, async (req, res) => { await T.logout(); return res.json({ ok: true }); });
     }
 
     // ---------- analytics, inside the admin layout ----------

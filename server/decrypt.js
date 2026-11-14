@@ -1,355 +1,482 @@
 "use strict";
 /**
- * Telegram userbot → @FastDecryptBot bridge for AirShare / TetherLess decrypt.
+ * TetherLess decrypt backend — phone worker + optional own Telegram bot.
+ *
+ * Replaces the old GramJS → @FastDecryptBot bridge. FairPlay runs on the
+ * signed-in iPhone; this module only queues jobs, waits for a worker upload,
+ * and (optionally) drives a Bot API bot that creates the same jobs.
  *
  * Expected by site.js:
  *   create({ db, secret }) → {
  *     bot, validUrl, busy, queueLen,
- *     request(url, dir, say, tryCache, vreq),
+ *     request(url, dir, say, tryCache, vreq, job?),
  *     versions(url, page),
- *     status, setKeys, sendCode, signIn, useSession, logout
+ *     status, setKeys, sendCode, signIn, useSession, logout,
+ *     attachWorkerRoutes(web, helpers),
+ *     startTelegramBot(helpers)
  *   }
- *
- * Needs the `telegram` (GramJS) package. Without it, create() throws so site.js
- * disables decrypt with a warning (same as before).
  */
 
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
+const https = require("https");
 
-const BUILD = "tetherless-decrypt-2";
-const BOT = process.env.DECRYPT_BOT || "FastDecryptBot";
+const BUILD = "tetherless-phone-worker-1";
+const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || process.env.DECRYPT_BOT || "TetherLessDecryptBot").replace(/^@/, "");
+const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
+const WORKER_TOKEN = process.env.DECRYPT_WORKER_TOKEN || "";
+const ALLOWED_CHAT_IDS = String(process.env.TELEGRAM_ALLOWED_IDS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+const REQUEST_MS = (Number(process.env.DECRYPT_TIMEOUT_MIN) || 20) * 60 * 1000;
 const MAX_GB = Number(process.env.DECRYPT_MAX_GB) || 1.5;
-const REQUEST_MS = (Number(process.env.DECRYPT_TIMEOUT_MIN) || 12) * 60 * 1000;
-const VERSION_MS = 90 * 1000;
 
-function create({ db, secret }) {
+function create({ db /*, secret */ }) {
   if (!db) throw new Error("decrypt.create needs db");
-  const encKey = deriveKey(secret);
 
-  db.exec(`CREATE TABLE IF NOT EXISTS tg_decrypt(
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    api_id TEXT, api_hash TEXT, session TEXT, phone TEXT, updated_at TEXT
-  )`);
-  if (!db.prepare("SELECT 1 FROM tg_decrypt WHERE id=1").get()) {
-    db.prepare("INSERT INTO tg_decrypt(id,api_id,api_hash,session,phone,updated_at) VALUES(1,'','','','',?)")
-      .run(new Date().toISOString());
-  }
-
-  let TelegramClient = null, StringSession = null, Api = null, libErr = null;
-  try {
-    // Prefer the dedicated install dir used in production, then local node_modules.
-    const modulePaths = [
-      "/opt/airshare-telegram/node_modules/telegram",
-      path.join(__dirname, "..", "node_modules", "telegram"),
-      "telegram",
-    ];
-    let mod = null, resolved = null, last = null;
-    for (const c of modulePaths) {
-      try { resolved = require.resolve(c); mod = require(c); break; } catch (e) { last = e; }
-    }
-    if (!mod) throw last || new Error("telegram package missing");
-    TelegramClient = mod.TelegramClient;
-    if (!TelegramClient) throw new Error("telegram.TelegramClient missing");
-    Api = mod.Api;
-    try {
-      StringSession = require(path.join(path.dirname(resolved), "sessions")).StringSession;
-    } catch {
-      StringSession = require("telegram/sessions").StringSession;
-    }
-  } catch (e) {
-    libErr = e.message || String(e);
-  }
-
-  const row = () => db.prepare("SELECT api_id,api_hash,session,phone FROM tg_decrypt WHERE id=1").get() || {};
-  const save = (patch) => {
-    const cur = row();
-    const next = Object.assign({}, cur, patch, { updated_at: new Date().toISOString() });
-    db.prepare("UPDATE tg_decrypt SET api_id=?, api_hash=?, session=?, phone=?, updated_at=? WHERE id=1")
-      .run(next.api_id || "", next.api_hash || "", next.session || "", next.phone || "", next.updated_at);
-  };
-
-  let client = null;
-  let pending = null; // { phoneCodeHash, phone }
+  /** @type {Map<string, any>} */
+  const waiters = new Map(); // jobId → { url, vreq, dir, say, resolve, reject, status, claimedBy, createdAt }
   let queue = Promise.resolve();
   let active = 0;
   let waiting = 0;
+  let botOffset = 0;
+  let botTimer = null;
 
   function validUrl(u) {
     return /^https:\/\/(?:apps|itunes)\.apple\.com\//i.test(String(u || "").trim());
   }
 
-  async function status() {
-    const r = row();
-    const hasKeys = !!(r.api_id && (r.api_hash || encKey));
-    let authed = false, who = {}, error = libErr || "";
-    if (TelegramClient && r.session) {
-      try {
-        const c = await ensureClient();
-        const me = await c.getMe();
-        authed = true;
-        who = { name: [me.firstName, me.lastName].filter(Boolean).join(" "), username: me.username || "" };
-      } catch (e) {
-        error = e.message || String(e);
-      }
-    }
-    return {
-      lib: !!TelegramClient,
-      authed,
-      who,
-      bot: BOT,
-      hasKeys: !!(r.api_id && r.api_hash),
-      apiId: r.api_id ? String(r.api_id) : "",
-      error,
-      build: BUILD,
-      maxGb: MAX_GB,
-    };
+  function busy() {
+    return active > 0 || [...waiters.values()].some((w) => w.status === "claimed");
   }
 
-  async function setKeys(apiId, apiHash) {
-    if (!TelegramClient) return libErr || "telegram package missing";
-    const id = String(apiId || "").trim();
-    const hash = String(apiHash || "").trim();
-    if (!/^\d{4,12}$/.test(id)) return "api_id looks wrong.";
-    if (hash && !/^[0-9a-f]{32}$/i.test(hash)) return "api_hash should be 32 hex characters.";
-    if (!hash && !row().api_hash) return "api_hash required.";
-    save({ api_id: id, api_hash: hash || row().api_hash });
-    await dropClient();
-    return null;
+  function queueLen() {
+    return waiting + [...waiters.values()].filter((w) => w.status === "queued").length;
   }
-
-  async function sendCode(phone) {
-    if (!TelegramClient) return { error: libErr || "telegram package missing" };
-    const p = String(phone || "").replace(/\s+/g, "");
-    if (!/^\+\d{8,16}$/.test(p)) return { error: "Use international format, e.g. +15551234567." };
-    try {
-      const c = await ensureClient({ allowEmptySession: true });
-      const res = await c.invoke(new Api.auth.SendCode({
-        phoneNumber: p,
-        apiId: Number(row().api_id),
-        apiHash: row().api_hash,
-        settings: new Api.CodeSettings({}),
-      }));
-      pending = { phoneCodeHash: res.phoneCodeHash, phone: p };
-      save({ phone: p });
-      const viaApp = String(res.type?.className || "").toLowerCase().includes("app");
-      return { ok: true, viaApp };
-    } catch (e) {
-      return { error: e.errorMessage || e.message || String(e) };
-    }
-  }
-
-  async function signIn(code, password) {
-    if (!TelegramClient) return { error: libErr || "telegram package missing" };
-    try {
-      const c = await ensureClient({ allowEmptySession: true });
-      if (password) {
-        await c.signInWithPassword({ apiId: Number(row().api_id), apiHash: row().api_hash }, { password: String(password) });
-      } else {
-        if (!pending) return { error: "Send a code first." };
-        try {
-          await c.invoke(new Api.auth.SignIn({
-            phoneNumber: pending.phone,
-            phoneCodeHash: pending.phoneCodeHash,
-            phoneCode: String(code || "").trim(),
-          }));
-        } catch (e) {
-          if (e.errorMessage === "SESSION_PASSWORD_NEEDED" || /PASSWORD/i.test(e.message || "")) {
-            return { need2fa: true };
-          }
-          throw e;
-        }
-      }
-      save({ session: c.session.save() });
-      pending = null;
-      return { ok: true };
-    } catch (e) {
-      return { error: e.errorMessage || e.message || String(e) };
-    }
-  }
-
-  async function useSession(session) {
-    if (!TelegramClient) return libErr || "telegram package missing";
-    const s = String(session || "").trim();
-    if (s.length < 20) return "Session string looks too short.";
-    save({ session: s });
-    await dropClient();
-    try {
-      await ensureClient();
-      const me = await client.getMe();
-      if (!me) return "Session didn't authorize.";
-      return null;
-    } catch (e) {
-      return e.message || String(e);
-    }
-  }
-
-  async function logout() {
-    try { if (client) await client.invoke(new Api.auth.LogOut()); } catch { /* ignore */ }
-    await dropClient();
-    save({ session: "", phone: "" });
-    pending = null;
-  }
-
-  async function dropClient() {
-    try { if (client) await client.disconnect(); } catch { /* ignore */ }
-    client = null;
-  }
-
-  async function ensureClient({ allowEmptySession } = {}) {
-    if (!TelegramClient) throw new Error(libErr || "telegram package missing");
-    const r = row();
-    if (!r.api_id || !r.api_hash) throw new Error("Add Telegram api_id and api_hash in Admin › Telegram.");
-    if (!r.session && !allowEmptySession) throw new Error("Log in to Telegram in Admin › Telegram first.");
-    if (client) return client;
-    const session = new StringSession(r.session || "");
-    const c = new TelegramClient(session, Number(r.api_id), r.api_hash, {
-      connectionRetries: 5,
-      deviceModel: "TetherLess",
-      appVersion: BUILD,
-      systemVersion: "Node",
-    });
-    await c.connect();
-    if (r.session && !(await c.checkAuthorization())) {
-      throw new Error("Telegram session expired. Log in again in Admin › Telegram.");
-    }
-    client = c;
-    return c;
-  }
-
-  function busy() { return active > 0; }
-  function queueLen() { return waiting; }
 
   function enqueue(fn) {
     waiting++;
     const run = queue.then(async () => {
       waiting = Math.max(0, waiting - 1);
       active++;
-      try { return await fn(); }
-      finally { active = Math.max(0, active - 1); }
+      try {
+        return await fn();
+      } finally {
+        active = Math.max(0, active - 1);
+      }
     });
     queue = run.catch(() => {});
     return run;
   }
 
-  async function request(url, dir, say, tryCache, vreq) {
+  function authWorker(req) {
+    const hdr = String(req.headers["x-decrypt-worker-token"] || req.headers["authorization"] || "");
+    const token = hdr.replace(/^Bearer\s+/i, "").trim();
+    if (!WORKER_TOKEN) {
+      return { ok: false, error: "DECRYPT_WORKER_TOKEN is not set on the server." };
+    }
+    if (!token || token !== WORKER_TOKEN) {
+      return { ok: false, error: "Unauthorized worker." };
+    }
+    return { ok: true };
+  }
+
+  /**
+   * Called from site.js runDecrypt. Parks until an iPhone worker uploads a clear IPA.
+   */
+  async function request(url, dir, say, tryCache, vreq, job) {
     if (!validUrl(url)) throw new Error("Paste an App Store link.");
     if (typeof tryCache === "function") {
       const hit = tryCache();
       if (hit) return hit;
     }
-    return enqueue(() => talkToBot({ url, dir, say, vreq, mode: "decrypt" }));
+    return enqueue(() => waitForWorker({ url, dir, say, vreq: vreq || "", job }));
   }
 
-  async function versions(url, page) {
-    if (!validUrl(url)) throw new Error("Paste an App Store link.");
-    return enqueue(async () => {
-      const say = () => {};
-      const dir = fs.mkdtempSync(path.join(require("os").tmpdir(), "dec-ver-"));
-      try {
-        const r = await talkToBot({ url, dir, say, vreq: "", mode: "versions", page: page || 1 });
-        return r.versions || { items: [], page: 1, pages: 1, total: 0 };
-      } finally {
-        try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
-      }
+  function waitForWorker({ url, dir, say, vreq, job }) {
+    const id = (job && job.id) || crypto.randomBytes(12).toString("hex");
+    say("Waiting for iPhone worker…");
+    if (job) {
+      job.msg = "Waiting for iPhone worker…";
+      job.worker = true;
+    }
+    return new Promise((resolve, reject) => {
+      const entry = {
+        id,
+        url,
+        vreq,
+        dir,
+        say,
+        job,
+        resolve,
+        reject,
+        status: "queued",
+        claimedBy: "",
+        createdAt: Date.now(),
+      };
+      waiters.set(id, entry);
+      const timer = setTimeout(() => {
+        const cur = waiters.get(id);
+        if (!cur || cur !== entry) return;
+        waiters.delete(id);
+        reject(
+          new Error(
+            "No iPhone worker claimed this job in time. Open TetherLess → Settings › Phone Worker, turn it on, and keep the app open."
+          )
+        );
+      }, REQUEST_MS);
+      entry.timer = timer;
     });
   }
 
-  async function talkToBot({ url, dir, say, vreq, mode, page }) {
-    const c = await ensureClient();
-    say("Opening @" + BOT);
-    const entity = await c.getEntity(BOT);
-    const since = Math.floor(Date.now() / 1000) - 2;
-    const text = vreq ? `${url}\n${vreq}` : url;
-    await c.sendMessage(entity, { message: text });
-    say(mode === "versions" ? "Asking for versions…" : (vreq ? "Requesting version " + vreq : "Waiting on @" + BOT));
+  function claimNext(workerId) {
+    const next = [...waiters.values()]
+      .filter((w) => w.status === "queued")
+      .sort((a, b) => a.createdAt - b.createdAt)[0];
+    if (!next) return null;
+    next.status = "claimed";
+    next.claimedBy = workerId || "iphone";
+    next.say("iPhone worker claimed job…");
+    if (next.job) next.job.msg = "iPhone worker claimed job…";
+    return {
+      id: next.id,
+      url: next.url,
+      version: next.vreq || "",
+    };
+  }
 
-    const deadline = Date.now() + (mode === "versions" ? VERSION_MS : REQUEST_MS);
-    let lastProgress = "";
-    const versions = [];
-    let file = null, name = "App", dlUrl = null;
+  function progress(id, msg) {
+    const w = waiters.get(String(id || ""));
+    if (!w) return false;
+    const text = String(msg || "").slice(0, 140);
+    if (text) {
+      w.say(text);
+      if (w.job) w.job.msg = text;
+    }
+    return true;
+  }
 
-    while (Date.now() < deadline) {
-      await sleep(1500);
-      const msgs = await c.getMessages(entity, { limit: 12 });
-      for (const m of msgs) {
-        if (!m || (m.date && m.date < since)) continue;
-        const body = (m.message || "").trim();
-        if (body && body !== lastProgress) {
-          lastProgress = body;
-          const short = body.replace(/\s+/g, " ").slice(0, 120);
-          if (/queue|wait|download|decrypt|process|fetch|upload|%|version/i.test(short)) say(short);
+  function complete(id, filePath, name) {
+    const w = waiters.get(String(id || ""));
+    if (!w) return { ok: false, error: "Unknown or expired job." };
+    clearTimeout(w.timer);
+    waiters.delete(w.id);
+    const dest = path.join(w.dir, "in.ipa");
+    try {
+      if (filePath !== dest) {
+        fs.copyFileSync(filePath, dest);
+        try {
+          fs.rmSync(filePath, { force: true });
+        } catch {
+          /* ignore */
         }
+      }
+      const size = fs.statSync(dest).size;
+      if (size < 100) throw new Error("Uploaded IPA was empty.");
+      if (size > MAX_GB * 1e9) throw new Error(`IPA is larger than ${MAX_GB} GB.`);
+      w.say("IPA received from iPhone…");
+      if (w.job) w.job.msg = "IPA received from iPhone…";
+      w.resolve({ file: dest, name: name || "App" });
+      return { ok: true };
+    } catch (e) {
+      w.reject(e);
+      return { ok: false, error: e.message || String(e) };
+    }
+  }
 
-        // Inline / reply keyboard buttons often list versions.
-        const buttons = flattenButtons(m);
-        for (const b of buttons) {
-          const t = String(b.text || b.data || "");
-          const ver = parseVersionLabel(t);
-          if (ver && !versions.some(v => v.version === ver)) {
-            versions.push({ version: ver, label: t, id: String(b.data || ver) });
+  function failJob(id, error) {
+    const w = waiters.get(String(id || ""));
+    if (!w) return { ok: false, error: "Unknown or expired job." };
+    clearTimeout(w.timer);
+    waiters.delete(w.id);
+    w.reject(new Error(String(error || "Worker failed.").slice(0, 200)));
+    return { ok: true };
+  }
+
+  /** Public iTunes current build — no FastDecrypt version scraping. */
+  async function versions(url, page) {
+    if (!validUrl(url)) throw new Error("Paste an App Store link.");
+    const m = /\bid(\d{5,12})\b/i.exec(url);
+    const empty = { versions: [], items: [], page: 1, pages: 1, total: 0 };
+    if (!m) return empty;
+    const r = await fetch(`https://itunes.apple.com/lookup?id=${m[1]}&country=us`, {
+      signal: AbortSignal.timeout(8000),
+      headers: { accept: "application/json" },
+    });
+    const j = r.ok ? await r.json() : null;
+    const a = j && j.results && j.results[0];
+    if (!a || !a.version) return empty;
+    const ver = String(a.version);
+    const row = {
+      v: ver,
+      version: ver,
+      label: ver,
+      id: ver,
+      index: 0,
+      current: true,
+      min_ios: a.minimumOsVersion ? String(a.minimumOsVersion) : undefined,
+    };
+    const p = Math.max(1, page || 1);
+    const list = p === 1 ? [row] : [];
+    return { ok: true, title: String(a.trackName||"App").slice(0,80), versions: list, items: list, page: p, pages: 1, total: list.length };
+  }
+
+  function attachWorkerRoutes(web, { jsonBody, fail }) {
+    web.post("/api/decrypt/worker/claim", jsonBody, (req, res) => {
+      const auth = authWorker(req);
+      if (!auth.ok) return fail(res, 401, auth.error);
+      const job = claimNext(String((req.body || {}).adid || "iphone").slice(0, 64));
+      return res.json({ ok: true, job: job || null, build: BUILD });
+    });
+
+    web.post("/api/decrypt/worker/progress", jsonBody, (req, res) => {
+      const auth = authWorker(req);
+      if (!auth.ok) return fail(res, 401, auth.error);
+      const b = req.body || {};
+      if (!progress(b.id, b.msg)) return fail(res, 404, "Job not found.");
+      return res.json({ ok: true });
+    });
+
+    web.post("/api/decrypt/worker/fail", jsonBody, (req, res) => {
+      const auth = authWorker(req);
+      if (!auth.ok) return fail(res, 401, auth.error);
+      const b = req.body || {};
+      const r = failJob(b.id, b.error);
+      return r.ok ? res.json({ ok: true }) : fail(res, 404, r.error);
+    });
+
+    // Raw IPA body: POST /api/decrypt/worker/complete?id=&name=
+    // Content-Type: application/octet-stream
+    web.post("/api/decrypt/worker/complete", (req, res) => {
+      const auth = authWorker(req);
+      if (!auth.ok) return fail(res, 401, auth.error);
+      const id = String(req.query.id || "");
+      const name = String(req.query.name || "App").slice(0, 80);
+      const w = waiters.get(id);
+      if (!w) return fail(res, 404, "Job not found.");
+      const tmp = path.join(w.dir, "worker-upload.ipa");
+      const max = MAX_GB * 1e9;
+      const out = fs.createWriteStream(tmp);
+      let got = 0;
+      let failed = false;
+      req.on("data", (chunk) => {
+        got += chunk.length;
+        if (got > max) {
+          failed = true;
+          try {
+            out.destroy();
+            fs.rmSync(tmp, { force: true });
+          } catch {
+            /* ignore */
           }
-          if (mode === "decrypt" && vreq && versionMatches(t, vreq)) {
+          return fail(res, 400, `IPA is larger than ${MAX_GB} GB.`);
+        }
+        out.write(chunk);
+      });
+      req.on("end", () => {
+        if (failed || res.headersSent) return;
+        out.end(() => {
+          if (got < 100) {
             try {
-              await m.click({ text: b.text });
-              say("Selected " + vreq);
-            } catch { /* ignore */ }
+              fs.rmSync(tmp, { force: true });
+            } catch {
+              /* ignore */
+            }
+            return fail(res, 400, "Uploaded IPA was empty.");
           }
+          const r = complete(id, tmp, name);
+          return r.ok ? res.json({ ok: true }) : fail(res, 400, r.error);
+        });
+      });
+      req.on("error", () => {
+        failed = true;
+        try {
+          out.destroy();
+        } catch {
+          /* ignore */
         }
+        if (!res.headersSent) fail(res, 500, "Upload failed.");
+      });
+    });
+  }
 
-        // Document / IPA attachment
-        if (m.media && (m.media.document || m.document)) {
-          const doc = m.media.document || m.document;
-          const fname = docFileName(doc) || "app.ipa";
-          if (/\.ipa$/i.test(fname) || (doc.mimeType || "").includes("zip") || (doc.size || 0) > 1e6) {
-            if (mode === "versions") continue;
-            const maxBytes = MAX_GB * 1e9;
-            if (doc.size && doc.size > maxBytes) throw new Error(`IPA is larger than ${MAX_GB} GB.`);
-            say("Downloading IPA from Telegram…");
-            const dest = path.join(dir, "in.ipa");
-            await c.downloadMedia(m, { outputFile: dest });
-            if (!fs.existsSync(dest) || fs.statSync(dest).size < 100) throw new Error("Telegram download was empty.");
-            file = dest;
-            name = fname.replace(/\.ipa$/i, "") || "App";
-            return { file, name };
-          }
-        }
+  // --- Optional Telegram Bot API (own bot — not FastDecryptBot) ---
 
-        // HTTPS download link in message text or entities
-        const links = extractLinks(m);
-        for (const link of links) {
-          if (/\.ipa(\?|$)/i.test(link) || /download|ipa|cdn|storage/i.test(link)) {
-            if (mode === "versions") continue;
-            dlUrl = link;
-            name = guessName(body) || "App";
-            return { url: dlUrl, name };
-          }
+  function tgApi(method, body) {
+    return new Promise((resolve, reject) => {
+      if (!BOT_TOKEN) return reject(new Error("TELEGRAM_BOT_TOKEN not set"));
+      const data = JSON.stringify(body || {});
+      const req = https.request(
+        {
+          hostname: "api.telegram.org",
+          path: `/bot${BOT_TOKEN}/${method}`,
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Content-Length": Buffer.byteLength(data),
+          },
+        },
+        (res) => {
+          const chunks = [];
+          res.on("data", (c) => chunks.push(c));
+          res.on("end", () => {
+            try {
+              resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+            } catch (e) {
+              reject(e);
+            }
+          });
         }
+      );
+      req.on("error", reject);
+      req.write(data);
+      req.end();
+    });
+  }
+
+  function chatAllowed(chatId) {
+    if (!ALLOWED_CHAT_IDS.length) return true;
+    return ALLOWED_CHAT_IDS.includes(String(chatId));
+  }
+
+  function startTelegramBot(helpers) {
+    if (!BOT_TOKEN) {
+      console.warn("Decrypt TG bot: TELEGRAM_BOT_TOKEN not set — bot polling disabled.");
+      return;
+    }
+    if (typeof helpers.createDecryptJob !== "function") {
+      console.warn("Decrypt TG bot: createDecryptJob helper missing.");
+      return;
+    }
+    if (botTimer) return;
+    console.log(`Decrypt TG bot: polling as @${BOT_USERNAME}`);
+    botTimer = setInterval(() => {
+      pollBot(helpers).catch((e) => console.warn("TG bot poll:", e.message || e));
+    }, 2000);
+    if (botTimer.unref) botTimer.unref();
+  }
+
+  async function pollBot(helpers) {
+    const r = await tgApi("getUpdates", {
+      offset: botOffset,
+      timeout: 0,
+      allowed_updates: ["message"],
+    });
+    if (!r.ok || !Array.isArray(r.result)) return;
+    for (const u of r.result) {
+      botOffset = Math.max(botOffset, (u.update_id || 0) + 1);
+      const msg = u.message;
+      if (!msg || !msg.chat) continue;
+      const chatId = msg.chat.id;
+      if (!chatAllowed(chatId)) {
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text: "This bot is private.",
+        }).catch(() => {});
+        continue;
       }
-
-      if (mode === "versions" && versions.length) {
-        const pageSize = 20;
-        const p = Math.max(1, page || 1);
-        const pages = Math.max(1, Math.ceil(versions.length / pageSize));
-        const items = versions.slice((p - 1) * pageSize, p * pageSize).map((v, i) => ({
-          version: v.version,
-          label: v.label,
-          id: v.id || v.version,
-          index: (p - 1) * pageSize + i,
-        }));
-        return { versions: { items, page: p, pages, total: versions.length } };
+      const text = String(msg.text || "").trim();
+      if (!text) continue;
+      if (/^\/(start|help)/i.test(text)) {
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text:
+            "Send an App Store link (https://apps.apple.com/…). Your iPhone worker decrypts it on-device and I’ll send the IPA back.",
+        }).catch(() => {});
+        continue;
+      }
+      const link = text.split(/\s+/).find((t) => validUrl(t));
+      if (!link) {
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text: "Paste a full apps.apple.com link.",
+        }).catch(() => {});
+        continue;
+      }
+      const verMatch = text.match(/\b(?:v|version)[:=\s]+([0-9][0-9A-Za-z._-]{0,29})\b/i);
+      const version = verMatch ? verMatch[1] : "";
+      try {
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text: "Queued for your iPhone worker…",
+        });
+        const result = await helpers.createDecryptJob({
+          url: link,
+          version,
+          uid: "tg:" + chatId,
+          ip: "telegram",
+          notify: async (status, payload) => {
+            if (status === "done" && payload && payload.filePath) {
+              // site helper should upload via sendDocument if possible; else link.
+              if (typeof helpers.sendIpaToChat === "function") {
+                await helpers.sendIpaToChat(chatId, payload);
+              } else {
+                await tgApi("sendMessage", {
+                  chat_id: chatId,
+                  text: `Done: ${payload.name || "App"} — download from the site.`,
+                });
+              }
+            } else if (status === "error") {
+              await tgApi("sendMessage", {
+                chat_id: chatId,
+                text: "Failed: " + String((payload && payload.error) || "unknown"),
+              });
+            } else if (status === "progress" && payload && payload.msg) {
+              // keep quiet on every progress tick — too noisy
+            }
+          },
+        });
+        if (result && result.error) {
+          await tgApi("sendMessage", { chat_id: chatId, text: result.error });
+        }
+      } catch (e) {
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text: "Couldn’t queue: " + (e.message || e),
+        }).catch(() => {});
       }
     }
+  }
 
-    if (mode === "versions") {
-      return { versions: { items: [], page: 1, pages: 1, total: 0 } };
-    }
-    throw new Error("@" + BOT + " didn't return an IPA in time. Try again, or use on-device decrypt.");
+  // Admin stubs — GramJS userbot login removed; bot uses TELEGRAM_BOT_TOKEN.
+  async function status() {
+    return {
+      lib: true,
+      mode: "phone-worker",
+      authed: !!BOT_TOKEN,
+      who: BOT_TOKEN ? { name: "Bot API", username: BOT_USERNAME } : {},
+      workerConfigured: !!WORKER_TOKEN,
+      waiting: queueLen(),
+      error: !BOT_TOKEN
+        ? "Set TELEGRAM_BOT_TOKEN (and optional TELEGRAM_BOT_USERNAME) on the server. Phone worker needs DECRYPT_WORKER_TOKEN."
+        : !WORKER_TOKEN
+          ? "Set DECRYPT_WORKER_TOKEN and enable Phone Worker in the iOS app."
+          : "",
+      bot: BOT_USERNAME,
+      build: BUILD,
+    };
+  }
+
+  async function setKeys() {
+    return "Bot API mode: set TELEGRAM_BOT_TOKEN in the environment (no my.telegram.org api_id).";
+  }
+  async function sendCode() {
+    return { error: "Bot API mode — no userbot phone login. Use TELEGRAM_BOT_TOKEN." };
+  }
+  async function signIn() {
+    return { error: "Bot API mode — no userbot sign-in." };
+  }
+  async function useSession() {
+    return "Bot API mode — sessions are not used. Set TELEGRAM_BOT_TOKEN.";
+  }
+  async function logout() {
+    return;
   }
 
   return {
-    bot: BOT,
+    bot: BOT_USERNAME,
     validUrl,
     busy,
     queueLen,
@@ -361,64 +488,10 @@ function create({ db, secret }) {
     signIn,
     useSession,
     logout,
+    attachWorkerRoutes,
+    startTelegramBot,
+    tgApi: BOT_TOKEN ? tgApi : null,
   };
 }
 
-// --- helpers ---
-
-function deriveKey(secret) {
-  return crypto.createHash("sha256").update(String(secret || "tetherless")).digest();
-}
-
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-function flattenButtons(m) {
-  const out = [];
-  const rows = (m.replyMarkup && (m.replyMarkup.rows || m.replyMarkup.buttons)) || [];
-  for (const row of rows) {
-    const buttons = row.buttons || row || [];
-    for (const b of buttons) out.push(b);
-  }
-  return out;
-}
-
-function parseVersionLabel(t) {
-  const s = String(t || "");
-  const m = s.match(/\b(\d+(?:\.\d+){1,3}(?:\.\d+)?)\b/);
-  return m ? m[1] : "";
-}
-
-function versionMatches(label, want) {
-  const a = String(want || "").trim();
-  if (!a) return false;
-  return String(label).includes(a) || parseVersionLabel(label) === a;
-}
-
-function docFileName(doc) {
-  const attrs = doc.attributes || [];
-  for (const a of attrs) {
-    if (a.fileName) return a.fileName;
-    if (a.className === "DocumentAttributeFilename" && a.fileName) return a.fileName;
-  }
-  return "";
-}
-
-function extractLinks(m) {
-  const links = [];
-  const text = m.message || "";
-  const re = /https:\/\/[^\s<>"')]+/gi;
-  let x;
-  while ((x = re.exec(text))) links.push(x[0].replace(/[.,;]+$/, ""));
-  const ents = m.entities || [];
-  for (const e of ents) {
-    if (e.url) links.push(e.url);
-  }
-  return [...new Set(links)];
-}
-
-function guessName(body) {
-  const m = String(body || "").match(/(?:app|name)\s*[:\-]\s*([^\n]+)/i);
-  return m ? m[1].trim().slice(0, 60) : "";
-}
-
-module.exports = { create };
+module.exports = { create, BUILD };

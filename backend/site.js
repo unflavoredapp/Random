@@ -186,6 +186,7 @@ details.fl .menu{position:absolute;right:0;top:50px;z-index:9;min-width:190px;pa
 .cats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin:14px 0 18px}
 .chiprow{display:flex;justify-content:center;gap:6px;max-width:100%}
 .cats .ch{justify-content:center;font-size:12px;padding:.85em .8em;gap:.5em;line-height:1.1;min-width:0}
+.ch .cn{font-weight:500;color:var(--mut);letter-spacing:0}.ch.on .cn{color:inherit;opacity:.75}
 .cats .ch:last-child:nth-child(odd){grid-column:1/-1;justify-self:center;min-width:50%}
 .picks{margin:4px 0 14px}.picks .nh i{color:var(--acc);margin-right:6px}
 .pk{position:relative;flex:0 0 min(80%,310px);scroll-snap-align:start;display:flex;gap:13px;align-items:center;min-height:98px;padding:14px;border-radius:18px;border:1px solid rgba(var(--acc-rgb),.5);background:linear-gradient(135deg,rgba(var(--acc-rgb),.18),rgba(10,10,10,.94) 72%);box-shadow:0 0 24px rgba(var(--acc-rgb),.14);color:inherit;text-decoration:none}
@@ -370,15 +371,157 @@ function mountSite(web, d0) {
     for (const r of db.prepare("SELECT bundle_id b, SUM(n) c FROM downloads GROUP BY bundle_id").all()) m.set(r.b, r.c);
     return m;
   });
-  const catMap = cached(30000, () => {
+  // ---------- One row per app ----------
+  // The catalog (d.getCatalog()) lists one row per VERSION of an app, same bundle id repeated once per
+  // version it has ever had (see features.js's own groups() helper, which groups the same way for a
+  // different reason). Anything that lists or counts "apps" needs exactly one row per app, so this picks
+  // the newest-version row as that app's representative, and groupedByKey() gives every raw row for an
+  // app (all its versions) when something — like Paid detection — needs to look across all of them.
+  const verOf = (it) => String(it && it.version != null ? it.version : "");
+  const byVerDesc = (a, b) => verOf(b).localeCompare(verOf(a), "en", { numeric: true });
+  function dedupeByKey(items) {
+    const m = new Map();
+    for (const it of items) {
+      const k = keyOf(it);
+      const prev = m.get(k);
+      if (!prev || byVerDesc(it, prev) < 0) m.set(k, it); // keep whichever row has the newer version
+    }
+    return [...m.values()];
+  }
+  function groupedByKey(items) {
+    const m = new Map();
+    for (const it of items) {
+      const k = keyOf(it);
+      if (!m.has(k)) m.set(k, []);
+      m.get(k).push(it);
+    }
+    return m;
+  }
+  // Cached for a minute, but an EMPTY result is never cached: right after a restart the catalog can still be
+  // loading, and caching that empty moment is what made the feed say "0 apps" for minutes.
+  let appsAt = 0, appsVal = [];
+  const catalogApps = () => {
+    if (appsVal.length && Date.now() - appsAt < 60000) return appsVal;
+    const raw = d.getCatalog() || [];
+    let out = dedupeByKey(raw);
+    if (raw.length && !out.length) { // safety net: grouping must never empty a populated catalog
+      console.warn(`catalogApps: dedupeByKey collapsed ${raw.length} raw row(s) to 0 — falling back to raw rows`);
+      out = raw;
+    }
+    appsVal = out; appsAt = out.length ? Date.now() : 0;
+    return out;
+  };
+  // ---------- Categories (Browse/Filters chips): wiped and rebuilt from scratch, once ----------
+  // Previous attempts tried to detect and merge whatever was already sitting in these tables under
+  // unknown/misspelled names, and kept missing because the real spelling wasn't knowable in advance.
+  // Simplest, most reliable fix: on first run, delete every row in both tables and regenerate the
+  // whole thing — 7 fixed category names, every catalog app classified fresh from its own name/bundle
+  // id/description. From then on, this is the one place that owns these two tables.
+  try {
+    db.exec("CREATE TABLE IF NOT EXISTS categories(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)");
+    db.exec("CREATE TABLE IF NOT EXISTS app_categories(bundle_id TEXT NOT NULL, category_id INTEGER NOT NULL, PRIMARY KEY(bundle_id, category_id))");
+    db.exec("CREATE INDEX IF NOT EXISTS app_categories_bundle ON app_categories(bundle_id)");
+    db.exec("CREATE TABLE IF NOT EXISTS category_migrations(name TEXT PRIMARY KEY, at TEXT NOT NULL)");
+  } catch (e) { console.warn("category tables:", e.message); }
+  const CATEGORY_NAMES = ["Tools", "Paid", "Jailbreak", "Media", "Social", "CarPlay", "Emulators"];
+  // extraDescriptions: text from every OTHER version of this app (Delvek's description text can say "paid"
+  // on one version and not another — e.g. a note added in a later update — so Paid detection checks every
+  // version's description, not just whichever single row ended up as the app's representative).
+  // Delvek writes its paid tag in Unicode "mathematical bold" letters (「✓𝐏𝐀𝐈𝐃 𝐀𝐏𝐏」), which look like PAID but
+  // are different characters. NFKC normalization turns them back into plain ASCII so the word match works.
+  const plain = (s) => String(s || "").normalize("NFKC");
+  function classifyApp(item, extraDescriptions = "") {
+    const desc = plain(`${item.subtitle || ""} ${item.localizedDescription || ""} ${item.versionDescription || ""} ${extraDescriptions}`);
+    // Paid wins over everything: "paid" anywhere in the description puts the app in the Paid tab.
+    if (/\bpaid\b/i.test(desc)) return "Paid";
+    const hay = plain(`${item.name || ""} ${item.bundleIdentifier || ""}`) + " " + desc;
+    const has = (...words) => words.some(w => new RegExp(`\\b${w}\\b`, "i").test(hay));
+    if (has("jailbreak", "cydia", "sileo", "substrate", "tweakinjection", "choicy", "theos", "tweak", "hook", "dopamine")) return "Jailbreak";
+    if (has("carplay", "car", "obd", "dashcam")) return "CarPlay";
+    if (has("emulator", "emu", "nes", "snes", "gba", "n64", "ppsspp", "dolphin", "rom", "retroarch")) return "Emulators";
+    if (has("social", "messenger", "reddit", "twitter", "instagram", "tiktok", "facebook", "whatsapp", "telegram", "discord", "snapchat")) return "Social";
+    if (has("music", "audio", "video", "stream", "youtube", "player", "photo", "camera", "image", "podcast", "soundcloud", "spotify")) return "Media";
+    return "Tools";
+  }
+  const descOf = (rows) => rows.map(x => `${x.localizedDescription || ""} ${x.versionDescription || ""}`).join(" ");
+  // v2: re-run once with the Unicode-aware Paid check. Runs lazily (from catMap) and only once the catalog has
+  // actually loaded, so a restart that comes up before the catalog can't wipe the tables and classify nothing.
+  const REBUILD = "categories_rebuild_v2";
+  let rebuilt = false, catVer = 0;
+  function rebuildIfNeeded() {
+    if (rebuilt) return;
+    try {
+      if (db.prepare("SELECT 1 FROM category_migrations WHERE name=?").get(REBUILD)) { rebuilt = true; return; }
+      const apps = catalogApps();
+      if (!apps.length) return; // catalog not loaded yet; try again on the next request
+      db.exec("DELETE FROM app_categories");
+      db.exec("DELETE FROM categories");
+      const insCat = db.prepare("INSERT INTO categories(name) VALUES(?)");
+      const idByName = new Map(CATEGORY_NAMES.map(n => [n, Number(insCat.run(n).lastInsertRowid)]));
+      const ins = db.prepare("INSERT OR IGNORE INTO app_categories(bundle_id, category_id) VALUES(?,?)");
+      const rawGroups = groupedByKey(d.getCatalog() || []);
+      const count = {};
+      for (const item of apps) {
+        if (!item.bundleIdentifier) continue;
+        const c = classifyApp(item, descOf(rawGroups.get(keyOf(item)) || []));
+        ins.run(item.bundleIdentifier, idByName.get(c));
+        count[c] = (count[c] || 0) + 1;
+      }
+      db.prepare("INSERT OR IGNORE INTO category_migrations(name, at) VALUES(?,?)").run(REBUILD, new Date().toISOString());
+      rebuilt = true; catVer++;
+      console.log("categories rebuilt:", JSON.stringify(count));
+    } catch (e) { console.warn("categories rebuild:", e.message); }
+  }
+  let backfilling = false;
+  function backfillNewApps(already) {
+    if (backfilling) return;
+    backfilling = true;
+    try {
+      const idByName = new Map(db.prepare("SELECT id,name FROM categories").all().map(r => [r.name, r.id]));
+      const ins = db.prepare("INSERT OR IGNORE INTO app_categories(bundle_id, category_id) VALUES(?,?)");
+      const rawGroups = groupedByKey(d.getCatalog() || []);
+      let added = 0;
+      for (const item of catalogApps()) {
+        const bid = item.bundleIdentifier;
+        if (!bid || already.has(bid)) continue; // only apps with zero category rows — never touches an existing tag
+        const cid = idByName.get(classifyApp(item, descOf(rawGroups.get(keyOf(item)) || [])));
+        if (cid) { ins.run(bid, cid); added++; }
+      }
+      if (added) console.log(`categorized ${added} new app(s)`);
+    } catch (e) { console.warn("category backfill:", e.message); }
+    backfilling = false;
+  }
+  const catMapQ = cached(30000, () => {
     const m = new Map();
     for (const r of db.prepare("SELECT bundle_id b, category_id c FROM app_categories").all()) {
       if (!m.has(r.b)) m.set(r.b, new Set());
       m.get(r.b).add(r.c);
     }
+    backfillNewApps(m); // anything added to the catalog after the rebuild still gets classified
+    // Admin's manual category fixes (features.js, category_overrides) replace the automatic one.
+    if (feat && feat.catOverrides) {
+      try {
+        const idByName = new Map(db.prepare("SELECT id,name FROM categories").all().map(r => [r.name, r.id]));
+        for (const [b, name] of feat.catOverrides()) { const id = idByName.get(name); if (id != null) m.set(b, new Set([id])); }
+      } catch (e) { console.warn("category overrides:", e.message); }
+    }
     return m;
-  });
-  const categories = cached(30000, () => db.prepare("SELECT id,name FROM categories ORDER BY id").all());
+  }, () => catVer + ":" + (feat && feat.catOverVer ? feat.catOverVer() : 0));
+  const categoriesQ = cached(30000, () => db.prepare("SELECT id,name FROM categories ORDER BY id").all(), () => catVer);
+  // The rebuild check runs before the caches are read (not inside them), so chips and their app lists always
+  // come from the same rebuild — a chip cached before the rebuild would otherwise point at a deleted id.
+  const catMap = () => { rebuildIfNeeded(); return catMapQ(); };
+  // How many apps are in each category (one count per app, not per version). Recomputed with the map.
+  let countsFor = null, countsVal = new Map();
+  const catCounts = () => {
+    const m = catMap(), apps = catalogApps();
+    if (countsFor === m && countsVal.size) return countsVal;
+    const c = new Map();
+    for (const it of apps) { const s = m.get(keyOf(it)); if (s) for (const id of s) c.set(id, (c.get(id) || 0) + 1); }
+    countsFor = m; countsVal = c;
+    return c;
+  };
+  const categories = () => { rebuildIfNeeded(); return categoriesQ(); };
   const grandTotal = cached(60000, () => db.prepare("SELECT COALESCE(SUM(n),0) c FROM downloads").get().c);
   const grandViews = cached(60000, () => db.prepare("SELECT COALESCE(SUM(views),0) c FROM page_views").get().c);
   const grandUniqueViews = cached(60000, () => db.prepare("SELECT COALESCE(SUM(unique_views),0) c FROM page_views").get().c);
@@ -417,7 +560,10 @@ function mountSite(web, d0) {
       const app = n.appID ? d.byKey(String(n.appID)) : null; // news about an app we carry links to its page
       const ext = !app && n.url ? (safeHttps(n.url) || "") : "";
       const tint = /^#?[0-9a-f]{6}$/i.test(String(n.tintColor || "")) ? "#" + String(n.tintColor).replace("#", "") : "";
-      out.push({ id, title: n.title.trim().slice(0, 80), caption: String(n.caption || "").trim().slice(0, 220), image: safeHttps(n.imageURL) || "",
+      const mine = (u) => typeof u === "string" && /^\/news-media\/[a-f0-9]{24}\.(png|jpg|webp|gif|ipa)$/.test(u) ? siteUrl + u : "";
+      const feats = Array.isArray(n.features) ? n.features.filter(x => typeof x === "string" && x.trim()).map(x => x.trim().slice(0, 80)).slice(0, 12) : [];
+      out.push({ id, features: feats, ipa: mine(n.ipaURL), ipaSize: Number(n.ipaSize) || 0, ipaVer: String(n.ipaVersion || "").slice(0, 30),
+        title: n.title.trim().slice(0, 80), caption: String(n.caption || "").trim().slice(0, 220), image: mine(n.imageURL) || safeHttps(n.imageURL) || "",
         desc: String(n.description || n.caption || "").trim().slice(0, 3000), appKey: app ? keyOf(app) : "", appName: app ? String(app.name || "") : "",
         tint, date: Date.parse(n.date) || 0, url: app ? `/app/${enc(keyOf(app))}` : ext, ext: !!ext, appID: app ? app.bundleIdentifier || "" : "" });
     }
@@ -429,6 +575,8 @@ function mountSite(web, d0) {
     title: n.title, identifier: n.id, caption: n.caption || undefined, date: new Date(n.date || Date.now()).toISOString(),
     tintColor: n.tint ? n.tint.slice(1) : undefined, imageURL: n.image || undefined, notify: false,
     url: n.ext ? n.url : undefined, appID: n.appID || undefined,
+    description: n.desc && n.desc !== n.caption ? n.desc : undefined, features: n.features && n.features.length ? n.features : undefined,
+    ipaURL: n.ipa || undefined, ipaSize: n.ipaSize || undefined, ipaVersion: n.ipaVer || undefined,
   }));
   const viewUpsert = db.prepare(`INSERT INTO page_views(page_key,day,views,unique_views) VALUES(?,?,1,?)
     ON CONFLICT(page_key,day) DO UPDATE SET views=views+1, unique_views=unique_views+excluded.unique_views`);
@@ -503,7 +651,9 @@ function mountSite(web, d0) {
     if (!safeEq(sig, sign(`${id}.${exp}`))) return null;
     if (id[0] === "u") { // password account
       const r = localGet.get(Number(id.slice(1)));
-      return r ? { id: r.id, tg_id: null, local: true, username: r.username, first_name: r.username, photo_url: "", email: r.email } : null;
+      if (!r) return null;
+      if (acct.isBanned && acct.isBanned(r.id)) return null; // banned: the website session stops working immediately, same as the app
+      return { id: r.id, tg_id: null, local: true, username: r.username, first_name: r.username, photo_url: "", email: r.email };
     }
     return userGet.get(Number(id)) || null;
   }
@@ -589,12 +739,15 @@ function mountSite(web, d0) {
     const chk = checkP12(p12, pw);
     if (chk === "badpw") return "Wrong p12 password.";
     if (chk === "bad") return "That isn't a valid .p12 file.";
-    if (certCount.get(uid).c >= 10) return "Up to 10 certificates per account. Remove one first.";
+    { const cap = isPrem(uid) ? Math.max(10, perk("certSlots", 10)) : 10; if (certCount.get(uid).c >= cap) return `Up to ${cap} certificates per account. Remove one first.`; }
     const name = String(b.name || "").replace(/[\u0000-\u001f<>]/g, "").trim().slice(0, 60) || pv.team || pv.name || "Certificate";
     certIns.run(uid, name, pv.team || pv.name || "", pv.expires || "", p12, prov, encPw(pw), new Date().toISOString(), locked ? 1 : 0);
     return "";
   }
   const acct = {}; // admin account tools, handed to features.mount
+  // Premium perks (see perks.js). Both fall back to the free behavior if the app API isn't mounted.
+  const isPrem = (uid) => { try { return !!(acct.isPremium && acct.isPremium(uid)); } catch { return false; } };
+  const perk = (key, fallback) => (acct.perks && acct.perks[key] != null ? acct.perks[key] : fallback);
   // ---------- guests (no account): a signed cookie id owns their imported certificate / uploaded IPA ----------
   const guestId = (req) => {
     const m = /(?:^|;\s*)as_guest=([^;]+)/.exec(req.headers.cookie || "");
@@ -618,7 +771,7 @@ function mountSite(web, d0) {
   const GUEST_DAYS = 7;
   setInterval(() => { try { db.prepare("DELETE FROM user_certs WHERE uid LIKE 'g%' AND created_at < ?").run(new Date(Date.now() - GUEST_DAYS * 86400000).toISOString()); } catch {} }, 3600000).unref();
 
-  // Telegram userbot -> @FastDecryptBot bridge (lock icon). Needs: npm i telegram
+  // Phone-worker decrypt + optional own Telegram bot (TELEGRAM_BOT_TOKEN). No FastDecryptBot.
   let decMod = null;
   try { decMod = require("./decrypt").create({ db, secret: viewSalt }); } catch (e) { console.warn("Decrypt disabled:", e.message); }
 
@@ -759,10 +912,26 @@ function mountSite(web, d0) {
         const row = localFind.get(ident, ident);
         const ok = await checkPw(password, row ? row.pass_hash : null);
         if (!row || !ok) return fail(res, 401, "Incorrect username or password.");
+        if (acct.isBanned && acct.isBanned(row.id)) {
+          return res.status(403).json({ ok: false, error: acct.banMessage(row.id), banned: true, ban: acct.banInfo ? acct.banInfo(row.id) : null });
+        }
         localTouch.run(new Date().toISOString(), row.id);
         setSession(res, "u" + row.id);
         return res.json({ ok: true });
       } catch (e) { console.warn("Login failed:", e.message); return fail(res, 500, "Something went wrong. Please try again."); }
+    }, jsonErr);
+
+    // A banned website account has no session, so this re-checks the password (same as login) before recording
+    // the appeal — same one-per-ban rule and admin inbox as the app side (they share local_users/ban_appeals).
+    web.post("/api/auth/appeal", guard, jsonBody, async (req, res) => {
+      try {
+        if (limited("ap|" + req.ip, 8, 3600000)) return fail(res, 429, "Too many attempts. Try again later.");
+        const b = req.body || {};
+        if (!acct.submitAppeal) return fail(res, 500, "Appeals aren't available right now.");
+        const ident = String(b.id || b.username || "").trim().slice(0, 120);
+        const r = await acct.submitAppeal({ username: ident, password: typeof b.password === "string" ? b.password.slice(0, 128) : "", message: b.message, gifUrl: b.gif_url });
+        return r.ok ? res.json(r) : fail(res, r.code || 400, r.error);
+      } catch (e) { console.warn("Appeal failed:", e.message); return fail(res, 500, "Something went wrong. Please try again."); }
     }, jsonErr);
 
     // ---- native iOS app API (/app/v1/*, /admin/app) ----
@@ -899,6 +1068,7 @@ function mountSite(web, d0) {
     const CACHE_MAX = (Number(process.env.DECRYPT_CACHE_GB) || 20) * 1e9;
     try { fs.mkdirSync(WORK_DIR, { recursive: true }); for (const n of fs.readdirSync(WORK_DIR)) fs.rmSync(path.join(WORK_DIR, n), { recursive: true, force: true }); } catch (e) { console.warn("Decrypt cache dir:", e.message); }
     db.exec("CREATE TABLE IF NOT EXISTS dec_cache(k TEXT PRIMARY KEY, app_id TEXT, ver_req TEXT, file TEXT, size INTEGER, name TEXT, bid TEXT, ver TEXT, icon_url TEXT, created_at INTEGER, used_at INTEGER)");
+    try { db.exec("ALTER TABLE dec_cache ADD COLUMN keep_until INTEGER"); } catch { /* already there */ }
     db.exec("CREATE TABLE IF NOT EXISTS dec_hist2(uid TEXT NOT NULL, app_id TEXT NOT NULL, vreq TEXT NOT NULL DEFAULT '', name TEXT, bid TEXT, ver TEXT, size INTEGER, icon TEXT, url TEXT, at INTEGER, PRIMARY KEY(uid,app_id,vreq))");
     const appIdOf = (u) => { const m = /\bid(\d{5,12})\b/.exec(String(u || "")); return m ? m[1] : ""; };
     const cKey = (aid, ver) => aid + "_" + String(ver || "latest").replace(/[^A-Za-z0-9._-]/g, "").slice(0, 40);
@@ -907,7 +1077,7 @@ function mountSite(web, d0) {
       const r = db.prepare("SELECT * FROM dec_cache WHERE k=?").get(k);
       if (!r) return null;
       const ttl = r.ver_req ? CACHE_VER_MS : CACHE_LATEST_MS;
-      if (r.created_at + ttl < Date.now() || !fs.existsSync(r.file)) { cDrop(k); return null; }
+      if ((r.created_at + ttl < Date.now() && !(r.keep_until > Date.now())) || !fs.existsSync(r.file)) { cDrop(k); return null; }
       return r;
     };
     function cPut(k, aid, verReq, file, meta, icon) {
@@ -934,12 +1104,24 @@ function mountSite(web, d0) {
       db.prepare("UPDATE dec_cache SET used_at=? WHERE k=?").run(Date.now(), e.k);
       return { file: f, hasIcon };
     }
+    // Premium: an app you decrypted stays re-downloadable longer than the shared cache would normally keep it.
+    const cPin = (k, uid) => {
+      if (!k || !isPrem(uid)) return;
+      const ms = perk("cacheKeepDays", 1) * 86400000;
+      if (ms > CACHE_LATEST_MS) { try { db.prepare("UPDATE dec_cache SET keep_until=MAX(COALESCE(keep_until,0), ?) WHERE k=?").run(Date.now() + ms, k); } catch { /* ignore */ } }
+    };
     const histPut = (uid, aid, vreq, m) => {
       if (!aid) return;
       db.prepare("INSERT INTO dec_hist2(uid,app_id,vreq,name,bid,ver,size,icon,url,at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(uid,app_id,vreq) DO UPDATE SET name=excluded.name,bid=excluded.bid,ver=excluded.ver,size=excluded.size,icon=excluded.icon,url=excluded.url,at=excluded.at").run(uid, aid, vreq || "", m.name, m.bid, m.ver, m.size, m.icon || "", m.url, Date.now());
-      db.prepare("DELETE FROM dec_hist2 WHERE uid=? AND rowid NOT IN (SELECT rowid FROM dec_hist2 WHERE uid=? ORDER BY at DESC LIMIT 30)").run(uid, uid);
+      db.prepare("DELETE FROM dec_hist2 WHERE uid=? AND rowid NOT IN (SELECT rowid FROM dec_hist2 WHERE uid=? ORDER BY at DESC LIMIT ?)").run(uid, uid, isPrem(uid) ? Math.max(30, perk("historyKeep", 30)) : 30);
     };
-    setInterval(() => { try { db.prepare("DELETE FROM dec_hist2 WHERE at < ?").run(Date.now() - 30 * 86400000); } catch {} }, 6 * 3600000).unref();
+    setInterval(() => {
+      try {
+        const now = Date.now(), days = Math.max(30, perk("historyDays", 30));
+        db.prepare("DELETE FROM dec_hist2 WHERE at < ?").run(now - days * 86400000);
+        if (days > 30) for (const r of db.prepare("SELECT DISTINCT uid FROM dec_hist2 WHERE at < ?").all(now - 30 * 86400000)) if (!isPrem(r.uid)) db.prepare("DELETE FROM dec_hist2 WHERE uid=? AND at < ?").run(r.uid, now - 30 * 86400000);
+      } catch {}
+    }, 6 * 3600000).unref();
 
     async function runDecrypt(j) {
       const dir = fs.mkdtempSync(path.join(WORK_DIR, "d-"));
@@ -950,7 +1132,7 @@ function mountSite(web, d0) {
         let file = "", name = "App", entry = null, hasIcon = false;
         const tryCache = () => { const e = ck && cGet(ck); if (!e) return null; const u = cUse(e, dir); entry = e; file = u.file; hasIcon = u.hasIcon; say("From cache"); return { cached: true }; };
         if (!tryCache()) {
-          const r = await decMod.request(j.url, dir, say, tryCache, vreq);
+          const r = await decMod.request(j.url, dir, say, tryCache, vreq, j);
           if (!r.cached) {
             file = r.file; name = r.name || "App";
             if (r.url) { file = path.join(dir, "in.ipa"); say("Fetching the IPA"); await fetchTo(r.url, file, p => say("Fetching the IPA " + p + "%")); }
@@ -958,13 +1140,13 @@ function mountSite(web, d0) {
         }
         const fd = fs.openSync(file, "r"), b4 = Buffer.alloc(4); fs.readSync(fd, b4, 0, 4, 0); fs.closeSync(fd);
         const size = fs.statSync(file).size;
-        if (size < 100 || b4.readUInt32BE(0) !== 0x504b0304) throw new Error("The bot's file isn't an IPA.");
+        if (size < 100 || b4.readUInt32BE(0) !== 0x504b0304) throw new Error("The uploaded file isn't an IPA.");
         let meta;
         if (entry) meta = { name: entry.name, bid: entry.bid, ver: entry.ver, iconUrl: entry.icon_url || "" };
         else {
           say("Checking the IPA");
           const info = ipaInfo(file);
-          if (info && info.bad) throw new Error("The bot's file doesn't contain an app.");
+          if (info && info.bad) throw new Error("The uploaded file doesn't contain an app.");
           const i = info || {};
           meta = { name: String(i.CFBundleDisplayName || i.CFBundleName || name).replace(/[\u0000-\u001f<>]/g, "").slice(0, 60) || "App", bid: String(i.CFBundleIdentifier || "com.example.app").slice(0, 155), ver: String(i.CFBundleShortVersionString || i.CFBundleVersion || "1.0").slice(0, 40), iconUrl: "" };
           hasIcon = ipaIcon(file, path.join(dir, "icon.png"));
@@ -973,13 +1155,21 @@ function mountSite(web, d0) {
         }
         for (const [id, u] of uploads) if (u.uid === j.uid) dropUpload(id);
         const id = crypto.randomBytes(16).toString("hex");
-        uploads.set(id, { id, uid: j.uid, dir, file, hasIcon, iconUrl: meta.iconUrl, from: "decrypt", name: meta.name, bid: meta.bid, ver: meta.ver, expires: Date.now() + 45 * 60000 });
+        uploads.set(id, { id, uid: j.uid, dir, file, hasIcon, iconUrl: meta.iconUrl, from: "decrypt", name: meta.name, bid: meta.bid, ver: meta.ver, expires: Date.now() + (isPrem(j.uid) ? perk("decryptFileMin", 45) : 45) * 60000 });
         histPut(j.uid, aid, vreq, { name: meta.name, bid: meta.bid, ver: meta.ver, size, icon: meta.iconUrl, url: j.url });
+        if (aid) cPin(ck, j.uid);
         Object.assign(j, { status: "done", up: id, size, name: meta.name, bid: meta.bid, ver: meta.ver, cached: !!entry, msg: "Done" });
+        if (typeof j.onDone === "function") {
+          try { await j.onDone({ status: "done", filePath: file, name: meta.name, bid: meta.bid, ver: meta.ver, up: id, size }); } catch (e) { console.warn("Decrypt onDone:", e.message); }
+        }
       } catch (e) {
         try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
         j.status = "error"; j.error = String(e.message || "Decrypt failed.").slice(0, 200);
+        if (!j.refunded && acct.decrypt) { j.refunded = true; try { acct.decrypt.refund(j.uid, j.ip, aid || undefined); } catch {} } // a failed decrypt doesn't use up the day's allowance or start the per-app cooldown
         console.warn("Decrypt failed:", j.error);
+        if (typeof j.onDone === "function") {
+          try { await j.onDone({ status: "error", error: j.error }); } catch {}
+        }
       }
     }
     const appInfoCache = new Map();
@@ -1029,13 +1219,20 @@ function mountSite(web, d0) {
         return res.json({ ok: true, items });
       } catch { return fail(res, 502, "Search is unavailable right now."); }
     });
+    // Today's decrypt allowance for whoever is asking (website cookie, signed-in account, or the iOS app's token / ADID header).
+    web.get("/api/decrypt/quota", (req, res) => {
+      res.set({ "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow" });
+      if (!acct.decrypt) return res.json({ ok: true, tier: "guest", limit: null, used: 0, left: null, unlimited: true });
+      const appId = appIdOf(String(req.query.url || ""));
+      return res.json(acct.decrypt.status(actorId(req, res, false), req.ip, appId || undefined));
+    });
     web.get("/api/decrypt/history", (req, res) => {
       res.set({ "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow" });
       const uid = actorId(req, res, false);
       if (!uid) return res.json({ ok: true, items: [] });
-      const rows = db.prepare("SELECT app_id,vreq,name,bid,ver,size,icon,url,at FROM dec_hist2 WHERE uid=? ORDER BY at DESC LIMIT 12").all(uid);
-      const live = db.prepare("SELECT 1 FROM dec_cache WHERE k=? AND created_at>?");
-      return res.json({ ok: true, items: rows.map(r => Object.assign(r, { cached: !!live.get(cKey(r.app_id, r.vreq), Date.now() - (r.vreq ? CACHE_VER_MS : CACHE_LATEST_MS)) })) });
+      const rows = db.prepare("SELECT app_id,vreq,name,bid,ver,size,icon,url,at FROM dec_hist2 WHERE uid=? ORDER BY at DESC LIMIT ?").all(uid, isPrem(uid) ? Math.max(12, perk("historyKeep", 12)) : 12);
+      const live = db.prepare("SELECT 1 FROM dec_cache WHERE k=? AND (created_at>? OR keep_until>?)");
+      return res.json({ ok: true, items: rows.map(r => Object.assign(r, { cached: !!live.get(cKey(r.app_id, r.vreq), Date.now() - (r.vreq ? CACHE_VER_MS : CACHE_LATEST_MS), Date.now()) })) });
     });
     web.post("/api/decrypt/history/delete", guard, needUser, jsonBody, (req, res) => {
       const b = req.body || {};
@@ -1053,12 +1250,20 @@ function mountSite(web, d0) {
         if (vreq && !/^[0-9][0-9A-Za-z._-]{0,29}$/.test(vreq)) return fail(res, 400, "Version should look like 6.8.0.");
         if (limited("dc|" + req.ip, 12, 3600000)) return fail(res, 429, "Too many requests. Try again later.");
         if (decBusy().some(j => j.uid === req.uid)) return fail(res, 429, "You already have a decrypt running.");
-        if (decBusy().length >= 8) return fail(res, 503, "Decrypt is busy. Try again in a minute.");
+        if (decBusy().length >= (isPrem(req.uid) ? perk("decryptBusyCap", 8) : 8)) return fail(res, 503, "Decrypt is busy. Try again in a minute.");
+        let quota = null;
+        if (acct.decrypt) {
+          quota = acct.decrypt.consume(req.uid, req.ip, appIdOf(url) || undefined);
+          if (!quota.ok) {
+            const msg = quota.cooldown ? quota.error : `You've used all ${quota.limit} decrypts for today.${quota.tier === "guest" ? " Sign in for more." : ""} It resets at midnight UTC.`;
+            return res.status(429).json({ ok: false, error: msg, quota });
+          }
+        }
         const id = crypto.randomBytes(12).toString("hex");
-        const j = { id, uid: req.uid, url, vreq, status: "queued", msg: "Queued", error: "", expires: Date.now() + 60 * 60000 };
+        const j = { id, uid: req.uid, ip: req.ip, url, vreq, status: "queued", msg: "Queued", error: "", expires: Date.now() + (isPrem(req.uid) ? perk("decryptFileMin", 45) + 15 : 60) * 60000 };
         decJobs.set(id, j);
         runDecrypt(j);
-        return res.json({ ok: true, id });
+        return res.json({ ok: true, id, quota });
       } catch (e) { console.warn("Decrypt start failed:", e.message); return fail(res, 500, "Something went wrong. Please try again."); }
     }, jsonErr);
     const verCache = new Map();
@@ -1074,7 +1279,6 @@ function mountSite(web, d0) {
         if (limited("dv|" + req.ip, 40, 3600000)) return fail(res, 429, "Too many requests. Try again later.");
         const ck = appIdOf(url) + "|" + page, hit = verCache.get(ck);
         if (hit && hit.at > Date.now() - 15 * 60000) return res.json(hit.v);
-        if (decMod.busy()) return fail(res, 503, "The bot is busy with another request. Try again in a moment.");
         const v = await decMod.versions(url, page);
         const out = Object.assign({ ok: true }, v);
         if (verCache.size > 300) verCache.clear();
@@ -1091,6 +1295,71 @@ function mountSite(web, d0) {
       if (j.status === "done") Object.assign(out, { up: j.up, name: j.name, bid: j.bid, ver: j.ver, size: j.size });
       return res.json(out);
     });
+
+    // iPhone worker claim / progress / complete (DECRYPT_WORKER_TOKEN).
+    if (decMod && typeof decMod.attachWorkerRoutes === "function") {
+      decMod.attachWorkerRoutes(web, { jsonBody, fail });
+    }
+
+    // Own Telegram bot → same decrypt jobs (phone worker). Optional TELEGRAM_BOT_TOKEN.
+    if (decMod && typeof decMod.startTelegramBot === "function") {
+      decMod.startTelegramBot({
+        createDecryptJob: async ({ url, version, uid, ip, notify }) => {
+          if (!decMod.validUrl(url)) return { error: "Paste an App Store link." };
+          const vreq = String(version || "").trim();
+          if (vreq && !/^[0-9][0-9A-Za-z._-]{0,29}$/.test(vreq)) return { error: "Bad version." };
+          if (decBusy().length >= 8) return { error: "Decrypt is busy. Try again in a minute." };
+          const id = crypto.randomBytes(12).toString("hex");
+          const j = {
+            id, uid: uid || ("tg:" + id), ip: ip || "telegram", url, vreq,
+            status: "queued", msg: "Queued", error: "",
+            expires: Date.now() + 75 * 60000,
+            onDone: async (payload) => {
+              if (typeof notify === "function") {
+                if (payload.status === "done") await notify("done", payload);
+                else await notify("error", payload);
+              }
+            },
+          };
+          decJobs.set(id, j);
+          runDecrypt(j);
+          return { ok: true, id };
+        },
+        sendIpaToChat: async (chatId, payload) => {
+          if (!decMod.tgApi || !payload.filePath || !fs.existsSync(payload.filePath)) {
+            await decMod.tgApi("sendMessage", {
+              chat_id: chatId,
+              text: `Done: ${payload.name || "App"} (${payload.ver || ""}). Download from the site if the file wasn’t attached.`,
+            });
+            return;
+          }
+          // Telegram Bot API sendDocument via multipart is heavier; send a short notice + site hint.
+          // File remains available via /api/ipa/file when the same uid polls; for TG we stream with fetch FormData if available.
+          try {
+            const FormData = require("form-data");
+            const form = new FormData();
+            form.append("chat_id", String(chatId));
+            form.append("document", fs.createReadStream(payload.filePath), {
+              filename: `${(payload.name || "App").replace(/[^\w.-]+/g, "_")}.ipa`,
+              contentType: "application/octet-stream",
+            });
+            form.append("caption", `${payload.name || "App"} ${payload.ver || ""} · decrypted on-device`.trim());
+            await new Promise((resolve, reject) => {
+              form.submit(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendDocument`, (err, res) => {
+                if (err) return reject(err);
+                res.resume();
+                resolve();
+              });
+            });
+          } catch (e) {
+            await decMod.tgApi("sendMessage", {
+              chat_id: chatId,
+              text: `Done: ${payload.name || "App"} — open TetherLess / the site to download (TG attach failed: ${e.message || e}).`,
+            });
+          }
+        },
+      });
+    }
     web.get("/api/ipa/file/:upId", (req, res) => {
       const u = findUpload(actorId(req, res, false), String(req.params.upId));
       if (!u) return res.status(404).type("text").send("Not found. The file expired, decrypt it again.");
@@ -1301,7 +1570,7 @@ function mountSite(web, d0) {
         job.status = "error"; job.error = String((e && e.message) || e).slice(0, 200);
         try { fs.rmSync(dir, { recursive: true, force: true }); job.dir = ""; } catch {}
       }
-      job.expires = Date.now() + JOB_TTL;
+      job.expires = Date.now() + (isPrem(job.uid) ? perk("signLinkMin", 30) * 60000 : JOB_TTL);
     }
 
     function parseSignOpts(b) {
@@ -1359,12 +1628,12 @@ function mountSite(web, d0) {
         if (typeof o === "string") return fail(res, 400, o);
         const mine = busyJobs();
         if (mine.some(j => j.uid === req.uid)) return fail(res, 409, "You already have a signing job running.");
-        if (mine.length >= 3) return fail(res, 503, "The signer is busy. Try again in a minute.");
+        if (mine.length >= (isPrem(req.uid) ? perk("signBusyCap", 3) : 3)) return fail(res, 503, "The signer is busy. Try again in a minute.");
         const token = crypto.randomBytes(16).toString("hex");
         const job = { uid: req.uid, key: upl ? "upload" : keyOf(item), bid: String(item.bundleIdentifier || keyOf(item)), name: o.name || item.name, ver: String(ver || "1.0"), status: "queued", steps: [], got: 0, total: 0 };
         jobs.set(token, job);
         if (upl) uploads.delete(upl.id);
-        runSign(job, upl ? { file: upl.file, dir: upl.dir } : { url }, cert, o).catch((e) => { job.status = "error"; job.error = "Signing failed."; job.expires = Date.now() + JOB_TTL; console.warn("Sign job crashed:", e && e.message); });
+        runSign(job, upl ? { file: upl.file, dir: upl.dir } : { url }, cert, o).catch((e) => { job.status = "error"; job.error = "Signing failed."; job.expires = Date.now() + (isPrem(job.uid) ? perk("signLinkMin", 30) * 60000 : JOB_TTL); console.warn("Sign job crashed:", e && e.message); });
         return res.json({ ok: true, token });
       } catch (e) { console.warn("Sign start failed:", e.message); return fail(res, 500, "Something went wrong. Please try again."); }
     }, (err, _req, res, next) => (err ? fail(res, 413, "Upload too large or invalid.") : next()));
@@ -1809,15 +2078,19 @@ $('q').addEventListener('input',function(){clearTimeout(tm);var v=this.value.tri
 <div id="vp" hidden style="margin-top:10px"><div class="lbl" id="vh"></div><div class="sres" id="vl"></div>
 <div style="display:flex;gap:8px;align-items:center;margin-top:8px"><button class="abtn ghost" id="vprev" type="button" aria-label="Previous page"><i class="fa-solid fa-chevron-left"></i></button><label class="sinp" style="flex:1;margin:0"><input id="vpg" type="text" inputmode="numeric" placeholder="Page number" maxlength="4" autocomplete="off"></label><button class="abtn ghost" id="vgo" type="button">Go</button><button class="abtn ghost" id="vnext" type="button" aria-label="Next page"><i class="fa-solid fa-chevron-right"></i></button></div>
 <div class="cmsg" id="vm" style="margin-top:6px"></div></div>
+<div class="cmsg" id="dq" style="margin-top:10px;text-align:center"></div>
 <div class="cmsg" id="st" role="status" style="margin-top:10px"></div>
 <div class="rs" id="res" hidden><img id="ri" alt="" referrerpolicy="no-referrer"><div class="tx"><small id="rbid">DECRYPTED</small><b id="rn"></b><span id="rm"></span></div></div>
-<div class="dact" id="acts" hidden><a class="vb" id="dl" href="#"><i class="fa-solid fa-download"></i><span>Download</span></a><div class="pw">Powered by<a href="https://t.me/${esc(decMod ? decMod.bot : "FastDecryptBot")}" rel="noopener">@${esc(decMod ? decMod.bot : "FastDecryptBot")}</a></div><a class="vb pri" id="sg" href="#"><i class="fa-solid fa-signature"></i><span>Sign</span></a></div>
+<div class="dact" id="acts" hidden><a class="vb" id="dl" href="#"><i class="fa-solid fa-download"></i><span>Download</span></a><div class="pw">Powered by<a href="https://t.me/${esc(decMod ? decMod.bot : "TetherLessDecryptBot")}" rel="noopener">@${esc(decMod ? decMod.bot : "TetherLessDecryptBot")}</a> · on-device worker</div><a class="vb pri" id="sg" href="#"><i class="fa-solid fa-signature"></i><span>Sign</span></a></div>
 <div id="hw" hidden><div class="lbl" style="margin-top:22px">Recent</div><div class="sres" id="hist"></div><div class="btnrow"><button class="abtn ghost" id="hclr" type="button"><i class="fa-regular fa-trash-can"></i> Clear history</button></div></div>
 <div class="bsp"></div>
 <script>
 (function(){
 function $(i){return document.getElementById(i);}
 function say(t,k){var e=$('st');e.textContent=t||'';e.className='cmsg'+(k?' '+k:'');}
+function quota(q){var e=$('dq');if(!e)return;if(q)show(q);else fetch('/api/decrypt/quota',{credentials:'same-origin'}).then(function(r){return r.json();}).then(show).catch(function(){});
+ function show(j){if(!j||j.ok===false)return;e.textContent=j.unlimited?'Unlimited decrypts':(j.left+' of '+j.limit+' decrypts left today'+(j.tier==='guest'?' \u00b7 sign in for more':''));}}
+quota();
 var timer=null,cur='',info=null,pt=null,pseq=0;
 function size(n){return n>=1e9?(n/1e9).toFixed(2)+' GB':n>=1e6?(n/1e6).toFixed(1)+' MB':Math.max(1,Math.round(n/1e3))+' KB';}
 function icon(el,src){if(src){el.src=src;el.style.visibility='visible';}else{el.removeAttribute('src');el.style.visibility='hidden';}}
@@ -1848,7 +2121,7 @@ function poll(id){cur=id;fetch('/api/decrypt/'+id,{credentials:'same-origin'}).t
  if(cur!==id)return;
  if(!j.ok){stop();say('That request expired. Try again.','err');return;}
  if(j.status==='done'){stop();say('');$('pv').hidden=true;$('rbid').textContent=j.cached?'DECRYPTED \\u00b7 FROM CACHE':'DECRYPTED';loadHist();$('rn').textContent=(info&&info.name)||j.name;icon($('ri'),info&&info.icon);$('rm').textContent=j.bid+' \u00b7 v'+j.ver+' \u00b7 '+size(j.size);$('res').hidden=false;$('acts').hidden=false;$('dl').href='/api/ipa/file/'+j.up;$('sg').href='/sign/u/'+j.up;return;}
- if(j.status==='error'){stop();say(j.error||'Decrypt failed.','err');return;}
+ if(j.status==='error'){stop();say(j.error||'Decrypt failed.','err');quota();return;}
  say((j.status==='queued'&&j.queue>1?'In line ('+j.queue+')... ':'')+(j.msg||'Working')+'...');timer=setTimeout(function(){poll(id);},1500);
 }).catch(function(){timer=setTimeout(function(){poll(id);},3000);});}
 $('go').addEventListener('click',function(){var v=$('u').value.trim();
@@ -1857,12 +2130,13 @@ $('go').addEventListener('click',function(){var v=$('u').value.trim();
  if(ver&&!/^[0-9][0-9A-Za-z._-]{0,29}$/.test(ver)){say('Version should look like 6.8.0.','err');return;}
  $('go').disabled=true;$('res').hidden=true;$('acts').hidden=true;say('Sending...');
  fetch('/api/decrypt',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({url:v,version:ver})}).then(function(r){return r.json();}).then(function(j){
+  if(j.quota)quota(j.quota);
   if(!j.ok){$('go').disabled=false;say(j.error||'Could not start.','err');return;}
   try{sessionStorage.setItem('air:dec',j.id);}catch(e){}poll(j.id);}).catch(function(){$('go').disabled=false;say('Network error. Try again.','err');});});
 $('u').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();$('go').click();}});
 var vs={page:1,pages:1,busy:false};
 function loadVers(pg){var v=$('u').value.trim();if(!URE.test(v)||vs.busy)return;
- vs.busy=true;$('vp').hidden=false;$('vm').textContent='Asking the bot for versions...';$('vm').className='cmsg';
+ vs.busy=true;$('vp').hidden=false;$('vm').textContent='Loading versions...';$('vm').className='cmsg';
  fetch('/api/decrypt/versions',{method:'POST',credentials:'same-origin',headers:{'content-type':'application/json'},body:JSON.stringify({url:v,page:pg||1})}).then(function(r){return r.json();}).then(function(j){
   vs.busy=false;
   if(!j.ok){$('vm').textContent=j.error||'Could not load versions.';$('vm').className='cmsg err';return;}
@@ -1996,14 +2270,14 @@ lookup();loadHist();try{var r=sessionStorage.getItem('air:dec');if(r){$('go').di
         : loginOn() && `<a class="dock-link" href="/login" data-login="1" data-tg="${authOn() ? 1 : 0}" aria-label="Log in" title="Log in"><i class="fa-regular fa-user" aria-hidden="true"></i></a>`,
       `<button class="dock-link deco-red" type="button" tabindex="-1" aria-label="Skull and crossbones"><i class="fa-solid fa-skull-crossbones" aria-hidden="true"></i></button>`,
       `<a class="dock-link" href="/decrypt" aria-label="Decrypt" title="Decrypt"><i class="fa-solid fa-lock" aria-hidden="true"></i></a>`,
-      `<div class="dstat"><span>${fmtN(d.getCatalog().length)} apps</span><span>${fmtN(grandTotal())} downloads \u00b7 ${fmtN(grandViews())} views</span></div>`,
+      `<div class="dstat"><span>${fmtN(catalogApps().length)} apps</span><span>${fmtN(grandTotal())} downloads \u00b7 ${fmtN(grandViews())} views</span></div>`,
       `<button class="dock-link theme-trigger" type="button" aria-label="Theme color" title="Theme color"><i class="fa-solid fa-palette" aria-hidden="true"></i></button>`,
     ].filter(Boolean).join("");
     const shell = modal
       ? `<div class="bg" aria-hidden="true">${bgHtml}</div><div class="ov"><div class="modal">${body}</div></div>`
       : `<div class="frame">
 ${hero ? `<div class="hero"><div class="logo"><div class="lbg" aria-hidden="true">${logoTiles()}</div><div class="t">${siteName}</div><div class="g">${tagline}</div></div>${repoShown ? `<p class="repo">repo: ${esc(repoShown)}</p>` : ""}</div>` : `<a class="brand" href="/">${siteName}</a>`}
-<form class="s" action="/" method="get" role="search"><label class="sb"><span aria-hidden="true"><i class="fa-solid fa-magnifying-glass"></i></span><input type="search" name="q" value="${esc(q)}" placeholder="Search\u2026 (${fmtN(d.getCatalog().length)} apps)" maxlength="80" aria-label="Search apps"></label>
+<form class="s" action="/" method="get" role="search"><label class="sb"><span aria-hidden="true"><i class="fa-solid fa-magnifying-glass"></i></span><input type="search" name="q" value="${esc(q)}" placeholder="Search\u2026 (${fmtN(catalogApps().length)} apps)" maxlength="80" aria-label="Search apps"></label>
 ${filters ? `<details class="fl"><summary><i class="fa-solid fa-sliders"></i> Filters <i class="fa-solid fa-chevron-down"></i></summary><div class="menu">${filters}</div></details>` : ""}</form>
 ${body}
 </div>`;
@@ -2398,7 +2672,7 @@ ${shell}
     const sort = sorts.includes(req.query.sort) ? req.query.sort : sorts[0];
     const cats = categories();
     const cat = cats.find(c => String(c.id) === String(req.query.cat));
-    let items = q ? d.search(q, 1000) : d.getCatalog().slice();
+    let items = q ? dedupeByKey(d.search(q, 1000)) : catalogApps().slice();
     if (cat) items = items.filter(x => (catMap().get(keyOf(x)) || new Set()).has(cat.id));
     const dl = totals();
     if (sort === "new") items.sort((a, b) => dateOf(b) - dateOf(a));
@@ -2429,8 +2703,9 @@ ${shell}
       const blurb = String(it.subtitle || String(it.localizedDescription || it.versionDescription || "").split(/\r?\n/).map(x => x.trim()).find(Boolean) || "").slice(0, 90);
       return `<a class="pk" href="/app/${enc(keyOf(it))}"><i class="fa-solid fa-star star" aria-hidden="true"></i>${icon(it)}<div class="pt"><b>${esc(it.name)}</b>${blurb ? `<span>${esc(blurb)}</span>` : ""}</div></a>`;
     }).join("")}</div></section>` : "";
-    const chipList = [`<a class="ch${cat ? "" : " on"}" href="${href({ cat: "" })}"><i class="fa-brands fa-app-store-ios"></i> All</a>`]
-      .concat(cats.map(c => `<a class="ch${cat && cat.id === c.id ? " on" : ""}" href="${href({ cat: c.id })}">${catIcon(c.name)} ${esc(c.name)}</a>`));
+    const cc = catCounts(), num = (n) => `<span class="cn">\u00b7 ${fmtN(n || 0)}</span>`;
+    const chipList = [`<a class="ch${cat ? "" : " on"}" href="${href({ cat: "" })}"><i class="fa-brands fa-app-store-ios"></i> All ${num(catalogApps().length)}</a>`]
+      .concat(cats.map(c => `<a class="ch${cat && cat.id === c.id ? " on" : ""}" href="${href({ cat: c.id })}">${catIcon(c.name)} ${esc(c.name)} ${num(cc.get(c.id))}</a>`));
     const chipRows = []; // stacked rows of four, each centered (CSS un-stacks them on wide screens)
     chipRows.push(chipList.join(""));
     const countHtml = q ? `${fmtN(items.length)} result${items.length === 1 ? "" : "s"} for \u201c${esc(q)}\u201d` : "";
@@ -2576,6 +2851,7 @@ if(form&&inp){
   web.get("/news/:id", (req, res) => {
     const n = newsAll().find(x => x.id === req.params.id);
     if (!n) return notFound(res);
+    recordView(req, "news:" + n.id);
     const st = n.tint ? ` style="--tint:${n.tint}"` : "";
     const dateTxt = n.date ? new Date(n.date).toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric", timeZone: "UTC" }) : "";
     const body = `
@@ -2583,6 +2859,8 @@ if(form&&inp){
 <div class="nbanner"${st}>${n.image ? `<img src="${esc(n.image)}" alt="" referrerpolicy="no-referrer">` : ""}<div class="nt"><b>${esc(n.title)}</b></div></div>
 ${dateTxt ? `<div class="ndate">${esc(dateTxt)}</div>` : ""}
 ${n.desc ? `<div class="sec"><h2>Description</h2><div class="pre">${esc(n.desc)}</div></div>` : ""}
+${n.features && n.features.length ? `<div class="sec"><h2>Features</h2><ul class="pre" style="padding-left:20px;margin:0">${n.features.map(f => `<li>${esc(f)}</li>`).join("")}</ul></div>` : ""}
+${n.ipa ? `<div class="nbtns"><a class="nbtn" href="${esc(n.ipa)}" download><i class="fa-solid fa-download" aria-hidden="true"></i> Download IPA${n.ipaVer ? " " + esc(n.ipaVer) : ""}${n.ipaSize ? " \u00b7 " + (n.ipaSize / 1e6).toFixed(0) + " MB" : ""}</a></div>` : ""}
 ${n.appKey || n.ext ? `<div class="nbtns">${n.appKey ? `<a class="nbtn" href="/app/${enc(n.appKey)}"><i class="fa-solid fa-mobile-screen" aria-hidden="true"></i> View ${esc(n.appName || "app")}</a>` : ""}${n.ext ? `<a class="nbtn" href="${esc(n.url)}" target="_blank" rel="noopener noreferrer"><i class="fa-solid fa-arrow-up-right-from-square" aria-hidden="true"></i> Open link</a>` : ""}</div>` : ""}
 <script>
 (function(){
@@ -2698,7 +2976,11 @@ if(vl)vl.addEventListener('click',function(e){var a=e.target.closest('.vr');if(!
   const iso = (x) => { const t = Date.parse(x); return t ? new Date(t).toISOString() : undefined; };
   const sourceJson = cached(600000, () => {
     const apps = [];
-    for (const item of d.getCatalog()) {
+    // Each app's category, from the same table the website's chips use, so the app shows identical tabs.
+    const catName = new Map(categories().map(c => [c.id, c.name]));
+    const cm = catMap();
+    const categoryOf = (item) => { const s = cm.get(keyOf(item)); const id = s && s.values().next().value; return id != null ? catName.get(id) : undefined; };
+    for (const item of catalogApps()) {
       if (!item.bundleIdentifier || !safeHttps(item.downloadURL)) continue; // sources need a bundle ID and an https file
       const key = keyOf(item), cur = d.verOf(item), dl = (v) => `${siteUrl}/dl/${enc(key)}${v ? `/${enc(v)}` : ""}`;
       const versions = d.versionsOf(item).slice(0, 10).map(v => ({
@@ -2715,6 +2997,7 @@ if(vl)vl.addEventListener('click',function(e){var a=e.target.closest('.vr');if(!
         // legacy single-version fields, for older clients
         version: cur, versionDate: iso(item.versionDate), versionDescription: item.versionDescription,
         size: Number(item.size) || undefined, downloadURL: dl(), minOSVersion: item.minOSVersion,
+        category: categoryOf(item),
         versions,
       });
     }
@@ -2723,10 +3006,26 @@ if(vl)vl.addEventListener('click',function(e){var a=e.target.closest('.vr');if(!
       name: d.siteName || "AIRSHARE.LOL", identifier: host.split(".").reverse().join("."),
       subtitle: d.tagline || "iOS \u2022 Apps \u2022 Tools", description: `${apps.length} apps from the Airshare catalog.`,
       website: siteUrl, tintColor: "#ff3b14", apps, news: feedNews(),
+      // App count per category tab, e.g. {"Paid": 403}. Counts apps, not versions.
+      categoryCounts: Object.fromEntries(categories().map(c => [c.name, catCounts().get(c.id) || 0])),
+      // Staff picks for the app's Browse tab: bundle IDs in pick order, plus the version chosen (if any).
+      staffPicks: feat ? feat.staffEntries().map(e => { const it = d.byKey(e.key); return it && it.bundleIdentifier ? { bundleIdentifier: it.bundleIdentifier, version: e.version || undefined } : null; }).filter(Boolean) : [],
     });
-  }, () => (feat ? feat.newsVer() : 0));
-  web.get([FEED, "/source.json"], (_req, res) => {
+  }, () => (feat ? feat.newsVer() + ":" + feat.ver() : 0) + ":" + catalogApps().length + ":" + catVer + ":" + (feat && feat.catOverVer ? feat.catOverVer() : 0)); // app count in the key: an empty feed from a cold start is replaced as soon as the catalog loads
+  web.get([FEED, "/source.json"], (req, res) => {
     if (!siteUrl) return res.status(404).send("Set SITE_URL or BASE_URL to enable the source feed.");
+    // ?adid=TC-XXXXXX-XX: beta-group devices get the closed-beta builds added; the response is then private.
+    const wantAdid = String(req.query.adid || req.query.mdid || "").trim().toUpperCase();
+    if (wantAdid && acct.beta) {
+      let extra = [];
+      try { extra = acct.beta.appsFor(wantAdid, siteUrl); } catch (e) { console.warn("Beta feed:", e.message); }
+      if (extra.length) {
+        const j = JSON.parse(sourceJson());
+        j.apps = extra.concat(j.apps.filter(x => !extra.some(b => b.bundleIdentifier === x.bundleIdentifier)));
+        res.set({ "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "private, no-store" });
+        return res.send(JSON.stringify(j));
+      }
+    }
     res.set({ "Content-Type": "application/json; charset=utf-8", "Access-Control-Allow-Origin": "*", "Cache-Control": "public, max-age=300" });
     return res.send(sourceJson());
   });
@@ -2760,7 +3059,7 @@ if(vl)vl.addEventListener('click',function(e){var a=e.target.closest('.vr');if(!
     res.send(`User-agent: *\nDisallow: /dl/\nDisallow: /api/\nDisallow: /shot/\nDisallow: /login\nDisallow: /me\nDisallow: /sign/\nDisallow: /signed/\nDisallow: /auth/\n${siteUrl ? `Sitemap: ${siteUrl}/sitemap.xml\n` : ""}`);
   });
   const sitemap = cached(3600000, () => {
-    const urls = [`<url><loc>${esc(siteUrl)}/</loc></url>`].concat(d.getCatalog().map(x => {
+    const urls = [`<url><loc>${esc(siteUrl)}/</loc></url>`].concat(catalogApps().map(x => {
       const t = dateOf(x);
       return `<url><loc>${esc(`${siteUrl}/app/${enc(keyOf(x))}`)}</loc>${t ? `<lastmod>${new Date(t).toISOString().slice(0, 10)}</lastmod>` : ""}</url>`;
     }));
