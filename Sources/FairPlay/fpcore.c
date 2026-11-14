@@ -1,4 +1,6 @@
 // FairPlayed — FairPlay decryption research tool.
+// Revised mremap_encrypted: page-aligned remap window, native cryptid mode,
+// libsystem_kernel dlsym fallback, guarded page-in retries.
 #include "fpcore.h"
 
 #include <dlfcn.h>
@@ -22,14 +24,20 @@
 
 typedef int (*mremap_encrypted_fn)(void *, size_t, uint32_t, uint32_t, uint32_t);
 
+// Darwin arm64: SYS_mremap_encrypted == 489 (stable across iOS 16–27 stock kernels).
+#ifndef SYS_mremap_encrypted_arm64
+#define SYS_mremap_encrypted_arm64 489
+#endif
+
 static int raw_mremap_encrypted(void *addr, size_t len, uint32_t cryptid, uint32_t cputype, uint32_t cpusubtype) {
 #if defined(__arm64__)
+    // Kernel requires page-aligned addr + len; callers must round first.
     register uint64_t x0 __asm__("x0") = (uint64_t)addr;
     register uint64_t x1 __asm__("x1") = (uint64_t)len;
     register uint64_t x2 __asm__("x2") = cryptid;
     register uint64_t x3 __asm__("x3") = cputype;
     register uint64_t x4 __asm__("x4") = cpusubtype;
-    register uint64_t x16 __asm__("x16") = 489; // SYS_mremap_encrypted
+    register uint64_t x16 __asm__("x16") = SYS_mremap_encrypted_arm64;
     uint64_t failed;
     __asm__ volatile("svc #0x80\n\tcset %[f], cs\n"
                      : "+r"(x0), "+r"(x1), [f] "=r"(failed)
@@ -38,17 +46,72 @@ static int raw_mremap_encrypted(void *addr, size_t len, uint32_t cryptid, uint32
     if (failed) { errno = (int)x0; return -1; }
     return (int)x0;
 #else
+    (void)addr; (void)len; (void)cryptid; (void)cputype; (void)cpusubtype;
     errno = ENOTSUP;
     return -1;
 #endif
 }
 
-static int do_mremap_encrypted(void *addr, size_t len, uint32_t cryptid, uint32_t cputype, uint32_t cpusubtype) {
+static mremap_encrypted_fn resolve_mremap_encrypted(void) {
     static mremap_encrypted_fn fn;
     static int resolved;
-    if (!resolved) { fn = (mremap_encrypted_fn)dlsym(RTLD_DEFAULT, "mremap_encrypted"); resolved = 1; }
+    if (resolved) return fn;
+    // Prefer the exported libsystem symbol (works when the stub is present).
+    fn = (mremap_encrypted_fn)dlsym(RTLD_DEFAULT, "mremap_encrypted");
+    if (!fn) {
+        void *h = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_LAZY | RTLD_NOLOAD);
+        if (!h) h = dlopen("/usr/lib/system/libsystem_kernel.dylib", RTLD_LAZY);
+        if (h) fn = (mremap_encrypted_fn)dlsym(h, "mremap_encrypted");
+    }
+    resolved = 1;
+    return fn;
+}
+
+static int do_mremap_encrypted(void *addr, size_t len, uint32_t cryptid, uint32_t cputype, uint32_t cpusubtype) {
+    mremap_encrypted_fn fn = resolve_mremap_encrypted();
     if (fn) return fn(addr, len, cryptid, cputype, cpusubtype);
     return raw_mremap_encrypted(addr, len, cryptid, cputype, cpusubtype);
+}
+
+static uint64_t fp_page_size(void) {
+    static uint64_t pg;
+    if (!pg) {
+        long p = sysconf(_SC_PAGESIZE);
+        if (p <= 0) p = getpagesize();
+        pg = (uint64_t)(p > 0 ? p : 16384);
+    }
+    return pg;
+}
+
+static uint64_t align_down(uint64_t v, uint64_t pg) { return v & ~(pg - 1); }
+static uint64_t align_up(uint64_t v, uint64_t pg) { return (v + pg - 1) & ~(pg - 1); }
+
+/// Pick cryptid + PROT flags for a mode. cryptid arg selects the VM path
+/// (2 = CRYPTID_MODEL_ENCRYPTION skips PROT_EXEC); it is not the FairPlay key id.
+static void mode_params(int mode, const fp_slice_t *s, uint32_t *cid_out, int *prot_out) {
+    switch (mode) {
+        case FP_MODE_R_CID2:
+            *cid_out = 2;
+            *prot_out = PROT_READ;
+            break;
+        case FP_MODE_RX_CID1:
+            *cid_out = 1;
+            *prot_out = PROT_READ | PROT_EXEC;
+            break;
+        case FP_MODE_R_CID1:
+            *cid_out = 1;
+            *prot_out = PROT_READ;
+            break;
+        case FP_MODE_NATIVE:
+        default: {
+            uint32_t native = s->cryptid ? s->cryptid : 1;
+            *cid_out = native;
+            // cryptid 1 historically expects an executable mapping (dyld path);
+            // cryptid 2+ can use plain PROT_READ.
+            *prot_out = (native == 1) ? (PROT_READ | PROT_EXEC) : PROT_READ;
+            break;
+        }
+    }
 }
 
 #pragma mark - helpers
@@ -108,6 +171,7 @@ const char *fp_mode_name(int mode) {
         case FP_MODE_R_CID2:  return "R/cryptid2";
         case FP_MODE_RX_CID1: return "RX/cryptid1";
         case FP_MODE_R_CID1:  return "R/cryptid1";
+        case FP_MODE_NATIVE:  return "native/cryptid";
     }
     return "?";
 }
@@ -203,10 +267,29 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
     memset(res, 0, sizeof *res);
     res->mode = mode; res->addsigs = addsigs; res->mremap_ret = -1;
     double t0 = now_ms();
-    const uint64_t pg = (uint64_t)getpagesize();
+    const uint64_t pg = fp_page_size();
     if (!s->has_enc || s->cryptsize == 0) return -1;
+    // Slice must start on a page so mmap(offset=slice_off) is valid.
     if (s->slice_off % pg) { res->mmap_errno = EINVAL; return -1; }
-    if (s->cryptoff % pg) { res->mremap_errno = EINVAL; return -1; }
+
+    // Page-align the remap window. On 16 KB devices, LC cryptoff/cryptsize may still
+    // be 4 KB multiples; the kernel rejects non-page-aligned mremap_encrypted args.
+    uint64_t crypt_end = (uint64_t)s->cryptoff + (uint64_t)s->cryptsize;
+    uint64_t remap_off = align_down(s->cryptoff, pg);
+    uint64_t remap_end = align_up(crypt_end, pg);
+    if (remap_end <= remap_off || remap_end > s->slice_size) {
+        res->mremap_errno = EINVAL;
+        res->ms = now_ms() - t0;
+        return -1;
+    }
+    uint64_t remap_len = remap_end - remap_off;
+    res->remap_off = remap_off;
+    res->remap_len = remap_len;
+
+    uint32_t cid = 0;
+    int prot = PROT_READ;
+    mode_params(mode, s, &cid, &prot);
+    res->used_cryptid = cid;
 
     int fd = open(path, O_RDONLY);
     if (fd < 0) { res->mmap_errno = errno; return -1; }
@@ -216,38 +299,40 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
         if (fcntl(fd, F_ADDFILESIGS_RETURN, &fs) == -1) res->sig_errno = errno;
     }
 
-    uint64_t map_len = ((uint64_t)s->cryptoff + s->cryptsize + pg - 1) & ~(pg - 1);
-    int prot = PROT_READ | (mode == FP_MODE_RX_CID1 ? PROT_EXEC : 0);
-    uint8_t *base = mmap(NULL, map_len, prot, MAP_PRIVATE, fd, (off_t)s->slice_off);
+    // Map enough of the slice to cover the aligned remap window.
+    uint64_t map_len = align_up(remap_end, pg);
+    if (map_len == 0) map_len = pg;
+    uint8_t *base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, (off_t)s->slice_off);
     if (base == MAP_FAILED) { res->mmap_errno = errno; close(fd); res->ms = now_ms() - t0; return -1; }
 
     uint8_t *orig = malloc(s->cryptsize);
     uint8_t *dec = out ? out : malloc(s->cryptsize);
     if (!orig || !dec || !pread_full(fd, orig, s->cryptsize, (off_t)(s->slice_off + s->cryptoff))) {
-        free(orig); if (!out) free(dec); munmap(base, map_len); close(fd); res->mmap_errno = EIO; return -1;
+        free(orig); if (!out) free(dec); munmap(base, (size_t)map_len); close(fd); res->mmap_errno = EIO; return -1;
     }
 
-    uint32_t cid = (mode == FP_MODE_R_CID2) ? 2 : 1;
+    // Page accounting covers the logical crypt range (not the padded remap).
     uint64_t total = (s->cryptsize + pg - 1) / pg;
+    if (total == 0) total = 1;
     res->pages_total = total;
 
     // Guarded remapping retry: when fairplayd flakes mid page-in, unmap + mremap again
-    // and re-read failed pages (userspace analogue of Buddy's pager retry — no kwrite).
+    // and re-read failed pages (userspace pager retry — no kwrite).
     uint8_t *okmask = calloc((size_t)total, 1);
     if (!okmask) {
-        free(orig); if (!out) free(dec); munmap(base, map_len); close(fd);
+        free(orig); if (!out) free(dec); munmap(base, (size_t)map_len); close(fd);
         res->mmap_errno = ENOMEM; res->ms = now_ms() - t0; return -1;
     }
 
-    for (int round = 0; round < 4; round++) {
+    for (int round = 0; round < 5; round++) {
         if (round > 0) {
-            munmap(base, map_len);
-            usleep((useconds_t)(40 * 1000 * round));
-            base = mmap(NULL, map_len, prot, MAP_PRIVATE, fd, (off_t)s->slice_off);
+            if (base != MAP_FAILED) munmap(base, (size_t)map_len);
+            usleep((useconds_t)(50 * 1000 * round));
+            base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, (off_t)s->slice_off);
             if (base == MAP_FAILED) { res->mmap_errno = errno; break; }
         }
         errno = 0;
-        int mr = do_mremap_encrypted(base + s->cryptoff, s->cryptsize, cid, s->cputype, s->cpusubtype);
+        int mr = do_mremap_encrypted(base + remap_off, (size_t)remap_len, cid, s->cputype, s->cpusubtype);
         res->mremap_ret = mr;
         res->mremap_errno = mr == 0 ? 0 : errno;
         if (mr != 0) continue;
@@ -292,7 +377,7 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
 
     free(orig);
     if (!out) free(dec);
-    if (base != MAP_FAILED) munmap(base, map_len);
+    if (base != MAP_FAILED) munmap(base, (size_t)map_len);
     close(fd);
     res->ms = now_ms() - t0;
     return (res->mremap_ret == 0 && res->pages_ok == res->pages_total && res->changed) ? 0 : -1;
@@ -300,9 +385,11 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
 
 void fp_attempt_describe(const fp_attempt_t *a, char *buf, size_t len) {
     snprintf(buf, len,
-             "%s%s: sig=%s mmap=%s mremap=%d(errno %d %s) pages=%llu/%llu firstfail=kr%d@0x%llx changed=%d "
-             "code-words %u->%u entropy %.3f->%.3f (%.0f ms)",
+             "%s%s cid=%u remap=0x%llx+0x%llx: sig=%s mmap=%s mremap=%d(errno %d %s) pages=%llu/%llu "
+             "firstfail=kr%d@0x%llx changed=%d code-words %u->%u entropy %.3f->%.3f (%.0f ms)",
              fp_mode_name(a->mode), a->addsigs ? "+sigs" : "",
+             a->used_cryptid,
+             (unsigned long long)a->remap_off, (unsigned long long)a->remap_len,
              a->addsigs ? (a->sig_errno ? strerror(a->sig_errno) : "ok") : "-",
              a->mmap_errno ? strerror(a->mmap_errno) : "ok",
              a->mremap_ret, a->mremap_errno, a->mremap_errno ? strerror(a->mremap_errno) : "ok",
@@ -422,19 +509,34 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
 
     int out = open(out_path, O_RDWR);
     if (out < 0) { logf_(log, ctx, "  open out: %s", strerror(errno)); return -1; }
-    // Prefer R/cryptid=2 (works without PROT_EXEC), then RX/cryptid=1, with and without F_ADDFILESIGS.
+    // Order: native LC cryptid first, then R/cryptid=2 (no PROT_EXEC), then dyld RX/cid1.
+    // Each mode is tried with and without F_ADDFILESIGS_RETURN.
     const int order[][2] = {
+        {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
         {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
         {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
         {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1}
     };
+    const uint64_t pg = fp_page_size();
     int rc = 0;
     for (int i = 0; i < n && rc == 0; i++) {
         const fp_slice_t *s = &sl[i];
         if (!s->has_enc || s->cryptid == 0) continue;
-        if (s->cryptsize == 0 || (s->cryptoff % (uint32_t)getpagesize()) != 0) {
-            logf_(log, ctx, "  slice[%d] bad crypt range (off=0x%x size=0x%x)", i, s->cryptoff, s->cryptsize);
+        if (s->cryptsize == 0) {
+            logf_(log, ctx, "  slice[%d] empty crypt range", i);
             rc = -1; break;
+        }
+        // Remap window must fit in the slice after page alignment.
+        uint64_t remap_off = align_down(s->cryptoff, pg);
+        uint64_t remap_end = align_up((uint64_t)s->cryptoff + s->cryptsize, pg);
+        if (remap_end <= remap_off || remap_end > s->slice_size) {
+            logf_(log, ctx, "  slice[%d] crypt range not remappable (off=0x%x size=0x%x page=%llu)",
+                  i, s->cryptoff, s->cryptsize, (unsigned long long)pg);
+            rc = -1; break;
+        }
+        if (s->cryptoff % pg) {
+            logf_(log, ctx, "  slice[%d] cryptoff 0x%x not page-aligned (page=%llu) — aligning remap down to 0x%llx",
+                  i, s->cryptoff, (unsigned long long)pg, (unsigned long long)remap_off);
         }
         uint8_t *dec = malloc(s->cryptsize);
         if (!dec) { rc = -1; break; }

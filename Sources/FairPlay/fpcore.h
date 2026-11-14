@@ -1,5 +1,5 @@
 // FairPlayed — FairPlay decryption research tool.
-// Core: Mach-O parsing + mremap_encrypted experiments.
+// Core: Mach-O parsing + revised mremap_encrypted path (page-aligned, native cryptid).
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
@@ -10,9 +10,14 @@
 typedef void (*fp_log_t)(void *ctx, const char *msg);
 
 enum {
-    FP_MODE_R_CID2  = 1,  // PROT_READ mapping, cryptid=2 (CRYPTID_MODEL_ENCRYPTION: VM layer skips the PROT_EXEC requirement)
-    FP_MODE_RX_CID1 = 2,  // PROT_READ|PROT_EXEC mapping, cryptid=1 (what dyld does)
-    FP_MODE_R_CID1  = 3,  // PROT_READ mapping, cryptid=1 (control: VM layer should reject)
+    // PROT_READ + cryptid=2 (CRYPTID_MODEL_ENCRYPTION): VM skips PROT_EXEC / AMFI check.
+    FP_MODE_R_CID2  = 1,
+    // PROT_READ|PROT_EXEC + cryptid=1 — what dyld uses for App Store text.
+    FP_MODE_RX_CID1 = 2,
+    // PROT_READ + cryptid=1 — control / older kernels.
+    FP_MODE_R_CID1  = 3,
+    // PROT_READ (or RX if file cryptid==1) using the slice's own LC cryptid.
+    FP_MODE_NATIVE  = 4,
 };
 
 typedef struct {
@@ -31,6 +36,9 @@ typedef struct {
     int      sig_errno;           // 0 = F_ADDFILESIGS_RETURN ok (or not requested)
     int      mmap_errno;
     int      mremap_ret, mremap_errno;
+    uint32_t used_cryptid;        // cryptid argument actually passed to mremap_encrypted
+    uint64_t remap_off;           // page-aligned remap start (slice-relative)
+    uint64_t remap_len;           // page-aligned remap length
     uint64_t pages_total, pages_ok;
     int      first_fail_kr;
     uint64_t first_fail_off;
