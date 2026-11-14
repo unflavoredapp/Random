@@ -156,7 +156,19 @@ struct RootView: View {
     }
 
     private func handleAirShareDeepLink(_ url: URL) {
-        guard ["airshare", "msign", "tetherless", "sideloader"].contains(url.scheme?.lowercased() ?? "") else { return }
+        let scheme = url.scheme?.lowercased() ?? ""
+        // Competition-style companion handoff: tetherless-decrypt://open or tetherless://decrypt-companion
+        if scheme == "tetherless-decrypt"
+            || (scheme == "tetherless" && (url.host?.lowercased() == "decrypt-companion" || url.host?.lowercased() == "companion")) {
+            nav.go(AppTab.decrypt.rawValue)
+            let name = URLComponents(url: url, resolvingAgainstBaseURL: false)?
+                .queryItems?.first(where: { $0.name == "name" })?.value
+                ?? "App"
+            DecryptCompanionController.shared.present(name: name, clearLog: false)
+            DecryptCompanionController.shared.appendLog("Opened companion decrypt…")
+            return
+        }
+        guard ["airshare", "msign", "tetherless", "sideloader"].contains(scheme) else { return }
         switch url.host?.lowercased() {
         case "activity", "signed":
             nav.go(AppTab.library.rawValue)   // Signed segment lives under Library

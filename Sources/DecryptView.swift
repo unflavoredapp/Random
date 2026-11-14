@@ -371,6 +371,7 @@ struct DecryptView: View {
     @ObservedObject private var liveTheme = AppTheme.shared
     @ObservedObject private var c = DecryptClient.shared
     @ObservedObject private var store = AppleIDStore.shared
+    @ObservedObject private var companion = DecryptCompanionController.shared
     @State private var query = ""
     @State private var versionsApp: DecryptApp?
     @State private var pickingIPA = false
@@ -449,6 +450,9 @@ struct DecryptView: View {
             DocPicker(types: [UTType(filenameExtension: "ipa") ?? .data]) { urls in
                 handlePickedIPAs(urls)
             }
+        }
+        .fullScreenCover(isPresented: $companion.isPresented) {
+            DecryptCompanionConsole()
         }
         .onAppear { consumePendingQuery() }
         .onChange(of: c.pendingQuery) { _ in consumePendingQuery() }

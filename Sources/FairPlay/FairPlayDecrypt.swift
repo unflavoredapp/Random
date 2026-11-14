@@ -283,11 +283,16 @@ enum FairPlayDecrypt {
 
         // FairPlayed `exportInstalledApp` / foulplay: mremap_encrypted the live install
         // binary (next to SC_Info) and write cleartext into a writable Payload copy.
-        progress?("Decrypting Mach-Os from install path…")
+        // Competition companion console uses the same line style as FairPlayed's export log.
+        let appLabel = source.deletingPathExtension().lastPathComponent
+        progress?("Found installed app: \(appLabel)")
+        progress?("Decrypting Mach-O file(s) from install path…")
         var report = try decryptMachOs(readingFrom: source, writingTo: destApp, progress: progress)
         report.sourcePath = source.path
         report.usedInstalledPath = true
-        progress?(report.summary)
+        let plainN = report.plain.count
+        let decN = report.decrypted.count
+        progress?("Done: \(decN) decrypted, \(plainN) already plain.")
 
         progress?("Copying app resources…")
         let copied = try copyAppResources(
@@ -302,6 +307,7 @@ enum FairPlayDecrypt {
         progress?("Copied \(copied) resource file(s)")
 
         try hardenDecryptedApp(at: destApp, report: &report)
+        progress?("Packaging \(sanitizeFileName(displayName))-decrypted.ipa…")
         return try zipDecryptedPayload(payload, displayName: displayName, report: report)
     }
 
@@ -381,27 +387,28 @@ enum FairPlayDecrypt {
             }
         }
         report.encryptedBefore = encCount
-        progress?("Found \(binaries.count) Mach-Os (\(encCount) encrypted slices)…")
+        progress?("Decrypting \(binaries.count) Mach-O file(s)…")
+        if encCount > 0 {
+            progress?("(\(encCount) encrypted slice(s) to clear)")
+        }
 
         let ordered = prioritizeBinaries(binaries, app: sourceApp)
         guard !ordered.isEmpty else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found.")
         }
 
-        // Serial decrypt with live progress. Concurrent fairplayd page-ins previously
-        // left the UI on a single status line while one binary blocked forever.
+        // Serial decrypt with live FairPlayed-style console lines (competition companion).
         for (index, file) in ordered.enumerated() {
             let r = role(of: file, under: sourceApp, app: sourceApp)
             let rel = relativePath(file, under: sourceApp)
             let budget: TimeInterval = (r == .main) ? 180 : 90
-            progress?("Decrypting \(rel) (\(index + 1)/\(ordered.count))…")
             let outcome = decryptOneWithTimeout(
                 file: file, sourceApp: sourceApp, destApp: destApp,
                 index: index, total: ordered.count, role: r, timeout: budget
             )
             switch outcome {
             case .timedOut:
-                progress?("Timed out on \(rel) after \(Int(budget))s — skipping")
+                progress?("[FAILED]    \(rel) (timeout \(Int(budget))s)")
                 if r.isRequired {
                     report.failed.append(rel)
                     if r == .main {
@@ -413,6 +420,7 @@ enum FairPlayDecrypt {
                     report.softFailed.append(rel)
                 }
             case .threw(let error):
+                progress?("[FAILED]    \(rel)")
                 if r.isRequired {
                     if r == .main { throw error }
                     report.failed.append(rel)
@@ -424,6 +432,13 @@ enum FairPlayDecrypt {
                 report.plain.append(contentsOf: mini.plain)
                 report.failed.append(contentsOf: mini.failed)
                 report.softFailed.append(contentsOf: mini.softFailed)
+                if mini.decrypted.contains(rel) {
+                    progress?("[DECRYPTED] \(rel)")
+                } else if mini.plain.contains(rel) {
+                    progress?("[plain]     \(rel)")
+                } else if mini.failed.contains(rel) || mini.softFailed.contains(rel) {
+                    progress?("[FAILED]    \(rel)")
+                }
                 if r == .main, mini.failed.contains(rel) {
                     throw FairPlayDecryptError.mainExecutableFailed(
                         "Couldn't decrypt the main executable (\(rel)). \(AppStoreDecryptGuide.failureHint)"
