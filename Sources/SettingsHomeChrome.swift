@@ -28,10 +28,17 @@ struct SettingsAppleIDCard: View {
                 }
             }
 
-            Text("Add multiple Apple IDs for free App Store installs and decrypt. Switch accounts per download.")
+            Text("Add multiple Apple IDs for free App Store installs and decrypt. Switch accounts per download. For decrypt, each Apple ID must also have signed in to this iPhone’s App Store at least once so iOS has its decryption keys.")
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
+
+            Button { AppStoreDecryptGuide.openAppStore() } label: {
+                Label("Open App Store to sign in once", systemImage: "bag.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
+            .buttonStyle(.plain)
 
             if store.accounts.isEmpty {
                 emptySignIn

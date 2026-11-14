@@ -2,7 +2,7 @@
 //  DeviceLibrary.swift
 //  Every user-installed app on this device, for the Library tab. Read through the native connection
 //  (built-in VPN + pairing), cached on disk so the Library opens instantly. App Store apps that don't have a
-//  decrypted copy in the Library are flagged DRM, and can be sent to the Decrypt tab by name.
+//  decrypted copy in the Library are flagged DRM, and can be decrypted on this device (App Store keys) from the Decrypt tab.
 //
 
 import Combine
@@ -127,10 +127,10 @@ final class DeviceLibrary: ObservableObject {
 // MARK: - Hand-off to the Decrypt tab
 
 extension DecryptClient {
-    /// Opens the Decrypt tab with this app's name already in the search box.
+    /// Opens the Decrypt tab with this app's name already in the search box (fallback).
     @MainActor static func sendToDecrypt(name: String) {
         shared.pendingQuery = name
-        AppNav.shared.go(2)
+        AppNav.shared.go(AppTab.decrypt.rawValue)
     }
 }
 

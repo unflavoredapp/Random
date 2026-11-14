@@ -173,7 +173,8 @@ struct LibraryView: View {
             // Encrypted (FairPlay) and no decrypted copy in the Library: hand it to the Decrypt tab by name.
             list.append(.init(title: "Decrypt", icon: "lock.open.fill", role: .normal) {
                 deviceSheet = nil
-                DecryptClient.sendToDecrypt(name: app.name)
+                AppNav.shared.go(AppTab.decrypt.rawValue)
+                Task { await DeviceDecryptService.shared.decryptInstalled(app) }
             })
         }
         if SignedLookup.latestEntry(for: app.bundleID) != nil {
