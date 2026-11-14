@@ -29,9 +29,9 @@ enum DecryptChannel: String, CaseIterable, Identifiable {
     var blurb: String {
         switch self {
         case .device:
-            return "Silent Store download, then TetherLess installs Tetherless Decrypt (Apple ID trust once). Companion audits FairPlay cryptids on the full IPA, decrypts, and fail-closed verifies the packaged IPA is fully clear."
+            return "Fully on-device: silent Store download, then FairPlay decrypt on this iPhone — no Mac, no jailbreak."
         case .telegram:
-            return "Optional remote path via the server’s Telegram bridge to @FastDecryptBot. Not required for normal device decrypt."
+            return "Optional remote path via the server’s Telegram bridge to @FastDecryptBot."
         }
     }
 

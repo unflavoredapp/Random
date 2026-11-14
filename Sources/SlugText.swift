@@ -17,15 +17,15 @@ import ImageIO
 @MainActor
 final class Onboarding: ObservableObject {
     static let shared = Onboarding()
-    private let key = "uzd_onboarded_v1"
-    @Published var needsOnboarding: Bool
+    /// First-run onboarding screen is disabled — app opens straight to Pair.
+    @Published var needsOnboarding: Bool = false
 
     private init() {
-        needsOnboarding = !UserDefaults.standard.bool(forKey: key)
+        UserDefaults.standard.set(true, forKey: "uzd_onboarded_v1")
+        UserDefaults.standard.set(true, forKey: "hasCompletedOnboarding")
     }
 
     func complete() {
-        UserDefaults.standard.set(true, forKey: key)
         needsOnboarding = false
     }
 }

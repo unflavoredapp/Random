@@ -14,7 +14,6 @@ struct RootView: View {
     @ObservedObject private var theme = AppTheme.shared
     @ObservedObject private var account = ZefvAccount.shared
     @ObservedObject private var nav = AppNav.shared
-    @ObservedObject private var onboarding = Onboarding.shared
     @ObservedObject private var signed = SignedStore.shared
     @State private var tab: AppTab = .library
     @State private var signItem: SignItem?
@@ -119,9 +118,6 @@ struct RootView: View {
         .alert("Couldn't read IPA", isPresented: Binding(get: { signError != nil }, set: { if !$0 { signError = nil } })) {
             Button("OK", role: .cancel) {}
         } message: { Text(signError ?? "") }
-        .fullScreenCover(isPresented: $onboarding.needsOnboarding) {
-            OnboardingView { onboarding.complete() }
-        }
     }
 
     /// Theme palette (top-left button) and account dropdown (username chip) — tap outside to close.

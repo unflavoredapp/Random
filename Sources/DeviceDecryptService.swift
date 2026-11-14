@@ -317,7 +317,7 @@ final class DeviceDecryptService: ObservableObject {
         case .device:
             DecryptClient.shared.select(app)
             DecryptClient.shared.phase = .running
-            DecryptClient.shared.message = "Starting decrypt…"
+            DecryptClient.shared.message = "Starting…"
             DecryptClient.shared.error = nil
             let deviceApp = DeviceApp(
                 bundleID: app.bundle.isEmpty ? app.id : app.bundle,

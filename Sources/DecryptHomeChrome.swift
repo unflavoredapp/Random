@@ -7,27 +7,25 @@
 import IDeviceSwift
 import SwiftUI
 
-/// Centered title + settings gear (reference Decrypt header).
+/// Left-aligned title + settings gear (matches reference Decrypt header).
 struct DecryptChromeHeader: View {
     var onSettings: (() -> Void)?
 
     var body: some View {
-        ZStack {
+        HStack {
             Text("Decrypt")
-                .font(.system(size: 28, weight: .bold))
+                .font(.system(size: 40, weight: .bold))
                 .foregroundStyle(.white)
-            HStack {
-                Spacer()
-                if let onSettings {
-                    Button(action: onSettings) {
-                        Image(systemName: "gearshape.fill")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 40, height: 40)
-                            .background(.ultraThinMaterial, in: Circle())
-                    }
-                    .accessibilityLabel("Settings")
+            Spacer()
+            if let onSettings {
+                Button(action: onSettings) {
+                    Image(systemName: "gearshape.fill")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 40, height: 40)
+                        .background(.ultraThinMaterial, in: Circle())
                 }
+                .accessibilityLabel("Settings")
             }
         }
         .padding(.horizontal, 20)
@@ -46,7 +44,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Silent Store download, then TetherLess installs Tetherless Decrypt (Apple ID — trust once). Companion audits DRM on the full IPA, decrypts, and verifies every Mach-O is cryptid=0. Telegram Bot is optional.")
+            Text("Search for an app you own, and Tetherless downloads and decrypts it — fully on-device, no Mac, no jailbreak.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
@@ -62,7 +60,6 @@ struct DecryptSignedInCard: View {
     let email: String
     var onSignOut: () -> Void
     @ObservedObject private var store = AppleIDStore.shared
-    @State private var showManage = false
 
     var body: some View {
         GlassCard(corner: 24) {
@@ -104,41 +101,17 @@ struct DecryptSignedInCard: View {
                     }
                 }
 
-                HStack(spacing: 10) {
-                    Button { showManage = true } label: {
-                        Text("Manage")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(.white.opacity(0.10), in: Capsule())
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-
-                    Button(action: onSignOut) {
-                        Text("Sign Out")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(.white.opacity(0.10), in: Capsule())
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
+                Button(action: onSignOut) {
+                    Text("Sign Out")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(.white.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
                 }
+                .buttonStyle(.plain)
             }
-        }
-        .sheet(isPresented: $showManage) {
-            NavigationStack {
-                AppleIDManageView()
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Done") { showManage = false }
-                        }
-                    }
-            }
-            .preferredColorScheme(.dark)
         }
     }
 }
@@ -544,7 +517,7 @@ struct DecryptAppStoreSignInHint: View {
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.55))
                     .fixedSize(horizontal: false, vertical: true)
-                Text("FairPlay runs inside Tetherless Decrypt (Apple ID trust under VPN & Device Management). The companion audits cryptids on the full IPA, decrypts, then fail-closed verifies the packaged IPA is fully clear. Without a one-time App Store sign-in for that Apple ID, decrypting fails after download because iOS has no keys yet.")
+                Text("Without that one-time App Store sign-in, decrypting fails after download because iOS has no keys yet.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.45))
                     .fixedSize(horizontal: false, vertical: true)
