@@ -1,10 +1,8 @@
 //
 //  RootView.swift
-//  App shell. The app is a signer first: Browse (repo.json sources → apps →
-//  IPA), Library (sign + install), Decrypt (lock — App Store IPAs via the AirShare backend), Signed (history), Settings. Handing an IPA to
-//  SignQueue opens SigningSheet directly — there is no intermediate Sign screen. The GitHub
-//  tools (Import · Contents · Push · Build · Repos) live behind Settings ›
-//  GitHub as a full-screen hub.
+//  Tetherless glass shell: Pair · Files · Library · Decrypt · Settings.
+//  Existing backends (pairing, inbox/signed stores, decrypt API, settings,
+//  SigningSheet, GitHub hub) stay wired underneath.
 //
 
 import SwiftUI
@@ -18,7 +16,7 @@ struct RootView: View {
     @ObservedObject private var nav = AppNav.shared
     @ObservedObject private var onboarding = Onboarding.shared
     @ObservedObject private var signed = SignedStore.shared
-    @State private var tab = 0
+    @State private var tab: AppTab = .library
     @State private var signItem: SignItem?
     @State private var signError: String?
 
@@ -32,17 +30,25 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            switch tab {
-            case 0: SourcesView()
-            case 1: LibraryView()
-            case 2: DecryptView()
-            case 3: SignedView()
-            default: SettingsView()
+            AppBackground()
+
+            Group {
+                switch tab {
+                case .pair: PairHomeView()
+                case .files: FilesHomeView()
+                case .library: LibraryHomeView()
+                case .decrypt:
+                    VStack(spacing: 0) {
+                        DecryptChromeHeader { AppNav.shared.go(AppTab.settings.rawValue) }
+                        DecryptView()
+                    }
+                case .settings: SettingsView()
+                }
             }
+            .id(theme.revision)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .id(theme.revision)                                   // re-skin every tab on a theme change
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .simultaneousGesture(                                 // finger drives the particle layer (grab / repulse / attract + tap burst)
+        .simultaneousGesture(                                 // finger drives the particle layer when enabled
             DragGesture(minimumDistance: 0, coordinateSpace: .global)
                 .onChanged { ParticleTouch.point = $0.location }
                 .onEnded { v in
@@ -52,15 +58,15 @@ struct RootView: View {
                     }
                 }
         )
-        .overlay(ThemeBackgroundLayer())                      // particle/grid network floats over the tab content
-        .overlay { dropdownLayer }                            // palette + account dropdowns
+        .overlay { if theme.background != .none { ThemeBackgroundLayer() } }
+        .overlay { dropdownLayer }
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: theme.panelShown)
         .animation(.spring(response: 0.3, dampingFraction: 0.85), value: account.panelShown)
 
         .task {
             theme.startCycleIfNeeded()
             Task.detached(priority: .utility) { try? await Task.sleep(nanoseconds: 8_000_000_000); await StorageCleaner.run() }
-            Task { _ = await LibraryCache.shared.refresh() }   // Library is ready before you open it
+            Task { _ = await LibraryCache.shared.refresh() }
             await SourceStore.shared.warmUpAtLaunch()
             WidgetDataManager.shared.refresh()
             _ = await PortalStorage.cleanupStaleTemporaryFiles()
@@ -71,18 +77,17 @@ struct RootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
             Task { await LocalSourceUpdateWatcher.shared.scanAllSources(reason: "foreground") }
-        }   // repos parsed from disk instantly, refreshed in background
+        }
         .onChange(of: nav.requestedTab) { t in
-            guard let t else { return }
+            guard let t, let mapped = AppTab(rawValue: t) else { return }
             nav.requestedTab = nil
-            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { tab = t }
+            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { tab = mapped }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            TabBar(selected: $tab)
+            FloatingTabBar(selection: $tab)
         }
-        .background(Theme.bg.ignoresSafeArea())
-        .tint(Theme.accent)
-        .preferredColorScheme(theme.colorScheme)
+        .tint(TetherlessPalette.accent)
+        .preferredColorScheme(.dark)
         .onChange(of: signQueue.requestedTab) { t in
             // Signing is a flow, not a tab: open SigningSheet directly over whatever's showing.
             guard t != nil else { return }
@@ -149,16 +154,20 @@ struct RootView: View {
     }
 
     private func handleAirShareDeepLink(_ url: URL) {
-        guard ["airshare", "msign"].contains(url.scheme?.lowercased() ?? "") else { return }
+        guard ["airshare", "msign", "tetherless", "sideloader"].contains(url.scheme?.lowercased() ?? "") else { return }
         switch url.host?.lowercased() {
-        case "activity":
-            nav.go(3)
-        case "updates":
-            nav.go(0)
-        case "import", "turbo":
-            nav.go(1)
+        case "activity", "signed":
+            nav.go(AppTab.library.rawValue)   // Signed segment lives under Library
+        case "updates", "pair":
+            nav.go(AppTab.pair.rawValue)
+        case "import", "turbo", "files":
+            nav.go(AppTab.files.rawValue)
+        case "library":
+            nav.go(AppTab.library.rawValue)
         case "decrypt":
-            nav.go(2)
+            nav.go(AppTab.decrypt.rawValue)
+        case "settings":
+            nav.go(AppTab.settings.rawValue)
         case "install":
             guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                   let id = components.queryItems?.first(where: { $0.name == "signedID" })?.value,
@@ -200,43 +209,6 @@ extension View {
     @ViewBuilder
     func then<Content: View>(@ViewBuilder _ transform: (Self) -> Content) -> Content {
         transform(self)
-    }
-}
-
-// MARK: - Tab bar
-
-private struct TabBar: View {
-    @ObservedObject private var liveTheme = AppTheme.shared   // re-read the accent live (auto-cycle) without rebuilding
-    @Binding var selected: Int
-    private let tabs: [(label: String, icon: String)] = [
-        ("Browse",   "square.grid.3x3.fill"),
-        ("Library",  "square.grid.2x2.fill"),
-        ("Decrypt",  "lock.fill"),
-        ("Signed",   "signature"),
-        ("Settings", "gearshape"),
-    ]
-
-    var body: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(tabs.enumerated()), id: \.offset) { i, t in
-                Button {
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { selected = i }
-                    UISelectionFeedbackGenerator().selectionChanged()
-                } label: {
-                    VStack(spacing: 3) {
-                        Image(systemName: t.icon).font(.system(size: 21, weight: .regular))
-                            .frame(height: 25)
-                        Text(t.label).font(.system(size: 10, weight: .semibold))
-                    }
-                    .foregroundStyle(selected == i ? Theme.accent : Theme.subtle)
-                    .frame(maxWidth: .infinity).frame(height: 52)
-                    .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .floatingGlassBar(edge: .bottom, cornerRadius: 30)
     }
 }
 

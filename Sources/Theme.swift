@@ -10,7 +10,8 @@ nonisolated enum Theme {
     static let keyAccent     = "theme_accent_hex"
     static let keyDark       = "theme_dark"
     static let keyBackground = "theme_background"
-    static let defaultAccent = "FF9A1F"
+    /// Tetherless blue — matches the purple→teal glass UI.
+    static let defaultAccent = "458FF7"
 
     static var isDark: Bool {
         UserDefaults.standard.object(forKey: keyDark) == nil ? true : UserDefaults.standard.bool(forKey: keyDark)
@@ -20,14 +21,15 @@ nonisolated enum Theme {
         return h.isEmpty ? defaultAccent : h
     }
 
-    static var bg: Color     { isDark ? Color.black : Color(red: 0.96, green: 0.96, blue: 0.97) }
-    static var card: Color   { isDark ? Color(red: 0.08, green: 0.09, blue: 0.10) : Color.white }
-    static var stroke: Color { isDark ? Color.white.opacity(0.08) : Color.black.opacity(0.08) }
-    static var text: Color   { isDark ? Color(red: 0.92, green: 0.95, blue: 0.96) : Color(red: 0.08, green: 0.09, blue: 0.10) }
-    static var subtle: Color { isDark ? Color(red: 0.55, green: 0.60, blue: 0.63) : Color(red: 0.42, green: 0.46, blue: 0.49) }
+    /// Clear so the root AppBackground gradient shows through every tab.
+    static var bg: Color     { .clear }
+    static var card: Color   { Color.white.opacity(isDark ? 0.10 : 0.92) }
+    static var stroke: Color { Color.white.opacity(isDark ? 0.15 : 0.12) }
+    static var text: Color   { isDark ? Color.white : Color(red: 0.08, green: 0.09, blue: 0.10) }
+    static var subtle: Color { isDark ? Color.white.opacity(0.55) : Color(red: 0.42, green: 0.46, blue: 0.49) }
     static var accent: Color { Color(hex: accentHex) }
 
-    static let appName    = "Decrypt.Team"
+    static let appName    = "Tetherless"
     static let appVersion = "3.7"
     /// Version of the local signing engine, shown under the ADID in Settings.
     static let trustCoreVersion = "1.6"
@@ -38,10 +40,9 @@ struct Card<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         VStack(alignment: .leading, spacing: 0) { content }
-            .padding(14)
+            .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Theme.card)
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Theme.stroke, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Theme.stroke, lineWidth: 1))
     }
 }
