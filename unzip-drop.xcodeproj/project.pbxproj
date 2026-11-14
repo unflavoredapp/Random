@@ -273,7 +273,7 @@
 				61EDEC30A5F63ED366D136AF /* XCRemoteSwiftPackageReference "ZIPFoundation" */,
 				5354524950450000000000A3 /* XCRemoteSwiftPackageReference "stripe-ios-spm" */,
 				6D6D6D6D0000000000000003 /* XCRemoteSwiftPackageReference "swift-crypto" */,
-				504B4753534C000000000001 /* XCRemoteSwiftPackageReference "OpenSSL-Swift-Package" */,
+				504B4753534C000000000001 /* XCRemoteSwiftPackageReference "OpenSSL" */,
 				5641504F52504B4700000001 /* XCRemoteSwiftPackageReference "vapor" */,
 				AD5E0000000000000000003C /* XCLocalSwiftPackageReference "IDeviceKit" */,
 			);
@@ -412,6 +412,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CLANG_CXX_LIBRARY = "libc++";
 				CODE_SIGN_ENTITLEMENTS = "unzip-drop.entitlements";
@@ -459,6 +460,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES;
 				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
 				CLANG_CXX_LIBRARY = "libc++";
 				CODE_SIGN_ENTITLEMENTS = "unzip-drop.entitlements";
@@ -682,12 +684,12 @@
 				minimumVersion = 0.9.20;
 			};
 		};
-		504B4753534C000000000001 /* XCRemoteSwiftPackageReference "OpenSSL-Swift-Package" */ = {
+		504B4753534C000000000001 /* XCRemoteSwiftPackageReference "OpenSSL" */ = {
 			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/HAHALOSAH/OpenSSL-Swift-Package";
+			repositoryURL = "https://github.com/krzyzanowskim/OpenSSL";
 			requirement = {
-				branch = main;
-				kind = branch;
+				kind = exactVersion;
+				version = 3.3.3001;
 			};
 		};
 		5641504F52504B4700000001 /* XCRemoteSwiftPackageReference "vapor" */ = {
@@ -721,7 +723,7 @@
 		};
 		50524F4453534C0000000001 /* OpenSSL */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 504B4753534C000000000001 /* XCRemoteSwiftPackageReference "OpenSSL-Swift-Package" */;
+			package = 504B4753534C000000000001 /* XCRemoteSwiftPackageReference "OpenSSL" */;
 			productName = OpenSSL;
 		};
 		5641504F52500000000001 /* Vapor */ = {
