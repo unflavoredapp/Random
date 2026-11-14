@@ -537,6 +537,7 @@ struct DecryptView: View {
                 if c.phase == .failed {
                     Text(c.error ?? "Decrypt failed.")
                         .font(.caption).foregroundStyle(.orange)
+                    DecryptAppStoreSignInHint(compact: true)
                     Button("Dismiss") { c.reset() }
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.55))

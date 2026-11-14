@@ -197,9 +197,30 @@ struct DecryptPickIPACard: View {
 
 /// One-time App Store sign-in requirement for decrypt keys on this device.
 struct DecryptAppStoreSignInHint: View {
+    /// Compact layout for decrypt-failure callouts.
+    var compact: Bool = false
+    @ObservedObject private var store = AppleIDStore.shared
+    @State private var ackTick = false
+
+    private var email: String { store.email }
+    private var acknowledged: Bool {
+        _ = ackTick
+        return AppStoreDecryptGuide.isAcknowledged(email: email)
+    }
+
     var body: some View {
+        if compact {
+            compactBody
+        } else if !acknowledged || email.isEmpty {
+            fullBody
+        } else {
+            acknowledgedBody
+        }
+    }
+
+    private var fullBody: some View {
         GlassCard(corner: 22) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
                     Image(systemName: "info.circle.fill")
                         .font(.title3)
@@ -220,6 +241,71 @@ struct DecryptAppStoreSignInHint: View {
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.45))
                     .fixedSize(horizontal: false, vertical: true)
+
+                actionButtons(showAck: !email.isEmpty)
+            }
+        }
+    }
+
+    private var compactBody: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(AppStoreDecryptGuide.failureHint)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.65))
+                .fixedSize(horizontal: false, vertical: true)
+            actionButtons(showAck: !email.isEmpty)
+        }
+        .padding(.top, 4)
+    }
+
+    private var acknowledgedBody: some View {
+        GlassCard(corner: 18) {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(TetherlessPalette.success)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("App Store sign-in noted")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(email.isEmpty ? "Keys should be on this device for your Store account." : "Marked for \(email). You can reopen the App Store anytime if decrypt still fails after download.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                Button("Open") { AppStoreDecryptGuide.openAppStore() }
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
+        }
+    }
+
+    private func actionButtons(showAck: Bool) -> some View {
+        VStack(spacing: 8) {
+            Button { AppStoreDecryptGuide.openAppStore() } label: {
+                Label("Open App Store", systemImage: "bag.fill")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(TetherlessPalette.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            if showAck {
+                Button {
+                    AppStoreDecryptGuide.setAcknowledged(true, email: email)
+                    ackTick.toggle()
+                } label: {
+                    Text("I’ve signed in on this iPhone")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(.white.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
             }
         }
     }

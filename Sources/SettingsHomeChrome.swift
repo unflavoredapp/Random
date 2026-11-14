@@ -33,6 +33,13 @@ struct SettingsAppleIDCard: View {
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
 
+            Button { AppStoreDecryptGuide.openAppStore() } label: {
+                Label("Open App Store to sign in once", systemImage: "bag.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
+            .buttonStyle(.plain)
+
             if store.accounts.isEmpty {
                 emptySignIn
             } else {
