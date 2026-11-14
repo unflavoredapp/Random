@@ -722,7 +722,7 @@ private struct DecryptVersionsSheet: View {
                 List {
                     Section {
                         Text(DecryptChannel.current == .device
-                              ? "Silent store download can pin a build via externalVersionId. FairPlay runs on this iPhone (iOS \(deviceIOS)) — pick a build whose min iOS is ≤ \(deviceIOS). Spoof Store iOS under Settings › Store Access if you need a different package variant."
+                              ? "Silent store download can pin a build via externalVersionId. FairPlay runs on this iPhone (iOS \(deviceIOS)) — pick a build whose min iOS is ≤ \(deviceIOS). Unpinned latest downloads honor Settings › Store Access › Spoof Store iOS (itunesstored UA)."
                               : "FairPlay decrypt runs on this iPhone (iOS \(deviceIOS)). Pick a build whose min iOS is ≤ \(deviceIOS). Telegram can fetch older archives when store history isn’t available.")
                             .font(.footnote)
                             .foregroundStyle(.white.opacity(0.55))
