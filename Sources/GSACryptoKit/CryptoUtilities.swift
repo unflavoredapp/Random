@@ -30,15 +30,17 @@ public enum CryptoUtilities {
     ) -> Data? {
         guard rounds > 0, outputLength > 0 else { return nil }
         var out = Data(count: outputLength)
+        let passwordCount = password.count
+        let saltCount = salt.count
         let status: CCStatus = out.withUnsafeMutableBytes { outBuf in
             password.withUnsafeBytes { passBuf in
                 salt.withUnsafeBytes { saltBuf in
                     CCKeyDerivationPBKDF(
                         CCPBKDFAlgorithm(kCCPBKDF2),
                         passBuf.bindMemory(to: Int8.self).baseAddress,
-                        password.count,
+                        passwordCount,
                         saltBuf.bindMemory(to: UInt8.self).baseAddress,
-                        salt.count,
+                        saltCount,
                         CCPseudoRandomAlgorithm(kCCPRFHmacAlgSHA256),
                         UInt32(rounds),
                         outBuf.bindMemory(to: UInt8.self).baseAddress,
@@ -55,7 +57,12 @@ public enum CryptoUtilities {
         guard key.count == 16 || key.count == 24 || key.count == 32 else { return nil }
         guard !ciphertext.isEmpty, ciphertext.count % 16 == 0 else { return nil }
         var out = Data(count: ciphertext.count + kCCBlockSizeAES128)
+        let outCapacity = out.count
+        let ciphertextCount = ciphertext.count
+        let keyCount = key.count
         var moved = 0
+        // Copy counts before exclusive borrows — Swift exclusivity forbids
+        // reading `out.count` (etc.) while `out` is mutably borrowed.
         let status: CCCryptorStatus = out.withUnsafeMutableBytes { outBuf in
             ciphertext.withUnsafeBytes { inBuf in
                 key.withUnsafeBytes { keyBuf in
@@ -64,10 +71,10 @@ public enum CryptoUtilities {
                             CCOperation(kCCDecrypt),
                             CCAlgorithm(kCCAlgorithmAES),
                             CCOptions(kCCOptionPKCS7Padding),
-                            keyBuf.baseAddress, key.count,
+                            keyBuf.baseAddress, keyCount,
                             ivBuf.baseAddress,
-                            inBuf.baseAddress, ciphertext.count,
-                            outBuf.baseAddress, out.count,
+                            inBuf.baseAddress, ciphertextCount,
+                            outBuf.baseAddress, outCapacity,
                             &moved
                         )
                     }
