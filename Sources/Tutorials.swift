@@ -39,7 +39,7 @@ enum TutorialLibrary {
         steps: [
             TutorialStep(
                 title: "What you need",
-                body: "An iPhone with this app, a GitHub account, and a domain you control (optional — airshare.lol is preconfigured). That's the whole list. No Mac, no Xcode, no server, no terminal — every build, sign, install and cert renewal runs on GitHub Actions or on the phone itself."),
+                body: "An iPhone with this app, a GitHub account, and a domain you control (optional — tetherless.dev is preconfigured as the backloop.dev-style loopback host). That's the whole list. No Mac, no Xcode, no server, no terminal — every build, sign, install and cert renewal runs on GitHub Actions or on the phone itself."),
             TutorialStep(
                 title: "Sign in to GitHub and make a token",
                 body: "On github.com (Safari is fine): Settings › Developer settings › Fine-grained tokens › Generate. Repository access: the repo(s) you'll use. Permissions — Contents, Actions, Workflows: Read and write. Copy it.",
@@ -57,7 +57,7 @@ enum TutorialLibrary {
                 tip: "Linking is idempotent — tap it again any time; it only adds what's missing."),
             TutorialStep(
                 title: "Point your domain (optional)",
-                body: "Skip this to use airshare.lol. For your own domain: at your DNS host add an A record `*` → 127.0.0.1 (and `@` → 127.0.0.1). Then Settings › Decrypt.Team Domain: type the domain, tap Check — it should say → 127.0.0.1 ✓. Save."),
+                body: "Skip this to use tetherless.dev (*.tetherless.dev → 127.0.0.1; apex hosts the pack). For your own domain: at your DNS host add an A record `*` → 127.0.0.1. Then Settings › Decrypt.Team Domain: type the domain, tap Check — it should say → 127.0.0.1 ✓. Save."),
             TutorialStep(
                 title: "Issue the cert",
                 body: "Tap Renew now. Within a minute the DNS challenge card shows a TXT name and value — add it at your DNS host, the workflow notices and continues; a second value follows for the apex, add it too (keep both). When it finishes, Pull latest. Done — installs now go over https://mr.<your domain>."),
@@ -76,7 +76,7 @@ enum TutorialLibrary {
                 body: "Instead of asking Let's Encrypt for a cert (and doing the DNS TXT dance), the phone becomes its own certificate authority. It generates a root CA once, signs a leaf for your install host, and serves installs with it. iOS trusts it after you install the root profile a single time. Private keys never leave the Keychain."),
             TutorialStep(
                 title: "Pick the host and point it at loopback",
-                body: "Any name that resolves to 127.0.0.1 works. At your DNS host add an A record for it → 127.0.0.1. In registrar panels the Subdomain field usually wants just the label (e.g. `sign`), not the full name — entering `sign.example.com` there makes `sign.example.com.example.com`. No DNS control? Use a free loopback name like 127-0-0-1.nip.io.",
+                body: "Any name that resolves to 127.0.0.1 works. At your DNS host add an A record for it → 127.0.0.1. In registrar panels the Subdomain field usually wants just the label (e.g. `sign`), not the full name — entering `sign.example.com` there makes `sign.example.com.example.com`. No DNS control? Use a free loopback name under *.tetherless.dev (the backloop.dev replacement).",
                 tip: "This DNS step is separate from trust. If the host doesn't resolve to 127.0.0.1, iOS silently never shows the install sheet."),
             TutorialStep(
                 title: "Switch to Fully local",

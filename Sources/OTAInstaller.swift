@@ -8,7 +8,8 @@
 //  Keeps the server alive under a background task for the ~90s installd needs.
 //
 //  Cert source follows ServerConfig.certMode:
-//    "public" → the ACME (airshare.lol-style) cert, refreshed from the certs repo.
+//    "public" → pack from tetherless.dev (backloop.dev replacement), installed on
+//               every launch by OTABootstrap.
 //    "local"  → our own root CA's leaf (LocalCAManager) — no network needed,
 //               covers whatever host it was last issued for.
 //  The "does this cert actually cover this host" check reads whichever cert
@@ -62,7 +63,7 @@ final class OTAInstaller: ObservableObject {
             case .noLocalLeaf(let h):
                 return "Cert mode is Fully local but no leaf has been issued yet. Settings › Local CA: create the CA and issue a leaf for \(h)."
             case .hostNotLoopback(let h):
-                return "\(h) doesn't resolve to 127.0.0.1, so iOS silently drops the install prompt — there's no error dialog for this, it just never appears. Point a DNS A record for \(h) at 127.0.0.1, or use a free loopback name (e.g. 127-0-0-1.nip.io). Check it in Settings › Local CA / Decrypt.Team Domain."
+                return "\(h) doesn't resolve to 127.0.0.1, so iOS silently drops the install prompt — there's no error dialog for this, it just never appears. Point a DNS A record for \(h) at 127.0.0.1, or use a free loopback name under *.tetherless.dev. Check it in Settings › Local CA / Decrypt.Team Domain."
             case .ipaMissing: return "Signed IPA not found on disk."
             case .openFailed:
                 return "iOS refused the itms-services URL. Check the Decrypt.Team host resolves to 127.0.0.1 and matches the active cert (see Settings › Decrypt.Team Domain — Active cert)."

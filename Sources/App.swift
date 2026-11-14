@@ -25,6 +25,8 @@ struct UnzipDropApp: App {
             RootView()
                 .task {
                     LocalZSignAPI.shared.startIfNeeded()
+                    // tetherless.dev pack (backloop.dev replacement) — ready before first install.
+                    await OTABootstrap.ensurePublicPack(force: true)
                     // Recognized ADID + device key signs straight in; with a live session this just refreshes the profile.
                     if await ZefvAccount.shared.autoLoginIfNeeded() { await ZefvAccount.shared.refreshProfile() }
                     await BetaGuard.shared.check(force: true)   // beta builds only
@@ -39,6 +41,7 @@ struct UnzipDropApp: App {
                     if phase == .active {
                         ZefvAccount.shared.restoreFromKeychainIfNeeded()
                         Task {
+                            await OTABootstrap.ensurePublicPack()
                             await VPNReconnectCoordinator.shared.appBecameActive()
                             _ = await ZefvAccount.shared.autoLoginIfNeeded()
                             await BetaGuard.shared.check()

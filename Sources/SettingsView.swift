@@ -1135,7 +1135,7 @@ private final class OTAState: ObservableObject {
     var have: Bool { mode == "local" ? hasLeaf : (mode == "custom" ? hasCustom : ZefvCert.isAvailable) }
     var coversHost: Bool { mode == "local" ? LocalCAManager.covers(host) : ZefvCert.covers(host, sans: sans) }
     var ready: Bool { have && coversHost && (mode != "local" || rootTrusted) }
-    var modeName: String { mode == "local" ? "Local CA" : (mode == "custom" ? "Own cert" : "airshare.lol") }
+    var modeName: String { mode == "local" ? "Local CA" : (mode == "custom" ? "Own cert" : "tetherless.dev") }
     var statusText: String { ready ? "READY" : (have ? (coversHost ? "NOT TRUSTED" : "MISMATCH") : "MISSING") }
 }
 
@@ -1155,14 +1155,16 @@ struct OTADomainScreen: View {
                         ServerConfig.setCertMode(m)
                         if m == "public" {
                             ServerConfig.setCertDomain(ServerConfig.defaultDomain)
-                            if !ServerConfig.installHost.hasSuffix("." + ServerConfig.defaultDomain) { ServerConfig.setInstallHost(ServerConfig.defaultInstallHost) }
+                            if !ServerConfig.installHost.hasSuffix("." + ServerConfig.defaultDomain) {
+                                ServerConfig.setInstallHost(ServerConfig.defaultInstallHost)
+                            }
                         }
                         st.reload()
                         UINotificationFeedbackGenerator().notificationOccurred(.success)
                     })) {
-                        Label("airshare.lol · VPS auto-renew", systemImage: "globe").tag("public")
-                        Label("Own TLS cert",             systemImage: "doc.badge.plus").tag("custom")
-                        Label("Local root CA",            systemImage: "iphone").tag("local")
+                        Label("tetherless.dev pack", systemImage: "globe").tag("public")
+                        Label("Own TLS cert",         systemImage: "doc.badge.plus").tag("custom")
+                        Label("Local root CA",        systemImage: "iphone").tag("local")
                     } label: {
                         HStack(spacing: 12) {
                             Image(systemName: "lock.rotation").foregroundStyle(Theme.accent).frame(width: 26)
@@ -1173,7 +1175,7 @@ struct OTADomainScreen: View {
                     .listRowBackground(Theme.card)
                 } footer: {
                     Text(st.mode == "public"
-                         ? "Real Let's Encrypt wildcard for *.airshare.lol, renewed on the VPS (certbot + Cloudflare) and pulled here. Trusted by iOS out of the box."
+                         ? "Public pack for *.tetherless.dev (backloop.dev replacement). Auto-installed on launch from tetherless.dev/pack.json. Point *.tetherless.dev at 127.0.0.1; apex hosts the pack."
                          : st.mode == "custom"
                          ? "Your own TLS cert for your own domain. Import fullchain + key; point the host at 127.0.0.1."
                          : "Your own root CA — offline, no DNS provider. iOS trusts it once the root profile is installed and enabled.")
@@ -1212,7 +1214,7 @@ struct OTADomainScreen: View {
                     case "custom":
                         TNav(icon: "doc.badge.plus", title: "Own certificate", subtitle: st.hasCustom ? "Imported · \(st.sans.joined(separator: ", "))" : "Import fullchain + key (PEM)") { OwnCertScreen(st: st) }
                     default:
-                        TNav(icon: "arrow.triangle.2.circlepath.circle", title: "airshare.lol certificate", subtitle: st.cached ? "Pulled from VPS · \(st.fetchedAt?.formatted(date: .abbreviated, time: .shortened) ?? "")" : "Bundled in IPA · pull from VPS to refresh") { VPSCertScreen(st: st) }
+                        TNav(icon: "arrow.triangle.2.circlepath.circle", title: "tetherless.dev pack", subtitle: st.cached ? "Pulled · \(st.fetchedAt?.formatted(date: .abbreviated, time: .shortened) ?? "")" : "Auto-install on launch · pull to refresh") { VPSCertScreen(st: st) }
                     }
                 } header: {
                     Text("Setup")
@@ -1248,7 +1250,12 @@ private struct OTAHostScreen: View {
     private var cleanHost: String {
         let h = host.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             .replacingOccurrences(of: "https://", with: "").trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        return h.isEmpty ? (cleanDomain == ServerConfig.defaultDomain ? ServerConfig.defaultInstallHost : "mr.\(cleanDomain)") : h
+        if h.isEmpty {
+            if cleanDomain == ServerConfig.defaultDomain { return ServerConfig.defaultInstallHost }
+            let label = String(UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(8)).lowercased()
+            return "\(label).\(cleanDomain)"
+        }
+        return h
     }
     private var domainOK: Bool { cleanDomain.contains(".") && !cleanDomain.contains(" ") }
     private var hostOK: Bool { domainOK && (cleanHost.hasSuffix("." + cleanDomain) || cleanHost == cleanDomain) }
@@ -1260,7 +1267,7 @@ private struct OTAHostScreen: View {
                 TField(label: "Install host", text: $host, placeholder: ServerConfig.defaultInstallHost, keyboard: .URL)
             } footer: {
                 Text(st.mode == "public"
-                     ? "On Cloudflare, *.airshare.lol points at the VPS, so the Decrypt.Team host is the dedicated ota.airshare.lol A record → 127.0.0.1 (DNS only). One label under the wildcard, so the *.airshare.lol cert covers it."
+                     ? "DNS: *.tetherless.dev → 127.0.0.1. Apex tetherless.dev stays on the VPS for pack.json. Your install host is a random one-label name under the wildcard so the pack cert covers it."
                      : "The install host must resolve to 127.0.0.1 via an A record — iOS silently drops the install prompt otherwise. The cert must cover it (wildcard *.<domain> covers any single label).")
                 .foregroundStyle(Theme.subtle)
             }
@@ -1304,7 +1311,7 @@ private struct OTAHostScreen: View {
     }
 }
 
-// MARK: - airshare.lol certificate (VPS)
+// MARK: - tetherless.dev pack
 
 private struct VPSCertScreen: View {
     @ObservedObject var st: OTAState
@@ -1313,22 +1320,34 @@ private struct VPSCertScreen: View {
     @State private var note: String?
 
     var body: some View {
-        TableScreen(title: "airshare.lol certificate") {
+        TableScreen(title: "tetherless.dev pack") {
             Section {
                 HStack { Text("Status").foregroundStyle(Theme.subtle); Spacer(); certPill(ZefvCert.effectiveNotAfter) }.listRowBackground(Theme.card)
-                TRow(k: "In use", v: st.cached ? "Pulled from VPS" : "Bundled in IPA")
+                TRow(k: "In use", v: st.cached ? "Pulled from tetherless.dev" : "Not cached yet")
                 TRow(k: "Covers", v: ZefvCert.effectiveSANs.isEmpty ? "—" : ZefvCert.effectiveSANs.joined(separator: ", "))
                 TRow(k: "Expires", v: ZefvCert.effectiveNotAfter.map { $0.formatted(date: .abbreviated, time: .omitted) } ?? "—")
                 TRow(k: "Last pull", v: st.fetchedAt?.formatted(date: .abbreviated, time: .shortened) ?? "never")
+                TStatusRow(ok: ZefvCert.isPackCATrusted(),
+                           text: ZefvCert.isPackCATrusted()
+                           ? "Pack CA trusted on this device"
+                           : "Pack CA not trusted yet — install the profile, then enable Full Trust")
             }
 
             Section {
-                TButton(title: refreshing ? "Fetching…" : "Pull latest from VPS", icon: "arrow.down.circle", busy: refreshing) { Task { await refresh() } }
-                if st.cached { TButton(title: "Forget pulled copy (use bundled)", icon: "trash", role: .destructive) { ZefvCert.clearCache(); st.reload() } }
+                TButton(title: refreshing ? "Fetching…" : "Pull latest pack", icon: "arrow.down.circle", busy: refreshing) { Task { await refresh() } }
+                TButton(title: "Install CA trust profile", icon: "square.and.arrow.down") {
+                    if ZefvCert.isPackCATrusted() { note = "Pack CA already trusted."; return }
+                    guard ZefvCert.writePackCATrustProfile() != nil else {
+                        error = "No pack CA on disk — pull the pack first."; return
+                    }
+                    OTABootstrap.resetTrustPrompt()
+                    OTABootstrap.offerPackCATrustIfNeeded(force: true)
+                }
+                if st.cached { TButton(title: "Forget pulled copy", icon: "trash", role: .destructive) { ZefvCert.clearCache(); st.reload() } }
                 if let error { TStatusRow(ok: false, text: error) }
                 if let note { TStatusRow(ok: true, text: note) }
             } footer: {
-                Text("certbot on the VPS renews *.airshare.lol through the Cloudflare DNS API; the app auto-pulls on install when within \(ServerConfig.refreshBufferDays) days of expiry. Pull latest forces it now.").foregroundStyle(Theme.subtle)
+                Text("Auto-installed on launch from \(ServerConfig.certSourceURL) (Feather/backloop pack.json shape; GitHub certs branch as fallback). After the pack lands, install the CA trust profile once and enable Full Trust.").foregroundStyle(Theme.subtle)
             }
         }
     }
@@ -1338,7 +1357,7 @@ private struct VPSCertScreen: View {
         do {
             _ = try await ZefvCert.fetch()
             OTAFiles.exportPublicChain(); st.reload()
-            note = "Certificate pulled from Decrypt.Team"
+            note = "Pack refreshed from tetherless.dev"
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         } catch { self.error = error.localizedDescription }
         refreshing = false
@@ -1489,7 +1508,7 @@ private struct LocalCAScreen: View {
             } header: {
                 Text("1 · Host & leaf")
             } footer: {
-                Text("The leaf covers this host and *.<host>. The host must ALSO resolve to 127.0.0.1 (A record, or a free name like 127-0-0-1.nip.io) or the install prompt never appears.").foregroundStyle(Theme.subtle)
+                Text("The leaf covers this host and *.<host>. The host must ALSO resolve to 127.0.0.1 (A record, or a free name under *.tetherless.dev) or the install prompt never appears.").foregroundStyle(Theme.subtle)
             }
 
             if st.hasRoot {
@@ -1595,7 +1614,7 @@ private struct CertInspectorScreen: View {
     var body: some View {
         DetailScreen(title: "Certificate inspector") {
             Card {
-                Text("Same parser, same fields, for every certificate this app can present to iOS. Compare what a public CA issued against what this phone issued. Active mode: \(ServerConfig.certMode == "local" ? "Fully local" : (ServerConfig.certMode == "custom" ? "Own TLS cert" : "airshare.lol (VPS)")).")
+                Text("Same parser, same fields, for every certificate this app can present to iOS. Compare what a public CA issued against what this phone issued. Active mode: \(ServerConfig.certMode == "local" ? "Fully local" : (ServerConfig.certMode == "custom" ? "Own TLS cert" : "tetherless.dev pack")).")
                     .font(.caption).foregroundStyle(Theme.subtle)
             }
             chainSection("PUBLIC (ACME) CERT", publicChain, empty: "No public cert loaded.")
