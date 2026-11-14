@@ -33,16 +33,40 @@ enum AppStoreDecryptGuide {
 
     /// Opens the App Store so the user can sign in with the decrypt Apple ID once.
     static func openAppStore() {
-        // Prefer the App Store URL scheme; fall back to https (no LSApplicationQueriesSchemes needed for open).
-        if let app = URL(string: "itms-apps://apps.apple.com") {
+        open(urlString: "itms-apps://apps.apple.com", fallback: "https://apps.apple.com")
+    }
+
+    /// Opens a specific App Store product page (https or itms-apps) so the user can install with their own Apple ID.
+    static func openAppStoreListing(_ storeURL: String) {
+        let trimmed = storeURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            openAppStore()
+            return
+        }
+        // Prefer the App Store client scheme when given an https apps.apple.com link.
+        if let https = URL(string: trimmed),
+           let host = https.host?.lowercased(),
+           host.contains("apps.apple.com") || host.contains("itunes.apple.com") {
+            var comps = URLComponents(url: https, resolvingAgainstBaseURL: false)
+            comps?.scheme = "itms-apps"
+            if let itms = comps?.url?.absoluteString {
+                open(urlString: itms, fallback: trimmed)
+                return
+            }
+        }
+        open(urlString: trimmed, fallback: "https://apps.apple.com")
+    }
+
+    private static func open(urlString: String, fallback: String) {
+        if let app = URL(string: urlString) {
             UIApplication.shared.open(app) { ok in
-                if !ok, let web = URL(string: "https://apps.apple.com") {
+                if !ok, let web = URL(string: fallback) {
                     UIApplication.shared.open(web)
                 }
             }
             return
         }
-        if let web = URL(string: "https://apps.apple.com") {
+        if let web = URL(string: fallback) {
             UIApplication.shared.open(web)
         }
     }

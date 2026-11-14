@@ -228,28 +228,61 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
     }
 
     uint32_t cid = (mode == FP_MODE_R_CID2) ? 2 : 1;
-    errno = 0;
-    res->mremap_ret = do_mremap_encrypted(base + s->cryptoff, s->cryptsize, cid, s->cputype, s->cpusubtype);
-    res->mremap_errno = res->mremap_ret == 0 ? 0 : errno;
+    uint64_t total = (s->cryptsize + pg - 1) / pg;
+    res->pages_total = total;
 
-    if (res->mremap_ret == 0) {
-        // Read through the remapped range with vm_read_overwrite so that a failing
-        // page-in (decrypt error) is reported as a kern_return_t instead of SIGBUS.
-        uint64_t total = (s->cryptsize + pg - 1) / pg;
-        res->pages_total = total;
+    // Guarded remapping retry: when fairplayd flakes mid page-in, unmap + mremap again
+    // and re-read failed pages (userspace analogue of Buddy's pager retry — no kwrite).
+    uint8_t *okmask = calloc((size_t)total, 1);
+    if (!okmask) {
+        free(orig); if (!out) free(dec); munmap(base, map_len); close(fd);
+        res->mmap_errno = ENOMEM; res->ms = now_ms() - t0; return -1;
+    }
+
+    for (int round = 0; round < 4; round++) {
+        if (round > 0) {
+            munmap(base, map_len);
+            usleep((useconds_t)(40 * 1000 * round));
+            base = mmap(NULL, map_len, prot, MAP_PRIVATE, fd, (off_t)s->slice_off);
+            if (base == MAP_FAILED) { res->mmap_errno = errno; break; }
+        }
+        errno = 0;
+        int mr = do_mremap_encrypted(base + s->cryptoff, s->cryptsize, cid, s->cputype, s->cpusubtype);
+        res->mremap_ret = mr;
+        res->mremap_errno = mr == 0 ? 0 : errno;
+        if (mr != 0) continue;
+
+        uint64_t pages_ok = 0;
+        int first_kr = 0;
+        uint64_t first_off = 0;
         for (uint64_t i = 0; i < total; i++) {
+            if (okmask[i]) { pages_ok++; continue; }
             uint64_t off = i * pg;
             uint64_t n = (off + pg <= s->cryptsize) ? pg : (s->cryptsize - off);
             vm_size_t got = 0;
-            kern_return_t kr = vm_read_overwrite(mach_task_self(), (vm_address_t)(base + s->cryptoff + off), (vm_size_t)n,
+            // vm_read_overwrite reports decrypt page-in failures as kern_return_t (no SIGBUS).
+            kern_return_t kr = vm_read_overwrite(mach_task_self(),
+                                                 (vm_address_t)(base + s->cryptoff + off),
+                                                 (vm_size_t)n,
                                                  (vm_address_t)(dec + off), &got);
             if (kr == KERN_SUCCESS && got == n) {
-                res->pages_ok++;
+                okmask[i] = 1;
+                pages_ok++;
             } else {
-                if (!res->first_fail_kr) { res->first_fail_kr = kr ? kr : -1; res->first_fail_off = s->cryptoff + off; }
-                memset(dec + off, 0, n);
+                if (!first_kr) { first_kr = kr ? (int)kr : -1; first_off = s->cryptoff + off; }
+                memset(dec + off, 0, (size_t)n);
             }
         }
+        res->pages_ok = pages_ok;
+        if (first_kr && !res->first_fail_kr) {
+            res->first_fail_kr = first_kr;
+            res->first_fail_off = first_off;
+        }
+        if (pages_ok == total) break;
+    }
+
+    free(okmask);
+    if (res->mremap_ret == 0 && res->pages_ok == res->pages_total) {
         res->changed = memcmp(orig, dec, s->cryptsize) != 0;
         res->ret_after = code_words(dec, s->cryptsize);
         res->ent_after = entropy(dec, s->cryptsize);
@@ -259,7 +292,7 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
 
     free(orig);
     if (!out) free(dec);
-    munmap(base, map_len);
+    if (base != MAP_FAILED) munmap(base, map_len);
     close(fd);
     res->ms = now_ms() - t0;
     return (res->mremap_ret == 0 && res->pages_ok == res->pages_total && res->changed) ? 0 : -1;
@@ -354,6 +387,31 @@ int fp_count_encrypted_slices(const char *path) {
     return c;
 }
 
+int fp_describe_cryptids(const char *path, char *buf, size_t buflen) {
+    if (!buf || !buflen) return -1;
+    buf[0] = 0;
+    fp_slice_t sl[FP_MAX_SLICES]; int n = 0; char err[256] = {0};
+    if (fp_parse(path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) {
+        snprintf(buf, buflen, "parse-error");
+        return -1;
+    }
+    size_t used = 0;
+    for (int i = 0; i < n; i++) {
+        char piece[64];
+        if (sl[i].has_enc) {
+            snprintf(piece, sizeof piece, "%ss%u:cryptid=%u", i ? " " : "", (unsigned)i, sl[i].cryptid);
+        } else {
+            snprintf(piece, sizeof piece, "%ss%u:plain", i ? " " : "", (unsigned)i);
+        }
+        size_t len = strlen(piece);
+        if (used + len + 1 >= buflen) break;
+        memcpy(buf + used, piece, len + 1);
+        used += len;
+    }
+    if (!n) snprintf(buf, buflen, "no-slices");
+    return n;
+}
+
 int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, void *ctx) {
     fp_slice_t sl[FP_MAX_SLICES]; int n = 0; char err[256] = {0};
     if (fp_parse(in_path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) { logf_(log, ctx, "  parse failed: %s", err); return -1; }
@@ -384,9 +442,9 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         fp_attempt_t best; memset(&best, 0, sizeof best); best.mremap_ret = -1;
         for (size_t k = 0; k < sizeof order / sizeof order[0] && !done; k++) {
             fp_attempt_t a; char d[512];
-            // Up to 2 tries per mode (fairplayd can flake under load).
-            for (int attempt = 0; attempt < 2 && !done; attempt++) {
-                if (attempt) usleep(50 * 1000);
+            // Extra tries per mode — guarded remapping inside fp_attempt plus outer backoff.
+            for (int attempt = 0; attempt < 4 && !done; attempt++) {
+                if (attempt) usleep((useconds_t)(60 * 1000 * attempt));
                 fp_attempt(in_path, s, order[k][0], order[k][1], dec, &a);
                 if (a.pages_ok > best.pages_ok || (a.pages_ok == best.pages_ok && a.changed && !best.changed))
                     best = a;

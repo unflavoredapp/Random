@@ -264,9 +264,8 @@ final class DecryptClient: ObservableObject {
         try FileManager.default.moveItem(at: tmp, to: dest)
         // Telegram bot IPAs should already be clear; still verify / finish with FairPlay when needed.
         if DecryptChannel.current == .telegram {
-            let still = dest.path.withCString { fp_has_encrypted_slice($0) }
-            if still != 1 {
-                message = "Saved from Telegram bot · Library"
+            if let verify = try? FairPlayDecrypt.verifyIPA(at: dest), verify.isFullyClear {
+                message = "Saved from Telegram bot · \(verify.summary)"
                 return dest
             }
         }
@@ -278,14 +277,19 @@ final class DecryptClient: ObservableObject {
                 try? FileManager.default.removeItem(at: dest)
                 try FileManager.default.moveItem(at: clear, to: dest)
             }
-            message = DecryptChannel.current == .telegram
-                ? "Telegram IPA finished with on-device FairPlay · Library"
-                : "Decrypted on this device · saved to Library"
+            let verifyNote = (try? FairPlayDecrypt.verifyIPA(at: dest))?.summary
+            if DecryptChannel.current == .telegram {
+                message = "Telegram IPA finished with on-device FairPlay" + (verifyNote.map { " · \($0)" } ?? "")
+            } else {
+                message = "Decrypted on this device · saved to Library" + (verifyNote.map { " · \($0)" } ?? "")
+            }
             return dest
         } catch {
             if DecryptChannel.current == .telegram {
                 // Bot claimed success but FairPlay couldn't finish — keep file, surface warning.
+                let verifyNote = (try? FairPlayDecrypt.verifyIPA(at: dest))?.summary
                 message = "Saved from Telegram (FairPlay verify failed: \(error.localizedDescription))"
+                    + (verifyNote.map { " · \($0)" } ?? "")
                 return dest
             }
             try? FileManager.default.removeItem(at: dest)

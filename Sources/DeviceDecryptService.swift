@@ -1,8 +1,9 @@
 //
 //  DeviceDecryptService.swift
 //  On-device decrypt: hardened FairPlay mremap on apps installed on this iPhone
-//  (App Store keys + SC_Info). Falls back to Store download + local FairPlay only
-//  when the install path is missing — not when FairPlay fails (that needs App Store sign-in).
+//  (App Store keys + SC_Info). When the app isn’t installed yet, Device mode opens
+//  the App Store listing for *your* Apple ID, waits for the install, then decrypts
+//  locally — no Telegram bot fallback.
 //
 
 import Foundation
@@ -146,19 +147,10 @@ final class DeviceDecryptService: ObservableObject {
                 ) { [weak self] msg in
                     Task { @MainActor in self?.status = msg }
                 }
-                lastReportSummary = clear.lastPathComponent.contains("-decrypted-soft")
-                    ? "Saved with optional Watch/widget leftovers encrypted"
-                    : "Full Mach-O coverage (main + frameworks + nested)"
-                DecryptClient.shared.finished = clear
-                DecryptClient.shared.finishedName = app.name
-                DecryptClient.shared.phase = .done
-                DecryptClient.shared.message = "Decrypted on this device · \(lastReportSummary)"
-                DecryptClient.shared.error = nil
-                status = ""
-                AppNav.shared.go(AppTab.library.rawValue)
+                finishSuccess(url: clear, name: app.name)
                 return
             } catch FairPlayDecryptError.noInstalledApp {
-                status = "App path not found — trying Store IPA…"
+                status = "Not installed — opening App Store for your Apple ID…"
             } catch let e as FairPlayDecryptError {
                 // Keys / FairPlay failure — do NOT mask with a remote download.
                 lastError = e.localizedDescription
@@ -169,22 +161,15 @@ final class DeviceDecryptService: ObservableObject {
             }
 
             let storeURL = try await storeURL(forBundleID: app.bundleID)
-            let display = app.name
-            let clientApp = DecryptApp(
-                id: app.bundleID,
-                name: app.name,
-                bundle: app.bundleID,
-                icon: nil,
-                dev: "",
-                version: version ?? app.version,
-                url: storeURL
+            try await waitForStoreInstallThenDecrypt(
+                bundleID: app.bundleID,
+                displayName: app.name,
+                storeURL: storeURL
             )
-            DecryptClient.shared.select(clientApp)
-            status = "Downloading + decrypting on this device…"
-            DecryptClient.shared.start(url: storeURL, version: version, display: display)
-            status = ""
         } catch {
             lastError = error.localizedDescription
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = error.localizedDescription
             status = ""
         }
     }
@@ -195,14 +180,117 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.select(app)
             DecryptClient.shared.start(url: app.url, version: version, display: app.name)
         case .device:
-            if !app.bundle.isEmpty, FairPlayDecrypt.installedAppURL(bundleID: app.bundle) != nil {
-                let deviceApp = DeviceApp(bundleID: app.bundle, name: app.name, version: app.version, isAppStore: true)
-                Task { await decryptInstalled(deviceApp, version: version) }
+            let deviceApp = DeviceApp(
+                bundleID: app.bundle.isEmpty ? app.id : app.bundle,
+                name: app.name,
+                version: app.version,
+                isAppStore: true
+            )
+            Task { await decryptOwnedStoreApp(deviceApp, storeURL: app.url, version: version) }
+        }
+    }
+
+    /// Device-channel path for a Store listing: decrypt if installed, otherwise open the listing
+    /// under the signed-in Apple ID, wait for install, then FairPlay locally (never Telegram).
+    func decryptOwnedStoreApp(_ app: DeviceApp, storeURL: String, version: String? = nil) async {
+        guard !busy else { return }
+        busy = true
+        lastError = nil
+        defer { busy = false }
+        do {
+            guard AppleIDStore.shared.isSignedIn else {
+                throw DecryptError("Sign in under Settings › Store Access with the Apple ID that owns this app.")
+            }
+            let bid = app.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !bid.isEmpty else {
+                throw DecryptError("Missing bundle ID — search again or paste an App Store link.")
+            }
+            if FairPlayDecrypt.installedAppURL(bundleID: bid) != nil {
+                status = "Decrypting \(app.name) on this device…"
+                let clear = try FairPlayDecrypt.decryptInstalledApp(
+                    bundleID: bid,
+                    displayName: app.name
+                ) { [weak self] msg in
+                    Task { @MainActor in self?.status = msg }
+                }
+                finishSuccess(url: clear, name: app.name)
                 return
             }
-            DecryptClient.shared.select(app)
-            DecryptClient.shared.start(url: app.url, version: version, display: app.name)
+            let link = storeURL.isEmpty ? try await self.storeURL(forBundleID: bid) : storeURL
+            try await waitForStoreInstallThenDecrypt(
+                bundleID: bid,
+                displayName: app.name,
+                storeURL: link
+            )
+        } catch {
+            lastError = error.localizedDescription
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = error.localizedDescription
+            status = ""
         }
+    }
+
+    private func waitForStoreInstallThenDecrypt(
+        bundleID: String,
+        displayName: String,
+        storeURL: String
+    ) async throws {
+        DecryptClient.shared.phase = .running
+        DecryptClient.shared.message = "Install \(displayName) from the App Store, then we’ll decrypt on this device"
+        DecryptClient.shared.error = nil
+        status = "Opening App Store — install with your Apple ID…"
+        AppStoreDecryptGuide.openAppStoreListing(storeURL)
+
+        let deadline = Date().addingTimeInterval(8 * 60)
+        var spins = 0
+        while Date() < deadline {
+            try Task.checkCancellation()
+            if let _ = FairPlayDecrypt.installedAppURL(bundleID: bundleID) {
+                status = "Installed — decrypting \(displayName)…"
+                DecryptClient.shared.message = status
+                let clear = try FairPlayDecrypt.decryptInstalledApp(
+                    bundleID: bundleID,
+                    displayName: displayName
+                ) { [weak self] msg in
+                    Task { @MainActor in
+                        self?.status = msg
+                        DecryptClient.shared.message = msg
+                    }
+                }
+                finishSuccess(url: clear, name: displayName)
+                return
+            }
+            spins += 1
+            if spins % 5 == 0 {
+                status = "Waiting for \(displayName) to finish installing…"
+                DecryptClient.shared.message = status
+            }
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+        }
+        throw DecryptError(
+            "Timed out waiting for \(displayName) to install. Open the App Store, install it with the Apple ID in Store Access, then tap Decrypt again."
+        )
+    }
+
+    private func finishSuccess(url: URL, name: String) {
+        let nameTag = url.lastPathComponent
+        if nameTag.contains("-PARTIAL") {
+            lastReportSummary = "PARTIAL IPA (main clear · some frameworks still encrypted)"
+        } else if nameTag.contains("-decrypted-soft") {
+            lastReportSummary = "Saved with optional Watch/widget leftovers encrypted"
+        } else {
+            lastReportSummary = "Full Mach-O coverage (main + frameworks + nested)"
+        }
+        if let verify = try? FairPlayDecrypt.verifyIPA(at: url) {
+            lastReportSummary += " · \(verify.summary)"
+        }
+        DecryptClient.shared.finished = url
+        DecryptClient.shared.finishedName = name
+        DecryptClient.shared.phase = .done
+        DecryptClient.shared.message = "Decrypted on this device · \(lastReportSummary)"
+        DecryptClient.shared.error = nil
+        status = ""
+        AppNav.shared.go(AppTab.library.rawValue)
     }
 
     /// Decrypt every listed App Store app with on-device FairPlay (main + frameworks + nested).

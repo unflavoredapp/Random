@@ -24,6 +24,29 @@ enum FairPlayDecryptError: LocalizedError {
     }
 }
 
+/// Per-Mach-O cryptid line from `verifyApp` / `verifyIPA` (FairPlayed `verify_ipa.sh` style).
+struct FairPlayCryptidEntry: Sendable, Identifiable {
+    var id: String { path }
+    var path: String
+    /// Highest cryptid across slices; `-1` parse error, `0` clear / no LC, `>0` still encrypted.
+    var cryptid: Int
+    var detail: String
+
+    var isEncrypted: Bool { cryptid > 0 }
+}
+
+struct FairPlayVerifyReport: Sendable {
+    var entries: [FairPlayCryptidEntry] = []
+    var encrypted = 0
+    var clear = 0
+    var plain = 0
+
+    var isFullyClear: Bool { encrypted == 0 && !entries.isEmpty }
+    var summary: String {
+        "\(clear) cryptid=0 · \(encrypted) encrypted · \(plain) no LC_ENCRYPTION"
+    }
+}
+
 /// Per-run summary for UI / logs.
 struct FairPlayDecryptReport: Sendable {
     var decrypted: [String] = []
@@ -36,6 +59,10 @@ struct FairPlayDecryptReport: Sendable {
     var usedInstalledPath: Bool = false
     var scanned = 0
     var encryptedBefore = 0
+    var sinfsReplicated = 0
+    var verify: FairPlayVerifyReport?
+    /// True when a required framework stayed encrypted but the main binary is clear (`-PARTIAL.ipa`).
+    var isPartial = false
 
     var summary: String {
         var parts: [String] = []
@@ -44,6 +71,9 @@ struct FairPlayDecryptReport: Sendable {
         if !plain.isEmpty { parts.append("\(plain.count) already clear") }
         if !softFailed.isEmpty { parts.append("\(softFailed.count) optional failed") }
         if !failed.isEmpty { parts.append("\(failed.count) failed") }
+        if sinfsReplicated > 0 { parts.append("\(sinfsReplicated) SINF staged") }
+        if isPartial { parts.append("PARTIAL") }
+        if let verify { parts.append(verify.summary) }
         return parts.isEmpty ? "no Mach-Os" : parts.joined(separator: " · ")
     }
 }
@@ -75,7 +105,9 @@ enum FairPlayDecrypt {
         guard !id.isEmpty else { return nil }
 
         if let url = lsWorkspaceURL(bundleID: id) { return url }
+        if let url = lsRecordURL(bundleID: id) { return url }
         if let url = lsProxyURL(bundleID: id) { return url }
+        if let url = pathFallbackURL(bundleID: id) { return url }
         return nil
     }
 
@@ -87,6 +119,12 @@ enum FairPlayDecrypt {
         let selURL = NSSelectorFromString("URLForApplicationWithBundleIdentifier:")
         guard workspace.responds(to: selURL),
               let url = workspace.perform(selURL, with: bundleID)?.takeUnretainedValue() as? URL else { return nil }
+        return existingAppDirectory(url)
+    }
+
+    /// FairPlayed-style `LSApplicationRecord` lookup when workspace enumeration is denied.
+    private static func lsRecordURL(bundleID: String) -> URL? {
+        guard let url = fp_ls_application_record_url(bundleID) else { return nil }
         return existingAppDirectory(url)
     }
 
@@ -102,6 +140,29 @@ enum FairPlayDecrypt {
                let url = proxy.perform(s)?.takeUnretainedValue() as? URL,
                let app = existingAppDirectory(url) {
                 return app
+            }
+        }
+        return nil
+    }
+
+    /// Last-ditch scan of common install roots when LaunchServices APIs refuse the query.
+    private static func pathFallbackURL(bundleID: String) -> URL? {
+        let fm = FileManager.default
+        let roots = [
+            "/var/containers/Bundle/Application",
+            "/private/var/containers/Bundle/Application",
+        ]
+        for root in roots {
+            guard let containers = try? fm.contentsOfDirectory(atPath: root) else { continue }
+            for container in containers {
+                let dir = URL(fileURLWithPath: root).appendingPathComponent(container)
+                guard let kids = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
+                for app in kids where app.pathExtension == "app" {
+                    if let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist")) as? [String: Any],
+                       (info["CFBundleIdentifier"] as? String) == bundleID {
+                        return app
+                    }
+                }
             }
         }
         return nil
@@ -168,7 +229,7 @@ enum FairPlayDecrypt {
         report.usedInstalledPath = true
         progress?(report.summary)
 
-        try hardenDecryptedApp(at: destApp, report: report)
+        try hardenDecryptedApp(at: destApp, report: &report)
         return try zipDecryptedPayload(payload, displayName: displayName, report: report)
     }
 
@@ -207,7 +268,7 @@ enum FairPlayDecrypt {
             report.usedInstalledPath = false
         }
 
-        try hardenDecryptedApp(at: app, report: report)
+        try hardenDecryptedApp(at: app, report: &report)
         return try zipDecryptedPayload(payload, displayName: displayName, report: report)
     }
 
@@ -220,6 +281,12 @@ enum FairPlayDecrypt {
         progress: ((String) -> Void)? = nil
     ) throws -> FairPlayDecryptReport {
         var report = FairPlayDecryptReport()
+        // FairPlayed embed_ipa.sh: installd normally copies the main .sinf onto every
+        // SinfReplicationPaths entry; IPA trees / incomplete installs often skip that.
+        let staged = replicateSinfs(in: sourceApp)
+        report.sinfsReplicated = staged
+        if staged > 0 { progress?("Staged \(staged) nested SINF license(s)…") }
+
         let binaries = try collectMachOs(under: sourceApp)
         guard !binaries.isEmpty else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(sourceApp.lastPathComponent).")
@@ -227,7 +294,7 @@ enum FairPlayDecrypt {
         report.scanned = binaries.count
         report.encryptedBefore = binaries.reduce(0) { acc, url in
             let n = url.path.withCString { fp_count_encrypted_slices($0) }
-            return acc + max(0, n)
+            return acc + max(0, Int(n))
         }
         progress?("Found \(binaries.count) Mach-Os (\(report.encryptedBefore) encrypted slices)…")
 
@@ -320,12 +387,100 @@ enum FairPlayDecrypt {
             }
         }
 
+        // FairPlayed-style -PARTIAL.ipa: if the main executable is clear, keep going even when
+        // a required framework stayed encrypted. hardenDecryptedApp + zip tag the triage IPA.
         if !report.failed.isEmpty {
-            throw FairPlayDecryptError.stillEncrypted(
-                "FairPlay left \(report.failed.count) required binary(ies) encrypted: \(report.failed.prefix(4).joined(separator: ", "))\(report.failed.count > 4 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
-            )
+            let mainClear = report.decrypted.contains { isMainExecutable($0, app: sourceApp) }
+                || report.plain.contains { isMainExecutable($0, app: sourceApp) }
+            if mainClear {
+                report.isPartial = true
+                progress?("Main clear — packaging PARTIAL (\(report.failed.count) required leftover)…")
+            } else {
+                throw FairPlayDecryptError.stillEncrypted(
+                    "FairPlay left \(report.failed.count) required binary(ies) encrypted: \(report.failed.prefix(4).joined(separator: ", "))\(report.failed.count > 4 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
+                )
+            }
         }
         return report
+    }
+
+    // MARK: - SINF replication / verify_ipa
+
+    /// Copy the root `.sinf` onto every `SinfReplicationPaths` entry from `SC_Info/Manifest.plist`
+    /// (same behavior as FairPlayed `embed_ipa.sh`). Returns how many files were staged.
+    @discardableResult
+    static func replicateSinfs(in app: URL) -> Int {
+        let man = app.appendingPathComponent("SC_Info/Manifest.plist")
+        guard let plist = NSDictionary(contentsOf: man) as? [String: Any] else { return 0 }
+        let sinfPaths = (plist["SinfPaths"] as? [String]) ?? []
+        let repPaths = (plist["SinfReplicationPaths"] as? [String]) ?? []
+        guard let mainRel = sinfPaths.first, !mainRel.isEmpty else { return 0 }
+        let mainURL = app.appendingPathComponent(mainRel)
+        guard FileManager.default.fileExists(atPath: mainURL.path) else { return 0 }
+
+        var count = 0
+        let fm = FileManager.default
+        for p in repPaths {
+            if p.hasPrefix("Watch/") || p.contains("..") { continue }
+            let dest = app.appendingPathComponent(p)
+            if fm.fileExists(atPath: dest.path) { continue }
+            try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            do {
+                try fm.copyItem(at: mainURL, to: dest)
+                count += 1
+            } catch {
+                continue
+            }
+        }
+        return count
+    }
+
+    /// Report cryptid of every Mach-O under an `.app` (FairPlayed `verify_ipa.sh`).
+    static func verifyApp(at app: URL) throws -> FairPlayVerifyReport {
+        var report = FairPlayVerifyReport()
+        for url in try collectMachOs(under: app) {
+            let rel = relativePath(url, under: app)
+            var detailBuf = [CChar](repeating: 0, count: 256)
+            let sliceCount = url.path.withCString { path in
+                detailBuf.withUnsafeMutableBufferPointer { buf in
+                    fp_describe_cryptids(path, buf.baseAddress, buf.count)
+                }
+            }
+            let detail = String(cString: detailBuf)
+            let cryptid = url.path.withCString { fp_max_cryptid($0) }
+            let entry = FairPlayCryptidEntry(path: rel, cryptid: Int(cryptid), detail: detail)
+            report.entries.append(entry)
+            if cryptid > 0 {
+                report.encrypted += 1
+            } else if cryptid == 0 && sliceCount > 0 && detail.contains("cryptid=0") {
+                report.clear += 1
+            } else if cryptid == 0 {
+                // No encryption LC, or all clear.
+                if detail.contains("plain") && !detail.contains("cryptid=") {
+                    report.plain += 1
+                } else {
+                    report.clear += 1
+                }
+            } else {
+                report.plain += 1
+            }
+        }
+        return report
+    }
+
+    /// Unpack an IPA and verify every Mach-O’s cryptid. Throws if unzip fails.
+    static func verifyIPA(at ipaURL: URL) throws -> FairPlayVerifyReport {
+        let fm = FileManager.default
+        let work = fm.temporaryDirectory.appendingPathComponent("fp-verify-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: work) }
+        try fm.createDirectory(at: work, withIntermediateDirectories: true)
+        try fm.unzipItem(at: ipaURL, to: work)
+        let payload = work.appendingPathComponent("Payload", isDirectory: true)
+        guard let app = try fm.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
+            .first(where: { $0.pathExtension == "app" }) else {
+            throw FairPlayDecryptError.failed("No .app in IPA.")
+        }
+        return try verifyApp(at: app)
     }
 
     /// Decrypt a single Mach-O from `sourceApp` into `destApp`.
@@ -406,8 +561,8 @@ enum FairPlayDecrypt {
 
     // MARK: - Harden / package
 
-    /// Strip FairPlay license crumbs / account metadata and verify no *required* encrypted Mach-O remains.
-    private static func hardenDecryptedApp(at app: URL, report: FairPlayDecryptReport) throws {
+    /// Strip FairPlay license crumbs / account metadata and verify no unexpected encrypted Mach-O remains.
+    private static func hardenDecryptedApp(at app: URL, report: inout FairPlayDecryptReport) throws {
         let fm = FileManager.default
         // SC_Info is useless (and unwanted) on a clear IPA — including nested Watch / appex.
         try? fm.removeItem(at: app.appendingPathComponent("SC_Info"))
@@ -418,13 +573,19 @@ enum FairPlayDecrypt {
         }
         stripAccountData(from: app)
 
+        let verify = try verifyApp(at: app)
+        report.verify = verify
+
         let softSet = Set(report.softFailed)
+        let failedSet = Set(report.failed)
         let remaining = try collectMachOs(under: app).filter { url in
             guard url.path.withCString({ fp_has_encrypted_slice($0) }) == 1 else { return false }
             let rel = relativePath(url, under: app)
-            // Soft-failed Watch / widget / App Clip may remain encrypted without aborting.
-            if softSet.contains(rel) { return false }
+            // Soft-failed Watch / widget / App Clip, and known PARTIAL leftovers, may stay encrypted.
+            if softSet.contains(rel) || failedSet.contains(rel) { return false }
             let r = role(of: url, under: app, app: app)
+            // PARTIAL packages only require the main executable to be clear.
+            if report.isPartial { return r == .main }
             return r.isRequired
         }
         if !remaining.isEmpty {
@@ -474,7 +635,7 @@ enum FairPlayDecrypt {
     ) throws -> URL {
         let safe = sanitizeFileName(displayName)
         let tag: String
-        if !report.failed.isEmpty {
+        if report.isPartial || !report.failed.isEmpty {
             tag = "-PARTIAL"
         } else if !report.softFailed.isEmpty {
             tag = "-decrypted-soft"
