@@ -1,8 +1,9 @@
 //
 //  FairPlayDecrypt.swift
-//  Hardened on-device FairPlay decrypt via mremap_encrypted (FairPlayed/fpcore).
-//  Reads encrypted Mach-Os from a path fairplayd can open (installed .app + SC_Info),
-//  verifies cryptid=0 on every output binary, and refuses partial IPAs.
+//  Hardened on-device FairPlay decrypt via revised mremap_encrypted (FairPlayed/fpcore):
+//  page-aligned remap window (4K LC → 16K pages), native LC cryptid + R/cid2/RX fallbacks,
+//  guarded fairplayd page-in retries. Reads from a path fairplayd can open
+//  (installed .app + SC_Info), verifies cryptid=0, refuses partial required Mach-Os.
 //
 
 import Darwin
