@@ -336,6 +336,9 @@ struct DecryptView: View {
 
                     if store.isSignedIn {
                         DecryptSignedInCard(email: store.email, onSignOut: store.signOut)
+                        if showingIdleHero {
+                            DecryptAppStoreSignInHint()
+                        }
                         DecryptSearchBar(query: $query, focused: $searchFocused) {
                             Task { await c.search(query) }
                         }
@@ -345,6 +348,7 @@ struct DecryptView: View {
                     } else {
                         DecryptHeroBlock()
                         DecryptStoreGateCard { AppNav.shared.go(AppTab.settings.rawValue) }
+                        DecryptAppStoreSignInHint()
                     }
 
                     if c.searching {

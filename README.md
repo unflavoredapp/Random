@@ -27,7 +27,7 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 ## Features
 
 - **Sign & install any IPA** — using your free Apple ID, or your own certificate.
-- **Get a clean copy of apps you own** — download an app you already own from the App Store with your Store account and save a DRM-free IPA to Library on this device.
+- **Get a clean copy of apps you own** — download an app you already own from the App Store with your Store account and save a DRM-free IPA to Library on this device. That Apple ID must have signed in to this iPhone’s App Store at least once (one-time per account) so iOS has its decryption keys; afterward you can switch the active App Store account back.
 - **Multiple App Store accounts** — sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.
 - **Tweak injection** — add `.deb` or `.dylib` tweaks while you sign.
 - **Keep apps alive** — resign in one tap, Refresh All at once, or automate it with a Shortcut so your apps (and TetherLess itself) never expire — even while your iPhone is locked.
@@ -41,6 +41,8 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 | **Files** | Drop / open archives, extract, inspect, push |
 | **Library** | Source repos, staff picks, updates, device-installed apps |
 | **Decrypt** | Multi-account Store Access + DRM-free IPA copies saved on-device |
+
+**Decrypt tip:** The Apple ID used in TetherLess must have been signed in to this iPhone’s App Store at least once (App Store app, or Settings → your name → Media & Purchases). iOS stores that account’s decryption keys on first sign-in; without it, decrypt fails after download even though TetherLess is set up correctly.
 | **Settings** | Install method (OTA vs Native), Store Access, certs, account |
 | **Sign & install** | TrustCore signing, OTA via `*.tetherless.dev`, or native idevice install |
 | **Analysis** | Local Analysis Center — disassembler, CFG, pseudocode, reversible patch proposals |

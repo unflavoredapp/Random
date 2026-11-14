@@ -45,7 +45,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Search for an app you own with your Store account. TetherLess fetches a DRM-free IPA and saves it to Library on this device — no Mac, no jailbreak.")
+            Text("Search for an app you own with your Store account. TetherLess fetches a DRM-free IPA and saves it to Library on this device — no Mac, no jailbreak. That Apple ID must have signed in to the App Store on this iPhone at least once so iOS has its decryption keys.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
@@ -194,6 +194,37 @@ struct DecryptPickIPACard: View {
     }
 }
 
+
+/// One-time App Store sign-in requirement for decrypt keys on this device.
+struct DecryptAppStoreSignInHint: View {
+    var body: some View {
+        GlassCard(corner: 22) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 10) {
+                    Image(systemName: "info.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(TetherlessPalette.accent)
+                    Text("One-time App Store sign-in")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                }
+                Text("To decrypt an app you own, the Apple ID you use in TetherLess must have been signed in to this iPhone’s App Store at least once — open the App Store app (or Settings → your name → Media & Purchases) and sign in with it one time.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.62))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("This is a one-time step per Apple ID: iOS stores that account’s decryption keys the first time it signs in and keeps them, so afterward you can switch your active App Store account back and decrypting still works. The account also has to own the app.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("Without that one-time sign-in, decrypting fails after the download, because the device has no keys for that account — nothing is wrong with TetherLess or your setup.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.45))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 struct DecryptStoreGateCard: View {
     var onOpenSettings: () -> Void
 
@@ -208,7 +239,7 @@ struct DecryptStoreGateCard: View {
                         Text("Store Access needed")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text("Sign in with your Apple ID under Settings › Store Access so Decrypt can download apps you own.")
+                        Text("Sign in under Settings › Store Access, and make sure that same Apple ID has signed in to this iPhone’s App Store at least once (App Store app, or Settings → your name → Media & Purchases). That’s how iOS stores the decryption keys — a one-time step per Apple ID.")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.6))
                     }

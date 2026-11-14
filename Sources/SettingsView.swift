@@ -728,7 +728,7 @@ private struct AboutScreen: View {
                     featureRow("signature", "Sign & install any IPA",
                                "Using your free Apple ID, or your own certificate.")
                     featureRow("lock.open.fill", "Get a clean copy of apps you own",
-                               "Download an app you already own from the App Store with your Store account and save a DRM-free IPA to Library on this device.")
+                               "Download an app you already own from the App Store with your Store account and save a DRM-free IPA to Library. That Apple ID must have signed in to this iPhone’s App Store at least once so iOS has its decryption keys.")
                     featureRow("person.2.fill", "Multiple App Store accounts",
                                "Sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.")
                     featureRow("puzzlepiece.extension.fill", "Tweak injection",
