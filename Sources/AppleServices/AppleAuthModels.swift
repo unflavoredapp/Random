@@ -148,7 +148,11 @@ enum AppleAuthError: LocalizedError, Sendable {
         case .tooManyAttempts(let m): return m
         case .accountRepairRequired(let m): return m
         case .network(let m): return m
-        case .portal(let c, let m): return "Developer Portal error \(c): \(m)"
+        case .portal(let c, let m):
+            if c == -80043 || c == -80045 || c == 80043 || c == 80045 {
+                return "Apple couldn't verify this device right now (\(c)). Tap Sign In again — a fresh device identity will be provisioned."
+            }
+            return "Developer Portal error \(c): \(m)"
         case .csrFailed(let m): return "CSR generation failed: \(m)"
         case .missingPendingAuth: return "Start Apple ID sign-in again."
         }
