@@ -21,17 +21,21 @@ struct SettingsAppleIDCard: View {
     var body: some View {
         GlassCard(corner: 24) {
             VStack(alignment: .leading, spacing: 14) {
-                header
-
-                Text("Lets Decrypt download apps from the App Store. Signing uses your certificate — no Apple ID needed.")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.7))
-                    .fixedSize(horizontal: false, vertical: true)
+                // Reference chrome: Apple ID (signing) + Store Access in one card.
+                appleIDHeader
 
                 if store.hasAnyAccount {
-                    signedInBody
+                    signedInAppleBlock
+                    storeAccessSection
                 } else if store.authPhase == .awaitingTwoFactor {
                     twoFactorBlock
+                } else if isPreparing {
+                    HStack(spacing: 10) {
+                        ProgressView().tint(TetherlessPalette.accent)
+                        Text("Signing in…")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                    }
                 } else {
                     emptySignIn
                 }
@@ -47,7 +51,7 @@ struct SettingsAppleIDCard: View {
         .sheet(isPresented: $showManageAccounts) {
             NavigationStack {
                 manageStoreAccountsSheet
-                    .navigationTitle("Store Accounts")
+                    .navigationTitle("Store Access")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
@@ -106,36 +110,103 @@ struct SettingsAppleIDCard: View {
         }
     }
 
-    private var header: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "bag.fill")
+    private var appleIDHeader: some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "person.crop.circle.fill")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(TetherlessPalette.accent)
                 .frame(width: 28)
-            Text("Store Access")
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.white)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Apple ID")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("Signs your apps with your free Apple ID.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
             Spacer(minLength: 0)
         }
     }
 
+    private var signedInAppleBlock: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "checkmark.seal.fill")
+                    .font(.title3)
+                    .foregroundStyle(Color.green.opacity(0.95))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Signed in")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(store.email)
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+
+            Button { showPortalManage = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "rosette")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Developer Account")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text("View your certificates, App IDs and devices — and free up a certificate slot.")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+                .padding(.vertical, 4)
+            }
+            .buttonStyle(.plain)
+
+            secondaryButton("Sign Out", busy: false) {
+                store.signOutActive()
+                email = ""; password = ""; twoFACode = ""
+            }
+        }
+    }
+
     @ViewBuilder
-    private var signedInBody: some View {
+    private var storeAccessSection: some View {
+        Divider().overlay(.white.opacity(0.12))
+
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "bag.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(TetherlessPalette.accent)
+                .frame(width: 28)
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Store Access")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("Used by Decrypt to buy/download apps.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            Spacer(minLength: 0)
+        }
+
         if isPreparing && !store.storeReady {
             HStack(spacing: 10) {
                 ProgressView().tint(TetherlessPalette.accent)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Preparing…")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Text(store.statusMessage ?? "Starting things back up…")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.55))
-                }
+                Text("Signing in for Store access…")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
             }
         } else {
             HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "checkmark.shield.fill")
+                Image(systemName: "checkmark.seal.fill")
                     .font(.title3)
                     .foregroundStyle(Color.green.opacity(0.95))
                 VStack(alignment: .leading, spacing: 3) {
@@ -173,33 +244,24 @@ struct SettingsAppleIDCard: View {
                 .padding(.vertical, 4)
             }
             .buttonStyle(.plain)
-
-            Button { AppStoreDecryptGuide.openAppStore() } label: {
-                Label("Open App Store to sign in once", systemImage: "bag.fill")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(TetherlessPalette.accent)
-            }
-            .buttonStyle(.plain)
-
-            StoreDeviceSpoofCard()
-
-            secondaryButton("Sign Out", busy: false) {
-                store.signOutActive()
-                email = ""; password = ""; twoFACode = ""
-            }
         }
     }
 
     private var emptySignIn: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Button { AppStoreDecryptGuide.openAppStore() } label: {
-                Label("Open App Store to sign in once", systemImage: "bag.fill")
-                    .font(.footnote.weight(.semibold))
+            HStack(spacing: 8) {
+                Image(systemName: "info.circle.fill")
                     .foregroundStyle(TetherlessPalette.accent)
+                Text("Not signed in")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
             }
-            .buttonStyle(.plain)
+            Text("One sign-in covers both app signing and Store downloads. Apple may ask for a verification code for each.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
 
-            glassField("Apple ID", text: $email, secure: false)
+            glassField("Apple ID email", text: $email, secure: false)
             HStack(spacing: 10) {
                 glassField("Password", text: $password, secure: !showPassword)
                 Button {
@@ -223,41 +285,78 @@ struct SettingsAppleIDCard: View {
     private var manageStoreAccountsSheet: some View {
         ScrollView(showsIndicators: false) {
             VStack(alignment: .leading, spacing: 16) {
-                Text("Switch the active Apple ID used for Decrypt downloads, add another account, or remove one from this device.")
-                    .font(.footnote)
-                    .foregroundStyle(.white.opacity(0.6))
-                    .fixedSize(horizontal: false, vertical: true)
+                GlassCard(corner: 22) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text("Store accounts")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Text("\(store.accounts.count)")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.45))
+                        }
+                        Text("The active account is used for every download and decrypt. Switch any time; the Decrypt tab shows a quick switcher once you have two or more.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.6))
+                            .fixedSize(horizontal: false, vertical: true)
 
-                accountList
-
-                Button {
-                    showManageAccounts = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        showAddAccount = true
+                        accountList
                     }
-                } label: {
-                    Label("Add Apple ID", systemImage: "plus.circle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(TetherlessPalette.accent)
                 }
-                .buttonStyle(.plain)
 
-                Button {
-                    showManageAccounts = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                        showPortalManage = true
+                GlassCard(corner: 22) {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "person.badge.plus")
+                                .foregroundStyle(TetherlessPalette.accent)
+                            Text("Add Account")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                        Text("Sign in another Apple ID for Store downloads. It becomes the active one.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.6))
+                        Button {
+                            showManageAccounts = false
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                                showAddAccount = true
+                            }
+                        } label: {
+                            Text("Add Account")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(.white.opacity(0.10), in: Capsule())
+                                .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
                     }
-                } label: {
-                    Label("Developer Portal for active ID", systemImage: "hammer.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(TetherlessPalette.accent)
                 }
-                .buttonStyle(.plain)
+
+                GlassCard(corner: 22) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 10) {
+                            Image(systemName: "info.circle.fill")
+                                .foregroundStyle(TetherlessPalette.accent)
+                            Text("About decrypt")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(.white)
+                        }
+                        Text("Decrypt works for an Apple ID only if it has signed into this iPhone's App Store at least once (ever). Downloads work for any added account.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.6))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                StoreDeviceSpoofCard()
             }
             .padding(20)
             .padding(.bottom, 28)
         }
-        .background(Color.black.ignoresSafeArea())
+        .background(AppBackground().ignoresSafeArea())
     }
 
     private var addAccountForm: some View {
@@ -347,41 +446,42 @@ struct SettingsAppleIDCard: View {
     private var accountList: some View {
         VStack(spacing: 10) {
             ForEach(store.accounts) { account in
-                HStack(spacing: 12) {
-                    Button {
-                        store.selectAccount(id: account.id)
-                    } label: {
-                        HStack(spacing: 12) {
-                            Image(systemName: store.activeAccountID == account.id ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(store.activeAccountID == account.id ? TetherlessPalette.accent : .white.opacity(0.35))
-                            VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        Button {
+                            store.selectAccount(id: account.id)
+                        } label: {
+                            HStack(spacing: 12) {
                                 Text(account.email)
                                     .font(.subheadline.weight(.semibold))
                                     .foregroundStyle(.white)
                                     .lineLimit(1)
-                                Text(account.statusLabel)
-                                    .font(.caption2)
-                                    .foregroundStyle(.white.opacity(0.45))
+                                Spacer(minLength: 4)
+                                if store.activeAccountID == account.id {
+                                    Text("Active")
+                                        .font(.caption2.weight(.bold))
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 8)
+                                        .padding(.vertical, 4)
+                                        .background(Color.green.opacity(0.85), in: Capsule())
+                                }
                             }
-                            Spacer(minLength: 4)
                         }
+                        .buttonStyle(.plain)
+                    }
+
+                    Button(role: .destructive) {
+                        accountPendingDelete = account
+                    } label: {
+                        Label("Sign Out", systemImage: "trash")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .background(.white.opacity(0.08), in: Capsule())
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
                     }
                     .buttonStyle(.plain)
-
-                    Menu {
-                        Button("Set Active") { store.selectAccount(id: account.id) }
-                        Button("Developer Portal") {
-                            store.selectAccount(id: account.id)
-                            showManageAccounts = false
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                showPortalManage = true
-                            }
-                        }
-                        Button("Remove", role: .destructive) { accountPendingDelete = account }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                            .foregroundStyle(.white.opacity(0.55))
-                    }
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
@@ -389,7 +489,7 @@ struct SettingsAppleIDCard: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
                         .strokeBorder(
-                            store.activeAccountID == account.id ? TetherlessPalette.accent.opacity(0.55) : .white.opacity(0.08),
+                            store.activeAccountID == account.id ? Color.green.opacity(0.45) : .white.opacity(0.08),
                             lineWidth: 1
                         )
                 )
@@ -744,13 +844,10 @@ struct SettingsSoftwareUpdateCard: View {
         GlassCard(corner: 24) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top, spacing: 12) {
-                    ZStack {
-                        Circle().fill(Color.green.opacity(0.9))
-                        Image(systemName: "arrow.down")
-                            .font(.body.weight(.bold))
-                            .foregroundStyle(.white)
-                    }
-                    .frame(width: 36, height: 36)
+                    Image(systemName: checker.updateAvailable ? "arrow.down.circle.fill" : "checkmark.seal.fill")
+                        .font(.title2)
+                        .foregroundStyle(checker.updateAvailable ? TetherlessPalette.accent : .green)
+                        .frame(width: 36, height: 36)
 
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Software Update")

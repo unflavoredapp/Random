@@ -391,26 +391,24 @@ struct DecryptView: View {
             }
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 14) {
-                    if showingIdleHero { DecryptHeroBlock() }
+                    // Hero stays visible while searching / decrypting (reference screenshots).
+                    DecryptHeroBlock()
 
                     if store.isSignedIn {
                         DecryptSignedInCard(email: store.email, onSignOut: store.signOut)
+                        DecryptSearchBar(query: $query, focused: $searchFocused) {
+                            Task { await c.search(query) }
+                        }
                         if showingIdleHero {
                             DecryptChannelPicker()
                             if DecryptChannel.current == .device {
                                 DecryptAppStoreSignInHint()
                                 DecryptOwnedStoreAppsSection()
                                 DecryptDeviceAppsSection()
+                                DecryptPickIPACard { pickingIPA = true }
                             }
                         }
-                        DecryptSearchBar(query: $query, focused: $searchFocused) {
-                            Task { await c.search(query) }
-                        }
-                        if showingIdleHero, DecryptChannel.current == .device {
-                            DecryptPickIPACard { pickingIPA = true }
-                        }
                     } else {
-                        DecryptHeroBlock()
                         DecryptStoreGateCard { AppNav.shared.go(AppTab.settings.rawValue) }
                         DecryptAppStoreSignInHint()
                     }
@@ -646,7 +644,7 @@ struct DecryptView: View {
                                   : "Preparing to decrypt \(app.name.isEmpty ? c.finishedName : app.name)…")
                                 .font(.headline.weight(.semibold))
                                 .foregroundStyle(.white)
-                            Text(c.message.isEmpty ? "Working…" : c.message)
+                            Text(c.message.isEmpty ? "Starting…" : c.message)
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.55))
                         }
@@ -836,21 +834,33 @@ private struct DecryptVersionsSheet: View {
             ZStack {
                 AppBackground().ignoresSafeArea()
                 List {
-                    Section {
-                        Text(DecryptChannel.current == .device
-                              ? "Silent store download can pin a build via externalVersionId. FairPlay runs on this iPhone (iOS \(deviceIOS)) — pick a build whose min iOS is ≤ \(deviceIOS). Unpinned latest downloads honor Settings › Store Access › Spoof Store iOS (itunesstored UA)."
-                              : "FairPlay decrypt runs on this iPhone (iOS \(deviceIOS)). Pick a build whose min iOS is ≤ \(deviceIOS). Telegram can fetch older archives when store history isn’t available.")
-                            .font(.footnote)
-                            .foregroundStyle(.white.opacity(0.55))
-                            .listRowBackground(Color.clear)
-                    }
-
                     if c.loadingVersions && c.versions.isEmpty {
-                        HStack {
-                            ProgressView().tint(TetherlessPalette.accent)
-                            Text("Loading versions…").foregroundStyle(.white.opacity(0.7))
+                        Section {
+                            HStack {
+                                Spacer()
+                                VStack(spacing: 12) {
+                                    ProgressView().tint(.white)
+                                    Text("Checking available versions…")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.white.opacity(0.7))
+                                }
+                                .padding(.vertical, 24)
+                                Spacer()
+                            }
+                            .listRowBackground(Color.clear)
                         }
-                        .listRowBackground(Color.clear)
+                        ForEach(0..<12, id: \.self) { idx in
+                            HStack(spacing: 10) {
+                                ProgressView().tint(.white.opacity(0.55)).scaleEffect(0.75)
+                                Text("Resolving…")
+                                    .foregroundStyle(.white.opacity(0.45))
+                                Spacer()
+                                if idx == 0 {
+                                    Text("Latest").font(.subheadline).foregroundStyle(.white.opacity(0.35))
+                                }
+                            }
+                            .listRowBackground(Color.white.opacity(0.04))
+                        }
                     } else if let err = c.error, c.versions.isEmpty {
                         Text(err)
                             .font(.footnote)
@@ -890,11 +900,6 @@ private struct DecryptVersionsSheet: View {
                                                     .font(.caption2)
                                                     .foregroundStyle(TetherlessPalette.accent.opacity(0.8))
                                             }
-                                            if let ext = v.externalId, !ext.isEmpty, ext != v.v {
-                                                Text("id \(ext)")
-                                                    .font(.caption2)
-                                                    .foregroundStyle(.white.opacity(0.35))
-                                            }
                                         }
                                     }
                                     Spacer()
@@ -906,6 +911,22 @@ private struct DecryptVersionsSheet: View {
                                 }
                             }
                             .listRowBackground(Color.white.opacity(0.06))
+                        }
+
+                        // Placeholder rows while more history is still resolving (reference UI).
+                        if c.loadingVersions {
+                            ForEach(0..<8, id: \.self) { idx in
+                                HStack(spacing: 10) {
+                                    ProgressView().tint(.white.opacity(0.55)).scaleEffect(0.75)
+                                    Text("Resolving…")
+                                        .foregroundStyle(.white.opacity(0.45))
+                                    Spacer()
+                                    if idx == 0, c.versions.isEmpty {
+                                        Text("Latest").font(.subheadline).foregroundStyle(.white.opacity(0.35))
+                                    }
+                                }
+                                .listRowBackground(Color.white.opacity(0.04))
+                            }
                         }
                     }
                 }
