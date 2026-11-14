@@ -299,24 +299,72 @@ final class AppleIDStore: ObservableObject {
     }
 
     /// Texts a code to the Apple ID’s trusted phone (SMS). Prefer this when no other Apple device is nearby.
+    /// Opens a fresh GSA 2FA challenge first when none is pending (Store Access “Text me a code”).
     func requestSMSCode() async {
         lastError = nil
         authPhase = .verifying
+        statusMessage = "Requesting a text message…"
+        let gsa = GSAAuthClient.shared
+        let hadPending = gsa.hasPendingTwoFactor
         do {
-            let hint = try await GSAAuthClient.shared.requestSMSCode()
+            if !hadPending {
+                do {
+                    try await openGSATwoFactorChallenge()
+                    // Rare: Apple didn’t ask for 2FA — refresh store session instead of SMS.
+                    storefrontNeedsRefresh = true
+                    if let session = try? await ensureStorefrontSession(forceRefresh: true), session.isUsable {
+                        storeNeedsVerification = false
+                        authPhase = .idle
+                        statusMessage = "Store access ready — free & purchased downloads unlocked"
+                        return
+                    }
+                } catch AppleAuthError.needsTwoFactor {
+                    // Pending DSID / idms / anisette are live — fall through to SMS.
+                }
+            }
+            guard gsa.hasPendingTwoFactor else {
+                throw AppleAuthError.missingPendingAuth
+            }
+            // authenticateOnce may already have texted once while opening the challenge —
+            // don't double-send on the same tap. Explicit resend (hadPending) always texts again.
+            if !hadPending, case .sms = gsa.twoFactorChannel, gsa.twoFactorCodeAlreadySent {
+                refreshTwoFactorChannelFromGSA()
+                authPhase = .awaitingTwoFactor
+                storeNeedsVerification = true
+                applySMSSentStatus(hint: gsa.twoFactorPhoneHint)
+                return
+            }
+            let hint = try await gsa.requestSMSCode()
             refreshTwoFactorChannelFromGSA()
             authPhase = .awaitingTwoFactor
-            if hint.isEmpty {
-                statusMessage = "A text message with a code was sent to your trusted phone number."
-            } else {
-                statusMessage = "A text message with a code was sent to \(hint)."
-            }
+            storeNeedsVerification = true
+            applySMSSentStatus(hint: hint.isEmpty ? nil : hint)
         } catch {
             refreshTwoFactorChannelFromGSA()
-            authPhase = .awaitingTwoFactor
+            authPhase = gsa.hasPendingTwoFactor ? .awaitingTwoFactor : .idle
+            storeNeedsVerification = true
             lastError = error.localizedDescription
-            statusMessage = twoFactorPromptMessage()
+            statusMessage = "Couldn't text a code (\(error.localizedDescription)). Try again in a moment."
         }
+    }
+
+    private func applySMSSentStatus(hint: String?) {
+        if let hint, !hint.isEmpty {
+            statusMessage = "A text message with a code was sent to \(hint). Enter it below."
+        } else {
+            statusMessage = "A text message with a code was sent to your trusted phone number. Enter it below."
+        }
+    }
+
+    /// Re-run GrandSlam password SRP so Apple opens a 2FA challenge (pending DSID/idms for SMS).
+    private func openGSATwoFactorChallenge() async throws {
+        guard let account = activeAccount else {
+            throw AppleAuthError.message("Sign in under Store Access first.")
+        }
+        guard let password = passwordForAccount(id: account.id), !password.isEmpty else {
+            throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Store Access.")
+        }
+        _ = try await GSAAuthClient.shared.authenticate(email: account.email, password: password)
     }
 
     var isSMSTwoFactor: Bool { twoFactorUsesSMS }
@@ -634,11 +682,29 @@ final class AppleIDStore: ObservableObject {
     }
 
     /// Complete App Store (MZFinance) 2FA without signing out — then silent download works.
+    /// Same 6-digit code also finishes a pending GSA SMS challenge when “Text me a code” was used.
     func submitStoreVerificationCode(_ code: String) async throws -> StorefrontSession {
         let digits = code.filter(\.isNumber)
         guard digits.count == 6 else {
             throw AppStoreClientError.message("Enter the 6-digit verification code.")
         }
+
+        // Finish GSA SMS / trusted-device challenge first when we opened one to text the code.
+        if GSAAuthClient.shared.hasPendingTwoFactor {
+            do {
+                let portal = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
+                if let idx = accounts.firstIndex(where: { $0.id == activeAccountID }) {
+                    accounts[idx].portalSessionJSON = try? JSONEncoder().encode(portal)
+                    accounts[idx].teamID = portal.teamID
+                    accounts[idx].teamName = portal.teamName
+                    save()
+                }
+                withAnimation(.snappy) { authPhase = .idle }
+            } catch {
+                // Still try MZFinance — the texted code is primarily for store passwordToken.
+            }
+        }
+
         pendingStoreAuthCode = digits
         storefrontNeedsRefresh = true
         do {
@@ -654,25 +720,22 @@ final class AppleIDStore: ObservableObject {
         }
     }
 
-    /// Nudge Apple to send a Store verification code (trusted device / SMS) without signing out.
+    /// Text a Store verification code to the trusted phone (GSA SMS) without signing out.
+    /// Does **not** rely on MZFinance authenticate (that often returns HTTP 204 and never SMS).
     func requestStoreVerificationPrompt() async {
         storeNeedsVerification = true
         storefrontNeedsRefresh = true
         pendingStoreAuthCode = nil
-        do {
-            _ = try await ensureStorefrontSession(forceRefresh: true)
-            if storefrontSession()?.isUsable == true {
-                storeNeedsVerification = false
-                statusMessage = "Store access ready — free & purchased downloads unlocked"
-            }
-        } catch AppStoreClientError.needsTwoFactor {
+        lastError = nil
+        // Always go through GSA → SMS. MZFinance re-auth alone does not send a text.
+        await requestSMSCode()
+        // Keep the Store Access code entry visible even if GSA UI phase flipped.
+        if storefrontSession()?.isUsable != true {
             storeNeedsVerification = true
-            statusMessage = "Enter the 6-digit code Apple sent to your trusted devices."
-            // Prefer SMS when no other Apple device is nearby.
-            await requestSMSCode()
-        } catch {
-            storeNeedsVerification = true
-            statusMessage = error.localizedDescription
+        }
+        if authPhase == .awaitingTwoFactor {
+            // Store Access uses SettingsStoreCodeEntry; avoid hiding that behind GSA-only UI.
+            withAnimation(.snappy) { authPhase = .idle }
         }
     }
 

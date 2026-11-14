@@ -605,19 +605,29 @@ private struct SettingsStoreCodeEntry: View {
             Button {
                 Task {
                     await store.requestStoreVerificationPrompt()
-                    localError = store.statusMessage
+                    // Prefer success/status copy; fall back to lastError when SMS failed.
+                    if let err = store.lastError, !(store.statusMessage?.localizedCaseInsensitiveContains("sent") == true) {
+                        localError = err
+                    } else {
+                        localError = store.statusMessage
+                    }
                 }
             } label: {
-                Label("Text me a code", systemImage: "message.fill")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(TetherlessPalette.accent)
+                Label(
+                    store.isSMSTwoFactor ? "Resend text message" : "Text me a code",
+                    systemImage: "message.fill"
+                )
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(TetherlessPalette.accent)
             }
             .buttonStyle(.plain)
             .disabled(busy || store.isBusy)
             if let localError, !localError.isEmpty {
                 Text(localError)
                     .font(.caption2)
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(
+                        localError.localizedCaseInsensitiveContains("sent") ? Color.green.opacity(0.9) : .orange
+                    )
             }
         }
     }
