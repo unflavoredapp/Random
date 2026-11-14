@@ -163,11 +163,12 @@ struct SettingsAppleIDCard: View {
 
     private var twoFactorBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Enter the verification code from a trusted device.")
+            Text(twoFactorHelpText)
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.65))
             TextField("6-digit code", text: $twoFACode)
                 .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 13)
@@ -189,7 +190,34 @@ struct SettingsAppleIDCard: View {
                     twoFACode = ""
                 }
             }
+            Button {
+                Task { await store.requestSMSCode() }
+            } label: {
+                HStack(spacing: 8) {
+                    Image(systemName: "message.fill")
+                    Text(store.isSMSTwoFactor ? "Resend text message" : "Text me a code")
+                        .font(.subheadline.weight(.semibold))
+                }
+                .foregroundStyle(TetherlessPalette.accent)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isBusy)
+            .opacity(store.isBusy ? 0.5 : 1)
         }
+    }
+
+    private var twoFactorHelpText: String {
+        if let status = store.statusMessage, !status.isEmpty {
+            return status
+        }
+        if store.isSMSTwoFactor {
+            if let hint = store.twoFactorPhoneHint, !hint.isEmpty {
+                return "Enter the 6-digit code texted to \(hint)."
+            }
+            return "Enter the 6-digit code texted to your phone."
+        }
+        return "Enter the verification code from a trusted device, or tap Text me a code to get an SMS."
     }
 
     private var accountList: some View {
