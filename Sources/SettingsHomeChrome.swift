@@ -204,6 +204,24 @@ struct SettingsAppleIDCard: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
             }
+        } else if store.storeNeedsVerification || !(store.storefrontSession()?.isUsable == true) {
+            // Niche path: Apple ID signed in, but MZFinance still needs a code / session.
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.title3)
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Store download needs a code")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text("Enter the 6-digit code so Decrypt can fetch free & purchased apps. You stay signed in.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            SettingsStoreCodeEntry()
         } else {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "checkmark.seal.fill")
@@ -220,6 +238,11 @@ struct SettingsAppleIDCard: View {
                 }
                 Spacer(minLength: 0)
             }
+
+            Text("Ready to fetch free apps and anything this Apple ID already purchased.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.5))
+                .fixedSize(horizontal: false, vertical: true)
 
             Button { showManageAccounts = true } label: {
                 HStack(spacing: 12) {
@@ -541,6 +564,74 @@ struct SettingsAppleIDCard: View {
         .background(.white.opacity(0.10), in: Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
         .buttonStyle(.plain)
+    }
+}
+
+/// Inline MZFinance 6-digit code on Settings (keeps Apple ID signed in).
+private struct SettingsStoreCodeEntry: View {
+    @ObservedObject private var store = AppleIDStore.shared
+    @State private var code = ""
+    @State private var busy = false
+    @State private var localError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                TextField("123456", text: $code)
+                    .keyboardType(.numberPad)
+                    .textContentType(.oneTimeCode)
+                    .font(.body.monospacedDigit().weight(.semibold))
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.28), in: Capsule())
+                    .foregroundStyle(.white)
+                Button {
+                    Task { await submit() }
+                } label: {
+                    if busy {
+                        ProgressView().tint(.white).frame(width: 44, height: 36)
+                    } else {
+                        Text("Submit")
+                            .font(.caption.weight(.bold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
+                            .background(TetherlessPalette.accent, in: Capsule())
+                    }
+                }
+                .buttonStyle(.plain)
+                .disabled(busy || code.filter(\.isNumber).count < 6)
+            }
+            Button {
+                Task {
+                    await store.requestStoreVerificationPrompt()
+                    localError = store.statusMessage
+                }
+            } label: {
+                Label("Text me a code", systemImage: "message.fill")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
+            .buttonStyle(.plain)
+            .disabled(busy || store.isBusy)
+            if let localError, !localError.isEmpty {
+                Text(localError)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+    }
+
+    private func submit() async {
+        busy = true
+        localError = nil
+        defer { busy = false }
+        do {
+            _ = try await store.submitStoreVerificationCode(code)
+            code = ""
+        } catch {
+            localError = error.localizedDescription
+        }
     }
 }
 

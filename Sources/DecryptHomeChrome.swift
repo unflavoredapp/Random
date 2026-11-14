@@ -44,7 +44,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Search for an app you own, and Tetherless downloads and decrypts it — fully on-device, no Mac, no jailbreak.")
+            Text("Sign in once under Store Access, then search free apps or anything this Apple ID already purchased — Tetherless downloads and decrypts on-device. No Mac. No jailbreak.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
@@ -430,7 +430,7 @@ struct DecryptSearchBar: View {
     var body: some View {
         GlassCard(corner: 22) {
             HStack(spacing: 12) {
-                TextField("App name", text: $query)
+                TextField("Free or purchased app", text: $query)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .foregroundStyle(.white)

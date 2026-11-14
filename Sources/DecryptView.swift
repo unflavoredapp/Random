@@ -452,8 +452,23 @@ struct DecryptView: View {
         .fullScreenCover(isPresented: $companion.isPresented) {
             DecryptCompanionConsole()
         }
-        .onAppear { consumePendingQuery() }
+        .onAppear {
+            consumePendingQuery()
+            Task { await warmStoreSessionForNiche() }
+        }
         .onChange(of: c.pendingQuery) { _ in consumePendingQuery() }
+    }
+
+    /// Soft-check Store session so free/purchased fetch works without a yellow wall surprise.
+    private func warmStoreSessionForNiche() async {
+        guard store.isSignedIn else { return }
+        do {
+            _ = try await store.ensureStorefrontSession(forceRefresh: false)
+        } catch AppStoreClientError.needsTwoFactor {
+            store.noteStoreNeedsVerification()
+        } catch {
+            // Leave UI to surface errors on first Owned refresh / decrypt.
+        }
     }
 
     private func consumePendingQuery() {
