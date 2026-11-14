@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import IDeviceSwift
 import SwiftUI
 
 struct LibraryHealthRow: Identifiable, Equatable {
@@ -34,10 +35,14 @@ struct LibraryHealthRow: Identifiable, Equatable {
 
 @MainActor
 enum LibraryHealth {
+    /// Default args cannot read `@MainActor` stores (evaluated as nonisolated), so
+    /// nil defaults are resolved inside the body on the main actor.
     static func rows(
-        signed: [SignedEntry] = SignedStore.shared.entries,
-        installed: [DeviceApp] = DeviceLibrary.shared.apps
+        signed: [SignedEntry]? = nil,
+        installed: [DeviceApp]? = nil
     ) -> [LibraryHealthRow] {
+        let signed = signed ?? SignedStore.shared.entries
+        let installed = installed ?? DeviceLibrary.shared.apps
         let installedByBundle = Dictionary(uniqueKeysWithValues: installed.map { ($0.bundleID, $0) })
         let tracked = Dictionary(uniqueKeysWithValues: AppAutoUpdater.shared.tracked.map { ($0.bundleID, $0) })
         let spoof = StoreDeviceSpoof.current
