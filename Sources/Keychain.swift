@@ -57,6 +57,7 @@ nonisolated enum Keychain {
         if value.isEmpty { return true }
         var add = q
         add[kSecValueData as String] = Data(value.utf8)
+        // CA private keys stay device-local and unlock-gated.
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
@@ -64,6 +65,56 @@ nonisolated enum Keychain {
     static func getSecret(_ key: String) -> String? { get(key) }   // read path is accessibility-agnostic
 
     static func deleteSecret(_ key: String) { _ = set(key, "") }
+
+    /// Apple ID password / store session blobs — survive lock + reboot (after first unlock),
+    /// stay off iCloud backups (`ThisDeviceOnly`). Prefer this over `setSecret` for auth sessions
+    /// so background refresh / cold launch don't treat the user as signed out.
+    @discardableResult
+    static func setSessionSecret(_ key: String, _ value: String) -> Bool {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(q as CFDictionary)
+        if value.isEmpty { return true }
+        var add = q
+        add[kSecValueData as String] = Data(value.utf8)
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+    }
+
+    static func getSessionSecret(_ key: String) -> String? { get(key) }
+
+    @discardableResult
+    static func setSessionData(_ key: String, _ data: Data) -> Bool {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+        ]
+        SecItemDelete(q as CFDictionary)
+        if data.isEmpty { return true }
+        var add = q
+        add[kSecValueData as String] = data
+        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
+    }
+
+    static func getSessionData(_ key: String) -> Data? {
+        let q: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+        ]
+        var out: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
+        return out as? Data
+    }
+
+    static func deleteSessionSecret(_ key: String) { _ = setSessionSecret(key, "") }
 
     // MARK: - Persistent binary storage (survives app deletion)
     //

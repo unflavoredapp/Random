@@ -52,6 +52,10 @@ final class AppleIDStore: ObservableObject {
     private static let legacyEmailKey = "tetherless.appleid.email"
     private static let legacyPasswordKey = "tetherless.appleid.password"
     private static let storeReadyKey = "tetherless.appleid.storeReady"
+    /// Keychain mirror so accounts + store tokens survive UserDefaults wipes / reinstalls of prefs.
+    private static let accountsBackupKey = "tetherless.appleid.accounts.backup"
+    private static let activeBackupKey = "tetherless.appleid.active.backup"
+    private static let storeSessionPrefix = "tetherless.appleid.storesession."
 
     enum AuthPhase: Equatable {
         case idle
@@ -86,6 +90,8 @@ final class AppleIDStore: ObservableObject {
     @Published private(set) var twoFactorPhoneHint: String?
     /// Last 2FA code — reused once for iTunes Store authenticate after GSA succeeds.
     private var pendingStoreAuthCode: String?
+    /// Soft flag: next ensure should re-auth without wiping the persisted store token first.
+    private var storefrontNeedsRefresh = false
 
     var activeID: String? {
         get { activeAccountID }
@@ -101,7 +107,8 @@ final class AppleIDStore: ObservableObject {
         default: return false
         }
     }
-    var isSignedIn: Bool { activeAccount != nil && storeReady }
+    /// Account presence = signed in. `storeReady` only gates the preparing spinner, not logout.
+    var isSignedIn: Bool { activeAccount != nil }
     var phase: Phase {
         if accounts.isEmpty { return .signedOut }
         switch authPhase {
@@ -109,40 +116,81 @@ final class AppleIDStore: ObservableObject {
         case .awaitingTwoFactor: return .needsCode
         case .verifying: return .verifying
         case .preparing: return .preparing
-        case .idle: return storeReady ? .signedIn : .preparing
+        case .idle: return .signedIn
         }
     }
 
     private init() {
         load()
         migrateLegacyIfNeeded()
-        storeReady = UserDefaults.standard.bool(forKey: Self.storeReadyKey)
-        if let active = activeAccount {
-            draftEmail = active.email
-            if !storeReady {
-                authPhase = .preparing
-                Task { await finishPreparing() }
-            } else {
-                authPhase = .idle
-            }
+        restoreStoreSessionsFromKeychain()
+        // Persist "signed in" whenever we have an account — never force a login wall on launch.
+        if activeAccount != nil {
+            storeReady = true
+            UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
+            draftEmail = activeAccount?.email ?? ""
+            authPhase = .idle
+            // Quietly refresh aged store tokens in the background — never clears the Apple ID.
+            Task { await quietlyRefreshStorefrontIfNeeded() }
+        } else {
+            storeReady = UserDefaults.standard.bool(forKey: Self.storeReadyKey)
         }
     }
 
     // MARK: Persistence
 
     private func load() {
-        guard let data = UserDefaults.standard.data(forKey: Self.accountsKey),
-              let list = try? JSONDecoder().decode([AppleIDAccount].self, from: data) else { return }
-        accounts = list
-        activeAccountID = UserDefaults.standard.string(forKey: Self.activeKey) ?? list.first?.id
+        if let data = UserDefaults.standard.data(forKey: Self.accountsKey),
+           let list = try? JSONDecoder().decode([AppleIDAccount].self, from: data),
+           !list.isEmpty {
+            accounts = list
+            activeAccountID = UserDefaults.standard.string(forKey: Self.activeKey) ?? list.first?.id
+            return
+        }
+        // UserDefaults empty — recover from Keychain mirror (prefs wipe / OS cleanup).
+        if let data = Keychain.getSessionData(Self.accountsBackupKey),
+           let list = try? JSONDecoder().decode([AppleIDAccount].self, from: data),
+           !list.isEmpty {
+            accounts = list
+            activeAccountID = Keychain.getSessionSecret(Self.activeBackupKey) ?? list.first?.id
+            // Write back to UserDefaults so the rest of the app keeps working.
+            save()
+        }
     }
 
     private func save() {
         if let data = try? JSONEncoder().encode(accounts) {
             UserDefaults.standard.set(data, forKey: Self.accountsKey)
+            _ = Keychain.setSessionData(Self.accountsBackupKey, data)
         }
         UserDefaults.standard.set(activeAccountID, forKey: Self.activeKey)
+        if let id = activeAccountID {
+            _ = Keychain.setSessionSecret(Self.activeBackupKey, id)
+        } else {
+            Keychain.deleteSessionSecret(Self.activeBackupKey)
+        }
         UserDefaults.standard.set(activeAccount?.email ?? "", forKey: "tetherless.appleid.activeEmailCache")
+        mirrorActiveStoreSessionToKeychain()
+    }
+
+    private func restoreStoreSessionsFromKeychain() {
+        var restored = false
+        for i in accounts.indices {
+            if accounts[i].storeSessionJSON == nil,
+               let data = Keychain.getSessionData(Self.storeSessionPrefix + accounts[i].id),
+               !data.isEmpty {
+                accounts[i].storeSessionJSON = data
+                restored = true
+            }
+        }
+        if restored { save() }
+    }
+
+    private func mirrorActiveStoreSessionToKeychain() {
+        guard let account = activeAccount else { return }
+        if let data = account.storeSessionJSON, !data.isEmpty {
+            _ = Keychain.setSessionData(Self.storeSessionPrefix + account.id, data)
+        }
     }
 
     private func migrateLegacyIfNeeded() {
@@ -150,12 +198,44 @@ final class AppleIDStore: ObservableObject {
         let id = UUID().uuidString
         accounts = [AppleIDAccount(id: id, email: email, addedAt: Date())]
         activeAccountID = id
-        if let pw = Keychain.getSecret(Self.legacyPasswordKey), !pw.isEmpty {
-            _ = Keychain.setSecret(Self.passwordPrefix + id, pw)
+        if let pw = Keychain.getSecret(Self.legacyPasswordKey) ?? Keychain.getSessionSecret(Self.legacyPasswordKey),
+           !pw.isEmpty {
+            _ = Keychain.setSessionSecret(Self.passwordPrefix + id, pw)
         }
         storeReady = true
         UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
         save()
+    }
+
+    /// Read Apple ID password with AfterFirstUnlock accessibility; migrate older WhenUnlocked items.
+    private func passwordForAccount(id: String) -> String? {
+        let key = Self.passwordPrefix + id
+        if let pw = Keychain.getSessionSecret(key), !pw.isEmpty {
+            // Re-write under AfterFirstUnlock so cold-launch / lock-screen refresh still works.
+            _ = Keychain.setSessionSecret(key, pw)
+            return pw
+        }
+        if let pw = Keychain.getSecret(key), !pw.isEmpty {
+            _ = Keychain.setSessionSecret(key, pw)
+            return pw
+        }
+        return nil
+    }
+
+    /// Background: refresh aged store tokens without bouncing the user to Sign In.
+    private func quietlyRefreshStorefrontIfNeeded() async {
+        guard activeAccount != nil else { return }
+        if let existing = storefrontSession(), existing.isUsable { return }
+        // Missing / unreadable store session — try silent re-auth with saved password.
+        storefrontNeedsRefresh = true
+        do {
+            _ = try await ensureStorefrontSession(forceRefresh: true)
+            statusMessage = nil
+            lastError = nil
+        } catch {
+            // Keep Apple ID signed in; Owned/decrypt will surface a refresh tip when needed.
+            storefrontNeedsRefresh = false
+        }
     }
 
     // MARK: Auth — Settings / Decrypt API
@@ -171,7 +251,7 @@ final class AppleIDStore: ObservableObject {
         statusMessage = nil
         draftEmail = e
         authPhase = .authenticating
-        _ = Keychain.setSecret(Self.passwordPrefix + "pending", p)
+        _ = Keychain.setSessionSecret(Self.passwordPrefix + "pending", p)
         do {
             let session = try await GSAAuthClient.shared.authenticate(email: e, password: p)
             await finishRealSignIn(session: session, password: p)
@@ -183,7 +263,7 @@ final class AppleIDStore: ObservableObject {
         } catch {
             authPhase = .idle
             lastError = error.localizedDescription
-            Keychain.deleteSecret(Self.passwordPrefix + "pending")
+            Keychain.deleteSessionSecret(Self.passwordPrefix + "pending")
             pendingStoreAuthCode = nil
             GSAAuthClient.shared.cancel()
         }
@@ -206,7 +286,9 @@ final class AppleIDStore: ObservableObject {
         pendingStoreAuthCode = digits
         do {
             let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
-            let pw = Keychain.getSecret(Self.passwordPrefix + "pending") ?? ""
+            let pw = Keychain.getSessionSecret(Self.passwordPrefix + "pending")
+                ?? Keychain.getSecret(Self.passwordPrefix + "pending")
+                ?? ""
             await finishRealSignIn(session: session, password: pw)
         } catch {
             authPhase = .awaitingTwoFactor
@@ -265,9 +347,9 @@ final class AppleIDStore: ObservableObject {
 
     func cancelTwoFactor() {
         GSAAuthClient.shared.cancel()
-        Keychain.deleteSecret(Self.passwordPrefix + "pending")
+        Keychain.deleteSessionSecret(Self.passwordPrefix + "pending")
         pendingStoreAuthCode = nil
-        authPhase = accounts.isEmpty ? .idle : .idle
+        authPhase = .idle
         lastError = nil
         statusMessage = nil
         twoFactorUsesSMS = false
@@ -296,7 +378,8 @@ final class AppleIDStore: ObservableObject {
     func switchTo(id: String) { selectAccount(id: id) }
 
     func removeAccount(id: String) {
-        Keychain.deleteSecret(Self.passwordPrefix + id)
+        Keychain.deleteSessionSecret(Self.passwordPrefix + id)
+        Keychain.deleteSessionSecret(Self.storeSessionPrefix + id)
         accounts.removeAll { $0.id == id }
         if activeAccountID == id {
             activeAccountID = accounts.first?.id
@@ -319,13 +402,19 @@ final class AppleIDStore: ObservableObject {
     }
 
     func signOutAll() {
-        for a in accounts { Keychain.deleteSecret(Self.passwordPrefix + a.id) }
+        for a in accounts {
+            Keychain.deleteSessionSecret(Self.passwordPrefix + a.id)
+            Keychain.deleteSessionSecret(Self.storeSessionPrefix + a.id)
+        }
+        Keychain.deleteSessionSecret(Self.accountsBackupKey)
+        Keychain.deleteSessionSecret(Self.activeBackupKey)
         accounts = []
         activeAccountID = nil
         draftEmail = ""
         draftPassword = ""
         verificationCode = ""
         storeReady = false
+        storefrontNeedsRefresh = false
         statusMessage = nil
         lastError = nil
         presentedDisplayCode = nil
@@ -335,6 +424,7 @@ final class AppleIDStore: ObservableObject {
         UserDefaults.standard.set(false, forKey: Self.storeReadyKey)
         save()
         _ = Keychain.set(Self.legacyEmailKey, "")
+        Keychain.deleteSessionSecret(Self.legacyPasswordKey)
         Keychain.deleteSecret(Self.legacyPasswordKey)
     }
 
@@ -448,7 +538,7 @@ final class AppleIDStore: ObservableObject {
         guard let account = activeAccount else {
             throw AppleAuthError.message("Sign in under Store Access first.")
         }
-        guard let password = Keychain.getSecret(Self.passwordPrefix + account.id), !password.isEmpty else {
+        guard let password = passwordForAccount(id: account.id), !password.isEmpty else {
             throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Store Access.")
         }
         authPhase = .authenticating
@@ -485,22 +575,23 @@ final class AppleIDStore: ObservableObject {
         return try? JSONDecoder().decode(StorefrontSession.self, from: data)
     }
 
-    /// Drop a stale iTunes Store passwordToken so the next ensure re-authenticates.
+    /// Mark store token stale for the next ensure — does **not** wipe the persisted session
+    /// (or the Apple ID). Re-auth replaces the token; sign-out is the only wipe path.
     func invalidateStorefrontSession() {
-        guard let aid = activeAccountID, let idx = accounts.firstIndex(where: { $0.id == aid }) else { return }
-        accounts[idx].storeSessionJSON = nil
-        save()
+        storefrontNeedsRefresh = true
     }
 
     /// Ensure a usable storefront session (re-auth with saved password if needed).
     func ensureStorefrontSession(forceRefresh: Bool = false) async throws -> StorefrontSession {
-        if !forceRefresh, let existing = storefrontSession(), existing.isUsable {
+        let refresh = forceRefresh || storefrontNeedsRefresh
+        if !refresh, let existing = storefrontSession(), existing.isUsable {
             return existing
         }
         guard let email = activeAccount?.email, !email.isEmpty else {
             throw AppStoreClientError.message("Sign in under Store Access first.")
         }
-        guard let password = Keychain.getSecret(Self.passwordPrefix + (activeAccountID ?? "")), !password.isEmpty else {
+        guard let aid = activeAccountID,
+              let password = passwordForAccount(id: aid), !password.isEmpty else {
             throw AppStoreClientError.message("Missing Apple ID password — sign in again under Store Access.")
         }
         do {
@@ -510,13 +601,17 @@ final class AppleIDStore: ObservableObject {
                 authCode: pendingStoreAuthCode
             )
             pendingStoreAuthCode = nil
+            storefrontNeedsRefresh = false
             persistStoreSession(session)
             return session
         } catch AppStoreClientError.needsTwoFactor {
-            // Surface an actionable path — Decrypt › Owned has no 2FA field of its own.
+            // Keep the Apple ID + prior store blob; user enters a code under Store Access.
             throw AppStoreClientError.message(
-                "App Store sign-in needs a verification code. Open Settings › Store Access, enter the 6-digit code (or Sign Out → Sign In), then tap refresh on Owned."
+                "App Store sign-in needs a verification code. Open Settings › Store Access, enter the 6-digit code, then tap refresh on Owned."
             )
+        } catch {
+            // Leave the previous token in place so a transient failure doesn't look like logout.
+            throw error
         }
     }
 
@@ -524,6 +619,7 @@ final class AppleIDStore: ObservableObject {
         guard let idx = accounts.firstIndex(where: { $0.email.caseInsensitiveCompare(store.email) == .orderedSame })
                 ?? accounts.firstIndex(where: { $0.id == activeAccountID }) else { return }
         accounts[idx].storeSessionJSON = try? JSONEncoder().encode(store)
+        storefrontNeedsRefresh = false
         save()
     }
 
@@ -587,7 +683,7 @@ final class AppleIDStore: ObservableObject {
             accounts[idx].teamID = session.teamID
             accounts[idx].teamName = session.teamName
             activeAccountID = accounts[idx].id
-            _ = Keychain.setSecret(Self.passwordPrefix + accounts[idx].id, password)
+            _ = Keychain.setSessionSecret(Self.passwordPrefix + accounts[idx].id, password)
         } else {
             let id = UUID().uuidString
             var account = AppleIDAccount(id: id, email: email, addedAt: Date())
@@ -596,16 +692,19 @@ final class AppleIDStore: ObservableObject {
             account.teamName = session.teamName
             accounts.append(account)
             activeAccountID = id
-            _ = Keychain.setSecret(Self.passwordPrefix + id, password)
+            _ = Keychain.setSessionSecret(Self.passwordPrefix + id, password)
         }
 
-        Keychain.deleteSecret(Self.passwordPrefix + "pending")
+        Keychain.deleteSessionSecret(Self.passwordPrefix + "pending")
         draftEmail = email
         draftPassword = ""
         verificationCode = ""
         twoFactorUsesSMS = false
         twoFactorPhoneHint = nil
         lastError = nil
+        // Account is signed in immediately — store session is best-effort after this.
+        storeReady = true
+        UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
 
         // Also establish iTunes Store passwordToken for silent purchase/download.
         statusMessage = "Connecting App Store download session…"

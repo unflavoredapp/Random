@@ -109,7 +109,7 @@ enum AppStoreClientError: LocalizedError {
         switch self {
         case .message(let m): return m
         case .needsTwoFactor: return "App Store sign-in needs a verification code."
-        case .tokenExpired: return "App Store session expired — sign in again under Store Access."
+        case .tokenExpired: return "App Store session expired — TetherLess will refresh it automatically; open Store Access only if refresh fails."
         case .licenseRequired: return "This Apple ID doesn’t own a license for that app."
         case .paidApp: return "Silent purchase only supports free apps. Buy it once in the App Store, then decrypt."
         case .network(let m): return m
@@ -936,7 +936,7 @@ final class AppStoreClient: ObservableObject {
                 )
             }
             throw AppStoreClientError.network(
-                "Non-plist App Store response (HTTP 204). In Settings › Store Access turn spoof to This iPhone (Client-Info rewrite off), Sign Out → Sign In, then refresh Owned."
+                "Non-plist App Store response (HTTP 204). In Settings › Store Access turn spoof to This iPhone (Client-Info rewrite off), then refresh Owned — stay signed in."
             )
         }
         if data.isEmpty, status == 500 {
@@ -972,7 +972,7 @@ final class AppStoreClient: ObservableObject {
             }
             let raw = String(data: data, encoding: .utf8) ?? ""
             throw AppStoreClientError.network(
-                "Non-plist App Store response (HTTP 403): Apple rejected the store client identity. Turn spoof off or use “This iPhone” / “Newest IPA” (not iOS 99), then Sign Out → Sign In under Store Access. \(raw.prefix(80))"
+                "Non-plist App Store response (HTTP 403): Apple rejected the store client identity. Turn spoof off or use “This iPhone” / “Newest IPA” (not iOS 99), then refresh under Store Access. \(raw.prefix(80))"
             )
         }
         guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
