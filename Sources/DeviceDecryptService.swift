@@ -163,14 +163,7 @@ final class DeviceDecryptService: ObservableObject {
             }
 
             let storeURL = try await storeURL(forBundleID: app.bundleID)
-            if await trySilentPurchaseDownloadDecrypt(
-                bundleID: app.bundleID,
-                displayName: app.name,
-                storeURL: storeURL
-            ) {
-                return
-            }
-            try await waitForStoreInstallThenDecrypt(
+            try await silentPurchaseDownloadDecrypt(
                 bundleID: app.bundleID,
                 displayName: app.name,
                 storeURL: storeURL
@@ -179,6 +172,7 @@ final class DeviceDecryptService: ObservableObject {
             lastError = error.localizedDescription
             DecryptClient.shared.phase = .failed
             DecryptClient.shared.error = error.localizedDescription
+            DecryptClient.shared.message = error.localizedDescription
             status = ""
         }
     }
@@ -203,8 +197,8 @@ final class DeviceDecryptService: ObservableObject {
         }
     }
 
-    /// Device-channel path for a Store listing: decrypt if installed, otherwise open the listing
-    /// under the signed-in Apple ID, wait for install, then FairPlay locally (never Telegram).
+    /// Device-channel path for a Store listing: decrypt if already on-disk, otherwise silent
+    /// purchase/download (never opens the App Store UI).
     func decryptOwnedStoreApp(_ app: DeviceApp, storeURL: String, version: String? = nil) async {
         guard !busy else { return }
         busy = true
@@ -231,15 +225,7 @@ final class DeviceDecryptService: ObservableObject {
                 return
             }
             let link = storeURL.isEmpty ? try await self.storeURL(forBundleID: bid) : storeURL
-            // Silent purchase + download (no App Store UI). Falls back to install-wait if needed.
-            if await trySilentPurchaseDownloadDecrypt(
-                bundleID: bid,
-                displayName: app.name,
-                storeURL: link
-            ) {
-                return
-            }
-            try await waitForStoreInstallThenDecrypt(
+            try await silentPurchaseDownloadDecrypt(
                 bundleID: bid,
                 displayName: app.name,
                 storeURL: link
@@ -261,87 +247,97 @@ final class DeviceDecryptService: ObservableObject {
         DecryptClient.shared.error = nil
     }
 
-    /// ipatool-style silent buy + CDN download, then FairPlay. Returns true if finished successfully.
-    @discardableResult
-    private func trySilentPurchaseDownloadDecrypt(
+    /// ipatool-style silent buy + CDN download, then FairPlay. Never opens the App Store UI.
+    private func silentPurchaseDownloadDecrypt(
         bundleID: String,
         displayName: String,
         storeURL: String
-    ) async -> Bool {
+    ) async throws {
+        guard let adam = try await resolveAdamId(bundleID: bundleID, storeURL: storeURL) else {
+            throw DecryptError("Couldn't resolve an App Store id for \(displayName). Try another search result.")
+        }
+        publishDecryptProgress("Silent App Store session…")
+        let account = try await AppleIDStore.shared.ensureStorefrontSession()
+
+        let tmpDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tetherless-silent", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        let dest = tmpDir.appendingPathComponent("\(bundleID.isEmpty ? "app" : bundleID)_\(adam).ipa")
+
+        let ipa: URL
         do {
-            guard let adam = try await resolveAdamId(bundleID: bundleID, storeURL: storeURL) else {
-                status = "Couldn't resolve App Store id — falling back to App Store install…"
-                return false
-            }
-            status = "Silent App Store session…"
-            DecryptClient.shared.phase = .running
-            DecryptClient.shared.message = status
-            let account = try await AppleIDStore.shared.ensureStorefrontSession()
-
-            let tmpDir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("tetherless-silent", isDirectory: true)
-            try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
-            let dest = tmpDir.appendingPathComponent("\(bundleID.isEmpty ? "app" : bundleID)_\(adam).ipa")
-
-            let ipa = try await AppStoreClient.shared.purchaseAndDownload(
+            ipa = try await AppStoreClient.shared.purchaseAndDownload(
                 adamId: adam,
                 account: account,
                 destination: dest,
                 onProgress: { [weak self] msg in
-                    Task { @MainActor in
-                        self?.status = msg
-                        DecryptClient.shared.message = msg
-                    }
+                    Task { @MainActor in self?.publishDecryptProgress(msg) }
                 }
             )
-
-            // Prefer decrypt via installed path once the silent purchase made the license live;
-            // otherwise attempt IPA-path FairPlay (needs readable SC_Info / keys on device).
-            if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
-                status = "License ready — decrypting installed \(displayName)…"
-                let clear = try FairPlayDecrypt.decryptInstalledApp(
-                    bundleID: bundleID,
-                    displayName: displayName,
-                    knownPath: installed.path
-                ) { [weak self] msg in
-                    Task { @MainActor in
-                        self?.status = msg
-                        DecryptClient.shared.message = msg
-                    }
-                }
-                finishSuccess(url: clear, name: displayName)
-                return true
-            }
-
-            status = "Decrypting silently downloaded \(displayName)…"
-            DecryptClient.shared.message = status
-            do {
-                let clear = try FairPlayDecrypt.decryptIPA(
-                    at: ipa,
-                    displayName: displayName
-                ) { [weak self] msg in
-                    Task { @MainActor in
-                        self?.status = msg
-                        DecryptClient.shared.message = msg
-                    }
-                }
-                finishSuccess(url: clear, name: displayName)
-                return true
-            } catch {
-                // Keep the encrypted IPA; fall through to App Store install for fairplayd path.
-                status = "Downloaded encrypted IPA — install once so FairPlay keys can finish decrypt…"
-                DecryptClient.shared.message = status
-                return false
-            }
         } catch AppStoreClientError.paidApp {
-            status = "Paid app — install from the App Store once, then decrypt on-device…"
-            return false
+            throw DecryptError(
+                "\(displayName) is paid — silent download only covers free/owned apps. Buy it once with this Apple ID, then decrypt again (still no App Store UI from TetherLess)."
+            )
         } catch AppStoreClientError.tokenExpired, AppStoreClientError.needsTwoFactor {
-            status = "App Store session needs refresh — open Store Access, then retry…"
-            return false
-        } catch {
-            status = "Silent download unavailable (\(error.localizedDescription)) — opening App Store…"
-            return false
+            throw DecryptError("App Store session needs refresh — sign in again under Settings › Store Access, then retry.")
+        }
+
+        // Prefer live install path if Pair/LS can see it after the license refresh.
+        if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
+            publishDecryptProgress("License ready — decrypting installed \(displayName)…")
+            let clear = try FairPlayDecrypt.decryptInstalledApp(
+                bundleID: bundleID,
+                displayName: displayName,
+                knownPath: installed.path
+            ) { [weak self] msg in
+                Task { @MainActor in self?.publishDecryptProgress(msg) }
+            }
+            finishSuccess(url: clear, name: displayName)
+            return
+        }
+
+        publishDecryptProgress("Decrypting silently downloaded \(displayName)…")
+        do {
+            let clear = try FairPlayDecrypt.decryptIPA(
+                at: ipa,
+                displayName: displayName
+            ) { [weak self] msg in
+                Task { @MainActor in self?.publishDecryptProgress(msg) }
+            }
+            finishSuccess(url: clear, name: displayName)
+            return
+        } catch let ipaError {
+            // Optional: silent native install of the downloaded IPA (Pair), then decrypt from disk.
+            if NativeInstaller.isSelected {
+                publishDecryptProgress("FairPlay needs an on-device install — installing silently via Pair…")
+                do {
+                    try await NativeInstaller.shared.install(
+                        ipaURL: ipa,
+                        bundleID: bundleID,
+                        name: displayName,
+                        version: ""
+                    )
+                    if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
+                        publishDecryptProgress("Installed — decrypting \(displayName)…")
+                        let clear = try FairPlayDecrypt.decryptInstalledApp(
+                            bundleID: bundleID,
+                            displayName: displayName,
+                            knownPath: installed.path
+                        ) { [weak self] msg in
+                            Task { @MainActor in self?.publishDecryptProgress(msg) }
+                        }
+                        finishSuccess(url: clear, name: displayName)
+                        return
+                    }
+                } catch {
+                    throw DecryptError(
+                        "Silent download OK, Pair install/decrypt failed (\(error.localizedDescription)). Earlier FairPlay error: \(ipaError.localizedDescription). Ensure \(AppleIDStore.shared.email.isEmpty ? "this Apple ID" : AppleIDStore.shared.email) signed in to Media & Purchases once — TetherLess will not open the App Store."
+                    )
+                }
+            }
+            throw DecryptError(
+                "Silent download succeeded, but FairPlay decrypt failed (\(ipaError.localizedDescription)). \(AppStoreDecryptGuide.failureHint) TetherLess does not open the App Store during decrypt."
+            )
         }
     }
 
@@ -379,85 +375,6 @@ final class DeviceDecryptService: ObservableObject {
             return url
         }
         return FairPlayDecrypt.installedAppURL(bundleID: bundleID)
-    }
-
-    private func waitForStoreInstallThenDecrypt(
-        bundleID: String,
-        displayName: String,
-        storeURL: String
-    ) async throws {
-        DecryptClient.shared.phase = .running
-        DecryptClient.shared.error = nil
-
-        // App may already be installed (App Store shows Open) while LS can't see the path yet.
-        if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
-            status = "Found on device — decrypting \(displayName)…"
-            DecryptClient.shared.message = status
-            let clear = try FairPlayDecrypt.decryptInstalledApp(
-                bundleID: bundleID,
-                displayName: displayName,
-                knownPath: installed.path
-            ) { [weak self] msg in
-                Task { @MainActor in
-                    self?.status = msg
-                    DecryptClient.shared.message = msg
-                }
-            }
-            finishSuccess(url: clear, name: displayName)
-            return
-        }
-
-        DecryptClient.shared.message = "Install \(displayName) from the App Store — decrypt runs automatically on this device"
-        status = "Opening App Store — install with \(AppleIDStore.shared.email.isEmpty ? "your Apple ID" : AppleIDStore.shared.email)…"
-        AppStoreDecryptGuide.openAppStoreListing(storeURL)
-
-        let deadline = Date().addingTimeInterval(10 * 60)
-        var spins = 0
-        var sawInLibraryWithoutPath = false
-        while Date() < deadline {
-            try Task.checkCancellation()
-            if spins % 3 == 0 {
-                _ = await DeviceLibrary.shared.refreshAwaiting()
-            }
-            if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
-                status = "Installed — decrypting \(displayName) on this device…"
-                DecryptClient.shared.message = status
-                let clear = try FairPlayDecrypt.decryptInstalledApp(
-                    bundleID: bundleID,
-                    displayName: displayName,
-                    knownPath: installed.path
-                ) { [weak self] msg in
-                    Task { @MainActor in
-                        self?.status = msg
-                        DecryptClient.shared.message = msg
-                    }
-                }
-                finishSuccess(url: clear, name: displayName)
-                return
-            }
-            if DeviceLibrary.shared.apps.contains(where: { $0.bundleID == bundleID }) {
-                sawInLibraryWithoutPath = true
-            }
-            spins += 1
-            // Don't hammer App Store forever when the app is already installed but path is invisible.
-            if sawInLibraryWithoutPath && spins >= 8 {
-                throw DecryptError(
-                    "\(displayName) is installed, but TetherLess can’t read its on-disk path yet. Connect Pair (Native), wait for the tunnel, then tap Decrypt again — FairPlay needs that path for keys."
-                )
-            }
-            if spins % 15 == 0 {
-                status = "Still waiting — reopening App Store for \(displayName)…"
-                DecryptClient.shared.message = status
-                AppStoreDecryptGuide.openAppStoreListing(storeURL)
-            } else if spins % 5 == 0 {
-                status = "Waiting for \(displayName) to finish installing…"
-                DecryptClient.shared.message = status
-            }
-            try await Task.sleep(nanoseconds: 2_000_000_000)
-        }
-        throw DecryptError(
-            "Timed out waiting for \(displayName) to install. Open the App Store, install it with the Apple ID in Store Access, then tap Decrypt again."
-        )
     }
 
     private func finishSuccess(url: URL, name: String) {
