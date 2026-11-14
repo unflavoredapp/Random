@@ -17,7 +17,12 @@ final class GSAAuthClient: ObservableObject {
     private let trustedDeviceSecurityCodeURL = URL(string: "https://gsa.apple.com/auth/verify/trusteddevice/securitycode")!
     private let authApp = "com.apple.gs.xcode.auth"
     private let xcodeVersion = "14.0"
-    private let session = URLSession(configuration: .ephemeral)
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.ephemeral
+        // GrandSlam sometimes redirects to HTML error pages; never follow those.
+        config.httpShouldSetCookies = false
+        return URLSession(configuration: config, delegate: GSRedirectBlocker.shared, delegateQueue: nil)
+    }()
 
     private var pendingEmail = ""
     private var pendingPassword = ""
@@ -35,18 +40,37 @@ final class GSAAuthClient: ObservableObject {
             throw AppleAuthError.message("Enter Apple ID and password.")
         }
 
-        let anisette = try await AnisetteClient.shared.fetch()
         pendingEmail = e
         pendingPassword = password
-        pendingAnisette = anisette
 
         do {
-            return try await runSRP(email: e, password: password, anisette: anisette, skipTwoFactorGate: false)
+            return try await authenticateOnce(email: e, password: password, skipTwoFactorGate: false)
+        } catch let AppleAuthError.portal(code, _) where Self.isTransientAnisetteRejection(code) {
+            // Apple rejected the machine identity — wipe adi.pb and provision a fresh one once.
+            await AnisetteClient.shared.invalidate(resetProvisioning: true)
+            return try await authenticateOnce(email: e, password: password, skipTwoFactorGate: false)
+        }
+    }
+
+    private func authenticateOnce(
+        email: String,
+        password: String,
+        skipTwoFactorGate: Bool
+    ) async throws -> AppleAuthSession {
+        let anisette = try await AnisetteClient.shared.fetch()
+        pendingAnisette = anisette
+        do {
+            return try await runSRP(email: email, password: password, anisette: anisette, skipTwoFactorGate: skipTwoFactorGate)
         } catch AppleAuthError.needsTwoFactor {
             pending2FA = .trustedDevice
             try await requestTrustedDeviceCode()
             throw AppleAuthError.needsTwoFactor
         }
+    }
+
+    private static func isTransientAnisetteRejection(_ code: Int) -> Bool {
+        // -80043 / -80045: "This action cannot be completed at this time" — anisette / client-identity reject.
+        code == -80043 || code == -80045 || code == 80043 || code == 80045
     }
 
     /// Continues after `authenticate` threw `.needsTwoFactor`.
@@ -59,17 +83,28 @@ final class GSAAuthClient: ObservableObject {
             throw AppleAuthError.missingPendingAuth
         }
         try await submitTrustedDeviceCode(digits)
+        do {
+            let session = try await completeAfterTwoFactor()
+            clearPending()
+            return session
+        } catch let AppleAuthError.portal(code, _) where Self.isTransientAnisetteRejection(code) {
+            await AnisetteClient.shared.invalidate(resetProvisioning: true)
+            let session = try await completeAfterTwoFactor()
+            clearPending()
+            return session
+        }
+    }
+
+    private func completeAfterTwoFactor() async throws -> AppleAuthSession {
         // Fresh anisette OTP after 2FA, then full SRP again (SideSign pattern).
         let fresh = try await AnisetteClient.shared.fetch()
         pendingAnisette = fresh
-        let session = try await runSRP(
+        return try await runSRP(
             email: pendingEmail,
             password: pendingPassword,
             anisette: fresh,
             skipTwoFactorGate: true
         )
-        clearPending()
-        return session
     }
 
     func cancel() { clearPending() }
@@ -353,6 +388,7 @@ final class GSAAuthClient: ObservableObject {
 
     // MARK: - Wire
 
+    /// Minimal CPD matching clients that currently clear GrandSlam (AltSign / iloader Windows shape).
     private func clientDictionary(_ a: AnisetteHeaders) -> [String: Any] {
         [
             "bootstrap": true,
@@ -361,19 +397,14 @@ final class GSAAuthClient: ObservableObject {
             "prkgen": true,
             "svct": "iCloud",
             "loc": a.locale,
-            "X-Apple-Locale": a.locale,
             "X-Apple-I-MD": a.oneTimePassword,
             "X-Apple-I-MD-M": a.machineID,
-            "X-Mme-Device-Id": a.deviceID,
-            "X-Apple-I-MD-LU": a.localUserID,
-            "X-Apple-I-MD-RINFO": a.routingInfo,
-            "X-Apple-I-SRL-NO": a.serialNumber,
-            "X-Apple-I-Client-Time": a.clientTime,
-            "X-Apple-I-TimeZone": a.timeZone
+            "X-Mme-Device-Id": a.deviceID
         ]
     }
 
     private func applyAnisette(_ req: inout URLRequest, _ a: AnisetteHeaders) {
+        // User-Agent + Client-Info MUST match the anisette provider that minted MID/OTP.
         req.setValue(a.clientInfo, forHTTPHeaderField: "X-MMe-Client-Info")
         req.setValue(a.userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue(a.machineID, forHTTPHeaderField: "X-Apple-I-MD-M")
@@ -385,6 +416,8 @@ final class GSAAuthClient: ObservableObject {
         req.setValue(a.clientTime, forHTTPHeaderField: "X-Apple-I-Client-Time")
         req.setValue(a.locale, forHTTPHeaderField: "X-Apple-Locale")
         req.setValue(a.timeZone, forHTTPHeaderField: "X-Apple-I-TimeZone")
+        req.setValue(authApp, forHTTPHeaderField: "X-Apple-App-Info")
+        req.setValue(xcodeVersion, forHTTPHeaderField: "X-Xcode-Version")
         req.setValue("close", forHTTPHeaderField: "Connection")
     }
 
@@ -398,10 +431,15 @@ final class GSAAuthClient: ObservableObject {
         req.httpMethod = "POST"
         req.httpBody = plist
         req.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
-        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        req.setValue("text/x-xml-plist", forHTTPHeaderField: "Accept")
+        req.httpShouldHandleCookies = false
         applyAnisette(&req, anisette)
         let (data, resp) = try await session.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        if !(200..<300).contains(code) {
+            let raw = String(data: data, encoding: .utf8) ?? ""
+            throw AppleAuthError.network("Apple's authentication servers returned an error (HTTP \(code)). \(raw.prefix(120))")
+        }
         guard !data.isEmpty else {
             throw AppleAuthError.network("Empty GrandSlam response (HTTP \(code)).")
         }
@@ -421,6 +459,11 @@ final class GSAAuthClient: ObservableObject {
             case -20101, -20209: throw AppleAuthError.appSpecificPasswordRequired
             case -21669: throw AppleAuthError.incorrectCode
             case -21668, -20102, -22411: throw AppleAuthError.tooManyAttempts(em ?? "Too many attempts.")
+            case -80043, -80045, 80043, 80045:
+                throw AppleAuthError.portal(
+                    ec,
+                    em ?? "Apple rejected this device identity. Try Sign In again in a moment."
+                )
             default: throw AppleAuthError.portal(ec, em ?? "Authentication failed")
             }
         }
@@ -432,5 +475,20 @@ final class GSAAuthClient: ObservableObject {
             return o
         }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+}
+
+/// Blocks HTTP redirects on GrandSlam so HTML 503 pages aren't parsed as plists.
+private final class GSRedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    static let shared = GSRedirectBlocker()
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
     }
 }

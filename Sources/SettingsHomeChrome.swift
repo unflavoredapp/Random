@@ -314,10 +314,15 @@ final class AppUpdateChecker: ObservableObject {
             guard let url = URL(string: "https://api.github.com/repos/unflavoredapp/Random/releases/latest") else { return }
             var req = URLRequest(url: url)
             req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            // GitHub requires a User-Agent; without it the API returns 403 and we show "Couldn't check".
+            req.setValue("TetherLess/\(localVersion)", forHTTPHeaderField: "User-Agent")
             let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200,
+            let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard status == 200,
                   let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                message = "Couldn't check for updates."
+                message = status == 403 || status == 429
+                    ? "Update check rate-limited. Try again shortly."
+                    : "Couldn't check for updates."
                 return
             }
             let tag = ((obj["tag_name"] as? String) ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
