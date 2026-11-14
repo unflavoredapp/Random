@@ -349,8 +349,10 @@ final class AppleIDStore: ObservableObject {
     }
 
     private func applySMSSentStatus(hint: String?) {
-        if let hint, !hint.isEmpty {
-            statusMessage = "A text message with a code was sent to \(hint). Enter it below."
+        let cleaned = (hint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // GSA phone id is often `"1"` — never show that as the destination.
+        if !cleaned.isEmpty, !(cleaned.allSatisfy(\.isNumber) && cleaned.count <= 3) {
+            statusMessage = "A text message with a code was sent to \(cleaned). Enter it below."
         } else {
             statusMessage = "A text message with a code was sent to your trusted phone number. Enter it below."
         }
@@ -376,7 +378,12 @@ final class AppleIDStore: ObservableObject {
         } else {
             twoFactorUsesSMS = false
         }
-        twoFactorPhoneHint = gsa.twoFactorPhoneHint
+        let hint = (gsa.twoFactorPhoneHint ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if hint.allSatisfy(\.isNumber), hint.count <= 3 {
+            twoFactorPhoneHint = nil
+        } else {
+            twoFactorPhoneHint = hint.isEmpty ? nil : hint
+        }
     }
 
     private func twoFactorPromptMessage() -> String {
@@ -719,27 +726,12 @@ final class AppleIDStore: ObservableObject {
     }
 
     /// Complete App Store (MZFinance) 2FA without signing out — then silent download works.
-    /// Same 6-digit code also finishes a pending GSA SMS challenge when “Text me a code” was used.
+    /// GSA is only used to *deliver* the SMS; the digits must hit MZFinance first so the
+    /// store passwordToken is minted before GrandSlam consumes the one-time code.
     func submitStoreVerificationCode(_ code: String) async throws -> StorefrontSession {
         let digits = code.filter(\.isNumber)
         guard digits.count == 6 else {
             throw AppStoreClientError.message("Enter the 6-digit verification code.")
-        }
-
-        // Finish GSA SMS / trusted-device challenge first when we opened one to text the code.
-        if GSAAuthClient.shared.hasPendingTwoFactor {
-            do {
-                let portal = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
-                if let idx = accounts.firstIndex(where: { $0.id == activeAccountID }) {
-                    accounts[idx].portalSessionJSON = try? JSONEncoder().encode(portal)
-                    accounts[idx].teamID = portal.teamID
-                    accounts[idx].teamName = portal.teamName
-                    save()
-                }
-                withAnimation(.snappy) { authPhase = .idle }
-            } catch {
-                // Still try MZFinance — the texted code is primarily for store passwordToken.
-            }
         }
 
         pendingStoreAuthCode = digits
@@ -748,13 +740,42 @@ final class AppleIDStore: ObservableObject {
             let session = try await ensureStorefrontSession(forceRefresh: true)
             storeNeedsVerification = false
             statusMessage = "Store access ready — free & purchased downloads unlocked"
+            // Best-effort: finish / clear the GSA challenge that sent the SMS (code may already be spent).
+            await finishOrClearPendingGSA(code: digits)
             return session
         } catch AppStoreClientError.needsTwoFactor {
+            // Store rejected the code — try completing GSA (keeps portal alive), then ask for a fresh SMS.
+            await finishOrClearPendingGSA(code: digits)
             storeNeedsVerification = true
             throw AppStoreClientError.message(
-                "Incorrect or expired code — tap Text me a code, then retry."
+                "Incorrect or expired code — tap Resend text message, then enter the new code."
             )
+        } catch {
+            // Network / HTML 404·500 from Apple: keep the code entry up; don't burn GSA unless it helps.
+            storeNeedsVerification = true
+            throw error
         }
+    }
+
+    /// After store verify, close out a pending GSA SMS challenge without blocking Store Access.
+    private func finishOrClearPendingGSA(code: String) async {
+        guard GSAAuthClient.shared.hasPendingTwoFactor else {
+            withAnimation(.snappy) { authPhase = .idle }
+            return
+        }
+        do {
+            let portal = try await GSAAuthClient.shared.submitTwoFactor(code: code)
+            if let idx = accounts.firstIndex(where: { $0.id == activeAccountID }) {
+                accounts[idx].portalSessionJSON = try? JSONEncoder().encode(portal)
+                accounts[idx].teamID = portal.teamID
+                accounts[idx].teamName = portal.teamName
+                save()
+            }
+        } catch {
+            // Code was for the store session — drop the GSA pending state so Settings isn't stuck.
+            GSAAuthClient.shared.cancel()
+        }
+        withAnimation(.snappy) { authPhase = .idle }
     }
 
     /// Text a Store verification code to the trusted phone (GSA SMS) without signing out.

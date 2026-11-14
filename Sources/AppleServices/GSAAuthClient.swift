@@ -105,6 +105,7 @@ final class GSAAuthClient: ObservableObject {
     }
 
     /// Explicitly text a code to the Apple ID’s trusted phone (UI “Text me a code”).
+    /// Returns a human-readable phone hint when Apple provides one (never the numeric phone id).
     @discardableResult
     func requestSMSCode(phoneID: String = "1") async throws -> String {
         guard pendingAnisette != nil, pendingDSID != nil, pendingIDMS != nil else {
@@ -113,9 +114,17 @@ final class GSAAuthClient: ObservableObject {
         let hint = try await sendSMSCodeRequest(phoneID: phoneID)
         pending2FA = .sms(phoneID: hint.phoneID)
         twoFactorChannel = .sms(phoneID: hint.phoneID)
-        twoFactorPhoneHint = hint.obfuscated.isEmpty ? nil : hint.obfuscated
+        twoFactorPhoneHint = Self.displayablePhoneHint(hint.obfuscated)
         twoFactorCodeAlreadySent = true
-        return twoFactorPhoneHint ?? hint.phoneID
+        return twoFactorPhoneHint ?? ""
+    }
+
+    /// Reject bare phone-number ids (`"1"`) so the UI never says “sent to 1”.
+    private static func displayablePhoneHint(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        if trimmed.allSatisfy(\.isNumber), trimmed.count <= 3 { return nil }
+        return trimmed
     }
 
     private static func isTransientAnisetteRejection(_ code: Int) -> Bool {

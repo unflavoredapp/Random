@@ -70,11 +70,26 @@ enum FreeAppleIDSigning {
             }
         }
 
-        let created = try await DeveloperPortalClient.shared.createDevelopmentCertificate(
-            machineName: UIDevice.current.name,
-            auth: auth,
-            team: team
-        )
+        let created: (certPEM: Data, privateKeyPEM: Data, certificate: DevCertificate, csr: CSRBuilder.Result)
+        do {
+            created = try await DeveloperPortalClient.shared.createDevelopmentCertificate(
+                machineName: UIDevice.current.name,
+                auth: auth,
+                team: team
+            )
+        } catch let AppleAuthError.portal(code, _) where code == 7460 || code == 35 {
+            // Free Apple IDs only allow one iOS Development cert. Revoke the portal copy
+            // we don't have a private key for, then create a fresh cert we can import.
+            let existing = (try? await DeveloperPortalClient.shared.listCertificates(auth: auth, team: team)) ?? []
+            for cert in existing {
+                try? await DeveloperPortalClient.shared.revokeCertificate(cert, auth: auth, team: team)
+            }
+            created = try await DeveloperPortalClient.shared.createDevelopmentCertificate(
+                machineName: UIDevice.current.name,
+                auth: auth,
+                team: team
+            )
+        }
         var appIDs = (try? await DeveloperPortalClient.shared.listAppIDs(auth: auth, team: team)) ?? []
         var appID = appIDs.first
         if appID == nil {

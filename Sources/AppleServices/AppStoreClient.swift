@@ -156,84 +156,171 @@ final class AppStoreClient: ObservableObject {
 
         let anisette = try await AnisetteClient.shared.fetch()
         let guid = Self.deviceGUID(from: anisette)
-        var redirect: String? = nil
+        // ipatool: start on buy.itunes with ?guid=, follow pod redirects without bumping attempt.
+        var endpoint = Self.authenticateURL(guid: guid)
+        var attempt = 1
+        var redirects = 0
         var last: [String: Any] = [:]
         var headers: [String: String] = [:]
+        var lastTransient: Error?
 
-        for attempt in 1...4 {
-            let url = redirect ?? Paths.authenticate
-            let (dict, respHeaders, status) = try await postPlist(
-                url: url,
-                body: [
-                    "appleId": e,
-                    "attempt": "\(attempt)",
-                    "guid": guid,
-                    "password": password + code,
-                    "rmp": "0",
-                    "why": "signIn"
-                ],
-                anisette: anisette,
-                // Authenticate with a real-device UA — spoofed iOS 99 / exotic identity
-                // headers here are a common HTTP 403 cause. Spoof applies on download only.
-                extraHeaders: [
-                    "Content-Type": "application/x-apple-plist",
-                    "User-Agent": "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
-                ],
-                allowRedirectCapture: true,
-                stripSpoofIdentity: true
-            )
-            last = dict
-            headers = respHeaders
+        while attempt <= 4, redirects <= 4 {
+            do {
+                let (dict, respHeaders, status) = try await postPlist(
+                    url: endpoint,
+                    body: [
+                        "appleId": e,
+                        "attempt": "\(attempt)",
+                        "guid": guid,
+                        "password": password + code,
+                        "rmp": "0",
+                        "why": "signIn"
+                    ],
+                    anisette: anisette,
+                    // Authenticate with a real-device UA — spoofed iOS 99 / exotic identity
+                    // headers here are a common HTTP 403 cause. Spoof applies on download only.
+                    extraHeaders: [
+                        "Content-Type": "application/x-apple-plist",
+                        "User-Agent": "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
+                    ],
+                    allowRedirectCapture: true,
+                    stripSpoofIdentity: true
+                )
+                last = dict
+                headers = respHeaders
+                lastTransient = nil
 
-            if let loc = headers["Location"] ?? headers["location"], status >= 300, status < 400 {
-                redirect = loc
-                continue
-            }
+                if (300..<400).contains(status),
+                   let loc = headers["Location"] ?? headers["location"], !loc.isEmpty {
+                    endpoint = try Self.resolveAuthenticateRedirect(
+                        from: endpoint,
+                        location: loc,
+                        guid: guid
+                    )
+                    redirects += 1
+                    continue // same attempt payload (ipatool)
+                }
 
-            let failure = string(dict["failureType"])
-            let customer = string(dict["customerMessage"])
-            if failure == "-5000", attempt == 1, code.isEmpty {
-                continue // retry once like ipatool
-            }
-            if (failure.isEmpty && customer.contains("BadLogin")) || customer.localizedCaseInsensitiveContains("incorrect verification") {
-                if code.isEmpty { throw AppStoreClientError.needsTwoFactor }
-                throw AppStoreClientError.message("Incorrect App Store password or verification code.")
-            }
-            if !failure.isEmpty {
-                throw AppStoreClientError.message(customer.isEmpty ? "App Store sign-in failed (\(failure))." : customer)
-            }
+                let failure = string(dict["failureType"])
+                let customer = string(dict["customerMessage"])
+                if failure == "-5000", attempt == 1, code.isEmpty {
+                    attempt += 1
+                    continue // retry once like ipatool
+                }
+                if (failure.isEmpty && customer.contains("BadLogin"))
+                    || customer.localizedCaseInsensitiveContains("incorrect verification") {
+                    if code.isEmpty { throw AppStoreClientError.needsTwoFactor }
+                    throw AppStoreClientError.message("Incorrect App Store password or verification code.")
+                }
+                if !failure.isEmpty {
+                    throw AppStoreClientError.message(
+                        customer.isEmpty ? "App Store sign-in failed (\(failure))." : customer
+                    )
+                }
 
-            let token = string(dict["passwordToken"])
-            var dsid = string(dict["dsPersonId"])
-            if dsid.isEmpty { dsid = headers["X-Dsid"] ?? headers["x-dsid"] ?? "" }
-            let storeFront = headers["X-Set-Apple-Store-Front"]
-                ?? headers["x-set-apple-store-front"]
-                ?? headers["X-Apple-Store-Front"]
-                ?? headers["x-apple-store-front"]
-                ?? ""
-            let pod = headers["pod"] ?? headers["Pod"]
+                let token = string(dict["passwordToken"])
+                var dsid = string(dict["dsPersonId"])
+                if dsid.isEmpty { dsid = headers["X-Dsid"] ?? headers["x-dsid"] ?? "" }
+                if dsid.isEmpty {
+                    dsid = Self.dsidFromSetCookie(headers) ?? ""
+                }
+                let storeFront = headers["X-Set-Apple-Store-Front"]
+                    ?? headers["x-set-apple-store-front"]
+                    ?? headers["X-Apple-Store-Front"]
+                    ?? headers["x-apple-store-front"]
+                    ?? ""
+                let pod = headers["pod"] ?? headers["Pod"]
 
-            guard !token.isEmpty, !dsid.isEmpty else {
-                if code.isEmpty { throw AppStoreClientError.needsTwoFactor }
-                throw AppStoreClientError.message("App Store sign-in returned no password token.")
-            }
-            guard !storeFront.isEmpty else {
-                throw AppStoreClientError.message("App Store sign-in missing storefront.")
-            }
+                guard !token.isEmpty, !dsid.isEmpty else {
+                    if code.isEmpty { throw AppStoreClientError.needsTwoFactor }
+                    throw AppStoreClientError.message(
+                        "App Store sign-in returned no password token. Tap Resend text message and enter a fresh code."
+                    )
+                }
+                guard !storeFront.isEmpty else {
+                    throw AppStoreClientError.message("App Store sign-in missing storefront.")
+                }
 
-            return StorefrontSession(
-                email: e,
-                passwordToken: token,
-                dsid: dsid,
-                storeFront: storeFront,
-                pod: pod,
-                guid: guid,
-                createdAt: Date()
-            )
+                return StorefrontSession(
+                    email: e,
+                    passwordToken: token,
+                    dsid: dsid,
+                    storeFront: storeFront,
+                    pod: pod,
+                    guid: guid,
+                    createdAt: Date()
+                )
+            } catch let err as AppStoreClientError {
+                // Transient pod HTML 404/403/5xx — reset to buy.itunes and retry.
+                if case .network(let msg) = err, Self.isTransientAuthenticateFailure(msg) {
+                    lastTransient = err
+                    endpoint = Self.authenticateURL(guid: guid)
+                    attempt += 1
+                    redirects = 0
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    continue
+                }
+                throw err
+            }
         }
 
+        if let lastTransient { throw lastTransient }
         let customer = string(last["customerMessage"])
         throw AppStoreClientError.message(customer.isEmpty ? "App Store sign-in failed after retries." : customer)
+    }
+
+    private static func authenticateURL(guid: String) -> String {
+        "\(Paths.authenticate)?guid=\(guid)"
+    }
+
+    private static func resolveAuthenticateRedirect(
+        from endpoint: String,
+        location: String,
+        guid: String
+    ) throws -> String {
+        guard let base = URL(string: endpoint) else {
+            throw AppStoreClientError.message("Bad App Store authenticate URL.")
+        }
+        guard let resolved = URL(string: location, relativeTo: base)?.absoluteURL else {
+            throw AppStoreClientError.message("Bad App Store redirect.")
+        }
+        let host = (resolved.host ?? "").lowercased()
+        guard host == "apple.com" || host.hasSuffix(".apple.com") else {
+            throw AppStoreClientError.message("App Store redirected to an unexpected host.")
+        }
+        var components = URLComponents(url: resolved, resolvingAgainstBaseURL: false)
+        var path = components?.path ?? resolved.path
+        // Modern /native/ authenticate endpoints require a trailing slash (ipatool).
+        if path.localizedCaseInsensitiveContains("/native"), !path.hasSuffix("/") {
+            path += "/"
+            components?.path = path
+        }
+        var items = components?.queryItems ?? []
+        if !items.contains(where: { $0.name.lowercased() == "guid" }) {
+            items.append(URLQueryItem(name: "guid", value: guid))
+        }
+        components?.queryItems = items
+        return components?.string ?? resolved.absoluteString
+    }
+
+    private static func isTransientAuthenticateFailure(_ message: String) -> Bool {
+        let m = message.lowercased()
+        return m.contains("http 404")
+            || m.contains("http 403")
+            || m.contains("http 500")
+            || m.contains("http 502")
+            || m.contains("http 503")
+            || m.contains("http 204")
+    }
+
+    private static func dsidFromSetCookie(_ headers: [String: String]) -> String? {
+        let cookie = headers.first { $0.key.lowercased() == "set-cookie" }?.value ?? ""
+        guard let range = cookie.range(of: #"mz_at(?:0|_ssl)-([0-9]+)="#, options: .regularExpression) else {
+            return nil
+        }
+        let slice = String(cookie[range])
+        let digits = slice.filter(\.isNumber)
+        return digits.isEmpty ? nil : digits
     }
 
     /// Obtain a free license (`buyProduct`). Paid apps are rejected.
@@ -954,8 +1041,7 @@ final class AppStoreClient: ObservableObject {
                     stripSpoofIdentity: true
                 )
             }
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            throw AppStoreClientError.network("Non-plist App Store response (HTTP 404): \(raw.prefix(120))")
+            throw AppStoreClientError.network(Self.friendlyNonPlistError(status: 404, data: data))
         }
         if status == 403 {
             // Spoofed OS identity (especially literal iOS 99) often yields HTML 403.
@@ -970,10 +1056,7 @@ final class AppStoreClient: ObservableObject {
                     stripSpoofIdentity: true
                 )
             }
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            throw AppStoreClientError.network(
-                "Non-plist App Store response (HTTP 403): Apple rejected the store client identity. Turn spoof off or use “This iPhone” / “Newest IPA” (not iOS 99), then refresh under Store Access. \(raw.prefix(80))"
-            )
+            throw AppStoreClientError.network(Self.friendlyNonPlistError(status: 403, data: data))
         }
         guard let dict = (try? PropertyListSerialization.propertyList(from: data, format: nil)) as? [String: Any] else {
             // Retry with pristine Client-Info and without spoof OS headers — common 204/403/404 cause.
@@ -988,12 +1071,38 @@ final class AppStoreClient: ObservableObject {
                     stripSpoofIdentity: true
                 )
             }
-            let raw = String(data: data, encoding: .utf8) ?? ""
-            throw AppStoreClientError.network(
-                "Store request failed (HTTP \(status)). Sign in again under Store Access if this keeps happening. \(raw.prefix(100))"
-            )
+            throw AppStoreClientError.network(Self.friendlyNonPlistError(status: status, data: data))
         }
         return (dict, headerMap, status)
+    }
+
+    /// Never dump Apple HTML 404/500 pages into the Settings UI.
+    private static func friendlyNonPlistError(status: Int, data: Data) -> String {
+        let raw = String(data: data, encoding: .utf8) ?? ""
+        let looksHTML = raw.localizedCaseInsensitiveContains("<html")
+            || raw.localizedCaseInsensitiveContains("<!DOCTYPE")
+            || raw.localizedCaseInsensitiveContains("<head>")
+        if status == 403 {
+            return looksHTML
+                ? "Store rejected this device identity (HTTP 403). In Settings › Store Access set spoof to This iPhone, then Resend text message."
+                : "Non-plist App Store response (HTTP 403). Turn spoof off or use This iPhone, then refresh under Store Access."
+        }
+        if status == 404 {
+            return "Store authenticate endpoint returned HTTP 404. Tap Resend text message and try a fresh code — stay signed in."
+        }
+        if status >= 500 {
+            return "Apple’s store servers returned HTTP \(status). Wait a moment, tap Resend text message, and enter a new code."
+        }
+        if looksHTML {
+            return "Store request failed (HTTP \(status)). Tap Resend text message or sign in again under Store Access if this keeps happening."
+        }
+        let snippet = raw
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if snippet.isEmpty {
+            return "Store request failed (HTTP \(status)). Sign in again under Store Access if this keeps happening."
+        }
+        return "Store request failed (HTTP \(status)). \(snippet.prefix(80))"
     }
 
     private func applyAnisette(
