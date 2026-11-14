@@ -29,14 +29,6 @@ final class GSAAuthClient: ObservableObject {
         return URLSession(configuration: config, delegate: GSRedirectBlocker.shared, delegateQueue: nil)
     }()
 
-    /// Mac AuthKit identity for `gsa.apple.com/auth/*`.
-    /// Must look like a real MacBook Pro so Apple pushes the system
-    /// “Apple Account Sign In Requested” (map) + verification-code sheets to this iPhone.
-    /// Incoherent old Xcode/macOS pairs make Apple skip the HSA2 UI (AltStore #1772).
-    private let twoFactorMacClientInfo =
-        "<MacBookPro18,3> <macOS;14.3;23D56> <com.apple.AuthKit/1 (com.apple.dt.Xcode/15.3.0)>"
-    private let twoFactorMacUserAgent = "Xcode"
-
     private var pendingEmail = ""
     private var pendingPassword = ""
     private var pendingAnisette: AnisetteHeaders?
@@ -226,14 +218,14 @@ final class GSAAuthClient: ObservableObject {
             : phoneID.trimmingCharacters(in: .whitespacesAndNewlines)
 
         var lastError: Error = AppleAuthError.network("SMS request failed.")
-        for macClient in [true, false] {
+        for spoofClient in [true, false] {
             do {
                 var req = makeTwoFactorRequest(
                     url: phonePutURL,
                     dsid: dsid,
                     idms: idms,
                     anisette: anisette,
-                    preferMacClient: macClient
+                    preferSpoofClient: spoofClient
                 )
                 req.httpMethod = "POST"
                 req.httpShouldHandleCookies = false
@@ -319,13 +311,13 @@ final class GSAAuthClient: ObservableObject {
         }
 
         var lastError: Error = AppleAuthError.incorrectCode
-        for macClient in [true, false] {
+        for spoofClient in [true, false] {
             var req = makeTwoFactorRequest(
                 url: phoneSecurityCodeURL,
                 dsid: dsid,
                 idms: idms,
                 anisette: anisette,
-                preferMacClient: macClient
+                preferSpoofClient: spoofClient
             )
             req.httpMethod = "POST"
             req.httpShouldHandleCookies = false
@@ -614,13 +606,14 @@ final class GSAAuthClient: ObservableObject {
         }
 
         // SideSign uses GET (Apple Wiki / AltSign). POST produced HTTP 500 xmlui.
-        func attempt(macClient: Bool) async throws -> (Data, Int) {
+        func attempt(spoofClient: Bool, override: (clientInfo: String, userAgent: String)? = nil) async throws -> (Data, Int) {
             var req = makeTwoFactorRequest(
                 url: trustedDeviceURL,
                 dsid: pendingDSID!,
                 idms: pendingIDMS!,
                 anisette: anisette,
-                preferMacClient: macClient
+                preferSpoofClient: spoofClient,
+                spoofOverride: override
             )
             req.httpMethod = "GET"
             req.httpShouldHandleCookies = false
@@ -631,16 +624,34 @@ final class GSAAuthClient: ObservableObject {
 
         var lastData = Data()
         var lastCode = 0
-        // Try Mac AuthKit first, then anisette/Windows identity — SideSign parity.
-        for macClient in [preferMacClient, !preferMacClient] {
-            let (data, code) = try await attempt(macClient: macClient)
+        // Selected MacBook/iPhone AuthKit identity first (Settings › Sign-in device),
+        // then alternate Mac profiles, then raw anisette/Windows — SideSign parity.
+        if preferMacClient {
+            for identity in AuthClientSpoof.current.fallbackClientInfos {
+                let (data, code) = try await attempt(spoofClient: true, override: identity)
+                lastData = data
+                lastCode = code
+                if code == 200 || code == 201 || code == 204 || code == 409 {
+                    return
+                }
+                if ![403, 433, 500, 503].contains(code) { break }
+            }
+            let (data, code) = try await attempt(spoofClient: false)
             lastData = data
             lastCode = code
             if code == 200 || code == 201 || code == 204 || code == 409 {
                 return
             }
-            // Retry opposite identity on auth-page soft failures.
-            if ![403, 433, 500, 503].contains(code) { break }
+        } else {
+            for spoofClient in [false, true] {
+                let (data, code) = try await attempt(spoofClient: spoofClient)
+                lastData = data
+                lastCode = code
+                if code == 200 || code == 201 || code == 204 || code == 409 {
+                    return
+                }
+                if ![403, 433, 500, 503].contains(code) { break }
+            }
         }
 
         if let alert = parseXMLUIAlert(from: lastData) {
@@ -657,13 +668,13 @@ final class GSAAuthClient: ObservableObject {
 
         // Prefer identity-token validate (SideSign / Apple Wiki), then securitycode endpoint.
         if let dsid = pendingDSID, let idms = pendingIDMS {
-            for macClient in [true, false] {
+            for spoofClient in [true, false] {
                 var validate = makeTwoFactorRequest(
                     url: validateURL,
                     dsid: dsid,
                     idms: idms,
                     anisette: anisette,
-                    preferMacClient: macClient
+                    preferSpoofClient: spoofClient
                 )
                 validate.httpMethod = "GET"
                 validate.setValue(code, forHTTPHeaderField: "security-code")
@@ -678,14 +689,14 @@ final class GSAAuthClient: ObservableObject {
                 if status == 401 || status == 403 {
                     try throwIfBad2FA(data: data, status: status)
                 }
-                if macClient { continue }
+                if spoofClient { continue }
 
                 var sec = makeTwoFactorRequest(
                     url: trustedDeviceSecurityCodeURL,
                     dsid: dsid,
                     idms: idms,
                     anisette: anisette,
-                    preferMacClient: true
+                    preferSpoofClient: true
                 )
                 sec.httpMethod = "POST"
                 sec.httpBody = try PropertyListSerialization.data(fromPropertyList: [
@@ -706,7 +717,7 @@ final class GSAAuthClient: ObservableObject {
         var req = URLRequest(url: trustedDeviceSecurityCodeURL)
         req.httpMethod = "POST"
         applyAnisette(&req, anisette)
-        applyTwoFactorMacIdentity(&req)
+        applyAuthClientSpoofIdentity(&req)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.httpBody = try JSONSerialization.data(withJSONObject: [
             "securityCode": ["code": code]
@@ -748,13 +759,14 @@ final class GSAAuthClient: ObservableObject {
         dsid: String,
         idms: String,
         anisette: AnisetteHeaders,
-        preferMacClient: Bool
+        preferSpoofClient: Bool,
+        spoofOverride: (clientInfo: String, userAgent: String)? = nil
     ) -> URLRequest {
         let identity = Data("\(dsid):\(idms)".utf8).base64EncodedString()
         var req = URLRequest(url: url)
         applyAnisette(&req, anisette)
-        if preferMacClient {
-            applyTwoFactorMacIdentity(&req)
+        if preferSpoofClient {
+            applyAuthClientSpoofIdentity(&req, override: spoofOverride)
         }
         req.setValue("application/x-buddyml", forHTTPHeaderField: "Accept")
         req.setValue("en-us", forHTTPHeaderField: "Accept-Language")
@@ -765,9 +777,14 @@ final class GSAAuthClient: ObservableObject {
         return req
     }
 
-    private func applyTwoFactorMacIdentity(_ req: inout URLRequest) {
-        req.setValue(twoFactorMacClientInfo, forHTTPHeaderField: "X-MMe-Client-Info")
-        req.setValue(twoFactorMacUserAgent, forHTTPHeaderField: "User-Agent")
+    /// Apply Settings › Sign-in device spoof (MacBook / iPhone + OS) over anisette headers.
+    private func applyAuthClientSpoofIdentity(
+        _ req: inout URLRequest,
+        override: (clientInfo: String, userAgent: String)? = nil
+    ) {
+        let spoof = AuthClientSpoof.current
+        req.setValue(override?.clientInfo ?? spoof.clientInfo, forHTTPHeaderField: "X-MMe-Client-Info")
+        req.setValue(override?.userAgent ?? spoof.userAgent, forHTTPHeaderField: "User-Agent")
     }
 
     private func parseXMLUIAlert(from data: Data) -> String? {
