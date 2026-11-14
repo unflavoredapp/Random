@@ -2,8 +2,15 @@
 // Revised mremap_encrypted: page-aligned remap window, native cryptid mode,
 // libsystem_kernel dlsym fallback, guarded page-in retries.
 //
+// GitHub configuration parity (install-path decrypt):
+// - foulplay (meme/apple-tools foulplay/main.c): pass LC cryptid to mremap_encrypted
+//   → FP_MODE_NATIVE is first in fp_decrypt_file()'s attempt order.
+// - FairPlayed (morzelowski/FairPlayed fpcore.c + exportInstalledApp): map from
+//   slice_off, vm_read_overwrite page-in, then R/cid2 + RX/cid1 fallbacks; caller
+//   must pass the live install binary as in_path (SC_Info beside it) and a writable
+//   Payload path as out_path.
+//
 // Regression (stock iOS / 16 KB pages):
-// - FP_MODE_NATIVE is first in fp_decrypt_file()'s attempt order.
 // - cryptoff that is only 4 KB-aligned is NOT rejected; fp_compute_remap_window()
 //   aligns the mremap args, then we copy the original crypt range only.
 #include "fpcore.h"
