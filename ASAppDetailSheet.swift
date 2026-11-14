@@ -134,7 +134,7 @@ struct ASAppDetailSheet: View {
                 Spacer()
                 if let u = URL(string: ASConfig.siteBase) {
                     Link(destination: u) {
-                        Text("airshare.lol")
+                        Text("TetherLess")
                             .font(.system(size: 15, weight: .bold))
                             .foregroundColor(.white)
                             .padding(.horizontal, 18)
@@ -215,7 +215,7 @@ struct ASAppDetailSheet: View {
                     Label("Sign latest", systemImage: "signature")
                 }
                 if let u = siteURL {
-                    Link(destination: u) { Label("Open on airshare.lol", systemImage: "safari") }
+                    Link(destination: u) { Label("Open on TetherLess", systemImage: "safari") }
                 }
             } label: {
                 actionIcon("gearshape.fill")
@@ -328,7 +328,7 @@ struct ASAppDetailSheet: View {
                 Text("Powered by")
                     .font(.system(size: 13))
                     .foregroundColor(.white.opacity(0.88))
-                Text("airshare.lol")
+                Text("TetherLess")
                     .font(.system(size: 18, weight: .bold))
                     .foregroundColor(accent)
             }

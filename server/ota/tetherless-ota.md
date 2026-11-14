@@ -1,6 +1,6 @@
 # On-device OTA over tetherless.dev
 
-`tetherless.dev` is Decrypt.Team’s replacement for the discontinued **backloop.dev** loopback-HTTPS trick:
+`tetherless.dev` is TetherLess’s replacement for the discontinued **backloop.dev** loopback-HTTPS trick:
 
 1. DNS: `*.tetherless.dev` → `127.0.0.1` (apex stays on the VPS).
 2. Apex serves a Feather/backloop-shaped `pack.json` (leaf + split key + CA).

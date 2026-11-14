@@ -342,7 +342,7 @@ final class SourceStore: ObservableObject {
         } else {
             list = Self.defaults
         }
-        // Delvek is the only built-in source: always present, first and locked. The old Decrypt.Team / AirShare
+        // Delvek is the only built-in source: always present, first and locked. The old TetherLess / AirShare
         // catalog is retired, and any older Delvek entry is replaced by the built-in one.
         let retired = list.filter { $0.id == "airshare" || $0.url.host == "airshare.lol" }
         list.removeAll { $0.id == "airshare" || $0.url.host == "airshare.lol" || $0.id == "delvek" || $0.url.host == "delvek.net" }
@@ -645,7 +645,7 @@ struct SourcesView: View {
             TextField("https://example.com/repo.json", text: $newURL).textInputAutocapitalization(.never).autocorrectionDisabled()
             Button("Add") { add() }
             Button("Cancel", role: .cancel) { newURL = "" }
-        } message: { Text(addError ?? "Paste a repo.json URL (AltStore, Feather, DELvEK, Decrypt.Team formats).") }
+        } message: { Text(addError ?? "Paste a repo.json URL (AltStore, Feather, DELvEK, TetherLess formats).") }
         .task { await store.prefetchSources() }
         .onChange(of: search) { _ in runSearch() }
         .sheet(item: $openHit) { hit in

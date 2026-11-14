@@ -214,7 +214,7 @@ struct TopBar: View {
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: "archivebox.fill").foregroundStyle(Theme.accent)
-            Text("UNZIP DROP")
+            Text("TETHERLESS")
                 .font(.system(size: 15, weight: .heavy, design: .rounded))
                 .kerning(1).foregroundStyle(Theme.text)
             Spacer()

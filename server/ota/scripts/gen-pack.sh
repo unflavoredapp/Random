@@ -19,7 +19,7 @@ trap 'rm -rf "$tmp"' EXIT
 # Private root CA (self-signed). Users install this once via the app's trust profile.
 openssl req -x509 -newkey rsa:4096 -sha256 -days "$DAYS" -nodes \
   -keyout "$tmp/ca.key" -out ca.crt \
-  -subj "/CN=Decrypt.Team Tetherless Root CA/O=Decrypt.Team/OU=OTA" \
+  -subj "/CN=TetherLess Root CA/O=TetherLess/OU=OTA" \
   -addext "basicConstraints=critical,CA:true" \
   -addext "keyUsage=critical,keyCertSign,cRLSign" >/dev/null 2>&1
 
@@ -32,7 +32,7 @@ subjectAltName=DNS:${CN},DNS:${DOMAIN}
 EOF
 
 openssl req -newkey rsa:2048 -nodes -keyout server.pem -out "$tmp/leaf.csr" \
-  -subj "/CN=${CN}/O=Decrypt.Team/OU=OTA" >/dev/null 2>&1
+  -subj "/CN=${CN}/O=TetherLess/OU=OTA" >/dev/null 2>&1
 
 openssl x509 -req -in "$tmp/leaf.csr" -CA ca.crt -CAkey "$tmp/ca.key" -CAcreateserial \
   -out "$tmp/leaf.crt" -days "$DAYS" -sha256 -extfile "$tmp/leaf.ext" >/dev/null 2>&1
@@ -50,7 +50,7 @@ pack = {
     "key1": key[:half],
     "key2": key[half:],
     "ca": pathlib.Path("ca.crt").read_text(),
-    "info": "Decrypt.Team tetherless.dev OTA pack (backloop.dev replacement). Install the CA once and enable Full Trust.",
+    "info": "TetherLess OTA pack (backloop.dev replacement). Install the CA once and enable Full Trust.",
 }
 pathlib.Path("pack.json").write_text(json.dumps(pack, indent=2) + "\n")
 pathlib.Path("commonName.txt").write_text("*.tetherless.dev\n")

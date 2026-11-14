@@ -17,7 +17,7 @@ struct ImportView: View {
                     Card {
                         VStack(alignment: .leading, spacing: 12) {
                             Label("Open a .zip", systemImage: "archivebox").font(.headline).foregroundStyle(Theme.text)
-                            Text("Pick a zip, or share one into Unzip Drop from Files or Safari. It extracts on-device — a single wrapping folder is flattened automatically.")
+                            Text("Pick a zip, or share one into TetherLess from Files or Safari. It extracts on-device — a single wrapping folder is flattened automatically.")
                                 .font(.caption).foregroundStyle(Theme.subtle)
                             Button {
                                 DocumentPickerPresenter.pickZip { url in

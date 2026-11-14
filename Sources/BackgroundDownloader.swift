@@ -24,7 +24,7 @@ final class AirShareAppDelegate: NSObject, UIApplicationDelegate {
 
 nonisolated final class IPADownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     static let shared = IPADownloader()
-    static let sessionID = "team.decrypt.yg12yoccq4.dl"
+    static let sessionID = "dev.tetherless.app.dl"
 
     struct Part: Codable { var index: Int; var lo: Int64; var hi: Int64; var done: Bool }   // hi < 0 → whole file
     struct Job: Codable {
@@ -495,7 +495,7 @@ nonisolated final class IPADownloader: NSObject, URLSessionDownloadDelegate, @un
             guard UIApplication.shared.applicationState != .active else { return }
             let c = UNMutableNotificationContent()
             c.title = "Downloaded \(name)"
-            c.body = "Ready to sign in Decrypt.Team."
+            c.body = "Ready to sign in TetherLess."
             c.sound = .default
             let req = UNNotificationRequest(identifier: "airshare.download.\(name)", content: c, trigger: nil)
             try? await UNUserNotificationCenter.current().add(req)

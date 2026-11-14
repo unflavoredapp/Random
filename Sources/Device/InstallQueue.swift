@@ -153,7 +153,7 @@ final class InstallQueue: ObservableObject {
         let ok = doneCount
         if UIApplication.shared.applicationState != .active {
             let c = UNMutableNotificationContent()
-            c.title = "Decrypt.Team"
+            c.title = "TetherLess"
             if failures.isEmpty { c.body = ok == 1 ? "Installed \(items.first?.app.name ?? "app")" : "Installed \(ok) apps" }
             else { c.body = "\(ok) installed, \(failures.count) failed — \(failures[0])" }
             c.sound = .default

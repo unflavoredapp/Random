@@ -1,6 +1,6 @@
 //
 //  LibraryHomeView.swift
-//  Tetherless-style Library tab with Unsigned / Signed / Installed segments.
+//  TetherLess-style Library tab with Unsigned / Signed / Installed segments.
 //  Reuses LibraryView (downloaded IPAs), SignedView (signed), DeviceLibrary (installed).
 //
 

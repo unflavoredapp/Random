@@ -60,7 +60,7 @@ struct ZefvAccountScreen: View {
                     .disabled(account.busy || username.isEmpty || password.isEmpty)
 
                     VStack(spacing: 4) {
-                        Text("Your Decrypt.Team ID (ADID)").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.subtle)
+                        Text("Your TetherLess ID (ADID)").font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.subtle)
                         Text(MDID.current).font(.system(size: 13, weight: .bold, design: .monospaced)).foregroundStyle(Theme.accent)
                         Text("This install gets a random MDID. Your account links that ADID to your server-side role.")
                             .font(.system(size: 11)).foregroundStyle(Theme.subtle).multilineTextAlignment(.center)
@@ -84,7 +84,7 @@ struct ZefvAccountScreen: View {
                 }
             }
             OnboardingLogo(size: 84)
-            Text(mode == .register ? "Create a Decrypt.Team account" : "Welcome back")
+            Text(mode == .register ? "Create a TetherLess account" : "Welcome back")
                 .font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
         }
     }

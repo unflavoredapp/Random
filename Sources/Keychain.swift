@@ -74,7 +74,7 @@ nonisolated enum Keychain {
     // app is uninstalled.
     //
     // Used for the leaf/root CA + user-imported .p12 / .mobileprovision so
-    // deleting Unzip Drop doesn't force the user to re-import certs when
+    // deleting TetherLess doesn't force the user to re-import certs when
     // they reinstall.
 
     @discardableResult

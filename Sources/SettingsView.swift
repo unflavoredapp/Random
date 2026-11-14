@@ -67,7 +67,7 @@ struct SettingsView: View {
                             SettingsRow(icon: "checkmark.seal.fill", imageName: "CertSeal", title: "Certificates",
                                         subtitle: certs.active?.name ?? "No signing certificate") { screen = .certificates }
                             SettingsRow(icon: "gearshape.fill", title: "Settings",
-                                        subtitle: "TrustCore API · Decrypt.Team Domain") { screen = .tableView }
+                                        subtitle: "TrustCore API · TetherLess Domain") { screen = .tableView }
                             // The "dev" group specifically — not admin, not the developer role. Being an admin
                             // or having elevated role doesn't put the GitHub repo tools in front of you.
                             if account.style.badges.contains("dev") {
@@ -78,13 +78,13 @@ struct SettingsView: View {
 
                         SettingsSection("Install") {
                             SettingsRow(icon: "arrow.down.app.fill", title: "Install Method",
-                                        subtitle: NativeInstaller.isSelected ? "Native · built-in VPN · auto-updates" : "OTA · itms-services over Decrypt.Team domain") { screen = .nativeInstall }
+                                        subtitle: NativeInstaller.isSelected ? "Native · built-in VPN · auto-updates" : "OTA · itms-services over TetherLess domain") { screen = .nativeInstall }
                         }
 
                         SettingsSection("Support") {
-                            SettingsLink(icon: "globe", imageName: "airshare_logo", title: "Decrypt.Team",
-                                         subtitle: "decrypt.team | Official site",
-                                         url: URL(string: "https://decrypt.team")!)
+                            SettingsLink(icon: "globe", imageName: "airshare_logo", title: "TetherLess",
+                                         subtitle: "tetherless.dev · Official site",
+                                         url: URL(string: "https://tetherless.dev")!)
                             SettingsLink(icon: "network", imageName: "delvek_logo", imageURL: URL(string: "https://delvek.net/img/delvek4.png"), title: "Delvek.net",
                                          subtitle: "delvek.net | Repo and support",
                                          url: URL(string: "https://delvek.net")!)
@@ -471,7 +471,7 @@ private struct StatusFooter: View {
                 Button { showAccount = true } label: {
                     HStack(spacing: 8) {
                         Image(systemName: "person.crop.circle.badge.plus").font(.system(size: 16, weight: .semibold))
-                        Text("Create a Decrypt.Team account").font(.system(size: 15, weight: .bold)).underline()
+                        Text("Create a TetherLess account").font(.system(size: 15, weight: .bold)).underline()
                     }
                     .foregroundStyle(Theme.accent)
                 }
@@ -552,7 +552,7 @@ private struct TableViewSettingsScreen: View {
                 SettingsSection("Signing tools") {
                     SettingsRow(icon: "bolt.horizontal.circle.fill", title: "TrustCore API",
                                 subtitle: "127.0.0.1:\(LocalZSignAPI.shared.port) · loopback signing control") { showAPI = true }
-                    SettingsRow(icon: "network", title: "Decrypt.Team Domain",
+                    SettingsRow(icon: "network", title: "TetherLess Domain",
                                 subtitle: "\(ServerConfig.installHost) · certbot via Actions") { showDomain = true }
                 }
             }
@@ -676,7 +676,7 @@ private struct AboutScreen: View {
         let name: String, blurb: String, asset: String, symbol: String, url: String
     }
     private let credits: [Credit] = [
-        Credit(name: "ᴍƦᴢᴇꜰΛ", blurb: "Built Decrypt.Team. Sign anything, keep it local.", asset: "airshare_mark", symbol: "person.fill", url: "https://airshare.lol"),
+        Credit(name: "ᴍƦᴢᴇꜰΛ", blurb: "Built TetherLess. Sign anything, keep it local.", asset: "airshare_mark", symbol: "person.fill", url: "https://tetherless.dev"),
         Credit(name: "DELvEK", blurb: "Trusted partner. Respected, protected apps updated daily with screenshots.", asset: "delvek_logo", symbol: "pawprint.fill", url: "https://delvek.net"),
     ]
     private let sponsors: [(String, Color)] = [
@@ -897,7 +897,7 @@ private struct DylibTemplateScreen: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Label("Theos dylib, no Substrate", systemImage: "puzzlepiece.extension.fill")
                         .font(.headline).foregroundStyle(Theme.text)
-                    Text("Makefile + Tweak.xm with a runtime-swizzle helper and an example overlay hook, bundle-filter plist, control, and a GitHub Actions workflow that installs Theos and uploads the .dylib as an artifact. Works sideloaded via Decrypt.Team or on a jailbreak.")
+                    Text("Makefile + Tweak.xm with a runtime-swizzle helper and an example overlay hook, bundle-filter plist, control, and a GitHub Actions workflow that installs Theos and uploads the .dylib as an artifact. Works sideloaded via TetherLess or on a jailbreak.")
                         .font(.caption).foregroundStyle(Theme.subtle)
                     Field(label: "Tweak name", text: $name, placeholder: "MRvEKTweak")
                     Field(label: "Target bundle id", text: $target, placeholder: "com.audiomack.iphone")
@@ -915,7 +915,7 @@ private struct DylibTemplateScreen: View {
             generate("Generate dylib project") {
                 ProjectTemplate.dylib(name: name, target: target, author: author.isEmpty ? "MRzefv" : author)
             }
-            Text("Then: Push → Build tab → download <name>-dylib → inject with Decrypt.Team. See Tutorials for the FLEX walkthrough.")
+            Text("Then: Push → Build tab → download <name>-dylib → inject with TetherLess. See Tutorials for the FLEX walkthrough.")
                 .font(.caption2).foregroundStyle(Theme.subtle)
         }
     }
@@ -948,7 +948,7 @@ private struct IPATemplateScreen: View {
                 VStack(alignment: .leading, spacing: 12) {
                     Label("SwiftUI app, unsigned IPA", systemImage: "app.badge.fill")
                         .font(.headline).foregroundStyle(Theme.text)
-                    Text("project.yml (XcodeGen) so there's no pbxproj to maintain by hand, a custom-shell RootView with the same header/tab-bar pattern as this app, launch screen set so it's full-screen, and a workflow that generates the project, builds unsigned and uploads <name>.ipa. Sign with Decrypt.Team to install.")
+                    Text("project.yml (XcodeGen) so there's no pbxproj to maintain by hand, a custom-shell RootView with the same header/tab-bar pattern as this app, launch screen set so it's full-screen, and a workflow that generates the project, builds unsigned and uploads <name>.ipa. Sign with TetherLess to install.")
                         .font(.caption).foregroundStyle(Theme.subtle)
                     Field(label: "App name", text: $name, placeholder: "MRvEKApp")
                     Field(label: "Bundle id", text: $bundle, placeholder: "party.mrvek.app")
@@ -974,7 +974,7 @@ private struct IPATemplateScreen: View {
                     .background(Theme.accent).foregroundStyle(.black)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-            Text("Then: Push → Build tab → download <name>-ipa → sign in Decrypt.Team.")
+            Text("Then: Push → Build tab → download <name>-ipa → sign in TetherLess.")
                 .font(.caption2).foregroundStyle(Theme.subtle)
         }
     }
@@ -1160,7 +1160,7 @@ struct OTADomainScreen: View {
 
     var body: some View {
         NavigationStack {
-            TableScreen(title: "Decrypt.Team", root: true) {
+            TableScreen(title: "TetherLess", root: true) {
 
                 Section {
                     Picker(selection: Binding(get: { st.mode }, set: { m in
@@ -1233,7 +1233,7 @@ struct OTADomainScreen: View {
                 }
 
                 Section {
-                    TNav(icon: "folder", title: "Exported files", subtitle: st.files.isEmpty ? "Nothing exported yet" : "\(st.files.count) file\(st.files.count == 1 ? "" : "s") · Files › On My iPhone › Decrypt.Team › Decrypt.Team Certs") { OTAFilesScreen(st: st) }
+                    TNav(icon: "folder", title: "Exported files", subtitle: st.files.isEmpty ? "Nothing exported yet" : "\(st.files.count) file\(st.files.count == 1 ? "" : "s") · Files › On My iPhone › TetherLess › TetherLess Certs") { OTAFilesScreen(st: st) }
                 } footer: {
                     Text("Certs, chains and the trust profile are copied into a folder the Files app can see whenever you issue or install. Private keys never leave the Keychain.").foregroundStyle(Theme.subtle)
                 }
@@ -1431,7 +1431,7 @@ private struct OTAFilesScreen: View {
     var body: some View {
         TableScreen(title: "Exported files") {
             Section {
-                TRow(k: "Folder", v: "Files › On My iPhone › \(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "Decrypt.Team") › Decrypt.Team Certs")
+                TRow(k: "Folder", v: "Files › On My iPhone › \(Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String ?? "TetherLess") › TetherLess Certs")
                 if let u = OTAFiles.filesAppURL {
                     TButton(title: "Open in Files", icon: "folder") { openURL(u) }
                 }
@@ -1502,11 +1502,11 @@ private struct LocalCAScreen: View {
                 TStatusRow(ok: st.rootTrusted, text: st.rootTrusted ? "Root profile installed & trusted on this device" : "Root profile not trusted on this device yet")
                 TButton(title: "Re-check trust", icon: "arrow.clockwise") { st.reload() }
             } footer: {
-                Text("Generates a root CA on this device (OpenSSL), signs a leaf for your Decrypt.Team host, and serves installs with it. Private keys stay in the Keychain (ThisDeviceOnly) — public certs are mirrored to iCloud Keychain so a reinstall keeps the same root.").foregroundStyle(Theme.subtle)
+                Text("Generates a root CA on this device (OpenSSL), signs a leaf for your TetherLess host, and serves installs with it. Private keys stay in the Keychain (ThisDeviceOnly) — public certs are mirrored to iCloud Keychain so a reinstall keeps the same root.").foregroundStyle(Theme.subtle)
             }
 
             Section {
-                TField(label: "Decrypt.Team host", text: $host, placeholder: ServerConfig.defaultInstallHost, keyboard: .URL)
+                TField(label: "TetherLess host", text: $host, placeholder: ServerConfig.defaultInstallHost, keyboard: .URL)
                 HStack(spacing: 10) {
                     Image(systemName: dnsChecking ? "hourglass" : (dnsLoopback == true ? "checkmark.circle.fill" : (dnsLoopback == false ? "xmark.octagon.fill" : "questionmark.circle")))
                         .foregroundStyle(dnsLoopback == true ? .green : (dnsLoopback == false ? .red : Theme.subtle))
@@ -1822,7 +1822,7 @@ private struct NativeInstallScreen: View {
                     Image(systemName: "arrow.up.circle.fill").font(.system(size: 22)).foregroundStyle(Theme.accent)
                     Text("Update to iOS 27 for native installs").font(.system(size: 16, weight: .bold, design: .rounded)).foregroundStyle(Theme.text)
                 }
-                Text("This phone is on iOS \(UIDevice.current.systemVersion). On iOS 27, Decrypt.Team installs apps straight to the phone with no install link or prompt, finishes in the background, and keeps your apps updated automatically.")
+                Text("This phone is on iOS \(UIDevice.current.systemVersion). On iOS 27, TetherLess installs apps straight to the phone with no install link or prompt, finishes in the background, and keeps your apps updated automatically.")
                     .font(.footnote).foregroundStyle(Theme.subtle).fixedSize(horizontal: false, vertical: true)
                 Button { showNativeGuide = true } label: {
                     Text("See how to set it up").font(.system(size: 14, weight: .bold)).foregroundStyle(.black)
@@ -1995,10 +1995,10 @@ private struct NativeInstallScreen: View {
                     if let pin = pairing.pin {
                         Text("Pairing code").font(.caption).foregroundStyle(Theme.subtle)
                         Text(pin).font(.system(size: 34, weight: .bold, design: .monospaced)).foregroundStyle(Theme.accent)
-                        Text("Enter it in Settings › Privacy & Security › Developer Mode › Pair with Decrypt.Team.")
+                        Text("Enter it in Settings › Privacy & Security › Developer Mode › Pair with TetherLess.")
                             .font(.footnote).foregroundStyle(Theme.subtle)
                     } else {
-                        Text("Open Settings › Privacy & Security › Developer Mode and choose Pair with Decrypt.Team…")
+                        Text("Open Settings › Privacy & Security › Developer Mode and choose Pair with TetherLess…")
                             .font(.footnote).foregroundStyle(.orange)
                     }
                     Button("Cancel Setup", role: .destructive) { manager.cancelSetup() }
@@ -2239,7 +2239,7 @@ private struct NativeInstallScreen: View {
                 .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color.black.opacity(0.5)))
             VStack(alignment: .leading, spacing: 2) {
                 Text("Finish installs in background").font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
-                Text("Leave Decrypt.Team mid-install. Progress shows as a notification.").font(.system(size: 12)).foregroundStyle(Theme.subtle)
+                Text("Leave TetherLess mid-install. Progress shows as a notification.").font(.system(size: 12)).foregroundStyle(Theme.subtle)
             }
             Spacer(minLength: 4)
             Toggle("", isOn: $keepAlive).labelsHidden().tint(Theme.accent)
@@ -2303,7 +2303,7 @@ private struct NativeInstallScreen: View {
                 }
                 .pickerStyle(.menu).listRowBackground(Theme.card).disabled(busy)
                 TNote(text: method == "native"
-                      ? "Installs straight to this device over a local VPN and a device pairing — no Decrypt.Team domain, TLS cert or itms-services prompt. Needs a build signed with a profile that allows Network Extensions (packet-tunnel-provider)."
+                      ? "Installs straight to this device over a local VPN and a device pairing — no TetherLess domain, TLS cert or itms-services prompt. Needs a build signed with a profile that allows Network Extensions (packet-tunnel-provider)."
                       : "Serves the signed IPA from the on-device HTTPS server and hands iOS an itms-services link.")
             }
             Section {
@@ -2314,8 +2314,8 @@ private struct NativeInstallScreen: View {
                 }
                 .pickerStyle(.menu).listRowBackground(Theme.card).disabled(busy)
                 TNote(text: manager.mode == .builtIn
-                      ? "Built-in manages a local VPN inside Decrypt.Team. Creating a pairing on-device needs iOS 27+, Developer Mode and Local Network access. The VPN may replace another active VPN."
-                      : "Manual uses an imported pairingFile.plist in Decrypt.Team's Documents folder and your own local VPN.")
+                      ? "Built-in manages a local VPN inside TetherLess. Creating a pairing on-device needs iOS 27+, Developer Mode and Local Network access. The VPN may replace another active VPN."
+                      : "Manual uses an imported pairingFile.plist in TetherLess's Documents folder and your own local VPN.")
             }
             Section { statusRows }
         }
@@ -2332,7 +2332,7 @@ private struct NativeInstallScreen: View {
     private var guideDetail: some View {
         TableScreen(title: "Guide") {
             Section {
-                TNote(text: "1. Turn on Developer Mode (Settings › Privacy & Security).\n2. Tap Setup Connection and allow the VPN configuration.\n3. Enter the pairing code shown here in Settings › Privacy & Security › Developer Mode › Pair with Decrypt.Team.\n4. Pick Native as the install method.\n\nRe-pair if you change devices, Developer Mode resets, or the tunnel stops responding (Forget Built-in Pairing, then Setup Connection).")
+                TNote(text: "1. Turn on Developer Mode (Settings › Privacy & Security).\n2. Tap Setup Connection and allow the VPN configuration.\n3. Enter the pairing code shown here in Settings › Privacy & Security › Developer Mode › Pair with TetherLess.\n4. Pick Native as the install method.\n\nRe-pair if you change devices, Developer Mode resets, or the tunnel stops responding (Forget Built-in Pairing, then Setup Connection).")
             }
         }
     }
@@ -2343,9 +2343,9 @@ private struct NativeInstallScreen: View {
         case .pairing:
             if let pin = pairing.pin {
                 TRow(k: "Pairing code", v: pin, tint: Theme.accent)
-                TNote(text: "Enter this code in Settings › Privacy & Security › Developer Mode › Pair with Decrypt.Team.")
+                TNote(text: "Enter this code in Settings › Privacy & Security › Developer Mode › Pair with TetherLess.")
             } else {
-                TStatusRow(ok: false, text: "Open Settings › Privacy & Security › Developer Mode and choose Pair with Decrypt.Team…")
+                TStatusRow(ok: false, text: "Open Settings › Privacy & Security › Developer Mode and choose Pair with TetherLess…")
             }
             TButton(title: "Cancel Setup", icon: "xmark.circle", role: .destructive) { manager.cancelSetup() }
         case .connecting:
@@ -2358,10 +2358,10 @@ private struct NativeInstallScreen: View {
         case .ready:
             TStatusRow(ok: true, text: "Connected")
         case .configured:
-            TStatusRow(ok: true, text: "Setup complete — Decrypt.Team reconnects automatically on install.")
+            TStatusRow(ok: true, text: "Setup complete — TetherLess reconnects automatically on install.")
         case .idle:
             TButton(title: "Set Up Connection", icon: "bolt.horizontal.circle.fill", enabled: !busy) { Task { await manager.setUp() } }
-            TNote(text: "Decrypt.Team also connects automatically on the first native install.")
+            TNote(text: "TetherLess also connects automatically on the first native install.")
         }
         if installer.job != nil {
             TRow(k: installer.job?.name ?? "Install", v: installer.stage.label)
@@ -2395,7 +2395,7 @@ private struct NativeInstallScreen: View {
                 }
                 if let notice = reconnect.notice { TNote(text: notice) }
             }
-            TNote(text: "Create a shortcut (default name “Restore Tailscale”) with your VPN's Connect action, enable Show in Share Sheet and allow Text input. Decrypt.Team offers it after all device work ends and its local VPN disconnects.")
+            TNote(text: "Create a shortcut (default name “Restore Tailscale”) with your VPN's Connect action, enable Show in Share Sheet and allow Text input. TetherLess offers it after all device work ends and its local VPN disconnects.")
         } header: {
             Text("Restore your VPN").font(.caption.weight(.semibold)).foregroundStyle(Theme.subtle)
         }
@@ -2476,7 +2476,7 @@ private struct NativeInstallScreen: View {
             }
             TNote(text: appUpdater.tracked.isEmpty
                   ? "No tracked apps yet. Apps you install with Native are added automatically."
-                  : "Automatic checks run when you open Decrypt.Team (at most every 30 minutes) and only for apps with Auto on. Wi-Fi / charging limits apply to automatic checks only. Several updates share one VPN session. Rolling back skips the newer version.")
+                  : "Automatic checks run when you open TetherLess (at most every 30 minutes) and only for apps with Auto on. Wi-Fi / charging limits apply to automatic checks only. Several updates share one VPN session. Rolling back skips the newer version.")
         } header: {
             Text("App updates").font(.caption.weight(.semibold)).foregroundStyle(Theme.subtle)
         }

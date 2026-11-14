@@ -1,7 +1,7 @@
 import SwiftUI
 import UIKit
 
-/// Shared AirShare branding used by onboarding and account flows.
+/// Shared TetherLess branding used by onboarding and account flows.
 /// The logo is stored in Sources/Resources rather than Assets.xcassets,
 /// so load it explicitly from the application bundle.
 struct OnboardingLogo: View {
@@ -30,7 +30,7 @@ struct OnboardingLogo: View {
                 .stroke(Color.green.opacity(0.30), lineWidth: 1)
         }
         .shadow(color: Color.green.opacity(0.22), radius: size * 0.22, y: size * 0.08)
-        .accessibilityLabel("Decrypt.Team")
+        .accessibilityLabel("TetherLess")
     }
 
     private static func logoImage() -> UIImage? {

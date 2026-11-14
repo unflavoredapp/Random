@@ -123,7 +123,7 @@ struct AppSetsScreen: View {
     private func install(_ set: AppSet) {
         let entries = set.apps.compactMap { SignedLookup.latestEntry(for: $0.bundleID) }
         let missing = set.apps.filter { app in !entries.contains { $0.bundleID == app.bundleID } }.map(\.name)
-        note = missing.isEmpty ? nil : "No signed copy in Decrypt.Team for: \(missing.joined(separator: ", ")). Sign \(missing.count == 1 ? "it" : "them") first."
+        note = missing.isEmpty ? nil : "No signed copy in TetherLess for: \(missing.joined(separator: ", ")). Sign \(missing.count == 1 ? "it" : "them") first."
         guard !entries.isEmpty else { return }
         installs.start(entries)
         installSheet = installs.isRunning

@@ -74,7 +74,7 @@ enum AirShareAPI {
             return object
         }
         switch code {
-        case 500...: throw Failure.http(code, "Decrypt.Team had a problem. Try again in a moment.")
+        case 500...: throw Failure.http(code, "TetherLess had a problem. Try again in a moment.")
         case 429: throw Failure.http(code, (object?["error"] as? String) ?? "Too many requests. Try again later.")
         default: throw Failure.http(code, (object?["error"] as? String) ?? "Request failed (\(code)).")
         }
@@ -85,7 +85,7 @@ enum AirShareAPI {
             switch f {
             case .cancelled: return .cancelled
             case .signedOut: return .signedOut
-            case .offline: return .message("Can't reach Decrypt.Team. Check your connection and try again.")
+            case .offline: return .message("Can't reach TetherLess. Check your connection and try again.")
             case let .http(_, message): return .message(message)
             }
         }

@@ -39,7 +39,7 @@ final class CardCheckout: ObservableObject {
             orderID = id
             STPAPIClient.shared.publishableKey = key
             var cfg = PaymentSheet.Configuration()
-            cfg.merchantDisplayName = "Decrypt.Team"
+            cfg.merchantDisplayName = "TetherLess"
             cfg.allowsDelayedPaymentMethods = false        // days are added when the payment is final, so no slow bank debits
             cfg.returnURL = nil
             let sheet = PaymentSheet(paymentIntentClientSecret: secret, configuration: cfg)
