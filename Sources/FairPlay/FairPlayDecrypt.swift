@@ -783,24 +783,72 @@ enum FairPlayDecrypt {
     /// Structured Mach-O discovery — matches FairPlayed `machOsUnder` coverage for the
     /// locations that actually carry FairPlay text, without walking every asset
     /// (full-tree `fp_is_macho` hung stock-iOS installs on “Decrypting Mach-Os…”).
-    private static func collectMachOs(
+    /// Shared by decrypt + companion slim-embed. Internal so packager can reuse the
+    /// same Flutter / live-install trust rules (do not reimplement `fp_is_macho` filtering).
+    static func collectMachOs(
         under root: URL,
         progress: ((String) -> Void)? = nil
     ) throws -> [URL] {
         let fm = FileManager.default
         var out: [URL] = []
         var seen = Set<String>()
+        let liveInstall = isLiveAppStoreInstall(root)
 
-        func consider(_ url: URL?) {
+        /// Probe Mach-O magic. On live App Store installs `open()`/`pread` of FairPlay
+        /// binaries can hang or fail in-sandbox (Flutter `Runner.app` hit this as
+        /// “No Mach-O binaries found”) — treat timeout / open-fail as “assume binary”
+        /// for known executable candidates so decrypt can proceed.
+        enum MachOProbe { case yes, no, unknown }
+
+        func probeMachO(_ url: URL) -> MachOProbe {
+            let box = TimeoutBox<Bool?>()
+            let sem = DispatchSemaphore(value: 0)
+            DispatchQueue.global(qos: .userInitiated).async {
+                let ok = url.path.withCString { fp_is_macho($0) }
+                box.value = ok
+                sem.signal()
+            }
+            if sem.wait(timeout: .now() + 4) == .timedOut {
+                return .unknown
+            }
+            switch box.value {
+            case true?: return .yes
+            case false?: return .no
+            default: return .unknown
+            }
+        }
+
+        func consider(_ url: URL?, trustIfUnreadable: Bool = false) {
             guard let url else { return }
             var isDir: ObjCBool = false
             guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return }
             let path = url.standardizedFileURL.path
             guard !seen.contains(path) else { return }
-            let isMachO = withTimeout(seconds: 4) {
-                url.path.withCString { fp_is_macho($0) }
-            } ?? false
-            guard isMachO else { return }
+            // Live App Store installs: `open()` of FairPlay binaries often fails (EPERM) or
+            // hangs. `fp_is_macho` returns false on open-fail — same as “not a Mach-O” —
+            // which emptied Runner.app for Flutter apps (Cake Wallet). Trusted candidates
+            // (CFBundleExecutable, frameworks, Flutter seeds) are included without a magic
+            // read so we neither hang per-file nor drop the main binary.
+            if trustIfUnreadable && liveInstall {
+                seen.insert(path)
+                out.append(url)
+                return
+            }
+            switch probeMachO(url) {
+            case .yes:
+                break
+            case .no:
+                // On live installs open-fail looks like “not Mach-O”. Keep trusted paths.
+                if trustIfUnreadable {
+                    progress?("Assuming Mach-O (unreadable for magic check): \(url.lastPathComponent)")
+                    break
+                }
+                return
+            case .unknown:
+                // Timeout — keep CFBundleExecutable / .dylib / Flutter paths.
+                guard trustIfUnreadable || liveInstall else { return }
+                progress?("Assuming Mach-O (magic check blocked): \(url.lastPathComponent)")
+            }
             seen.insert(path)
             out.append(url)
         }
@@ -819,7 +867,7 @@ enum FairPlayDecrypt {
             for item in items {
                 let ext = item.pathExtension.lowercased()
                 if ext == "framework" {
-                    consider(bundleExecutableURL(in: item))
+                    consider(bundleExecutableURL(in: item), trustIfUnreadable: true)
                     // Loose dylibs shipped beside the framework binary.
                     if let nested = try? fm.contentsOfDirectory(
                         at: item,
@@ -829,18 +877,30 @@ enum FairPlayDecrypt {
                         for n in nested {
                             let nDir = (try? n.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
                             if nDir { continue }
-                            if n.pathExtension.lowercased() == "dylib" { consider(n) }
+                            if n.pathExtension.lowercased() == "dylib" {
+                                consider(n, trustIfUnreadable: true)
+                            }
                         }
                     }
                     collectFrameworks(in: item, depth: depth + 1)
                 } else if ext == "dylib" {
-                    consider(item)
+                    consider(item, trustIfUnreadable: true)
                 }
             }
         }
 
         progress?("Main executable…")
-        consider(bundleExecutableURL(in: root))
+        // Always trust CFBundleExecutable — Flutter uses `Runner`, and live installs
+        // often block the magic read that used to drop this candidate.
+        consider(bundleExecutableURL(in: root), trustIfUnreadable: true)
+        // Explicit Flutter seeds (Cake Wallet / other Runner.app shells).
+        for rel in [
+            "Runner",
+            "Frameworks/App.framework/App",
+            "Frameworks/Flutter.framework/Flutter",
+        ] {
+            consider(root.appendingPathComponent(rel), trustIfUnreadable: true)
+        }
 
         // Loose dylibs / binaries at app root (rare but cheap).
         if let top = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
@@ -848,14 +908,23 @@ enum FairPlayDecrypt {
                 let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
                 if isDir { continue }
                 let ext = item.pathExtension.lowercased()
-                if ext.isEmpty || ext == "dylib" { consider(item) }
+                if ext.isEmpty || ext == "dylib" {
+                    consider(item, trustIfUnreadable: ext == "dylib" || liveInstall)
+                }
             }
         }
 
         progress?("Frameworks…")
-        // Bound Frameworks listing — large apps can stall on sandbox directory I/O.
-        if withTimeout(seconds: 12, work: { collectFrameworks(in: root); return true }) == nil {
-            progress?("Frameworks listing timed out — continuing with main executable…")
+        // Bound Frameworks listing — Flutter apps ship many frameworks; give more budget.
+        if withTimeout(seconds: 25, work: { collectFrameworks(in: root); return true }) == nil {
+            progress?("Frameworks listing timed out — keeping discovered executables…")
+            // Last-chance shallow Frameworks scan (no deep recurse) for Flutter essentials.
+            let fw = root.appendingPathComponent("Frameworks", isDirectory: true)
+            if let items = try? fm.contentsOfDirectory(at: fw, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
+                for item in items where item.pathExtension.lowercased() == "framework" {
+                    consider(bundleExecutableURL(in: item), trustIfUnreadable: true)
+                }
+            }
         }
 
         progress?("PlugIns / Extensions…")
@@ -866,7 +935,7 @@ enum FairPlayDecrypt {
             }) ?? nil
             guard let items else { continue }
             for item in items where item.pathExtension.lowercased() == "appex" {
-                consider(bundleExecutableURL(in: item))
+                consider(bundleExecutableURL(in: item), trustIfUnreadable: true)
                 _ = withTimeout(seconds: 8, work: { collectFrameworks(in: item); return true })
             }
         }
@@ -882,8 +951,16 @@ enum FairPlayDecrypt {
         progress?("Skipping App Clips (optional · avoids install-path hang)…")
 
         if out.isEmpty {
+            // Absolute last resort: force-include CFBundleExecutable even if exists-check raced.
+            if let main = bundleExecutableURL(in: root) {
+                progress?("Force-including main executable \(main.lastPathComponent)…")
+                out.append(main)
+            }
+        }
+        if out.isEmpty {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(root.lastPathComponent).")
         }
+        progress?("Located \(out.count) Mach-O candidate(s)…")
         return out
     }
 
