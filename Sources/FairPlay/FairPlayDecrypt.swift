@@ -281,7 +281,9 @@ enum FairPlayDecrypt {
             _ = copyFileChunked(from: srcInfo, to: destApp.appendingPathComponent(infoName), timeout: 15)
         }
 
-        progress?("Scanning install path for Mach-Os…")
+        // FairPlayed `exportInstalledApp` / foulplay: mremap_encrypted the live install
+        // binary (next to SC_Info) and write cleartext into a writable Payload copy.
+        progress?("Decrypting Mach-Os from install path…")
         var report = try decryptMachOs(readingFrom: source, writingTo: destApp, progress: progress)
         report.sourcePath = source.path
         report.usedInstalledPath = true
@@ -362,7 +364,7 @@ enum FairPlayDecrypt {
             if staged > 0 { progress?("Staged \(staged) nested SINF license(s)…") }
         }
 
-        progress?("Locating Mach-Os…")
+        progress?("Locating Mach-Os under \(isLiveAppStoreInstall(sourceApp) ? "install path" : "app bundle")…")
         let binaries = try collectMachOs(under: sourceApp, progress: progress)
         guard !binaries.isEmpty else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(sourceApp.lastPathComponent).")
@@ -558,6 +560,12 @@ enum FairPlayDecrypt {
     }
 
     /// Decrypt a single Mach-O from `sourceApp` into `destApp`.
+    ///
+    /// Configuration locked to GitHub references:
+    /// - FairPlayed `exportInstalledApp`: `fp_decrypt_file(install/rel, payload/rel)` —
+    ///   fairplayd resolves `<dir of binary>/SC_Info/<exe>.sinf` on the **input** path.
+    /// - foulplay `main.c`: remaps with the slice’s native `cryptid` (our `FP_MODE_NATIVE` first).
+    /// Never feed a Payload/temp copy as `in_path` when a live install path is available.
     private static func decryptOne(
         file: URL,
         sourceApp: URL,
@@ -570,6 +578,14 @@ enum FairPlayDecrypt {
     ) throws {
         let fm = FileManager.default
         let rel = relativePath(file, under: sourceApp)
+        // Input must stay under the read root (install or IPA app). If somehow swapped,
+        // fairplayd would look for SC_Info next to the writable copy and fail.
+        // Prefer reconstructing from sourceApp+rel so /var vs /private/var aliases can't
+        // accidentally point mremap at the writable Payload copy.
+        let inFile = sourceApp.appendingPathComponent(rel)
+        var isDir: ObjCBool = false
+        let readable = FileManager.default.fileExists(atPath: inFile.path, isDirectory: &isDir) && !isDir.boolValue
+        let decryptInput = readable ? inFile : file
         progress?("Decrypting \(rel) (\(index + 1)/\(total))…")
 
         let outFile = destApp.appendingPathComponent(rel)
@@ -578,7 +594,7 @@ enum FairPlayDecrypt {
         try? fm.removeItem(at: tmp)
 
         let logBuf = FairPlayLogBuffer()
-        let rc = file.path.withCString { inPath in
+        let rc = decryptInput.path.withCString { inPath in
             tmp.path.withCString { outPath in
                 fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
             }
@@ -592,7 +608,7 @@ enum FairPlayDecrypt {
                 // Restore install/IPA copy so packaging still has a complete tree for soft-fail roles.
                 try? fm.removeItem(at: outFile)
                 if sourceApp != destApp {
-                    _ = copyFileChunked(from: file, to: outFile, timeout: 60)
+                    _ = copyFileChunked(from: decryptInput, to: outFile, timeout: 60)
                 }
                 if role.isRequired {
                     report.failed.append(rel)
@@ -610,7 +626,7 @@ enum FairPlayDecrypt {
         } else if rc == 1 {
             try? fm.removeItem(at: tmp)
             if sourceApp != destApp, !fm.fileExists(atPath: outFile.path) {
-                _ = copyFileChunked(from: file, to: outFile, timeout: 60)
+                _ = copyFileChunked(from: decryptInput, to: outFile, timeout: 60)
             }
             report.plain.append(rel)
         } else {
@@ -626,7 +642,7 @@ enum FairPlayDecrypt {
             } else {
                 // Keep whatever was copied into dest (may still be encrypted).
                 if sourceApp != destApp, !fm.fileExists(atPath: outFile.path) {
-                    _ = copyFileChunked(from: file, to: outFile, timeout: 60)
+                    _ = copyFileChunked(from: decryptInput, to: outFile, timeout: 60)
                 }
                 report.softFailed.append(rel)
             }
@@ -749,8 +765,9 @@ enum FairPlayDecrypt {
 
     // MARK: - Mach-O discovery
 
-    /// Structured Mach-O discovery — do **not** walk every resource file under an App Store
-    /// install (that hung decrypt forever on `fp_is_macho` of assets).
+    /// Structured Mach-O discovery — matches FairPlayed `machOsUnder` coverage for the
+    /// locations that actually carry FairPlay text, without walking every asset
+    /// (full-tree `fp_is_macho` hung stock-iOS installs on “Decrypting Mach-Os…”).
     private static func collectMachOs(
         under root: URL,
         progress: ((String) -> Void)? = nil
@@ -773,8 +790,42 @@ enum FairPlayDecrypt {
             out.append(url)
         }
 
+        /// FairPlayed walks every regular file; we target Frameworks via Info.plist
+        /// `CFBundleExecutable` (name can differ from the `.framework` basename) and
+        /// recurse nested `Frameworks/` the same way installd stages nested SINFs.
+        func collectFrameworks(in container: URL, depth: Int = 0) {
+            guard depth < 4 else { return }
+            let frameworks = container.appendingPathComponent("Frameworks", isDirectory: true)
+            guard let items = try? fm.contentsOfDirectory(
+                at: frameworks,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else { return }
+            for item in items {
+                let ext = item.pathExtension.lowercased()
+                if ext == "framework" {
+                    consider(bundleExecutableURL(in: item))
+                    // Loose dylibs shipped beside the framework binary.
+                    if let nested = try? fm.contentsOfDirectory(
+                        at: item,
+                        includingPropertiesForKeys: [.isDirectoryKey],
+                        options: [.skipsHiddenFiles]
+                    ) {
+                        for n in nested {
+                            let nDir = (try? n.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                            if nDir { continue }
+                            if n.pathExtension.lowercased() == "dylib" { consider(n) }
+                        }
+                    }
+                    collectFrameworks(in: item, depth: depth + 1)
+                } else if ext == "dylib" {
+                    consider(item)
+                }
+            }
+        }
+
         progress?("Main executable…")
-        consider(mainExecutableURL(in: root))
+        consider(bundleExecutableURL(in: root))
 
         // Loose dylibs / binaries at app root (rare but cheap).
         if let top = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
@@ -787,33 +838,15 @@ enum FairPlayDecrypt {
         }
 
         progress?("Frameworks…")
-        let frameworks = root.appendingPathComponent("Frameworks", isDirectory: true)
-        if let items = try? fm.contentsOfDirectory(at: frameworks, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-            for item in items {
-                let ext = item.pathExtension.lowercased()
-                if ext == "framework" {
-                    let name = item.deletingPathExtension().lastPathComponent
-                    consider(item.appendingPathComponent(name))
-                    // Nested dylibs inside the framework bundle.
-                    if let nested = try? fm.contentsOfDirectory(at: item, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
-                        for n in nested {
-                            let nDir = (try? n.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
-                            if nDir { continue }
-                            if n.pathExtension.lowercased() == "dylib" { consider(n) }
-                        }
-                    }
-                } else if ext == "dylib" {
-                    consider(item)
-                }
-            }
-        }
+        collectFrameworks(in: root)
 
         progress?("PlugIns / Extensions…")
         for folder in ["PlugIns", "Extensions"] {
             let dir = root.appendingPathComponent(folder, isDirectory: true)
             if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
                 for item in items where item.pathExtension.lowercased() == "appex" {
-                    consider(mainExecutableURL(in: item))
+                    consider(bundleExecutableURL(in: item))
+                    collectFrameworks(in: item)
                 }
             }
         }
@@ -823,14 +856,8 @@ enum FairPlayDecrypt {
             let dir = root.appendingPathComponent(folder, isDirectory: true)
             if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
                 for item in items where item.pathExtension.lowercased() == "app" {
-                    consider(mainExecutableURL(in: item))
-                    // Watch frameworks
-                    let wfw = item.appendingPathComponent("Frameworks", isDirectory: true)
-                    if let fws = try? fm.contentsOfDirectory(at: wfw, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-                        for fw in fws where fw.pathExtension.lowercased() == "framework" {
-                            consider(fw.appendingPathComponent(fw.deletingPathExtension().lastPathComponent))
-                        }
-                    }
+                    consider(bundleExecutableURL(in: item))
+                    collectFrameworks(in: item)
                 }
             }
         }
@@ -959,14 +986,32 @@ enum FairPlayDecrypt {
             || p.contains("/AppTranslocation/")
     }
 
-    private static func mainExecutableURL(in app: URL) -> URL? {
-        let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist")) as? [String: Any]
+    /// Resolve `CFBundleExecutable` for an `.app` / `.appex` / `.framework` (FairPlayed uses
+    /// the same Info.plist field when probing installed apps). Bound on live installs —
+    /// plist I/O can stall the same way SC_Info did.
+    private static func bundleExecutableURL(in bundle: URL) -> URL? {
+        let infoURL = bundle.appendingPathComponent("Info.plist")
+        let info: [String: Any]? = withTimeout(seconds: 5) {
+            NSDictionary(contentsOf: infoURL) as? [String: Any]
+        } ?? nil
         let name = (info?["CFBundleExecutable"] as? String)
-            ?? app.deletingPathExtension().lastPathComponent
-        let url = app.appendingPathComponent(name)
-        var isDir: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return nil }
-        return url
+            ?? bundle.deletingPathExtension().lastPathComponent
+        // Flat iOS layout first; macOS-style Versions/Current as a rare fallback.
+        let candidates = [
+            bundle.appendingPathComponent(name),
+            bundle.appendingPathComponent("Versions/Current/\(name)"),
+        ]
+        for url in candidates {
+            var isDir: ObjCBool = false
+            if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue {
+                return url
+            }
+        }
+        return nil
+    }
+
+    private static func mainExecutableURL(in app: URL) -> URL? {
+        bundleExecutableURL(in: app)
     }
 
     private static func isMainExecutable(_ rel: String, app: URL) -> Bool {
