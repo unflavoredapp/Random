@@ -26,13 +26,22 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 
 ## Features
 
+- **Sign & install any IPA** — using your free Apple ID, or your own certificate.
+- **Get a clean copy of apps you own** — download an app you already own from the App Store with your Store account and save a DRM-free IPA to Library on this device.
+- **Multiple App Store accounts** — sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.
+- **Tweak injection** — add `.deb` or `.dylib` tweaks while you sign.
+- **Keep apps alive** — resign in one tap, Refresh All at once, or automate it with a Shortcut so your apps (and TetherLess itself) never expire — even while your iPhone is locked.
+- **Built-in Files** — manage IPAs, tweaks, and downloads without leaving the app.
+- **Custom certificate mode** — bring your own paid certificate to install over the air, with no pairing or VPN.
+- **Manage your Apple ID** — view your signing certificates, App IDs, and devices, and revoke a certificate to free a slot — right in the app, no Apple Developer portal needed.
+
 | Area | What you get |
 | --- | --- |
 | **Pair** | On-device pairing + local VPN for native installs |
 | **Files** | Drop / open archives, extract, inspect, push |
 | **Library** | Source repos, staff picks, updates, device-installed apps |
-| **Decrypt** | Local decrypt / DRM tooling flows |
-| **Settings** | Install method (OTA vs Native), domain, certs, account, theme |
+| **Decrypt** | Multi-account Store Access + DRM-free IPA copies saved on-device |
+| **Settings** | Install method (OTA vs Native), Store Access, certs, account |
 | **Sign & install** | TrustCore signing, OTA via `*.tetherless.dev`, or native idevice install |
 | **Analysis** | Local Analysis Center — disassembler, CFG, pseudocode, reversible patch proposals |
 | **Identity** | ADID (`AS-XXXXXX-XX`) minted on first launch, stored in Keychain |

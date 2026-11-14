@@ -80,6 +80,12 @@ nonisolated enum LocalDecryptBridge {
         r.cachePolicy = .reloadIgnoringLocalCacheData
         r.setValue(MDID.current, forHTTPHeaderField: "X-AS-ADID")
         if let t = ZefvAccount.currentSessionToken, !t.isEmpty { r.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
+        if let email = UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache"), !email.isEmpty {
+            r.setValue(email, forHTTPHeaderField: "X-AS-Apple-ID")
+        }
+        if let aid = UserDefaults.standard.string(forKey: "tetherless.appleid.active"), !aid.isEmpty {
+            r.setValue(aid, forHTTPHeaderField: "X-AS-Apple-ID-Account")
+        }
         if let body {
             r.httpMethod = "POST"
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")

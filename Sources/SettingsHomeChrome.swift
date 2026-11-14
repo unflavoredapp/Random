@@ -1,280 +1,236 @@
-//
-//  SettingsHomeChrome.swift
-//  Glass Settings home cards matching the TetherLess reference (Apple ID 2FA
-//  flow, Software Update, Custom Certificate, notification / background toggles).
-//
-
 import SwiftUI
+import UniformTypeIdentifiers
 
-// MARK: - Apple ID session
-
-@MainActor
-final class AppleIDStore: ObservableObject {
-    static let shared = AppleIDStore()
-    private static let emailKey = "tetherless.appleid.email"
-    private static let passwordKey = "tetherless.appleid.password"
-    private static let storeReadyKey = "tetherless.appleid.storeReady"
-
-    enum Phase: Equatable {
-        case signedOut
-        case authenticating
-        case needsCode
-        case verifying
-        case signedIn
-        case preparing
-    }
-
-    @Published private(set) var email: String = ""
-    @Published var draftEmail = ""
-    @Published var draftPassword = ""
-    @Published var verificationCode = ""
-    @Published private(set) var phase: Phase = .signedOut
-    @Published var statusMessage: String?
-    @Published var presentedDisplayCode: String?
-    @Published private(set) var storeReady = false
-
-    var isSignedIn: Bool {
-        switch phase {
-        case .signedIn, .preparing: return true
-        default: return false
-        }
-    }
-
-    private init() {
-        email = Keychain.get(Self.emailKey) ?? ""
-        draftEmail = email
-        storeReady = UserDefaults.standard.bool(forKey: Self.storeReadyKey)
-        if !email.isEmpty {
-            phase = storeReady ? .signedIn : .preparing
-            if !storeReady { Task { await finishPreparing() } }
-        }
-    }
-
-    func signIn() {
-        let e = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines)
-        let p = draftPassword
-        guard e.contains("@"), e.contains("."), !p.isEmpty else {
-            statusMessage = "Enter a valid Apple ID email and password."
-            return
-        }
-        statusMessage = nil
-        phase = .authenticating
-        draftPassword = ""
-        _ = Keychain.set(Self.emailKey, e)
-        _ = Keychain.setSecret(Self.passwordKey, p)
-        email = e
-        Task {
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            // Free Apple ID signing always challenges with a trusted-device code.
-            withAnimation(.snappy) { phase = .needsCode }
-        }
-    }
-
-    func submitVerificationCode() {
-        let digits = verificationCode.filter(\.isNumber)
-        guard digits.count == 6 else {
-            statusMessage = "Enter the 6-digit code from your Apple device."
-            return
-        }
-        statusMessage = nil
-        phase = .verifying
-        Task {
-            try? await Task.sleep(nanoseconds: 1_100_000_000)
-            // Store Access only — signing still uses Custom Certificate / TrustCore.
-            verificationCode = ""
-            withAnimation(.snappy) { phase = .preparing }
-            await finishPreparing()
-        }
-    }
-
-    /// Optional path: this device is showing a code for another Apple device (trusted-device prompt).
-    func presentTrustedDeviceCode() {
-        let code = String((0..<6).map { _ in String(Int.random(in: 0...9)) }.joined())
-        presentedDisplayCode = code
-    }
-
-    func dismissDisplayedCode() { presentedDisplayCode = nil }
-
-    func signOut() {
-        _ = Keychain.set(Self.emailKey, "")
-        Keychain.deleteSecret(Self.passwordKey)
-        UserDefaults.standard.set(false, forKey: Self.storeReadyKey)
-        email = ""
-        draftEmail = ""
-        draftPassword = ""
-        verificationCode = ""
-        storeReady = false
-        statusMessage = nil
-        presentedDisplayCode = nil
-        phase = .signedOut
-    }
-
-    private func finishPreparing() async {
-        try? await Task.sleep(nanoseconds: 1_200_000_000)
-        storeReady = true
-        UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
-        withAnimation(.snappy) { phase = .signedIn }
-    }
-}
+// MARK: - Store Access (multi-account)
 
 struct SettingsAppleIDCard: View {
     @ObservedObject private var store = AppleIDStore.shared
-    @FocusState private var codeFocused: Bool
-    @State private var manageAccounts = false
+    @State private var email = ""
+    @State private var password = ""
+    @State private var twoFACode = ""
+    @State private var showPassword = false
+    @State private var showManage = false
+    @State private var showAddAccount = false
+    @State private var accountPendingDelete: AppleIDAccount?
 
     var body: some View {
-        GlassCard(corner: 24) {
-            VStack(alignment: .leading, spacing: 16) {
-                switch store.phase {
-                case .signedOut:
-                    statusRow(
-                        icon: "bag",
-                        tint: TetherlessPalette.accent,
-                        title: "Store Access",
-                        subtitle: "Lets Decrypt download apps from the App Store. Signing uses your certificate — no Apple ID needed."
-                    )
-                    glassField("Apple ID email", text: $store.draftEmail, secure: false)
-                    glassField("Password", text: $store.draftPassword, secure: true)
-                    secondaryButton("Sign In", busy: false, action: store.signIn)
-
-                case .authenticating:
-                    statusRow(icon: "bag", tint: TetherlessPalette.accent, title: "Store Access",
-                              subtitle: "Lets Decrypt download apps from the App Store.")
-                    statusRow(icon: nil, tint: TetherlessPalette.accent, title: "Signing in…",
-                              subtitle: "Contacting Apple ID…", spinning: true)
-
-                case .needsCode:
-                    statusRow(icon: "bag", tint: TetherlessPalette.accent, title: "Store Access",
-                              subtitle: "Lets Decrypt download apps from the App Store.")
-                    statusRow(
-                        icon: "number",
-                        tint: .green,
-                        title: "Verification code needed",
-                        subtitle: "Enter the code shown on one of your Apple devices."
-                    )
-                    TextField("000000", text: $store.verificationCode)
-                        .keyboardType(.numberPad)
-                        .focused($codeFocused)
-                        .font(.system(size: 28, weight: .semibold, design: .monospaced))
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(.white)
-                        .padding(.vertical, 14)
-                        .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                                .strokeBorder(.white.opacity(0.12), lineWidth: 1)
-                        )
-                        .onChange(of: store.verificationCode) { value in
-                            let digits = String(value.filter(\.isNumber).prefix(6))
-                            if digits != value { store.verificationCode = digits }
-                        }
-                        .onAppear { codeFocused = true }
-                    primaryButton("Submit Code", action: store.submitVerificationCode)
-
-                case .verifying:
-                    statusRow(icon: "bag", tint: TetherlessPalette.accent, title: "Store Access",
-                              subtitle: "Lets Decrypt download apps from the App Store.")
-                    statusRow(icon: nil, tint: TetherlessPalette.accent, title: "Verifying code…",
-                              subtitle: "Checking with Apple…", spinning: true)
-
-                case .preparing, .signedIn:
-                    storeAccessSignedIn
-                }
-
-                if let msg = store.statusMessage {
-                    Text(msg).font(.caption).foregroundStyle(.orange)
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Store Access")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 8)
+                if store.hasAnyAccount {
+                    Button("Manage") { showManage = true }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                        .buttonStyle(.plain)
                 }
             }
+
+            Text("Add multiple Apple IDs for free App Store installs and decrypt. Switch accounts per download.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
+
+            if store.accounts.isEmpty {
+                emptySignIn
+            } else {
+                accountList
+                Button {
+                    showAddAccount = true
+                } label: {
+                    Label("Add Apple ID", systemImage: "plus.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 2)
+            }
+
+            if let err = store.lastError, !err.isEmpty {
+                Text(err)
+                    .font(.footnote)
+                    .foregroundStyle(.red.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .sheet(item: Binding(
-            get: { store.presentedDisplayCode.map { DisplayedCode($0) } },
-            set: { if $0 == nil { store.dismissDisplayedCode() } }
-        )) { item in
-            VerificationCodeSheet(code: item.value) { store.dismissDisplayedCode() }
-                .presentationDetents([.medium])
-        }
-        .sheet(isPresented: $manageAccounts) {
+        .padding(18)
+        .tetherlessGlassCard(cornerRadius: 22)
+        .sheet(isPresented: $showManage) {
             NavigationStack {
-                List {
-                    Section("Active") {
-                        Text(store.email).foregroundStyle(.primary)
-                    }
-                    Section {
-                        Button("Add another Apple ID…") {
-                            manageAccounts = false
-                            store.signOut()
+                AppleIDManageView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showManage = false }
                         }
                     }
-                }
-                .navigationTitle("Store Accounts")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button("Done") { manageAccounts = false }
-                    }
-                }
             }
             .preferredColorScheme(.dark)
         }
-    }
-
-    private var storeAccessSignedIn: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            statusRow(
-                icon: "bag",
-                tint: TetherlessPalette.accent,
-                title: "Store Access",
-                subtitle: "Lets Decrypt download apps from the App Store. Signing uses your certificate — no Apple ID needed."
-            )
-            statusRow(
-                icon: "checkmark.seal.fill",
-                tint: .green,
-                title: "Signed in for Store access",
-                subtitle: store.email
-            )
-            Button { manageAccounts = true } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "person.2.fill")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(TetherlessPalette.accent)
-                        .frame(width: 28)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Manage Store Accounts")
-                            .font(.headline.weight(.semibold))
-                            .foregroundStyle(.white)
-                        Text("Add another Apple ID for downloads, or switch accounts.")
-                            .font(.subheadline)
-                            .foregroundStyle(.white.opacity(0.55))
+        .sheet(isPresented: $showAddAccount) {
+            NavigationStack {
+                addAccountForm
+                    .padding(20)
+                    .navigationTitle("Add Apple ID")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Cancel") { showAddAccount = false; store.cancelTwoFactor() }
+                        }
                     }
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.45))
-                }
             }
-            .buttonStyle(.plain)
-            if store.phase == .preparing {
-                statusRow(icon: nil, tint: TetherlessPalette.accent, title: "Preparing…",
-                          subtitle: "Starting things back up…", spinning: true)
+            .preferredColorScheme(.dark)
+        }
+        .confirmationDialog(
+            "Remove Apple ID?",
+            isPresented: Binding(
+                get: { accountPendingDelete != nil },
+                set: { if !$0 { accountPendingDelete = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                if let a = accountPendingDelete { store.removeAccount(id: a.id) }
+                accountPendingDelete = nil
             }
-            secondaryButton("Sign Out", busy: false, action: store.signOut)
+            Button("Cancel", role: .cancel) { accountPendingDelete = nil }
+        } message: {
+            if let a = accountPendingDelete {
+                Text("Remove \(a.email) from Store Access on this device.")
+            }
         }
     }
 
-    private func statusRow(icon: String?, tint: Color, title: String, subtitle: String, spinning: Bool = false) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Group {
-                if spinning {
-                    ProgressView().tint(tint)
-                } else if let icon {
-                    Image(systemName: icon)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(tint)
+    private var emptySignIn: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            glassField("Apple ID", text: $email, secure: false)
+            HStack(spacing: 10) {
+                glassField(showPassword ? "Password" : "Password", text: $password, secure: !showPassword)
+                Button {
+                    showPassword.toggle()
+                } label: {
+                    Image(systemName: showPassword ? "eye.slash.fill" : "eye.fill")
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 44, height: 44)
+                        .background(Color.black.opacity(0.28), in: Circle())
+                }
+                .buttonStyle(.plain)
+            }
+            if store.authPhase == .awaitingTwoFactor {
+                twoFactorBlock
+            } else {
+                primaryButton(store.isBusy ? "Signing In…" : "Sign In") {
+                    Task { await store.signIn(email: email, password: password) }
+                }
+                .disabled(store.isBusy || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
+                .opacity(store.isBusy ? 0.7 : 1)
+            }
+        }
+    }
+
+    private var addAccountForm: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Sign in with another Apple ID. Each account can install and decrypt apps independently.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.6))
+            glassField("Apple ID", text: $email, secure: false)
+            glassField("Password", text: $password, secure: true)
+            if store.authPhase == .awaitingTwoFactor {
+                twoFactorBlock
+            } else {
+                primaryButton(store.isBusy ? "Signing In…" : "Add Account") {
+                    Task {
+                        await store.signIn(email: email, password: password)
+                        if store.authPhase == .idle, store.lastError == nil {
+                            showAddAccount = false
+                            email = ""; password = ""; twoFACode = ""
+                        }
+                    }
+                }
+                .disabled(store.isBusy || email.isEmpty || password.isEmpty)
+            }
+            Spacer()
+        }
+    }
+
+    private var twoFactorBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Enter the verification code from a trusted device.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.65))
+            TextField("6-digit code", text: $twoFACode)
+                .keyboardType(.numberPad)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+                .background(Color.black.opacity(0.28), in: Capsule())
+                .overlay(Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 1))
+            HStack(spacing: 10) {
+                primaryButton(store.isBusy ? "Verifying…" : "Verify") {
+                    Task {
+                        await store.submitTwoFactor(code: twoFACode)
+                        if store.authPhase == .idle, store.lastError == nil {
+                            showAddAccount = false
+                            email = ""; password = ""; twoFACode = ""
+                        }
+                    }
+                }
+                .disabled(store.isBusy || twoFACode.count < 4)
+                secondaryButton("Cancel", busy: false) {
+                    store.cancelTwoFactor()
+                    twoFACode = ""
                 }
             }
-            .frame(width: 28, height: 28)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.headline.weight(.semibold)).foregroundStyle(.white)
-                Text(subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.55))
+        }
+    }
+
+    private var accountList: some View {
+        VStack(spacing: 10) {
+            ForEach(store.accounts) { account in
+                HStack(spacing: 12) {
+                    Button {
+                        store.selectAccount(id: account.id)
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: store.activeAccountID == account.id ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(store.activeAccountID == account.id ? TetherlessPalette.accent : .white.opacity(0.35))
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(account.email)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                Text(account.statusLabel)
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.45))
+                            }
+                            Spacer(minLength: 4)
+                        }
+                    }
+                    .buttonStyle(.plain)
+
+                    Menu {
+                        Button("Set Active") { store.selectAccount(id: account.id) }
+                        Button("Manage") {
+                            store.selectAccount(id: account.id)
+                            showManage = true
+                        }
+                        Button("Remove", role: .destructive) { accountPendingDelete = account }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .background(Color.black.opacity(0.22), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(
+                            store.activeAccountID == account.id ? TetherlessPalette.accent.opacity(0.55) : .white.opacity(0.08),
+                            lineWidth: 1
+                        )
+                )
             }
         }
     }
@@ -325,95 +281,6 @@ struct SettingsAppleIDCard: View {
     }
 }
 
-private struct DisplayedCode: Identifiable {
-    let id = UUID()
-    let value: String
-    init(_ value: String) { self.value = value }
-}
-
-private struct VerificationCodeSheet: View {
-    let code: String
-    let onDismiss: () -> Void
-
-    private var spaced: String {
-        let d = Array(code)
-        guard d.count == 6 else { return code }
-        return "\(d[0]) \(d[1]) \(d[2])   \(d[3]) \(d[4]) \(d[5])"
-    }
-
-    var body: some View {
-        VStack(spacing: 18) {
-            Text("Apple Account Verification Code")
-                .font(.title3.weight(.bold))
-                .foregroundStyle(.white)
-                .multilineTextAlignment(.center)
-            Text("Enter this verification code on your other Apple device to sign in.")
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.65))
-                .multilineTextAlignment(.center)
-            Text(spaced)
-                .font(.system(size: 36, weight: .semibold, design: .rounded))
-                .foregroundStyle(.white)
-                .padding(.vertical, 8)
-            Text("Don’t share it with anyone. Apple will never call or text you for this code.")
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.5))
-                .multilineTextAlignment(.center)
-            Button("OK", action: onDismiss)
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 14)
-                .background(TetherlessPalette.accent, in: Capsule())
-        }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppBackground())
-    }
-}
-
-// MARK: - Software Update
-
-@MainActor
-final class AppUpdateChecker: ObservableObject {
-    static let shared = AppUpdateChecker()
-
-    @Published private(set) var remoteVersion: String?
-    @Published private(set) var downloadURL: URL?
-    @Published private(set) var checking = false
-    @Published private(set) var message: String?
-
-    var localVersion: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? Theme.appVersion
-    }
-
-    var updateAvailable: Bool {
-        guard let remote = remoteVersion else { return false }
-        return VersionCompare.isNewer(remote: remote, than: localVersion)
-    }
-
-    func refresh() async {
-        checking = true
-        defer { checking = false }
-        do {
-            guard let url = URL(string: "https://api.github.com/repos/unflavoredapp/Random/releases/latest") else { return }
-            var req = URLRequest(url: url)
-            req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-            let (data, resp) = try await URLSession.shared.data(for: req)
-            guard (resp as? HTTPURLResponse)?.statusCode == 200,
-                  let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                message = "Couldn't check for updates."
-                return
-            }
-            let tag = ((obj["tag_name"] as? String) ?? "").trimmingCharacters(in: CharacterSet(charactersIn: "vV"))
-            remoteVersion = tag.isEmpty ? nil : tag
-            if let html = obj["html_url"] as? String { downloadURL = URL(string: html) }
-            message = nil
-        } catch {
-            message = error.localizedDescription
-        }
-    }
-}
 
 struct SettingsSoftwareUpdateCard: View {
     @ObservedObject private var checker = AppUpdateChecker.shared
@@ -575,5 +442,66 @@ struct SettingsBackgroundSideloadingRow: View {
             subtitle: "Allow sideloading to continue after you leave TetherLess.",
             isOn: $continueWhenBackgrounded
         )
+    }
+}
+
+
+struct SettingsKeepAppsAliveCard: View {
+    @ObservedObject private var updater = AppAutoUpdater.shared
+    @AppStorage(BackgroundKeepAlive.enabledKey) private var keepAlive = true
+
+    var body: some View {
+        GlassCard(corner: 22) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.clockwise.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(TetherlessPalette.accent)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Keep Apps Alive")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text("Re-sign tracked apps with your active or free Apple ID certificate, even while backgrounded.")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.55))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Button {
+                    AppleIDStore.shared.activatePreferredSigningCertificate()
+                    updater.refreshAll()
+                } label: {
+                    HStack {
+                        if updater.busy {
+                            ProgressView().tint(.white)
+                        } else {
+                            Text("Refresh All")
+                                .font(.title3.weight(.semibold))
+                        }
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 14)
+                    .background(TetherlessPalette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(updater.busy)
+                .opacity(updater.busy ? 0.7 : 1)
+
+                if !updater.status.isEmpty {
+                    Text(updater.status)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+
+                Text(keepAlive
+                     ? "Background keep-alive is on — installs and Refresh All can finish after you leave TetherLess. Add the “Refresh All” Shortcut from the Shortcuts app for one-tap resign."
+                     : "Turn on Continue Sideloading when Backgrounded so Refresh All can finish while your iPhone is locked.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.4))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
     }
 }
