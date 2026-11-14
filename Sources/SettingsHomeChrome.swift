@@ -181,6 +181,8 @@ struct SettingsAppleIDCard: View {
             }
             .buttonStyle(.plain)
 
+            StoreDeviceSpoofCard()
+
             secondaryButton("Sign Out", busy: false) {
                 store.signOutActive()
                 email = ""; password = ""; twoFACode = ""
@@ -439,6 +441,83 @@ struct SettingsAppleIDCard: View {
         .background(.white.opacity(0.10), in: Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
         .buttonStyle(.plain)
+    }
+}
+
+/// Spoof claimed iOS / device model on App Store download requests (variant selection).
+struct StoreDeviceSpoofCard: View {
+    @State private var spoof = StoreDeviceSpoof.current
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(isOn: Binding(
+                get: { spoof.enabled },
+                set: { spoof.enabled = $0; StoreDeviceSpoof.current = spoof }
+            )) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Spoof Store iOS / device")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text("Changes the App Store User-Agent so Apple can serve a package for another iOS version. Does not change this iPhone’s real OS.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.45))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .tint(TetherlessPalette.accent)
+
+            if spoof.enabled {
+                HStack(spacing: 10) {
+                    TextField("iOS version", text: Binding(
+                        get: { spoof.iosVersion },
+                        set: { spoof.iosVersion = $0; StoreDeviceSpoof.current = spoof }
+                    ))
+                    .keyboardType(.decimalPad)
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.28), in: Capsule())
+
+                    TextField("Build (opt.)", text: Binding(
+                        get: { spoof.build },
+                        set: { spoof.build = $0; StoreDeviceSpoof.current = spoof }
+                    ))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.28), in: Capsule())
+                }
+
+                Menu {
+                    ForEach(StoreDeviceSpoof.modelPresets, id: \.model) { preset in
+                        Button(preset.label) {
+                            spoof.deviceModel = preset.model
+                            StoreDeviceSpoof.current = spoof
+                        }
+                    }
+                } label: {
+                    HStack {
+                        Text(spoof.deviceModel.isEmpty ? "Device model" : spoof.deviceModel)
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(Color.black.opacity(0.28), in: Capsule())
+                }
+
+                Text("UA preview: \(spoof.storeUserAgent(fallbackConfigurator: "Configurator"))")
+                    .font(.caption2)
+                    .foregroundStyle(.white.opacity(0.35))
+                    .lineLimit(2)
+            }
+        }
+        .padding(.top, 4)
+        .onAppear { spoof = StoreDeviceSpoof.current }
     }
 }
 

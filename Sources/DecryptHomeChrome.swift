@@ -144,6 +144,105 @@ struct DecryptSignedInCard: View {
 }
 
 
+/// Apps this Apple ID owns in purchase/download history (silent redownload targets).
+struct DecryptOwnedStoreAppsSection: View {
+    @ObservedObject private var decrypting = DeviceDecryptService.shared
+    @AppStorage("uzd_decrypt_channel") private var channelRaw = DecryptChannel.device.rawValue
+    @State private var owned: [OwnedStoreApp] = []
+    @State private var loading = false
+    @State private var loadError: String?
+
+    private var channel: DecryptChannel { DecryptChannel(rawValue: channelRaw) ?? .device }
+
+    var body: some View {
+        if channel != .device { EmptyView() }
+        else {
+            GlassCard(corner: 22) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("OWNED ON THIS APPLE ID")
+                            .font(.system(size: 12, weight: .semibold))
+                            .kerning(1.1)
+                            .foregroundStyle(.white.opacity(0.45))
+                        Spacer()
+                        if loading || decrypting.busy {
+                            ProgressView().tint(TetherlessPalette.accent)
+                        } else {
+                            Button {
+                                Task { await refresh() }
+                            } label: {
+                                Image(systemName: "arrow.clockwise")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundStyle(TetherlessPalette.accent)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+
+                    Text("Purchase history from Store Access — tap Decrypt to silent-download and FairPlay without opening the App Store.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.5))
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    if let loadError, !loadError.isEmpty {
+                        Text(loadError)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    } else if owned.isEmpty && !loading {
+                        Text("No purchase history yet, or Apple didn’t return items for this session. Search still works for free/owned apps.")
+                            .font(.footnote)
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+
+                    ForEach(owned.prefix(16)) { app in
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(app.name)
+                                    .font(.subheadline.weight(.semibold))
+                                    .foregroundStyle(.white)
+                                    .lineLimit(1)
+                                Text([app.version.isEmpty ? nil : "v\(app.version)",
+                                       app.bundleId.isEmpty ? "id\(app.adamId)" : app.bundleId]
+                                    .compactMap { $0 }.joined(separator: " · "))
+                                    .font(.caption2)
+                                    .foregroundStyle(.white.opacity(0.45))
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 8)
+                            Button {
+                                DeviceDecryptService.shared.decryptFromSearch(app.asDecryptApp)
+                            } label: {
+                                Text("Decrypt")
+                                    .font(.caption.weight(.bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 12)
+                                    .padding(.vertical, 7)
+                                    .background(TetherlessPalette.accent, in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                            .disabled(decrypting.busy || DecryptClient.shared.busy)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+            .task { await refresh() }
+        }
+    }
+
+    private func refresh() async {
+        loading = true
+        loadError = nil
+        defer { loading = false }
+        do {
+            owned = try await DeviceDecryptService.shared.ownedStoreApps()
+        } catch {
+            owned = []
+            loadError = error.localizedDescription
+        }
+    }
+}
+
 /// Installed App Store (DRM) apps on this device — primary on-device decrypt targets.
 struct DecryptDeviceAppsSection: View {
     @ObservedObject private var device = DeviceLibrary.shared
