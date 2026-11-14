@@ -1,8 +1,8 @@
 //
 //  DecryptCompanionConsole.swift
-//  FairPlayed-style companion decrypt UI (competition handoff).
-//  Live console with [DECRYPTED] / [plain] lines; opened from Decrypt or
-//  via tetherless-decrypt:// URL after download/install prep.
+//  FairPlayed-style companion decrypt UI — shown only by the installed
+//  “Tetherless Decrypt” companion IPA (`DecryptCompanionRoot`), not as a
+//  host fullScreenCover.
 //
 
 import SwiftUI

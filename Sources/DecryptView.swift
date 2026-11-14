@@ -371,7 +371,6 @@ struct DecryptView: View {
     @ObservedObject private var liveTheme = AppTheme.shared
     @ObservedObject private var c = DecryptClient.shared
     @ObservedObject private var store = AppleIDStore.shared
-    @ObservedObject private var companion = DecryptCompanionController.shared
     @State private var query = ""
     @State private var versionsApp: DecryptApp?
     @State private var pickingIPA = false
@@ -449,9 +448,8 @@ struct DecryptView: View {
                 handlePickedIPAs(urls)
             }
         }
-        .fullScreenCover(isPresented: $companion.isPresented) {
-            DecryptCompanionConsole()
-        }
+        // FairPlay console UI lives in the separate “Tetherless Decrypt” companion IPA —
+        // host stays on Decrypt status, then hands off after install.
         .onAppear {
             consumePendingQuery()
             Task { await warmStoreSessionForNiche() }
@@ -484,24 +482,43 @@ struct DecryptView: View {
         guard let url = urls.first else { return }
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let name = url.deletingPathExtension().lastPathComponent
+        let dest = AppPaths.dir("inbox").appendingPathComponent(url.lastPathComponent)
         do {
-            let clear = try FairPlayDecrypt.decryptIPA(
-                at: url,
-                displayName: url.deletingPathExtension().lastPathComponent
-            )
-            pickMessage = "Decrypted on this device → \(clear.lastPathComponent)"
-            AppNav.shared.go(AppTab.library.rawValue)
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.copyItem(at: url, to: dest)
         } catch {
-            // Prefer install-path decrypt: import encrypted only as a last resort for later retry.
-            let dest = AppPaths.dir("inbox").appendingPathComponent(url.lastPathComponent)
+            pickMessage = error.localizedDescription
+            return
+        }
+        // Build/sign/install the separate companion IPA — console UI opens there.
+        pickMessage = "Building Tetherless Decrypt companion…"
+        c.phase = .running
+        c.message = "Building Tetherless Decrypt companion…"
+        Task {
             do {
-                if FileManager.default.fileExists(atPath: dest.path) {
-                    try FileManager.default.removeItem(at: dest)
+                _ = try await DecryptCompanionInstaller.installAndOpen(
+                    embedding: dest,
+                    displayName: name
+                ) { msg in
+                    Task { @MainActor in
+                        c.message = msg
+                        pickMessage = msg
+                    }
                 }
-                try FileManager.default.copyItem(at: url, to: dest)
-                pickMessage = "FairPlay failed (\(error.localizedDescription)). Imported encrypted IPA — install the app on this iPhone and decrypt from On This Device."
+                await MainActor.run {
+                    c.phase = .running
+                    c.message = "Open Tetherless Decrypt to finish decrypt."
+                    pickMessage = "Companion installed — open Tetherless Decrypt."
+                }
             } catch {
-                pickMessage = error.localizedDescription
+                await MainActor.run {
+                    c.phase = .failed
+                    c.error = error.localizedDescription
+                    pickMessage = "Companion failed (\(error.localizedDescription)). Encrypted IPA kept in Files."
+                }
             }
         }
     }

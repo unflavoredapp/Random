@@ -82,7 +82,6 @@
 			<key>CFBundleURLSchemes</key>
 			<array>
 				<string>tetherless</string>
-				<string>tetherless-decrypt</string>
 				<string>airshare</string>
 				<string>msign</string>
 			</array>
