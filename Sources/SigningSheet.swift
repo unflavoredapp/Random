@@ -78,8 +78,7 @@ struct SigningSheet: View {
     @State private var o = ExtraToggles()
     @State private var expanded: Set<String> = ["general"]
 
-    // AirShare-style signing method selector (Saved / Enterprise / Apple ID).
-    // "saved" is fully wired; the others are UI placeholders to plug in later.
+    // Signing method: Saved cert · Enterprise (in-house ProvisionsAllDevices) · Free Apple ID (linked portal cert).
     @AppStorage("uzd_signing_method") private var method = "saved"   // saved | enterprise | appleid
     @State private var enterpriseName = ""
     @State private var appleIDEmail = ""
@@ -605,7 +604,7 @@ struct SigningSheet: View {
                     .frame(width: 46, height: 46)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(methodHeadline).font(.system(size: 8.5, weight: .heavy)).kerning(1.1).foregroundStyle(accentSoft)
-                        Text(method == "appleid" ? methodSubline : c.name).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
+                        Text(method == "saved" ? c.name : methodSubline).font(.system(size: 17, weight: .semibold)).foregroundStyle(.white).lineLimit(1)
                     }
                     Spacer(minLength: 0)
                     Image(systemName: "slider.horizontal.3")

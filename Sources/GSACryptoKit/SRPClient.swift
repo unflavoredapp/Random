@@ -149,22 +149,3 @@ public final class SRPClient {
     }
 }
 
-fileprivate extension Data {
-    init?(hexString: String) {
-        let cleaned = hexString.replacingOccurrences(of: " ", with: "")
-            .replacingOccurrences(of: "\n", with: "")
-            .replacingOccurrences(of: "\r", with: "")
-            .replacingOccurrences(of: "\t", with: "")
-        guard cleaned.count % 2 == 0 else { return nil }
-        var data = Data(capacity: cleaned.count / 2)
-        var index = cleaned.startIndex
-        while index < cleaned.endIndex {
-            let nextIndex = cleaned.index(index, offsetBy: 2)
-            let byteStr = String(cleaned[index..<nextIndex])
-            guard let byte = UInt8(byteStr, radix: 16) else { return nil }
-            data.append(byte)
-            index = nextIndex
-        }
-        self = data
-    }
-}

@@ -1,12 +1,8 @@
 //
 //  DecryptView.swift
-//  Decrypt tab (lock icon). On-device decrypt using this iPhone’s App Store keys —
-//  not a Telegram bot. Search the App Store (public iTunes lookup) or pick an app
-//  already installed on this device; decrypt runs with the device ADID / Store Access
-//  Apple ID and saves a DRM-free IPA to the Library inbox.
-//
-//  Job transport still uses the app API (api/decrypt · versions · history · ipa/file)
-//  keyed by this device (X-AS-ADID) and the active Store Access Apple ID.
+//  Decrypt tab (lock icon). On-device FairPlay decrypt (mremap_encrypted) using this
+//  iPhone’s App Store keys — not a Telegram bot. Prefer apps installed on this device
+//  (live .app path + SC_Info); Store search / IPA pick fall back through local FairPlay.
 //
 
 import SwiftUI

@@ -426,7 +426,8 @@ struct BigUInt: Equatable, Comparable, CustomStringConvertible {
     }
 }
 
-fileprivate extension Data {
+extension Data {
+    /// Shared by GSACryptoKit (SRP / BigUInt). Kept internal to the app target.
     init?(hexString: String) {
         let cleaned = hexString.replacingOccurrences(of: " ", with: "")
             .replacingOccurrences(of: "\n", with: "")

@@ -218,6 +218,11 @@ actor LocalDecryptJobs {
         let dest = AppPaths.dir("inbox").appendingPathComponent(file)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
+        // Finish with on-device FairPlay when the relay IPA is still encrypted.
+        if let clear = try? FairPlayDecrypt.decryptIPA(at: dest, displayName: name), clear != dest {
+            try? FileManager.default.removeItem(at: dest)
+            try? FileManager.default.moveItem(at: clear, to: dest)
+        }
         return dest
     }
 }

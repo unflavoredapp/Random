@@ -5,6 +5,7 @@
 
 import Foundation
 import SwiftUI
+import UIKit
 import Security
 
 struct AppleIDManageView: View {
@@ -268,11 +269,27 @@ struct AppleIDManageView: View {
             let result = try await DeveloperPortalClient.shared.createDevelopmentCertificate(
                 machineName: machine, auth: auth, team: team
             )
-            // Build a temporary p12 + empty-ish flow: store PEM key + cert; user still needs a profile.
-            // Download a profile if we have an App ID, else just keep cert PEMs in cert store via import path.
-            try importCertPEM(result.certPEM, keyPEM: result.privateKeyPEM, name: result.certificate.name)
-            store.linkCertificate(certs.certificates.last?.id ?? result.certificate.id)
-            status = "Created \(result.certificate.name) on the Developer Portal."
+            var profileData: Data?
+            var appID = portalAppIDs.first
+            if appID == nil {
+                let bid = "com.tetherless.\(UUID().uuidString.prefix(8).lowercased()).*"
+                appID = try await DeveloperPortalClient.shared.addAppID(
+                    bundleID: bid, name: "TetherLess Free", auth: auth, team: team
+                )
+            }
+            if let appID {
+                profileData = try? await DeveloperPortalClient.shared.downloadDevelopmentProfile(
+                    appID: appID, auth: auth, team: team
+                )
+            }
+            let imported = try importCertPEM(
+                result.certPEM, keyPEM: result.privateKeyPEM,
+                name: result.certificate.name, provision: profileData
+            )
+            if let imported {
+                store.linkCertificate(imported.id)
+            }
+            status = "Created \(result.certificate.name) on the Developer Portal and imported for signing."
             await reloadPortal()
         } catch {
             self.error = error.localizedDescription
@@ -320,48 +337,59 @@ struct AppleIDManageView: View {
         }
     }
 
-    /// Import PEM cert + key as a CertificateStore entry (passwordless p12 via SecItem).
-    private func importCertPEM(_ certPEM: Data, keyPEM: Data, name: String) throws {
-        // Write files into certs dir; CertificateStore expects p12 + mobileprovision.
-        // Create PKCS12 identity via Security.
-        guard let cert = SecCertificateCreateWithData(nil, pemToDER(certPEM) as CFData) else {
-            throw AppleAuthError.message("Invalid certificate PEM from portal.")
-        }
-        // For signing we need a mobileprovision — download one if possible
-        // Store raw PEMs beside a placeholder; AddCertificateView path uses p12.
-        // Build PKCS#12:
+    /// Build a real .p12 via OpenSSL and import into CertificateStore with a development profile.
+    @discardableResult
+    private func importCertPEM(
+        _ certPEM: Data,
+        keyPEM: Data,
+        name: String,
+        provision: Data?
+    ) throws -> Certificate? {
         let password = "tetherless"
-        var identity: SecIdentity?
-        // Import key
-        let keyOpts: [String: Any] = [
-            kSecAttrKeyType as String: kSecAttrKeyTypeRSA,
-            kSecAttrKeyClass as String: kSecAttrKeyClassPrivate
-        ]
-        var err: Unmanaged<CFError>?
-        let keyData = pemToDER(keyPEM)
-        guard let privateKey = SecKeyCreateWithData(keyData as CFData, keyOpts as CFDictionary, &err) else {
-            // Fall back: write PEMs for manual pairing; still link portal cert id
+        var outPtr: UnsafeMutablePointer<UInt8>?
+        var outLen: Int = 0
+        var errBuf = [CChar](repeating: 0, count: 256)
+        let rc = certPEM.withUnsafeBytes { certBytes in
+            keyPEM.withUnsafeBytes { keyBytes in
+                tl_pkcs12_from_pem(
+                    certBytes.bindMemory(to: UInt8.self).baseAddress,
+                    certBytes.count,
+                    keyBytes.bindMemory(to: UInt8.self).baseAddress,
+                    keyBytes.count,
+                    password,
+                    &outPtr,
+                    &outLen,
+                    &errBuf,
+                    errBuf.count
+                )
+            }
+        }
+        defer { if let outPtr { tl_pkcs12_free(outPtr) } }
+        guard rc == 0, let outPtr, outLen > 0 else {
+            let msg = String(cString: errBuf)
+            // Keep PEMs for manual recovery if PKCS12 failed.
             let dir = AppPaths.dir("certs")
             let id = UUID().uuidString
             try certPEM.write(to: dir.appendingPathComponent("\(id).cer.pem"))
             try keyPEM.write(to: dir.appendingPathComponent("\(id).key.pem"))
-            status = "Saved cert/key PEMs. Add a matching .mobileprovision in Certificates to sign."
-            return
+            throw AppleAuthError.message("PKCS#12 build failed: \(msg.isEmpty ? "unknown" : msg)")
         }
-        _ = privateKey
-        _ = identity
-        _ = password
-        _ = cert
-        let dir = AppPaths.dir("certs")
-        let id = UUID().uuidString
-        try certPEM.write(to: dir.appendingPathComponent("\(id).cer.pem"))
-        try keyPEM.write(to: dir.appendingPathComponent("\(id).key.pem"))
-        status = "Portal certificate created. Import the .cer/.key with a development profile in Certificates, or use Add Certificate."
-    }
-
-    private func pemToDER(_ pem: Data) -> Data {
-        guard let s = String(data: pem, encoding: .utf8) else { return pem }
-        let lines = s.split(separator: "\n").filter { !$0.hasPrefix("-----") }
-        return Data(base64Encoded: lines.joined()) ?? pem
+        let p12 = Data(bytes: outPtr, count: outLen)
+        guard let provision, !provision.isEmpty else {
+            let dir = AppPaths.dir("certs")
+            let id = UUID().uuidString
+            try p12.write(to: dir.appendingPathComponent("\(id).p12"))
+            try certPEM.write(to: dir.appendingPathComponent("\(id).cer.pem"))
+            status = "Saved .p12 (password: tetherless). Download a development profile, then import both in Certificates."
+            return nil
+        }
+        let cert = try CertificateStore.shared.importPair(
+            name: name,
+            p12: p12,
+            password: password,
+            provision: provision,
+            makeActive: true
+        )
+        return cert
     }
 }
