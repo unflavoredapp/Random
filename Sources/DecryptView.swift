@@ -747,7 +747,7 @@ struct DecryptView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     if !Self.isPortalCertError(c.error),
                        Self.needsStoreVerification(c.error) || AppleIDStore.shared.storeNeedsVerification {
-                        DecryptStoreCodeEntry(retryApp: app)
+                        DecryptStoreTrustHint(retryApp: app)
                     }
                     FailurePlaybookCard(errorText: c.error)
                     if Self.shouldShowAppStoreKeyHint(c.error) {
@@ -811,90 +811,49 @@ struct DecryptView: View {
     }
 }
 
-// MARK: - Inline Store 2FA (Decrypt tab)
+// MARK: - Store trust piggyback (Decrypt tab)
 
-/// Enter the App Store 6-digit code without leaving Decrypt / signing out.
-private struct DecryptStoreCodeEntry: View {
+/// Store unlocks with the first Sign In Allow/code — no second Store OTP.
+private struct DecryptStoreTrustHint: View {
     let retryApp: DecryptApp
     @ObservedObject private var store = AppleIDStore.shared
-    @State private var code = ""
     @State private var busy = false
     @State private var localError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Enter the 6-digit code texted to your phone (or from a trusted device). You stay signed in.")
+            Text("Store piggybacks the Allow / verification code from Sign In — it should not ask for a second text. Retry unlock, or Sign Out → Sign In once under Settings › Store Access.")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 10) {
-                TextField("123456", text: $code)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .font(.body.monospacedDigit().weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .foregroundStyle(.white)
-                Button {
-                    Task { await submit() }
-                } label: {
-                    if busy {
-                        ProgressView().tint(.white)
-                            .frame(width: 44, height: 36)
-                    } else {
-                        Text("Submit")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(TetherlessPalette.accent, in: Capsule())
-                    }
-                }
-                .buttonStyle(.plain)
-                .disabled(busy || code.filter(\.isNumber).count < 6)
-            }
             Button {
                 Task {
                     busy = true
+                    localError = nil
                     defer { busy = false }
                     await store.requestStoreVerificationPrompt()
-                    localError = store.statusMessage ?? store.lastError
+                    if store.storefrontSession()?.isUsable == true {
+                        DecryptClient.shared.reset()
+                        DeviceDecryptService.shared.decryptFromSearch(retryApp)
+                    } else {
+                        localError = store.statusMessage ?? store.lastError
+                            ?? "Sign Out, then Sign In once so Store can use the first trust."
+                    }
                 }
             } label: {
-                Label(
-                    store.isSMSTwoFactor ? "Resend text message" : "Text me a code",
-                    systemImage: "message.fill"
-                )
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(TetherlessPalette.accent)
+                Text(busy ? "Retrying…" : "Retry Store unlock")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
             }
             .buttonStyle(.plain)
-            .disabled(busy || store.isBusy)
+            .disabled(busy || store.isBusy || store.storeConnecting)
             if let localError, !localError.isEmpty {
                 Text(localError)
                     .font(.caption2)
-                    .foregroundStyle(
-                        localError.localizedCaseInsensitiveContains("sent") ? Color.green.opacity(0.9) : .orange
-                    )
+                    .foregroundStyle(.orange)
             }
         }
         .padding(.top, 4)
-    }
-
-    private func submit() async {
-        busy = true
-        localError = nil
-        defer { busy = false }
-        do {
-            _ = try await store.submitStoreVerificationCode(code)
-            code = ""
-            DecryptClient.shared.reset()
-            // Retry the same search result now that the store session is ready.
-            DeviceDecryptService.shared.decryptFromSearch(retryApp)
-        } catch {
-            localError = error.localizedDescription
-        }
     }
 }
 

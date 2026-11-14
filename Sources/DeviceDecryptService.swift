@@ -625,7 +625,7 @@ final class DeviceDecryptService: ObservableObject {
         } catch AppStoreClientError.needsTwoFactor {
             AppleIDStore.shared.noteStoreNeedsVerification()
             throw DecryptError(
-                "App Store needs a one-time verification code. Enter the 6-digit code below (or Settings › Store Access → Text me a code), then tap Submit code — you stay signed in."
+                "Store needs the first Sign In trust. In Settings › Store Access, Sign Out then Sign In once — the Allow / verification code unlocks Store automatically (no second text)."
             )
         } catch AppStoreClientError.tokenExpired {
             throw DecryptError(
