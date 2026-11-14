@@ -421,52 +421,87 @@ struct SettingsAppleIDCard: View {
     }
 
     private var twoFactorBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(twoFactorHelpText)
-                .font(.footnote)
-                .foregroundStyle(.white.opacity(0.65))
-            TextField("6-digit code", text: $twoFACode)
+        VStack(alignment: .leading, spacing: 12) {
+            // Reference chrome: “Verification code needed” after GrandSlam trusted-device push.
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "number")
+                    .font(.title3.weight(.bold))
+                    .foregroundStyle(Color.green.opacity(0.95))
+                    .frame(width: 28)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(store.isBusy ? "Verifying code…" : "Verification code needed")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                    Text(twoFactorHelpText)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+                if store.isBusy {
+                    ProgressView().tint(TetherlessPalette.accent)
+                }
+            }
+
+            TextField("123456", text: $twoFACode)
                 .keyboardType(.numberPad)
                 .textContentType(.oneTimeCode)
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 13)
-                .background(Color.black.opacity(0.28), in: Capsule())
-                .overlay(Capsule().strokeBorder(.white.opacity(0.10), lineWidth: 1))
-            HStack(spacing: 10) {
-                primaryButton(store.isBusy ? "Verifying…" : "Verify") {
-                    Task {
-                        await store.submitTwoFactor(code: twoFACode)
-                        if store.authPhase == .idle, store.lastError == nil {
-                            showAddAccount = false
-                            email = ""; password = ""; twoFACode = ""
-                        }
+                .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+                )
+                .disabled(store.isBusy)
+
+            primaryButton(store.isBusy ? "Verifying code…" : "Submit Code") {
+                Task {
+                    await store.submitTwoFactor(code: twoFACode)
+                    if store.authPhase == .idle, store.lastError == nil {
+                        showAddAccount = false
+                        email = ""; password = ""; twoFACode = ""
                     }
                 }
-                .disabled(store.isBusy || twoFACode.count < 4)
-                secondaryButton("Cancel", busy: false) {
+            }
+            .disabled(store.isBusy || twoFACode.filter(\.isNumber).count < 6)
+            .opacity(store.isBusy ? 0.7 : 1)
+
+            HStack(spacing: 16) {
+                Button {
+                    Task { await store.requestSMSCode() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "message.fill")
+                        Text(store.isSMSTwoFactor ? "Resend text message" : "Text me a code")
+                            .font(.footnote.weight(.semibold))
+                    }
+                    .foregroundStyle(TetherlessPalette.accent)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.isBusy)
+
+                Spacer(minLength: 0)
+
+                Button {
                     store.cancelTwoFactor()
                     twoFACode = ""
+                } label: {
+                    Text("Cancel")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.55))
                 }
+                .buttonStyle(.plain)
+                .disabled(store.isBusy)
             }
-            Button {
-                Task { await store.requestSMSCode() }
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "message.fill")
-                    Text(store.isSMSTwoFactor ? "Resend text message" : "Text me a code")
-                        .font(.subheadline.weight(.semibold))
-                }
-                .foregroundStyle(TetherlessPalette.accent)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .buttonStyle(.plain)
-            .disabled(store.isBusy)
-            .opacity(store.isBusy ? 0.5 : 1)
         }
     }
 
     private var twoFactorHelpText: String {
+        if store.isBusy {
+            return "Checking the code with Apple…"
+        }
         if let status = store.statusMessage, !status.isEmpty {
             return status
         }
@@ -476,7 +511,7 @@ struct SettingsAppleIDCard: View {
             }
             return "Enter the 6-digit code texted to your phone."
         }
-        return "Enter the verification code from a trusted device, or tap Text me a code to get an SMS."
+        return "Enter the code shown on one of your Apple devices."
     }
 
     private var accountList: some View {
