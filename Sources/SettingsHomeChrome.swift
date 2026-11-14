@@ -318,6 +318,13 @@ final class AppUpdateChecker: ObservableObject {
             req.setValue("TetherLess/\(localVersion)", forHTTPHeaderField: "User-Agent")
             let (data, resp) = try await URLSession.shared.data(for: req)
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            // No GitHub Releases yet → treat as up to date rather than an error.
+            if status == 404 {
+                remoteVersion = nil
+                downloadURL = nil
+                message = nil
+                return
+            }
             guard status == 200,
                   let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
                 message = status == 403 || status == 429

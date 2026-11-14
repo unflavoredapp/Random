@@ -23,14 +23,14 @@ struct AnisetteHeaders: Sendable, Codable, Equatable {
 enum AnisetteError: LocalizedError {
     case badURL
     case badResponse(Int, String)
-    case missingFields
+    case missingFields(String)
     case provisioning(String)
 
     var errorDescription: String? {
         switch self {
         case .badURL: return "Bad anisette server URL."
         case .badResponse(let c, let b): return "Anisette server error (\(c)): \(b)"
-        case .missingFields: return "Anisette response missing required headers."
+        case .missingFields(let detail): return "Anisette response missing required headers (\(detail))."
         case .provisioning(let m): return "Anisette provisioning failed: \(m)"
         }
     }
@@ -70,11 +70,18 @@ actor AnisetteClient {
             cached = (headers, Date())
             return headers
         } catch {
-            // One reset + retry covers stale adi_pb / identifier pairs Apple rejects.
+            // One reset + retry covers stale adi_pb / identifier pairs.
             resetProvisioningState()
-            let headers = try await fetchV3Provisioned(base: base, clientMeta: clientMeta)
-            cached = (headers, Date())
-            return headers
+            do {
+                let headers = try await fetchV3Provisioned(base: base, clientMeta: clientMeta)
+                cached = (headers, Date())
+                return headers
+            } catch {
+                // Last resort: legacy shared headers with matching client identity overlay.
+                let headers = try await fetchLegacy(base: base, clientMeta: clientMeta)
+                cached = (headers, Date())
+                return headers
+            }
         }
     }
 
@@ -163,14 +170,36 @@ actor AnisetteClient {
         if let adi = json["adi_pb"] as? String, !adi.isEmpty {
             UserDefaults.standard.set(adi, forKey: Keys.adiPb)
         }
-        var headers = try parse(json)
-        // Always overlay the server's client identity — Apple rejects MID/OTP + Client-Info mismatches.
-        headers.clientInfo = clientMeta.clientInfo
-        headers.userAgent = clientMeta.userAgent
+        // v3 get_headers typically returns only MD + MD-M (+ optional RINFO / result).
+        var headers = try parse(
+            json,
+            identifier: identifier,
+            clientMeta: clientMeta,
+            requireLocalUserID: false
+        )
         if let routing = UserDefaults.standard.string(forKey: Keys.routing), !routing.isEmpty {
             headers.routingInfo = routing
         }
         return headers
+    }
+
+    private func fetchLegacy(base: String, clientMeta: ClientMeta) async throws -> AnisetteHeaders {
+        guard let url = URL(string: base) else { throw AnisetteError.badURL }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 15
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw AnisetteError.badResponse(code, String(data: data, encoding: .utf8) ?? "")
+        }
+        return try parse(
+            json,
+            identifier: stableIdentifier(),
+            clientMeta: clientMeta,
+            requireLocalUserID: false
+        )
     }
 
     // MARK: - Remote v3 provisioning (Apple lookup ↔ anisette WebSocket)
@@ -236,8 +265,9 @@ actor AnisetteClient {
         var req = URLRequest(url: startURL)
         req.httpMethod = "POST"
         applyProvisionHeaders(&req, clientMeta: clientMeta, identifier: identifier, routingInfo: routingInfo)
+        // Working remote clients send empty Header/Request dicts (not Version/Type).
         req.httpBody = try PropertyListSerialization.data(
-            fromPropertyList: ["Header": ["Version": "1.0.1"], "Request": ["Type": "StartProvisioning"] as [String: Any]],
+            fromPropertyList: ["Header": [:] as [String: Any], "Request": [:] as [String: Any]],
             format: .xml,
             options: 0
         )
@@ -251,9 +281,7 @@ actor AnisetteClient {
         guard let spimB64 = response["spim"] as? String, let spim = Data(base64Encoded: spimB64), !spim.isEmpty else {
             throw AnisetteError.provisioning("Start provisioning missing spim.")
         }
-        let routing = response["routing-info"] as? String
-            ?? (response["routing-info"] as? NSNumber)?.stringValue
-            ?? httpRouting(resp)
+        let routing = routingValue(from: response) ?? httpRouting(resp)
         return (spim, routing)
     }
 
@@ -269,11 +297,8 @@ actor AnisetteClient {
         applyProvisionHeaders(&req, clientMeta: clientMeta, identifier: identifier, routingInfo: routingInfo)
         req.httpBody = try PropertyListSerialization.data(
             fromPropertyList: [
-                "Header": ["Version": "1.0.1"],
-                "Request": [
-                    "Type": "FinishProvisioning",
-                    "cpim": cpim.base64EncodedString()
-                ] as [String: Any]
+                "Header": [:] as [String: Any],
+                "Request": ["cpim": cpim.base64EncodedString()] as [String: Any]
             ],
             format: .xml,
             options: 0
@@ -289,10 +314,16 @@ actor AnisetteClient {
               let tkB64 = response["tk"] as? String, let tk = Data(base64Encoded: tkB64) else {
             throw AnisetteError.provisioning("Finish provisioning missing ptm/tk.")
         }
-        let routing = response["routing-info"] as? String
-            ?? (response["routing-info"] as? NSNumber)?.stringValue
-            ?? httpRouting(resp)
+        let routing = routingValue(from: response) ?? httpRouting(resp)
         return (ptm, tk, routing)
+    }
+
+    private func routingValue(from response: [String: Any]) -> String? {
+        if let s = response["X-Apple-I-MD-RINFO"] as? String, !s.isEmpty { return s }
+        if let n = response["X-Apple-I-MD-RINFO"] as? NSNumber { return n.stringValue }
+        if let s = response["routing-info"] as? String, !s.isEmpty { return s }
+        if let n = response["routing-info"] as? NSNumber { return n.stringValue }
+        return nil
     }
 
     private func openProvisioningSession(base: String) async throws -> URLSessionWebSocketTask {
@@ -390,12 +421,14 @@ actor AnisetteClient {
         identifier: String,
         routingInfo: String?
     ) {
+        let deviceID = deviceID(from: identifier)
         req.setValue("text/x-xml-plist", forHTTPHeaderField: "Content-Type")
         req.setValue("*/*", forHTTPHeaderField: "Accept")
         req.setValue(clientMeta.userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue(clientMeta.clientInfo, forHTTPHeaderField: "X-MMe-Client-Info")
-        req.setValue(identifier.uppercased(), forHTTPHeaderField: "X-Mme-Device-Id")
-        req.setValue("0000000000000000000000000000000000000000000000000000000000000001", forHTTPHeaderField: "X-Apple-I-MD-LU")
+        req.setValue(deviceID, forHTTPHeaderField: "X-Mme-Device-Id")
+        // Working remote clients use "0" during mid-provisioning.
+        req.setValue("0", forHTTPHeaderField: "X-Apple-I-MD-LU")
         req.setValue(routingInfo ?? "17106176", forHTTPHeaderField: "X-Apple-I-MD-RINFO")
         req.setValue("0", forHTTPHeaderField: "X-Apple-I-SRL-NO")
         let df = ISO8601DateFormatter()
@@ -416,34 +449,79 @@ actor AnisetteClient {
         return nil
     }
 
-    private func parse(_ json: [String: Any]) throws -> AnisetteHeaders {
+    private func parse(
+        _ json: [String: Any],
+        identifier: String,
+        clientMeta: ClientMeta,
+        requireLocalUserID: Bool
+    ) throws -> AnisetteHeaders {
+        // Some servers nest headers under a "headers" object.
+        let source: [String: Any]
+        if let nested = json["headers"] as? [String: Any] {
+            source = nested
+        } else {
+            source = json
+        }
         func s(_ keys: String...) -> String? {
             for k in keys {
-                if let v = json[k] as? String, !v.isEmpty { return v }
-                if let v = json[k] as? NSNumber { return v.stringValue }
+                if let v = source[k] as? String, !v.isEmpty { return v }
+                if let v = source[k] as? NSNumber { return v.stringValue }
             }
             return nil
         }
-        guard let mid = s("X-Apple-I-MD-M", "machineID", "mid"),
-              let otp = s("X-Apple-I-MD", "oneTimePassword", "otp"),
-              let lu = s("X-Apple-I-MD-LU", "localUserID", "lu") else {
-            throw AnisetteError.missingFields
+        // v3 get_headers only guarantees MD + MD-M (AnisetteKit requires just those two).
+        guard let mid = s("X-Apple-I-MD-M", "X-Apple-MD-M", "machineID", "mid"),
+              let otp = s("X-Apple-I-MD", "X-Apple-MD", "oneTimePassword", "otp") else {
+            let keys = source.keys.sorted().joined(separator: ",")
+            throw AnisetteError.missingFields(keys.isEmpty ? "empty" : keys)
         }
-        let routing = s("X-Apple-I-MD-RINFO", "routingInfo", "rinfo") ?? "17106176"
-        let deviceID = s("X-Mme-Device-Id", "deviceID", "device_id") ?? UUID().uuidString.uppercased()
+        let device = s("X-Mme-Device-Id", "deviceID", "device_id") ?? deviceID(from: identifier)
+        let providedLU = s("X-Apple-I-MD-LU", "localUserID", "lu")
+        if requireLocalUserID, providedLU == nil {
+            throw AnisetteError.missingFields("X-Apple-I-MD-LU")
+        }
+        let lu = providedLU ?? localUserID(for: device)
+        let routing = s("X-Apple-I-MD-RINFO", "routingInfo", "rinfo")
+            ?? UserDefaults.standard.string(forKey: Keys.routing)
+            ?? "17106176"
         let serial = s("X-Apple-I-SRL-NO", "serialNumber", "serial") ?? "0"
-        let clientInfo = s("X-MMe-Client-Info", "client_info", "clientInfo")
-            ?? "<PC> <Windows;6.2(0,0);9200> <com.apple.AuthKit/1 (com.apple.iTunes/12.12.4.1)>"
-        let ua = s("User-Agent", "user_agent", "userAgent") ?? "akd/1.0 CFNetwork/808.1.4"
         let df = ISO8601DateFormatter()
         df.formatOptions = [.withInternetDateTime]
         let clientTime = s("X-Apple-I-Client-Time", "clientTime") ?? df.string(from: Date())
         let locale = s("X-Apple-Locale", "X-Apple-I-Locale", "locale") ?? "en_US"
         let tz = s("X-Apple-I-TimeZone", "timeZone") ?? (TimeZone.current.abbreviation() ?? "UTC")
         return AnisetteHeaders(
-            machineID: mid, oneTimePassword: otp, localUserID: lu, routingInfo: routing,
-            deviceID: deviceID, serialNumber: serial, clientInfo: clientInfo, userAgent: ua,
-            clientTime: clientTime, locale: locale, timeZone: tz
+            machineID: mid,
+            oneTimePassword: otp,
+            localUserID: lu,
+            routingInfo: routing,
+            deviceID: device,
+            serialNumber: serial,
+            // Always prefer the server's advertised client identity over any leftover legacy string.
+            clientInfo: clientMeta.clientInfo,
+            userAgent: clientMeta.userAgent,
+            clientTime: clientTime,
+            locale: locale,
+            timeZone: tz
         )
+    }
+
+    /// Format a 32-char hex identifier as a UUID string; otherwise uppercase as-is.
+    private func deviceID(from identifier: String) -> String {
+        let h = identifier.replacingOccurrences(of: "-", with: "").uppercased()
+        guard h.count == 32, h.allSatisfy(\.isHexDigit) else {
+            return identifier.uppercased()
+        }
+        let p1 = h.prefix(8)
+        let p2 = h.dropFirst(8).prefix(4)
+        let p3 = h.dropFirst(12).prefix(4)
+        let p4 = h.dropFirst(16).prefix(4)
+        let p5 = h.dropFirst(20).prefix(12)
+        return "\(p1)-\(p2)-\(p3)-\(p4)-\(p5)"
+    }
+
+    /// Legacy anisette servers use base64(deviceID) as X-Apple-I-MD-LU.
+    private func localUserID(for deviceID: String) -> String {
+        Data(deviceID.utf8).base64EncodedString()
     }
 }
