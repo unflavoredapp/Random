@@ -45,7 +45,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Search for an app you own with your Store account. TetherLess fetches a DRM-free IPA and saves it to Library on this device — no Mac, no jailbreak. That Apple ID must have signed in to the App Store on this iPhone at least once so iOS has its decryption keys.")
+            Text("Decrypt runs on this iPhone with your App Store keys — not a Telegram bot. Pick an app you own (installed here or from search); TetherLess saves a DRM-free IPA to Library. That Apple ID must have signed in to the App Store on this iPhone at least once.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
@@ -138,6 +138,97 @@ struct DecryptSignedInCard: View {
                     }
             }
             .preferredColorScheme(.dark)
+        }
+    }
+}
+
+
+/// Installed App Store (DRM) apps on this device — primary on-device decrypt targets.
+struct DecryptDeviceAppsSection: View {
+    @ObservedObject private var device = DeviceLibrary.shared
+    @ObservedObject private var decrypting = DeviceDecryptService.shared
+
+    private var drm: [DeviceApp] { device.apps.filter(\.isAppStore) }
+
+    var body: some View {
+        GlassCard(corner: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Text("ON THIS DEVICE")
+                        .font(.system(size: 12, weight: .semibold))
+                        .kerning(1.1)
+                        .foregroundStyle(.white.opacity(0.45))
+                    Spacer()
+                    if device.loading || decrypting.busy {
+                        ProgressView().tint(TetherlessPalette.accent)
+                    } else {
+                        Button {
+                            device.refresh()
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(TetherlessPalette.accent)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                Text("App Store apps installed on this iPhone decrypt with this device’s keys. Pair with Native install if the list is empty.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if let err = decrypting.lastError ?? device.error, !err.isEmpty {
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if !decrypting.status.isEmpty {
+                    Text(decrypting.status)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+
+                if drm.isEmpty && !device.loading {
+                    Text(NativeInstaller.isSelected
+                          ? "No App Store apps listed yet. Tap refresh after pairing."
+                          : "Set Install method to Native in Settings to list apps on this device.")
+                        .font(.footnote)
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+
+                ForEach(drm.prefix(12)) { app in
+                    HStack(spacing: 12) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(app.name)
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .lineLimit(1)
+                            Text([app.version.isEmpty ? nil : "v\(app.version)", app.bundleID].compactMap { $0 }.joined(separator: " · "))
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 8)
+                        Button {
+                            Task { await DeviceDecryptService.shared.decryptInstalled(app) }
+                        } label: {
+                            Text("Decrypt")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(.white)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(TetherlessPalette.accent, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(decrypting.busy || DecryptClient.shared.busy)
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .onAppear {
+            if NativeInstaller.isSelected { device.refreshIfStale() }
         }
     }
 }

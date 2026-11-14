@@ -467,8 +467,9 @@ struct CertificatesScreen: View {
                     HStack(spacing: 14) {
                         AssetIcon(name: "PartnerFastDecrypt", size: 56, fallback: "lock.open.fill")
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Partner").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
-                            Text("@FastDecryptBot").font(.system(size: 12)).foregroundStyle(Theme.subtle)
+                            Text("Decrypt on this device").font(.system(size: 16, weight: .bold)).foregroundStyle(Theme.text)
+                            Text("DRM-free copies using this iPhone’s App Store keys")
+                                .font(.system(size: 12)).foregroundStyle(Theme.subtle)
                             if let q = decrypt.quota {
                                 Text(q.unlimited ? "Unlimited decrypts" : "\(q.left ?? 0) of \(q.limit ?? 0) decrypts left today")
                                     .font(.system(size: 11.5, weight: .semibold))

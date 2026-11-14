@@ -1,12 +1,12 @@
 //
 //  DecryptView.swift
-//  Decrypt tab (lock icon). Search the App Store or paste a link, pick the latest
-//  or an older version, and the AirShare backend decrypts it and hands back the IPA.
-//  The IPA is saved to the Library inbox, ready to sign.
+//  Decrypt tab (lock icon). On-device decrypt using this iPhone’s App Store keys —
+//  not a Telegram bot. Search the App Store (public iTunes lookup) or pick an app
+//  already installed on this device; decrypt runs with the device ADID / Store Access
+//  Apple ID and saves a DRM-free IPA to the Library inbox.
 //
-//  Backend routes (airshare.lol): /api/appsearch · /api/appinfo · /api/decrypt ·
-//  /api/decrypt/versions · /api/decrypt/:id · /api/decrypt/history · /api/ipa/file/:up
-//  Auth: Bearer account token when signed in, always X-AS-ADID (device ADID).
+//  Job transport still uses the app API (api/decrypt · versions · history · ipa/file)
+//  keyed by this device (X-AS-ADID) and the active Store Access Apple ID.
 //
 
 import SwiftUI
@@ -149,23 +149,9 @@ final class DecryptClient: ObservableObject {
         searching = true; error = nil
         defer { searching = false }
         do {
-            if Self.isStoreLink(q) {
-                let o = try await send(makeRequest("api/appinfo", query: ["url": q]))
-                let icon = ((o["icon512"] as? String) ?? (o["icon"] as? String)).flatMap { URL(string: $0) }
-                let app = DecryptApp(id: q, name: (o["name"] as? String) ?? "App", bundle: (o["bid"] as? String) ?? "",
-                                     icon: icon, dev: (o["dev"] as? String) ?? (o["artist"] as? String) ?? "",
-                                     version: (o["ver"] as? String) ?? (o["version"] as? String) ?? "", url: q)
-                if !Task.isCancelled { results = [app] }
-                return
-            }
-            let o = try await send(makeRequest("api/appsearch", query: ["q": q]))
-            let items = (o["items"] as? [[String: Any]]) ?? []
-            if Task.isCancelled { return }
-            results = items.compactMap { i in
-                guard let id = i["id"] as? String, let name = i["name"] as? String, let url = i["url"] as? String else { return nil }
-                return DecryptApp(id: id, name: name, bundle: (i["bid"] as? String) ?? "", icon: (i["icon"] as? String).flatMap { URL(string: $0) },
-                                  dev: (i["dev"] as? String) ?? "", version: (i["ver"] as? String) ?? "", url: url)
-            }
+            // On-device App Store search (iTunes) — no Telegram / FastDecryptBot.
+            let found = try await DeviceDecryptService.shared.searchAppStore(q)
+            if !Task.isCancelled { results = found }
         } catch {
             if Task.isCancelled { return }
             results = []
@@ -338,6 +324,7 @@ struct DecryptView: View {
                         DecryptSignedInCard(email: store.email, onSignOut: store.signOut)
                         if showingIdleHero {
                             DecryptAppStoreSignInHint()
+                            DecryptDeviceAppsSection()
                         }
                         DecryptSearchBar(query: $query, focused: $searchFocused) {
                             Task { await c.search(query) }

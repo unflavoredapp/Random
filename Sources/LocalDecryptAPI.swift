@@ -2,11 +2,10 @@
 //  LocalDecryptAPI.swift
 //  Decrypt functions on the local TrustCore engine (the on-device Vapor server).
 //
-//  These routes use exactly the same data as the Decrypt tab: the same backend routes
-//  (api/appsearch · api/appinfo · api/decrypt · api/decrypt/versions · api/decrypt/:id ·
-//  api/decrypt/quota · api/decrypt/history · api/ipa/file/:up), the same device ADID and the
-//  same account token. The engine only relays and tracks the job; nothing is decrypted here.
-//  A finished job lands in the Library inbox, ready for POST /v1/sign.
+//  Local TrustCore decrypt routes for on-device jobs (this iPhone’s App Store keys /
+//  device ADID — not a Telegram bot). Search uses public iTunes lookup in the UI;
+//  job status still tracks api/decrypt · versions · quota · history · ipa/file with
+//  X-AS-ADID. A finished job lands in the Library inbox, ready for POST /v1/sign.
 //
 //  Routes (all need the X-mSign-Local-Token header, like /v1/sign):
 //    GET  /v1/decrypt/search?q=<text or apps.apple.com link>
