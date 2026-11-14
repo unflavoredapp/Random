@@ -201,57 +201,58 @@ enum FairPlayDecrypt {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(sourceApp.lastPathComponent).")
         }
 
-        // Main executable first — fail fast if FairPlay keys aren't available.
-        let ordered = prioritizeMainExecutable(binaries, app: sourceApp)
+        // Main executable first — fail fast if FairPlay keys aren't available —
+        // then appex / frameworks / other, with limited parallelism.
+        let ordered = prioritizeBinaries(binaries, app: sourceApp)
+        guard let first = ordered.first else {
+            throw FairPlayDecryptError.failed("No Mach-O binaries found.")
+        }
 
-        for (index, file) in ordered.enumerated() {
-            let rel = relativePath(file, under: sourceApp)
-            progress?("Decrypting \(rel) (\(index + 1)/\(ordered.count))…")
+        // 1) Main (or first) — serial, fail closed.
+        try decryptOne(
+            file: first, sourceApp: sourceApp, destApp: destApp,
+            index: 0, total: ordered.count, progress: progress, report: &report, requireMain: true
+        )
 
-            let outFile = destApp.appendingPathComponent(rel)
-            try? fm.createDirectory(at: outFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let tmp = outFile.appendingPathExtension("fpdec")
-            try? fm.removeItem(at: tmp)
-
-            let logBuf = FairPlayLogBuffer()
-            let rc = file.path.withCString { inPath in
-                tmp.path.withCString { outPath in
-                    fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
-                }
-            }
-
-            if rc == 0 {
-                try? fm.removeItem(at: outFile)
-                try fm.moveItem(at: tmp, to: outFile)
-                // Fail closed: re-check cryptid on the written file.
-                let still = outFile.path.withCString { fp_has_encrypted_slice($0) }
-                if still != 0 {
-                    report.failed.append(rel)
-                    try? fm.removeItem(at: outFile)
-                    if isMainExecutable(rel, app: sourceApp) {
-                        throw FairPlayDecryptError.mainExecutableFailed(
-                            "Main executable still encrypted after decrypt. \(AppStoreDecryptGuide.failureHint)"
+        // 2) Remainder — concurrent (cap 3) for frameworks / appex.
+        let rest = Array(ordered.dropFirst())
+        if !rest.isEmpty {
+            progress?("Decrypting \(rest.count) more binaries…")
+            let lock = NSLock()
+            var localFailed: [String] = []
+            var localDecrypted: [String] = []
+            var localPlain: [String] = []
+            let group = DispatchGroup()
+            let gate = DispatchSemaphore(value: 3)
+            for (offset, file) in rest.enumerated() {
+                group.enter()
+                DispatchQueue.global(qos: .userInitiated).async {
+                    defer { group.leave() }
+                    gate.wait()
+                    defer { gate.signal() }
+                    var mini = FairPlayDecryptReport()
+                    do {
+                        try decryptOne(
+                            file: file, sourceApp: sourceApp, destApp: destApp,
+                            index: offset + 1, total: ordered.count, progress: nil,
+                            report: &mini, requireMain: false
                         )
+                    } catch {
+                        let rel = relativePath(file, under: sourceApp)
+                        lock.lock(); localFailed.append(rel); lock.unlock()
+                        return
                     }
-                } else {
-                    report.decrypted.append(rel)
-                }
-            } else if rc == 1 {
-                try? fm.removeItem(at: tmp)
-                if sourceApp != destApp, !fm.fileExists(atPath: outFile.path) {
-                    try? fm.copyItem(at: file, to: outFile)
-                }
-                report.plain.append(rel)
-            } else {
-                try? fm.removeItem(at: tmp)
-                report.failed.append(rel)
-                let detail = logBuf.lines.suffix(3).joined(separator: " | ")
-                if isMainExecutable(rel, app: sourceApp) {
-                    throw FairPlayDecryptError.mainExecutableFailed(
-                        "Couldn't decrypt the main executable (\(rel)). \(detail.isEmpty ? AppStoreDecryptGuide.failureHint : detail)"
-                    )
+                    lock.lock()
+                    localDecrypted.append(contentsOf: mini.decrypted)
+                    localPlain.append(contentsOf: mini.plain)
+                    localFailed.append(contentsOf: mini.failed)
+                    lock.unlock()
                 }
             }
+            group.wait()
+            report.decrypted.append(contentsOf: localDecrypted)
+            report.plain.append(contentsOf: localPlain)
+            report.failed.append(contentsOf: localFailed)
         }
 
         if !report.failed.isEmpty {
@@ -262,16 +263,81 @@ enum FairPlayDecrypt {
         return report
     }
 
+    /// Decrypt a single Mach-O from `sourceApp` into `destApp`.
+    private static func decryptOne(
+        file: URL,
+        sourceApp: URL,
+        destApp: URL,
+        index: Int,
+        total: Int,
+        progress: ((String) -> Void)?,
+        report: inout FairPlayDecryptReport,
+        requireMain: Bool
+    ) throws {
+        let fm = FileManager.default
+        let rel = relativePath(file, under: sourceApp)
+        progress?("Decrypting \(rel) (\(index + 1)/\(total))…")
+
+        let outFile = destApp.appendingPathComponent(rel)
+        try? fm.createDirectory(at: outFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let tmp = outFile.appendingPathExtension("fpdec")
+        try? fm.removeItem(at: tmp)
+
+        let logBuf = FairPlayLogBuffer()
+        let rc = file.path.withCString { inPath in
+            tmp.path.withCString { outPath in
+                fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
+            }
+        }
+
+        if rc == 0 {
+            try? fm.removeItem(at: outFile)
+            try fm.moveItem(at: tmp, to: outFile)
+            let still = outFile.path.withCString { fp_has_encrypted_slice($0) }
+            if still != 0 {
+                report.failed.append(rel)
+                try? fm.removeItem(at: outFile)
+                if requireMain || isMainExecutable(rel, app: sourceApp) {
+                    throw FairPlayDecryptError.mainExecutableFailed(
+                        "Main executable still encrypted after decrypt. \(AppStoreDecryptGuide.failureHint)"
+                    )
+                }
+            } else {
+                report.decrypted.append(rel)
+            }
+        } else if rc == 1 {
+            try? fm.removeItem(at: tmp)
+            if sourceApp != destApp, !fm.fileExists(atPath: outFile.path) {
+                try? fm.copyItem(at: file, to: outFile)
+            }
+            report.plain.append(rel)
+        } else {
+            try? fm.removeItem(at: tmp)
+            report.failed.append(rel)
+            let detail = logBuf.lines.suffix(3).joined(separator: " | ")
+            if requireMain || isMainExecutable(rel, app: sourceApp) {
+                throw FairPlayDecryptError.mainExecutableFailed(
+                    "Couldn't decrypt the main executable (\(rel)). \(detail.isEmpty ? AppStoreDecryptGuide.failureHint : detail)"
+                )
+            }
+        }
+    }
+
     // MARK: - Harden / package
 
-    /// Strip FairPlay license crumbs and verify no encrypted Mach-O remains.
+    /// Strip FairPlay license crumbs / account metadata and verify no encrypted Mach-O remains.
     private static func hardenDecryptedApp(at app: URL, report: FairPlayDecryptReport) throws {
         let fm = FileManager.default
-        // SC_Info is useless (and unwanted) on a clear IPA; remove it so resigners don't trip over it.
-        let sc = app.appendingPathComponent("SC_Info")
-        try? fm.removeItem(at: sc)
+        // SC_Info is useless (and unwanted) on a clear IPA.
+        try? fm.removeItem(at: app.appendingPathComponent("SC_Info"))
+        // Walk nested appex / frameworks for SC_Info too.
+        if let enumerator = fm.enumerator(at: app, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
+            for case let item as URL in enumerator where item.lastPathComponent == "SC_Info" {
+                try? fm.removeItem(at: item)
+            }
+        }
+        stripAccountData(from: app)
 
-        // Verify every Mach-O under the destination is clear.
         let remaining = try collectMachOs(under: app).filter { url in
             url.path.withCString { fp_has_encrypted_slice($0) } == 1
         }
@@ -283,6 +349,35 @@ enum FairPlayDecrypt {
         }
         if report.decrypted.isEmpty && report.plain.isEmpty {
             throw FairPlayDecryptError.failed("Nothing to decrypt in \(app.lastPathComponent).")
+        }
+    }
+
+    /// Remove Apple ID / purchaser fields from iTunesMetadata.plist when present.
+    private static func stripAccountData(from app: URL) {
+        let candidates = [
+            app.appendingPathComponent("iTunesMetadata.plist"),
+            app.deletingLastPathComponent().appendingPathComponent("iTunesMetadata.plist"),
+        ]
+        let scrubKeys = [
+            "appleId", "AppleID", "com.apple.iTunesStore.downloadInfo",
+            "purchaseDate", "userName", "artistId", "playlistArtistId",
+        ]
+        for url in candidates {
+            guard var plist = NSDictionary(contentsOf: url) as? [String: Any] else { continue }
+            var changed = false
+            for k in scrubKeys where plist[k] != nil {
+                plist.removeValue(forKey: k)
+                changed = true
+            }
+            if let info = plist["com.apple.iTunesStore.downloadInfo"] as? [String: Any] {
+                var copy = info
+                for k in ["accountInfo", "purchaseDate", "appleId"] { copy.removeValue(forKey: k) }
+                plist["com.apple.iTunesStore.downloadInfo"] = copy
+                changed = true
+            }
+            if changed {
+                (plist as NSDictionary).write(to: url, atomically: true)
+            }
         }
     }
 
@@ -356,14 +451,42 @@ enum FairPlayDecrypt {
         return out
     }
 
-    private static func prioritizeMainExecutable(_ files: [URL], app: URL) -> [URL] {
-        guard let main = mainExecutableURL(in: app) else { return files }
-        let mainPath = main.path
-        let rest = files.filter { $0.path != mainPath }
-        if files.contains(where: { $0.path == mainPath }) {
-            return [main] + rest
+    /// Order: main executable → appex → frameworks → everything else.
+    private static func prioritizeBinaries(_ files: [URL], app: URL) -> [URL] {
+        let mainPath = mainExecutableURL(in: app)?.path
+        func rank(_ u: URL) -> Int {
+            let p = u.path
+            if let mainPath, p == mainPath { return 0 }
+            if p.contains(".appex/") { return 1 }
+            if p.contains(".framework/") { return 2 }
+            if p.contains("/PlugIns/") { return 1 }
+            return 3
         }
-        return files
+        return files.sorted { a, b in
+            let ra = rank(a), rb = rank(b)
+            if ra != rb { return ra < rb }
+            return a.path < b.path
+        }
+    }
+
+    /// Batch decrypt several installed apps (device FairPlay). Stops on first hard failure if `stopOnError`.
+    static func decryptInstalledApps(
+        _ apps: [(bundleID: String, name: String)],
+        stopOnError: Bool = false,
+        progress: ((String) -> Void)? = nil
+    ) -> [(bundleID: String, url: URL?, error: String?)] {
+        var out: [(bundleID: String, url: URL?, error: String?)] = []
+        for (i, app) in apps.enumerated() {
+            progress?("[\(i + 1)/\(apps.count)] \(app.name)")
+            do {
+                let url = try decryptInstalledApp(bundleID: app.bundleID, displayName: app.name, progress: progress)
+                out.append((app.bundleID, url, nil))
+            } catch {
+                out.append((app.bundleID, nil, error.localizedDescription))
+                if stopOnError { break }
+            }
+        }
+        return out
     }
 
     private static func mainExecutableURL(in app: URL) -> URL? {

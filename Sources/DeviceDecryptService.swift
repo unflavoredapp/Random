@@ -184,12 +184,18 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     func decryptFromSearch(_ app: DecryptApp, version: String? = nil) {
-        if !app.bundle.isEmpty, FairPlayDecrypt.installedAppURL(bundleID: app.bundle) != nil {
-            let deviceApp = DeviceApp(bundleID: app.bundle, name: app.name, version: app.version, isAppStore: true)
-            Task { await decryptInstalled(deviceApp, version: version) }
-            return
+        switch DecryptChannel.current {
+        case .telegram:
+            DecryptClient.shared.select(app)
+            DecryptClient.shared.start(url: app.url, version: version, display: app.name)
+        case .device:
+            if !app.bundle.isEmpty, FairPlayDecrypt.installedAppURL(bundleID: app.bundle) != nil {
+                let deviceApp = DeviceApp(bundleID: app.bundle, name: app.name, version: app.version, isAppStore: true)
+                Task { await decryptInstalled(deviceApp, version: version) }
+                return
+            }
+            DecryptClient.shared.select(app)
+            DecryptClient.shared.start(url: app.url, version: version, display: app.name)
         }
-        DecryptClient.shared.select(app)
-        DecryptClient.shared.start(url: app.url, version: version, display: app.name)
     }
 }

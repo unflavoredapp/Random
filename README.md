@@ -27,7 +27,7 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 ## Features
 
 - **Sign & install any IPA** — using your free Apple ID, or your own certificate.
-- **Get a clean copy of apps you own** — decrypt on this iPhone with your App Store keys (not a Telegram bot). That Apple ID must have signed in to this iPhone’s App Store at least once so iOS has its decryption keys; afterward you can switch the active App Store account back.
+- **Get a clean copy of apps you own** — decrypt on this iPhone with FairPlay (App Store keys), or via the Telegram bot bridge (`@FastDecryptBot`). Device mode needs a one-time App Store sign-in for that Apple ID.
 - **Multiple App Store accounts** — sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.
 - **Tweak injection** — add `.deb` or `.dylib` tweaks while you sign.
 - **Keep apps alive** — resign in one tap, Refresh All at once, or automate it with a Shortcut so your apps (and TetherLess itself) never expire — even while your iPhone is locked.
@@ -40,9 +40,9 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 | **Pair** | On-device pairing + local VPN for native installs |
 | **Files** | Drop / open archives, extract, inspect, push |
 | **Library** | Source repos, staff picks, updates, device-installed apps |
-| **Decrypt** | On-device decrypt (this iPhone’s App Store keys) + multi-account Store Access |
+| **Decrypt** | This Device (FairPlay) or Telegram Bot (`@FastDecryptBot`) + multi-account Store Access |
 
-**Decrypt tip:** Decrypt runs on this device — not via Telegram. The Apple ID used in TetherLess must have been signed in to this iPhone’s App Store at least once (App Store app, or Settings → your name → Media & Purchases). iOS stores that account’s decryption keys on first sign-in; without it, decrypt fails after download even though TetherLess is set up correctly.
+**Decrypt tip:** **This Device** uses FairPlay on installed apps — that Apple ID must have signed in to this iPhone’s App Store at least once. **Telegram Bot** queues through the server’s GramJS bridge to `@FastDecryptBot` (Admin › Telegram).
 | **Settings** | Install method (OTA vs Native), Store Access, certs, account |
 | **Sign & install** | TrustCore signing, OTA via `*.tetherless.dev`, or native idevice install |
 | **Analysis** | Local Analysis Center — disassembler, CFG, pseudocode, reversible patch proposals |

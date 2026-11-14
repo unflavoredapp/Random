@@ -1,8 +1,8 @@
 //
 //  DecryptView.swift
-//  Decrypt tab (lock icon). On-device FairPlay decrypt (mremap_encrypted) using this
-//  iPhone’s App Store keys — not a Telegram bot. Prefer apps installed on this device
-//  (live .app path + SC_Info); Store search / IPA pick fall back through local FairPlay.
+//  Decrypt tab (lock icon). Two channels:
+//    • This Device — FairPlay mremap on installed apps (SC_Info + App Store keys)
+//    • Telegram Bot — server bridge to @FastDecryptBot for App Store links
 //
 
 import SwiftUI
@@ -262,7 +262,14 @@ final class DecryptClient: ObservableObject {
         let dest = AppPaths.dir("inbox").appendingPathComponent(file)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
-        // On-device FairPlay decrypt (mremap_encrypted). Fail closed if cryptid remains.
+        // Telegram bot IPAs should already be clear; still verify / finish with FairPlay when needed.
+        if DecryptChannel.current == .telegram {
+            let still = dest.path.withCString { fp_has_encrypted_slice($0) }
+            if still != 1 {
+                message = "Saved from Telegram bot · Library"
+                return dest
+            }
+        }
         do {
             let clear = try FairPlayDecrypt.decryptIPA(at: dest, displayName: name) { [weak self] msg in
                 Task { @MainActor in self?.message = msg }
@@ -271,9 +278,16 @@ final class DecryptClient: ObservableObject {
                 try? FileManager.default.removeItem(at: dest)
                 try FileManager.default.moveItem(at: clear, to: dest)
             }
-            message = "Decrypted on this device · saved to Library"
+            message = DecryptChannel.current == .telegram
+                ? "Telegram IPA finished with on-device FairPlay · Library"
+                : "Decrypted on this device · saved to Library"
             return dest
         } catch {
+            if DecryptChannel.current == .telegram {
+                // Bot claimed success but FairPlay couldn't finish — keep file, surface warning.
+                message = "Saved from Telegram (FairPlay verify failed: \(error.localizedDescription))"
+                return dest
+            }
             try? FileManager.default.removeItem(at: dest)
             throw DecryptError("On-device FairPlay decrypt failed: \(error.localizedDescription)")
         }
@@ -333,13 +347,16 @@ struct DecryptView: View {
                     if store.isSignedIn {
                         DecryptSignedInCard(email: store.email, onSignOut: store.signOut)
                         if showingIdleHero {
-                            DecryptAppStoreSignInHint()
-                            DecryptDeviceAppsSection()
+                            DecryptChannelPicker()
+                            if DecryptChannel.current == .device {
+                                DecryptAppStoreSignInHint()
+                                DecryptDeviceAppsSection()
+                            }
                         }
                         DecryptSearchBar(query: $query, focused: $searchFocused) {
                             Task { await c.search(query) }
                         }
-                        if showingIdleHero {
+                        if showingIdleHero, DecryptChannel.current == .device {
                             DecryptPickIPACard { pickingIPA = true }
                         }
                     } else {
@@ -463,8 +480,7 @@ struct DecryptView: View {
                         .buttonStyle(.plain)
                         .disabled(c.busy)
                         Button {
-                            c.select(app)
-                            c.start(url: app.url, version: nil, display: app.name)
+                            DeviceDecryptService.shared.decryptFromSearch(app)
                         } label: {
                             Image(systemName: "arrow.down.circle")
                                 .foregroundStyle(.white)
@@ -472,7 +488,7 @@ struct DecryptView: View {
                                 .background(.white.opacity(0.10), in: Circle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(c.busy)
+                        .disabled(c.busy || DeviceDecryptService.shared.busy)
                     }
                 }
             }
@@ -623,7 +639,7 @@ private struct DecryptVersionsSheet: View {
                     } else {
                         ForEach(c.versions) { v in
                             Button {
-                                c.start(url: app.url, version: v.v, display: app.name)
+                                DeviceDecryptService.shared.decryptFromSearch(app, version: v.v)
                                 dismiss()
                             } label: {
                                 HStack {
