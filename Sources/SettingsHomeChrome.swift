@@ -257,17 +257,27 @@ struct SettingsAppleIDCard: View {
                     .font(.title3)
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Store download needs a code")
+                    Text("Store needs the first sign-in trust")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text("Easiest: Sign Out, then sign in once — the same 2FA unlocks Store downloads automatically. Or enter a fresh 6-digit code below.")
+                    Text(store.statusMessage?.isEmpty == false
+                         ? store.statusMessage!
+                         : "Store piggybacks the Allow / verification code from Sign In — it should not ask for a second text. Sign Out, then Sign In once.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.55))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
-            SettingsStoreCodeEntry()
+            Button {
+                Task { await store.requestStoreVerificationPrompt() }
+            } label: {
+                Text("Retry Store unlock")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isBusy || store.storeConnecting)
         } else {
             // Portal signed in; store session not loaded yet — reconnect with the same password.
             HStack(spacing: 10) {
@@ -278,6 +288,10 @@ struct SettingsAppleIDCard: View {
             }
             .task {
                 await store.reconnectStoreSessionIfNeeded()
+                // Don't spin forever if reconnect no-ops or store still needs a code.
+                if store.storefrontSession()?.isUsable != true, !store.storeConnecting {
+                    store.noteStoreNeedsVerification()
+                }
             }
         }
     }
@@ -532,7 +546,7 @@ struct SettingsAppleIDCard: View {
             return "Enter the 6-digit code texted to your phone."
         }
         let device = AuthClientSpoof.current.displayName
-        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off if they don’t appear. Then enter the code below."
+        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off if they don’t appear. Enter that code below — Store unlocks with the same trust (no second text)."
     }
 
     private var accountList: some View {
@@ -633,84 +647,6 @@ struct SettingsAppleIDCard: View {
         .background(.white.opacity(0.10), in: Capsule())
         .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
         .buttonStyle(.plain)
-    }
-}
-
-/// Inline MZFinance 6-digit code on Settings (keeps Apple ID signed in).
-private struct SettingsStoreCodeEntry: View {
-    @ObservedObject private var store = AppleIDStore.shared
-    @State private var code = ""
-    @State private var busy = false
-    @State private var localError: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
-                TextField("123456", text: $code)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .font(.body.monospacedDigit().weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color.black.opacity(0.28), in: Capsule())
-                    .foregroundStyle(.white)
-                Button {
-                    Task { await submit() }
-                } label: {
-                    if busy {
-                        ProgressView().tint(.white).frame(width: 44, height: 36)
-                    } else {
-                        Text("Submit")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(TetherlessPalette.accent, in: Capsule())
-                    }
-                }
-                .buttonStyle(.plain)
-                .disabled(busy || code.filter(\.isNumber).count < 6)
-            }
-            Button {
-                Task {
-                    await store.requestStoreVerificationPrompt()
-                    // Prefer success/status copy; fall back to lastError when SMS failed.
-                    if let err = store.lastError, !(store.statusMessage?.localizedCaseInsensitiveContains("sent") == true) {
-                        localError = err
-                    } else {
-                        localError = store.statusMessage
-                    }
-                }
-            } label: {
-                Label(
-                    store.isSMSTwoFactor ? "Resend text message" : "Text me a code",
-                    systemImage: "message.fill"
-                )
-                .font(.footnote.weight(.semibold))
-                .foregroundStyle(TetherlessPalette.accent)
-            }
-            .buttonStyle(.plain)
-            .disabled(busy || store.isBusy)
-            if let localError, !localError.isEmpty {
-                Text(localError)
-                    .font(.caption2)
-                    .foregroundStyle(
-                        localError.localizedCaseInsensitiveContains("sent") ? Color.green.opacity(0.9) : .orange
-                    )
-            }
-        }
-    }
-
-    private func submit() async {
-        busy = true
-        localError = nil
-        defer { busy = false }
-        do {
-            _ = try await store.submitStoreVerificationCode(code)
-            code = ""
-        } catch {
-            localError = error.localizedDescription
-        }
     }
 }
 

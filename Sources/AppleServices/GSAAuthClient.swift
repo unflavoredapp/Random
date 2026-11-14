@@ -54,7 +54,14 @@ final class GSAAuthClient: ObservableObject {
     private init() {}
 
     /// Completes password SRP. Throws `.needsTwoFactor` after Apple has been asked to push a code.
-    func authenticate(email: String, password: String) async throws -> AppleAuthSession {
+    /// - Parameter requestTrustedDevicePush: When `true` (default), fire Mac `/auth/verify/trusteddevice`
+    ///   so Allow + code sheets overlay this iPhone. Pass `false` when opening a challenge only to
+    ///   text an SMS for Store Access — a push here races MZFinance and burns usable OTPs.
+    func authenticate(
+        email: String,
+        password: String,
+        requestTrustedDevicePush: Bool = true
+    ) async throws -> AppleAuthSession {
         let e = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard e.contains("@"), !password.isEmpty else {
             throw AppleAuthError.message("Enter Apple ID and password.")
@@ -67,32 +74,40 @@ final class GSAAuthClient: ObservableObject {
         twoFactorChannel = .trustedDevice
 
         do {
-            return try await authenticateOnce(email: e, password: password, skipTwoFactorGate: false)
+            return try await authenticateOnce(
+                email: e,
+                password: password,
+                skipTwoFactorGate: false,
+                requestTrustedDevicePush: requestTrustedDevicePush
+            )
         } catch let AppleAuthError.portal(code, _) where Self.isTransientAnisetteRejection(code) {
             // Apple rejected the machine identity — wipe adi.pb and provision a fresh one once.
             await AnisetteClient.shared.invalidate(resetProvisioning: true)
-            return try await authenticateOnce(email: e, password: password, skipTwoFactorGate: false)
+            return try await authenticateOnce(
+                email: e,
+                password: password,
+                skipTwoFactorGate: false,
+                requestTrustedDevicePush: requestTrustedDevicePush
+            )
         }
     }
 
     private func authenticateOnce(
         email: String,
         password: String,
-        skipTwoFactorGate: Bool
+        skipTwoFactorGate: Bool,
+        requestTrustedDevicePush: Bool = true
     ) async throws -> AppleAuthSession {
         let anisette = try await AnisetteClient.shared.fetch()
         pendingAnisette = anisette
         do {
             return try await runSRP(email: email, password: password, anisette: anisette, skipTwoFactorGate: skipTwoFactorGate)
         } catch AppleAuthError.needsTwoFactor {
-            // Fire Mac-shaped /auth/verify/trusteddevice so THIS iPhone gets the system
-            // Allow (map / “MacBook Pro near …”) + verification-code sheets. Skipping that
-            // GET leaves Settings on “Verification code needed” with nothing overlaid.
             pending2FA = .trustedDevice
             twoFactorChannel = .trustedDevice
-            // Always request once when we have identity tokens. AltSign #59 warned that a
-            // *second* GET can kill an on-screen code — a first GET is what creates the UI.
-            if hasPendingTwoFactor {
+            // Store SMS delivery must skip this GET — a Mac push + SMS on the same challenge
+            // leaves MZFinance rejecting the texted digits (“That code didn’t unlock Store”).
+            if requestTrustedDevicePush, hasPendingTwoFactor {
                 _ = await requestTrustedDeviceCodeBestEffort()
             }
             throw AppleAuthError.needsTwoFactor

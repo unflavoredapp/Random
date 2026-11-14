@@ -166,7 +166,7 @@ struct DecryptOwnedStoreAppsSection: View {
                             || loadError.localizedCaseInsensitiveContains("2fa")
                             || loadError.localizedCaseInsensitiveContains("two-factor")
                             || AppleIDStore.shared.storeNeedsVerification {
-                            OwnedStoreCodeEntry(onSuccess: { await refresh() })
+                            OwnedStoreTrustHint(onRetry: { await refresh() })
                         } else if loadError.localizedCaseInsensitiveContains("204")
                             || loadError.localizedCaseInsensitiveContains("403")
                             || loadError.localizedCaseInsensitiveContains("expired") {
@@ -225,7 +225,7 @@ struct DecryptOwnedStoreAppsSection: View {
             owned = try await DeviceDecryptService.shared.ownedStoreApps()
         } catch AppStoreClientError.needsTwoFactor {
             owned = []
-            loadError = "App Store needs a one-time verification code. Enter the 6-digit code below, then tap Submit — you stay signed in."
+            loadError = "Store needs the first Sign In trust — Sign Out, then Sign In once under Settings › Store Access. The Allow / verification code unlocks Store automatically (no second text)."
             AppleIDStore.shared.noteStoreNeedsVerification()
         } catch {
             owned = []
@@ -237,61 +237,32 @@ struct DecryptOwnedStoreAppsSection: View {
     }
 }
 
-/// Inline 6-digit App Store code for Owned history (no Sign Out).
-private struct OwnedStoreCodeEntry: View {
-    var onSuccess: () async -> Void
+/// Store must piggyback the first Allow/code — no second Store OTP here.
+private struct OwnedStoreTrustHint: View {
+    var onRetry: () async -> Void
     @ObservedObject private var store = AppleIDStore.shared
-    @State private var code = ""
     @State private var busy = false
-    @State private var localError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Enter the 6-digit code — stay signed in.")
+            Text("Store piggybacks the Allow / verification code from Sign In — it should not ask for another text.")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.5))
-            HStack(spacing: 10) {
-                TextField("123456", text: $code)
-                    .keyboardType(.numberPad)
-                    .textContentType(.oneTimeCode)
-                    .font(.body.monospacedDigit().weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                    .foregroundStyle(.white)
-                Button {
-                    Task { await submit() }
-                } label: {
-                    if busy {
-                        ProgressView().tint(.white).frame(width: 44, height: 36)
-                    } else {
-                        Text("Submit")
-                            .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(TetherlessPalette.accent, in: Capsule())
-                    }
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                Task {
+                    busy = true
+                    defer { busy = false }
+                    await store.requestStoreVerificationPrompt()
+                    await onRetry()
                 }
-                .buttonStyle(.plain)
-                .disabled(busy || code.filter(\.isNumber).count < 6)
+            } label: {
+                Text(busy ? "Retrying…" : "Retry Store unlock")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
             }
-            if let localError, !localError.isEmpty {
-                Text(localError).font(.caption2).foregroundStyle(.orange)
-            }
-        }
-    }
-
-    private func submit() async {
-        busy = true
-        localError = nil
-        defer { busy = false }
-        do {
-            _ = try await store.submitStoreVerificationCode(code)
-            code = ""
-            await onSuccess()
-        } catch {
-            localError = error.localizedDescription
+            .buttonStyle(.plain)
+            .disabled(busy || store.isBusy || store.storeConnecting)
         }
     }
 }
