@@ -177,10 +177,25 @@ struct DecryptDeviceAppsSection: View {
                     }
                 }
 
-                Text("App Store apps installed on this iPhone decrypt with this device’s keys. Pair with Native install if the list is empty.")
+                Text("Decrypts main, frameworks, widgets, Watch, and App Clips with this device’s FairPlay keys. Pair with Native install if the list is empty.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
+
+                if !drm.isEmpty {
+                    Button {
+                        Task { await DeviceDecryptService.shared.decryptAllInstalled() }
+                    } label: {
+                        Text(decrypting.busy ? "Decrypting…" : "Decrypt All")
+                            .font(.subheadline.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 10)
+                            .foregroundStyle(.white)
+                            .background(TetherlessPalette.accent.opacity(decrypting.busy ? 0.45 : 1), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(decrypting.busy || DecryptClient.shared.busy || !NativeInstaller.isSelected || !(DevicePairingStore.hasSavedPairing))
+                }
 
                 if let err = decrypting.lastError ?? device.error, !err.isEmpty {
                     Text(err)
@@ -191,6 +206,11 @@ struct DecryptDeviceAppsSection: View {
                     Text(decrypting.status)
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.55))
+                }
+                if !decrypting.lastReportSummary.isEmpty, decrypting.status.isEmpty {
+                    Text(decrypting.lastReportSummary)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.45))
                 }
 
                 if !NativeInstaller.isSelected {

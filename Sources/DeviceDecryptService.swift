@@ -15,6 +15,8 @@ final class DeviceDecryptService: ObservableObject {
     @Published private(set) var busy = false
     @Published var status = ""
     @Published var lastError: String?
+    /// Last batch / single-run detail line (counts, soft-fails).
+    @Published var lastReportSummary = ""
 
     private init() {}
 
@@ -143,10 +145,13 @@ final class DeviceDecryptService: ObservableObject {
                 ) { [weak self] msg in
                     Task { @MainActor in self?.status = msg }
                 }
+                lastReportSummary = clear.lastPathComponent.contains("-decrypted-soft")
+                    ? "Saved with optional Watch/widget leftovers encrypted"
+                    : "Full Mach-O coverage (main + frameworks + nested)"
                 DecryptClient.shared.finished = clear
                 DecryptClient.shared.finishedName = app.name
                 DecryptClient.shared.phase = .done
-                DecryptClient.shared.message = "Decrypted on this device · saved to Library"
+                DecryptClient.shared.message = "Decrypted on this device · \(lastReportSummary)"
                 DecryptClient.shared.error = nil
                 status = ""
                 AppNav.shared.go(AppTab.library.rawValue)
@@ -196,6 +201,64 @@ final class DeviceDecryptService: ObservableObject {
             }
             DecryptClient.shared.select(app)
             DecryptClient.shared.start(url: app.url, version: version, display: app.name)
+        }
+    }
+
+    /// Decrypt every listed App Store app with on-device FairPlay (main + frameworks + nested).
+    func decryptAllInstalled(stopOnError: Bool = false) async {
+        guard !busy else { return }
+        let apps = drmApps
+        guard !apps.isEmpty else {
+            lastError = "No App Store apps listed. Pair Native and refresh."
+            return
+        }
+        guard AppleIDStore.shared.isSignedIn else {
+            lastError = "Sign in under Settings › Store Access with the Apple ID that owns these apps."
+            return
+        }
+        busy = true
+        lastError = nil
+        lastReportSummary = ""
+        defer { busy = false }
+
+        var ok = 0
+        var fail = 0
+        var lastURL: URL?
+        var lastName = ""
+        for (i, app) in apps.enumerated() {
+            status = "[\(i + 1)/\(apps.count)] \(app.name)…"
+            do {
+                let clear = try FairPlayDecrypt.decryptInstalledApp(
+                    bundleID: app.bundleID,
+                    displayName: app.name
+                ) { [weak self] msg in
+                    Task { @MainActor in
+                        self?.status = "[\(i + 1)/\(apps.count)] \(app.name) · \(msg)"
+                    }
+                }
+                ok += 1
+                lastURL = clear
+                lastName = app.name
+            } catch {
+                fail += 1
+                lastError = "\(app.name): \(error.localizedDescription)"
+                if stopOnError { break }
+            }
+        }
+
+        lastReportSummary = "\(ok) decrypted · \(fail) failed of \(apps.count)"
+        if let lastURL {
+            DecryptClient.shared.finished = lastURL
+            DecryptClient.shared.finishedName = lastName
+            DecryptClient.shared.phase = .done
+            DecryptClient.shared.message = "Decrypt All finished · \(lastReportSummary)"
+            DecryptClient.shared.error = fail == 0 ? nil : lastError
+            status = lastReportSummary
+            AppNav.shared.go(AppTab.library.rawValue)
+        } else {
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = lastError ?? "Decrypt All failed."
+            status = ""
         }
     }
 }
