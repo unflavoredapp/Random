@@ -260,7 +260,7 @@ struct SettingsAppleIDCard: View {
                     Text("Store download needs a code")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text("Easiest: Sign Out, then sign in once — the same 2FA unlocks Store downloads automatically. Or enter a fresh 6-digit code below.")
+                    Text("Tap Resend text message, enter that SMS code below, then Submit. Stay signed in — don’t use an older code from a previous prompt.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.55))
                         .fixedSize(horizontal: false, vertical: true)
@@ -278,6 +278,10 @@ struct SettingsAppleIDCard: View {
             }
             .task {
                 await store.reconnectStoreSessionIfNeeded()
+                // Don't spin forever if reconnect no-ops or store still needs a code.
+                if store.storefrontSession()?.isUsable != true, !store.storeConnecting {
+                    store.noteStoreNeedsVerification()
+                }
             }
         }
     }
