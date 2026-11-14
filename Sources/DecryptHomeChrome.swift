@@ -46,7 +46,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("All in one app — FairPlay decrypt runs here on this iPhone. No separate decrypt helper. Use This Device for silent Store download + local keys, or Telegram Bot only as an optional remote fallback.")
+            Text("All in one app — silent Store download + FairPlay decrypt on this iPhone. No helper app and no App Store UI. Telegram Bot is an optional remote fallback only.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
