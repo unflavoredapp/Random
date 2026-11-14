@@ -546,7 +546,7 @@ struct SettingsAppleIDCard: View {
             return "Enter the 6-digit code texted to your phone."
         }
         let device = AuthClientSpoof.current.displayName
-        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off if they don’t appear. Enter that code below — Store unlocks with the same trust (no second text)."
+        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off (moon) if they don’t appear. Enter that code below; Store unlocks from the same trust after Submit (no second text)."
     }
 
     private var accountList: some View {
