@@ -56,6 +56,8 @@ final class AppleIDStore: ObservableObject {
     private static let accountsBackupKey = "tetherless.appleid.accounts.backup"
     private static let activeBackupKey = "tetherless.appleid.active.backup"
     private static let storeSessionPrefix = "tetherless.appleid.storesession."
+    /// Short-lived GrandSlam PET for Retry Store unlock (same sign-in window).
+    private static let petPrefix = "tetherless.appleid.pet."
 
     enum AuthPhase: Equatable {
         case idle
@@ -261,6 +263,7 @@ final class AppleIDStore: ObservableObject {
             password: password,
             authCode: force ? nil : pendingStoreAuthCode,
             prefetched: nil,
+            pet: storedPET(),
             teamName: activeAccount?.teamName
         )
     }
@@ -626,7 +629,8 @@ final class AppleIDStore: ObservableObject {
 
     func removeAccount(id: String) {
         Keychain.deleteSessionSecret(Self.passwordPrefix + id)
-        Keychain.deleteSessionSecret(Self.storeSessionPrefix + id)
+        Keychain.deleteSessionSecret(Self.petPrefix + id)
+        _ = Keychain.setSessionData(Self.storeSessionPrefix + id, Data())
         accounts.removeAll { $0.id == id }
         if activeAccountID == id {
             activeAccountID = accounts.first?.id
@@ -651,7 +655,8 @@ final class AppleIDStore: ObservableObject {
     func signOutAll() {
         for a in accounts {
             Keychain.deleteSessionSecret(Self.passwordPrefix + a.id)
-            Keychain.deleteSessionSecret(Self.storeSessionPrefix + a.id)
+            Keychain.deleteSessionSecret(Self.petPrefix + a.id)
+            _ = Keychain.setSessionData(Self.storeSessionPrefix + a.id, Data())
         }
         Keychain.deleteSessionSecret(Self.accountsBackupKey)
         Keychain.deleteSessionSecret(Self.activeBackupKey)
@@ -987,7 +992,9 @@ final class AppleIDStore: ObservableObject {
         storefrontNeedsRefresh = true
         pendingStoreAuthCode = nil
         lastError = nil
-        statusMessage = "Retrying Store with your signed-in Apple ID…"
+        statusMessage = storedPET() == nil
+            ? "No Store trust token yet — Sign Out, then Sign In once so Apple’s Allow code can mint Store…"
+            : "Retrying Store with your Apple ID trust token…"
         // Drop stray GSA SMS challenges — Store must not ask for its own code.
         if GSAAuthClient.shared.hasPendingTwoFactor {
             GSAAuthClient.shared.cancel()
@@ -1007,7 +1014,7 @@ final class AppleIDStore: ObservableObject {
             }
         }
         storeNeedsVerification = true
-        statusMessage = "Store still needs the first sign-in trust. Sign Out, then Sign In once — the Allow / verification code unlocks Store automatically (no second text)."
+        statusMessage = "Store still needs the Allow-sheet trust token. Sign Out, then Sign In once — Submit Code unlocks Store automatically (no second text)."
         withAnimation(.snappy) { authPhase = .idle }
     }
 
@@ -1063,6 +1070,9 @@ final class AppleIDStore: ObservableObject {
         authPhase = .preparing
         statusMessage = "Fetching developer team…"
         var session = session
+        // Keep PET in memory for Store mint; don't write the short-lived token into portal JSON.
+        let petForStore = session.pet
+        session.pet = nil
         // Attach first Developer Portal team when available (free or paid).
         if let teams = try? await DeveloperPortalClient.shared.listTeams(auth: session),
            let team = teams.first {
@@ -1104,11 +1114,16 @@ final class AppleIDStore: ObservableObject {
         UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
         save()
 
+        if let petForStore, !petForStore.isEmpty, let aid = activeAccountID {
+            _ = Keychain.setSessionSecret(Self.petPrefix + aid, petForStore)
+        }
+
         await connectStoreSession(
             email: email,
             password: password,
             authCode: pendingStoreAuthCode,
             prefetched: pendingStoreSession,
+            pet: petForStore,
             teamName: session.teamName
         )
         pendingStoreSession = nil
@@ -1117,30 +1132,58 @@ final class AppleIDStore: ObservableObject {
         await finishPreparing()
     }
 
-    /// Mint / persist iTunes Store session with the Apple ID password (+ optional same 2FA).
-    /// On success Settings shows “Signed in for Store access” with the same email.
-    /// After a successful HSA2 Allow trust, password-only MZFinance usually works even when
-    /// password+code did not (Allow-sheet digits are AuthKit, not always store OTPs).
+    /// Mint / persist iTunes Store session.
+    /// Prefer GrandSlam PET as MZFinance `password` after HSA2 — raw Apple ID password
+    /// alone does not unlock Store for 2FA accounts (Allow-sheet digits ≠ store OTPs).
     private func connectStoreSession(
         email: String,
         password: String,
         authCode: String?,
         prefetched: StorefrontSession?,
+        pet: String?,
         teamName: String?
     ) async {
         storeConnecting = true
         statusMessage = "Connecting App Store download session…"
         defer { storeConnecting = false }
+        sanitizeStoreIdentityForAccountAPIs()
 
         if let prefetched, prefetched.isUsable {
             persistStoreSession(prefetched)
             storeNeedsVerification = false
             pendingStoreAuthCode = nil
+            clearStoredPET()
             statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
                 ?? "Signed in · free & purchased downloads ready"
             return
         }
 
+        // 1) PET exchange — standard GSA → Store bridge after Allow / SMS trust.
+        let resolvedPET = (pet ?? storedPET())?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let resolvedPET, !resolvedPET.isEmpty {
+            statusMessage = "Unlocking Store with Apple ID trust token…"
+            do {
+                let store = try await authenticateStoreWithRetries(
+                    email: email,
+                    password: resolvedPET,
+                    authCode: ""
+                )
+                if store.isUsable {
+                    persistStoreSession(store)
+                    storeNeedsVerification = false
+                    pendingStoreAuthCode = nil
+                    clearStoredPET()
+                    statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
+                        ?? "Signed in · free & purchased downloads ready"
+                    return
+                }
+            } catch {
+                lastError = "Store PET unlock: \(error.localizedDescription)"
+            }
+        }
+
+        // 2) SMS-style OTP still works when digits are real store codes.
         let code = (authCode ?? "").filter(\.isNumber)
         if code.count == 6 {
             if let store = try? await authenticateStoreWithRetries(
@@ -1151,19 +1194,20 @@ final class AppleIDStore: ObservableObject {
                 persistStoreSession(store)
                 storeNeedsVerification = false
                 pendingStoreAuthCode = nil
+                clearStoredPET()
                 statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
                     ?? "Signed in · free & purchased downloads ready"
                 return
             }
         }
 
-        // Warm trust: GSA 2FA just succeeded — MZFinance often accepts password alone.
-        for attempt in 1...3 {
+        // 3) Legacy password-only (non-2FA / rare warm sessions).
+        for attempt in 1...2 {
             statusMessage = attempt == 1
                 ? "Unlocking Store from the same Apple ID trust…"
-                : "Retrying Store unlock (\(attempt)/3)…"
+                : "Retrying Store unlock…"
             if attempt > 1 {
-                try? await Task.sleep(nanoseconds: UInt64(attempt) * 800_000_000)
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
                 await AnisetteClient.shared.invalidate(resetProvisioning: false)
             }
             if let store = try? await AppStoreClient.shared.authenticate(
@@ -1174,6 +1218,7 @@ final class AppleIDStore: ObservableObject {
                 persistStoreSession(store)
                 storeNeedsVerification = false
                 pendingStoreAuthCode = nil
+                clearStoredPET()
                 statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
                     ?? "Signed in · free & purchased downloads ready"
                 return
@@ -1186,8 +1231,18 @@ final class AppleIDStore: ObservableObject {
             statusMessage = teamName.map { "Signed in · \($0)" } ?? "Signed in"
         } else {
             storeNeedsVerification = true
-            statusMessage = "Signed in — tap Retry Store unlock (no second text). Turn Focus off, or Sign Out and Sign In once."
+            statusMessage = "Signed in — tap Retry Store unlock (uses the same Apple ID trust). Or Sign Out and Sign In once."
         }
+    }
+
+    private func storedPET() -> String? {
+        guard let aid = activeAccountID else { return nil }
+        return Keychain.getSessionSecret(Self.petPrefix + aid)
+    }
+
+    private func clearStoredPET() {
+        guard let aid = activeAccountID else { return }
+        Keychain.deleteSessionSecret(Self.petPrefix + aid)
     }
 
     private func finishPreparing() async {

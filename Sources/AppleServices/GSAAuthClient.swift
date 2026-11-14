@@ -18,6 +18,8 @@ final class GSAAuthClient: ObservableObject {
     private let phonePutURL = URL(string: "https://gsa.apple.com/auth/verify/phone/put?mode=sms")!
     private let phoneSecurityCodeURL = URL(string: "https://gsa.apple.com/auth/verify/phone/securitycode?referrer=/auth/verify/phone/put")!
     private let authApp = "com.apple.gs.xcode.auth"
+    /// Personally Entitled Token — MZFinance authenticate accepts this as `password` after HSA2.
+    private let petApp = "com.apple.gs.idms.pet"
     /// SideInstaller / SideStore working Xcode version string for GSA + 2FA.
     private let xcodeVersion = "15.3 (15E204a)"
     private let session: URLSession = {
@@ -35,6 +37,8 @@ final class GSAAuthClient: ObservableObject {
     private var pendingDSID: String?
     private var pendingIDMS: String?
     private var pending2FA: TwoFactorPending?
+    /// Captured from validate `X-Apple-PE-Token` or apptokens `com.apple.gs.idms.pet`.
+    private var pendingPET: String?
     /// Apple already pushed a code (hsc 409 / pushedCode) — do not hit /trusteddevice again.
     private(set) var twoFactorCodeAlreadySent = false
     /// Obfuscated phone shown after SMS request (e.g. ••••42).
@@ -69,6 +73,7 @@ final class GSAAuthClient: ObservableObject {
 
         pendingEmail = e
         pendingPassword = password
+        pendingPET = nil
         twoFactorCodeAlreadySent = false
         twoFactorPhoneHint = nil
         twoFactorChannel = .trustedDevice
@@ -204,9 +209,34 @@ final class GSAAuthClient: ObservableObject {
         pendingDSID = nil
         pendingIDMS = nil
         pending2FA = nil
+        pendingPET = nil
         twoFactorCodeAlreadySent = false
         twoFactorPhoneHint = nil
         twoFactorChannel = .trustedDevice
+    }
+
+    private func capturePEToken(from response: URLResponse?) {
+        guard let http = response as? HTTPURLResponse else { return }
+        // Apple Wiki: validate returns X-Apple-PE-Token after a successful security code.
+        let keys = ["X-Apple-PE-Token", "x-apple-pe-token", "X-Apple-Pe-Token"]
+        for key in keys {
+            if let raw = http.value(forHTTPHeaderField: key)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !raw.isEmpty {
+                pendingPET = raw
+                return
+            }
+        }
+        // Some pods emit PE among multi-value GS tokens — keep first non-empty PE-looking header.
+        for (key, value) in http.allHeaderFields {
+            let k = String(describing: key).lowercased()
+            guard k.contains("pe-token") || k.contains("petoken") else { continue }
+            let v = String(describing: value).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty {
+                pendingPET = v
+                return
+            }
+        }
     }
 
     private struct SMSRequestResult {
@@ -347,7 +377,6 @@ final class GSAAuthClient: ObservableObject {
 
             let (data, resp) = try await session.data(for: req)
             let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            let http = resp as? HTTPURLResponse
 
             do {
                 try throwIfBad2FA(data: data, status: status)
@@ -362,13 +391,9 @@ final class GSAAuthClient: ObservableObject {
             }
 
             if status == 200 || status == 204 {
-                // Phone verify should return X-Apple-PE-Token; tolerate if Apple skips it.
-                let hasPE = http?.allHeaderFields.keys.contains(where: {
-                    ($0 as? String)?.lowercased() == "x-apple-pe-token"
-                }) == true
-                if hasPE || status == 200 || status == 204 {
-                    return
-                }
+                // Phone verify should return X-Apple-PE-Token (SideSign); capture for Store mint.
+                capturePEToken(from: resp)
+                return
             }
             if status == 401 || status == 403 {
                 throw AppleAuthError.incorrectCode
@@ -539,12 +564,57 @@ final class GSAAuthClient: ObservableObject {
         guard let sk = dict["sk"] as? Data, let cookie = dict["c"] as? Data else {
             throw AppleAuthError.message("Missing session key for apptokens.")
         }
-        guard let checksum = CryptoUtilities.hmacSHA256(key: sk, strings: ["apptokens", dsid, authApp]) else {
-            throw AppleAuthError.message("apptokens checksum failed.")
+
+        // Prefer PET already in SPD `t`, else from validate PE-Token, else apptokens fetch.
+        if pendingPET == nil {
+            if let tokens = dict["t"] as? [String: Any],
+               let petEntry = tokens[petApp] as? [String: Any],
+               let pet = petEntry["token"] as? String, !pet.isEmpty {
+                pendingPET = pet
+            }
         }
 
+        let authToken = try await fetchAppToken(
+            app: authApp, sk: sk, cookie: cookie, dsid: dsid, idms: idms, cpd: cpd, anisette: anisette
+        )
+        if pendingPET == nil {
+            if let pet = try? await fetchAppToken(
+                app: petApp, sk: sk, cookie: cookie, dsid: dsid, idms: idms, cpd: cpd, anisette: anisette
+            ), !pet.isEmpty {
+                pendingPET = pet
+            }
+        }
+
+        let now = Date()
+        let pet = pendingPET
+        return AppleAuthSession(
+            dsid: dsid,
+            authToken: authToken,
+            email: email,
+            anisette: anisette,
+            createdAt: now,
+            expiresAt: nil,
+            timeToLive: nil,
+            xcodeVersion: xcodeVersion,
+            pet: pet
+        )
+    }
+
+    /// Decrypt one GrandSlam app token (`com.apple.gs.xcode.auth` / `com.apple.gs.idms.pet`).
+    private func fetchAppToken(
+        app: String,
+        sk: Data,
+        cookie: Data,
+        dsid: String,
+        idms: String,
+        cpd: [String: Any],
+        anisette: AnisetteHeaders
+    ) async throws -> String {
+        guard let checksum = CryptoUtilities.hmacSHA256(key: sk, strings: ["apptokens", dsid, app]) else {
+            throw AppleAuthError.message("apptokens checksum failed.")
+        }
         let tokenResp = try await sendGS([
-            "app": [authApp],
+            "app": [app],
             "c": cookie,
             "checksum": checksum,
             "cpd": cpd,
@@ -554,7 +624,7 @@ final class GSAAuthClient: ObservableObject {
         ], anisette: anisette)
 
         guard let et = tokenResp["et"] as? Data, et.count > 35 else {
-            throw AppleAuthError.message("Missing encrypted auth token.")
+            throw AppleAuthError.message("Missing encrypted auth token (\(app)).")
         }
         let aad = Data(et[..<3])
         let nonce = Data(et[3..<19])
@@ -564,36 +634,11 @@ final class GSAAuthClient: ObservableObject {
             key: sk, nonce: nonce, aad: aad, ciphertext: ciphertext, tag: tag
         ), let tokens = parsePlist(tokenBytes),
            let appTokens = tokens["t"] as? [String: Any],
-           let entry = appTokens[authApp] as? [String: Any],
-           let authToken = entry["token"] as? String else {
-            throw AppleAuthError.message("Couldn't parse Xcode auth token.")
+           let entry = appTokens[app] as? [String: Any],
+           let token = entry["token"] as? String, !token.isEmpty else {
+            throw AppleAuthError.message("Couldn't parse auth token (\(app)).")
         }
-
-        let now = Date()
-        var expires: Date?
-        var ttl: TimeInterval?
-        if let expiry = entry["expiry"] as? Date {
-            expires = expiry
-            ttl = expiry.timeIntervalSince(now)
-        } else if let expiryStr = entry["expiry"] as? String,
-                  let parsed = ISO8601DateFormatter().date(from: expiryStr) {
-            expires = parsed
-            ttl = parsed.timeIntervalSince(now)
-        } else if let t = entry["ttl"] as? Double ?? (entry["ttl"] as? Int).map(Double.init) {
-            ttl = t
-            expires = now.addingTimeInterval(t)
-        }
-
-        return AppleAuthSession(
-            dsid: dsid,
-            authToken: authToken,
-            email: email,
-            anisette: anisette,
-            createdAt: now,
-            expiresAt: expires,
-            timeToLive: ttl,
-            xcodeVersion: xcodeVersion
-        )
+        return token
     }
 
     // MARK: - Trusted-device 2FA
@@ -698,6 +743,7 @@ final class GSAAuthClient: ObservableObject {
                 let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
                 if status == 200 {
                     try throwIfBad2FA(data: data, status: status)
+                    capturePEToken(from: resp)
                     return
                 }
                 // Wrong code — don't thrash client identities.
@@ -723,6 +769,7 @@ final class GSAAuthClient: ObservableObject {
                 guard status2 == 200 || status2 == 204 else {
                     throw AppleAuthError.incorrectCode
                 }
+                capturePEToken(from: resp2)
                 return
             }
             throw AppleAuthError.incorrectCode
@@ -743,6 +790,7 @@ final class GSAAuthClient: ObservableObject {
         guard (200..<300).contains(status) || status == 204 else {
             throw AppleAuthError.incorrectCode
         }
+        capturePEToken(from: resp)
     }
 
     private func throwIfBad2FA(data: Data, status: Int) throws {
