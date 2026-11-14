@@ -166,7 +166,12 @@ final class AppleIDStore: ObservableObject {
             await finishRealSignIn(session: session, password: p)
         } catch AppleAuthError.needsTwoFactor {
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
-            statusMessage = "Enter the 6-digit code from your trusted Apple device."
+            // Apple often already pushed the code (hsc 409). Asking /trusteddevice again caused
+            // HTTP 500 "Could not connect to iCloud" — just collect the code on screen.
+            statusMessage = GSAAuthClient.shared.twoFactorCodeAlreadySent
+                ? "Apple already sent a code to your trusted devices — enter it below."
+                : "Enter the 6-digit code from your trusted Apple device."
+            lastError = nil
         } catch {
             authPhase = .idle
             lastError = error.localizedDescription
