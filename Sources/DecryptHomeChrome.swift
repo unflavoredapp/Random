@@ -252,7 +252,7 @@ struct DecryptOwnedStoreAppsSection: View {
             owned = try await DeviceDecryptService.shared.ownedStoreApps()
         } catch AppStoreClientError.needsTwoFactor {
             owned = []
-            loadError = error.localizedDescription
+            loadError = "App Store needs a one-time verification code. Enter the 6-digit code below, then tap Submit — you stay signed in."
             AppleIDStore.shared.noteStoreNeedsVerification()
         } catch {
             owned = []
