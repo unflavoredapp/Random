@@ -5,6 +5,7 @@
 //
 
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 private enum LibrarySegment: String, CaseIterable, Identifiable {
