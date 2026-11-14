@@ -236,9 +236,10 @@ final class AppleIDStore: ObservableObject {
     }
 
     /// Settings: finish “Signed in for Store access” using the saved Apple ID password (same session).
-    func reconnectStoreSessionIfNeeded() async {
+    /// - Parameter force: Re-mint even when a structurally “usable” token exists (dead tokens 204 Owned).
+    func reconnectStoreSessionIfNeeded(force: Bool = false) async {
         guard activeAccount != nil else { return }
-        if let existing = storefrontSession(), existing.isUsable {
+        if !force, !storefrontNeedsRefresh, let existing = storefrontSession(), existing.isUsable {
             storeNeedsVerification = false
             storeConnecting = false
             return
@@ -250,13 +251,37 @@ final class AppleIDStore: ObservableObject {
             storeNeedsVerification = true
             return
         }
+        if force {
+            clearPersistedStoreSession()
+            sanitizeStoreIdentityForAccountAPIs()
+            await AnisetteClient.shared.invalidate(resetProvisioning: false)
+        }
         await connectStoreSession(
             email: email,
             password: password,
-            authCode: pendingStoreAuthCode,
+            authCode: force ? nil : pendingStoreAuthCode,
             prefetched: nil,
             teamName: activeAccount?.teamName
         )
+    }
+
+    /// Drop a dead passwordToken so Retry / Owned can re-mint (keeps Apple ID signed in).
+    func clearPersistedStoreSession() {
+        guard let aid = activeAccountID,
+              let idx = accounts.firstIndex(where: { $0.id == aid }) else { return }
+        accounts[idx].storeSessionJSON = nil
+        _ = Keychain.setSessionData(Self.storeSessionPrefix + aid, Data())
+        storefrontNeedsRefresh = true
+        save()
+    }
+
+    /// Account APIs (authenticate / Owned) must not rewrite Client-Info — that 204s MZFinance.
+    func sanitizeStoreIdentityForAccountAPIs() {
+        var spoof = StoreDeviceSpoof.current
+        if spoof.rewriteClientInfo {
+            spoof.rewriteClientInfo = false
+            StoreDeviceSpoof.current = spoof
+        }
     }
 
     // MARK: Auth — Settings / Decrypt API
@@ -956,8 +981,8 @@ final class AppleIDStore: ObservableObject {
         withAnimation(.snappy) { authPhase = .idle }
     }
 
-    /// Recovery when Store never piggybacked the first trust: try password-only again,
-    /// then tell the user to Sign Out → Sign In once (same Allow/code). No second Store SMS.
+    /// Recovery when Store never piggybacked the first trust / Owned HTTP 204:
+    /// clear dead token, pristine Client-Info, password-only re-mint. No second Store SMS.
     func requestStoreVerificationPrompt() async {
         storefrontNeedsRefresh = true
         pendingStoreAuthCode = nil
@@ -967,11 +992,19 @@ final class AppleIDStore: ObservableObject {
         if GSAAuthClient.shared.hasPendingTwoFactor {
             GSAAuthClient.shared.cancel()
         }
-        await reconnectStoreSessionIfNeeded()
-        if storefrontSession()?.isUsable == true {
-            storeNeedsVerification = false
-            statusMessage = "Store access ready — free & purchased downloads unlocked"
-            return
+        await reconnectStoreSessionIfNeeded(force: true)
+        if let session = storefrontSession(), session.isUsable {
+            // Prove the token with Owned — structurally “usable” can still 204.
+            do {
+                _ = try await AppStoreClient.shared.purchaseHistory(account: session)
+                storeNeedsVerification = false
+                statusMessage = "Store access ready — free & purchased downloads unlocked"
+                withAnimation(.snappy) { authPhase = .idle }
+                return
+            } catch {
+                clearPersistedStoreSession()
+                lastError = error.localizedDescription
+            }
         }
         storeNeedsVerification = true
         statusMessage = "Store still needs the first sign-in trust. Sign Out, then Sign In once — the Allow / verification code unlocks Store automatically (no second text)."
