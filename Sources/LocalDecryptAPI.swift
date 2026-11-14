@@ -218,7 +218,7 @@ actor LocalDecryptJobs {
         let dest = AppPaths.dir("inbox").appendingPathComponent(file)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
-        // Finish with on-device FairPlay; fail closed if cryptid remains.
+        // Finish with on-device FairPlay; fail closed if cryptid remains on required binaries.
         do {
             let clear = try FairPlayDecrypt.decryptIPA(at: dest, displayName: name)
             if clear != dest {

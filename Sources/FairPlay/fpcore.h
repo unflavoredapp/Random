@@ -56,3 +56,5 @@ int  fp_has_encrypted_slice(const char *path);
 int  fp_max_cryptid(const char *path);
 // Count slices with cryptid ≠ 0. -1 on parse error.
 int  fp_count_encrypted_slices(const char *path);
+// Per-slice cryptid dump into caller buffer (NUL-terminated). Returns slice count, -1 on parse error.
+int  fp_describe_cryptids(const char *path, char *buf, size_t buflen);
