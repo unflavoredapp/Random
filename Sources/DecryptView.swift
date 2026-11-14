@@ -19,6 +19,10 @@ struct DecryptApp: Identifiable, Hashable {
     let dev: String
     let version: String
     let url: String
+    /// ISO storefront code from iTunes `country=` / URL (e.g. `us`, `jp`). Empty when unknown.
+    var countryCode: String = ""
+    /// Short badge label (e.g. `US`, `JP`).
+    var countryLabel: String = ""
 }
 
 struct DecryptVersion: Identifiable, Hashable {
@@ -591,7 +595,18 @@ struct DecryptView: View {
             HStack(spacing: 12) {
                 iconView(app.icon, size: 52)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(app.name).font(.headline.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                    HStack(spacing: 6) {
+                        Text(app.name).font(.headline.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                        if !app.countryLabel.isEmpty {
+                            Text(app.countryLabel)
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.white.opacity(0.14), in: Capsule())
+                                .accessibilityLabel("Storefront \(app.countryLabel)")
+                        }
+                    }
                     Text([app.dev, app.version.isEmpty ? "" : "v\(app.version)"].filter { !$0.isEmpty }.joined(separator: " · "))
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.55))

@@ -134,11 +134,16 @@ final class DeviceDecryptService: ObservableObject {
             return nil
         }
         guard var comps = URLComponents(string: "https://itunes.apple.com/lookup") else { return nil }
+        var items: [URLQueryItem]
         if let adam {
-            comps.queryItems = [URLQueryItem(name: "id", value: "\(adam)"), URLQueryItem(name: "limit", value: "1")]
+            items = [URLQueryItem(name: "id", value: "\(adam)"), URLQueryItem(name: "limit", value: "1")]
         } else {
-            comps.queryItems = [URLQueryItem(name: "bundleId", value: bundle), URLQueryItem(name: "limit", value: "1")]
+            items = [URLQueryItem(name: "bundleId", value: bundle), URLQueryItem(name: "limit", value: "1")]
         }
+        if !app.countryCode.isEmpty {
+            items.append(URLQueryItem(name: "country", value: app.countryCode))
+        }
+        comps.queryItems = items
         guard let url = comps.url else { return nil }
         guard let (data, resp) = try? await URLSession.shared.data(from: url),
               (resp as? HTTPURLResponse)?.statusCode == 200,
@@ -185,44 +190,86 @@ final class DeviceDecryptService: ObservableObject {
         throw DecryptError("Couldn't find an App Store link for \(id).")
     }
 
-    /// Public iTunes search (on-device) — no FastDecryptBot / Telegram.
+    /// Public iTunes search across every linked Store Access storefront — no FastDecryptBot / Telegram.
     func searchAppStore(_ term: String) async throws -> [DecryptApp] {
         let q = term.trimmingCharacters(in: .whitespacesAndNewlines)
         guard q.count >= 2 else { return [] }
         if DecryptClient.isStoreLink(q) {
             return try await [appInfo(url: q)]
         }
-        guard var comps = URLComponents(string: "https://itunes.apple.com/search") else {
-            throw DecryptError("Bad search URL.")
+        let linked = AppleIDStore.shared.linkedStorefrontCountryCodes()
+        let countries = linked.isEmpty ? ["us"] : linked
+        let batches = await withTaskGroup(of: [DecryptApp].self, returning: [[DecryptApp]].self) { group in
+            for country in countries {
+                group.addTask {
+                    await Self.searchItunes(term: q, country: country)
+                }
+            }
+            var out: [[DecryptApp]] = []
+            for await batch in group {
+                out.append(batch)
+            }
+            return out
         }
+        var merged: [DecryptApp] = []
+        var seen = Set<String>()
+        for batch in batches {
+            for app in batch {
+                if seen.insert(app.id).inserted {
+                    merged.append(app)
+                }
+            }
+        }
+        return merged.sorted {
+            let nameOrder = $0.name.localizedCaseInsensitiveCompare($1.name)
+            if nameOrder != .orderedSame {
+                return nameOrder == .orderedAscending
+            }
+            return $0.countryLabel < $1.countryLabel
+        }
+    }
+
+    /// One-country iTunes software search (nonisolated so storefronts run in parallel).
+    nonisolated private static func searchItunes(term: String, country: String) async -> [DecryptApp] {
+        let code = country.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !code.isEmpty else { return [] }
+        guard var comps = URLComponents(string: "https://itunes.apple.com/search") else { return [] }
         comps.queryItems = [
-            URLQueryItem(name: "term", value: q),
+            URLQueryItem(name: "term", value: term),
             URLQueryItem(name: "entity", value: "software"),
+            URLQueryItem(name: "country", value: code),
             URLQueryItem(name: "limit", value: "25")
         ]
-        guard let url = comps.url else { throw DecryptError("Bad search URL.") }
+        guard let url = comps.url else { return [] }
         var req = URLRequest(url: url)
         req.timeoutInterval = 30
-        let (data, _) = try await URLSession.shared.data(for: req)
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              (resp as? HTTPURLResponse)?.statusCode == 200 else {
+            return []
+        }
         let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         let results = json["results"] as? [[String: Any]] ?? []
+        let label = StorefrontCountry.label(forCode: code)
         return results.compactMap { row in
             guard let trackId = row["trackId"] as? Int else { return nil }
             let name = (row["trackName"] as? String) ?? "App"
             let bundle = (row["bundleId"] as? String) ?? ""
             let artist = (row["artistName"] as? String) ?? ""
             let version = (row["version"] as? String) ?? ""
-            let link = (row["trackViewUrl"] as? String) ?? "https://apps.apple.com/app/id\(trackId)"
+            let link = (row["trackViewUrl"] as? String)
+                ?? "https://apps.apple.com/\(code)/app/id\(trackId)"
             let icon = (row["artworkUrl512"] as? String).flatMap(URL.init(string:))
                 ?? (row["artworkUrl100"] as? String).flatMap(URL.init(string:))
             return DecryptApp(
-                id: "itunes-\(trackId)",
+                id: "itunes-\(trackId)-\(code)",
                 name: name,
                 bundle: bundle,
                 icon: icon,
                 dev: artist,
                 version: version,
-                url: link
+                url: link,
+                countryCode: code,
+                countryLabel: label
             )
         }
     }
@@ -234,8 +281,14 @@ final class DeviceDecryptService: ObservableObject {
             }
             return nil
         }()
+        let country = StorefrontCountry.code(fromAppStoreURL: url) ?? ""
+        let label = country.isEmpty ? "" : StorefrontCountry.label(forCode: country)
         if let id, var comps = URLComponents(string: "https://itunes.apple.com/lookup") {
-            comps.queryItems = [URLQueryItem(name: "id", value: id)]
+            var items = [URLQueryItem(name: "id", value: id)]
+            if !country.isEmpty {
+                items.append(URLQueryItem(name: "country", value: country))
+            }
+            comps.queryItems = items
             if let u = comps.url {
                 let (data, _) = try await URLSession.shared.data(from: u)
                 let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
@@ -245,11 +298,31 @@ final class DeviceDecryptService: ObservableObject {
                     let artist = (row["artistName"] as? String) ?? ""
                     let version = (row["version"] as? String) ?? ""
                     let icon = (row["artworkUrl512"] as? String).flatMap(URL.init(string:))
-                    return DecryptApp(id: url, name: name, bundle: bundle, icon: icon, dev: artist, version: version, url: url)
+                    return DecryptApp(
+                        id: url,
+                        name: name,
+                        bundle: bundle,
+                        icon: icon,
+                        dev: artist,
+                        version: version,
+                        url: url,
+                        countryCode: country,
+                        countryLabel: label
+                    )
                 }
             }
         }
-        return DecryptApp(id: url, name: "App", bundle: "", icon: nil, dev: "", version: "", url: url)
+        return DecryptApp(
+            id: url,
+            name: "App",
+            bundle: "",
+            icon: nil,
+            dev: "",
+            version: "",
+            url: url,
+            countryCode: country,
+            countryLabel: label
+        )
     }
 
     /// Phone-worker / TG-bot path: silent Store download + **in-process** FairPlay so a clear
@@ -368,6 +441,9 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     func decryptFromSearch(_ app: DecryptApp, version: String? = nil, externalVersionId: String? = nil) {
+        if !app.countryCode.isEmpty {
+            AppleIDStore.shared.selectAccountMatching(countryCode: app.countryCode)
+        }
         switch DecryptChannel.current {
         case .telegram:
             DecryptClient.shared.select(app)

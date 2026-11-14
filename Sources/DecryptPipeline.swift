@@ -43,6 +43,9 @@ final class DecryptPipeline: ObservableObject {
         guard !busy else { return }
         busy = true
         stage = .decrypting("Decrypting \(app.name)…")
+        if !app.countryCode.isEmpty {
+            AppleIDStore.shared.selectAccountMatching(countryCode: app.countryCode)
+        }
         DecryptClient.shared.select(app)
         DecryptClient.shared.phase = .running
         DecryptClient.shared.message = "Pipeline: decrypt…"
