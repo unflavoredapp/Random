@@ -45,7 +45,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Search for an app you own, and TetherLess downloads and decrypts it — fully on-device, no Mac, no jailbreak.")
+            Text("Search for an app you own with your Store account. TetherLess fetches a DRM-free IPA and saves it to Library on this device — no Mac, no jailbreak.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
@@ -60,6 +60,8 @@ struct DecryptHeroBlock: View {
 struct DecryptSignedInCard: View {
     let email: String
     var onSignOut: () -> Void
+    @ObservedObject private var store = AppleIDStore.shared
+    @State private var showManage = false
 
     var body: some View {
         GlassCard(corner: 24) {
@@ -69,25 +71,73 @@ struct DecryptSignedInCard: View {
                         .font(.title2)
                         .foregroundStyle(.green)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text("Signed in")
+                        Text(store.accounts.count > 1 ? "Store account" : "Signed in")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.white)
                         Text(email)
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.55))
                     }
+                    Spacer(minLength: 4)
+                    if store.accounts.count > 1 {
+                        Menu {
+                            ForEach(store.accounts) { account in
+                                Button {
+                                    store.selectAccount(id: account.id)
+                                } label: {
+                                    if store.activeAccountID == account.id {
+                                        Label(account.email, systemImage: "checkmark")
+                                    } else {
+                                        Text(account.email)
+                                    }
+                                }
+                            }
+                        } label: {
+                            Text("Switch")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(TetherlessPalette.accent)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(TetherlessPalette.accent.opacity(0.15), in: Capsule())
+                        }
+                    }
                 }
-                Button(action: onSignOut) {
-                    Text("Sign Out")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(.white.opacity(0.10), in: Capsule())
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+
+                HStack(spacing: 10) {
+                    Button { showManage = true } label: {
+                        Text("Manage")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(.white.opacity(0.10), in: Capsule())
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+
+                    Button(action: onSignOut) {
+                        Text("Sign Out")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(.white.opacity(0.10), in: Capsule())
+                            .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
             }
+        }
+        .sheet(isPresented: $showManage) {
+            NavigationStack {
+                AppleIDManageView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { showManage = false }
+                        }
+                    }
+            }
+            .preferredColorScheme(.dark)
         }
     }
 }

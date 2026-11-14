@@ -43,6 +43,20 @@ struct GlassCard<Content: View>: View {
     }
 }
 
+
+extension View {
+    /// Glass panel for Settings / Manage cards that already apply their own padding.
+    func tetherlessGlassCard(cornerRadius: CGFloat = 22) -> some View {
+        self
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .strokeBorder(.white.opacity(0.15), lineWidth: 1)
+            )
+    }
+}
+
 struct GlassPillRow<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {

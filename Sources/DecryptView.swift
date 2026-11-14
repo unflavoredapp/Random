@@ -101,6 +101,12 @@ final class DecryptClient: ObservableObject {
         r.cachePolicy = .reloadIgnoringLocalCacheData
         r.setValue(MDID.current, forHTTPHeaderField: "X-AS-ADID")
         if let t = ZefvAccount.shared.sessionToken, !t.isEmpty { r.setValue("Bearer \(t)", forHTTPHeaderField: "Authorization") }
+        // Active Store Access Apple ID so multi-account switching affects decrypt jobs.
+        let appleEmail = AppleIDStore.shared.email
+        if !appleEmail.isEmpty {
+            r.setValue(appleEmail, forHTTPHeaderField: "X-AS-Apple-ID")
+            r.setValue(AppleIDStore.shared.activeAccountID ?? "", forHTTPHeaderField: "X-AS-Apple-ID-Account")
+        }
         if let body {
             r.httpMethod = "POST"
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")

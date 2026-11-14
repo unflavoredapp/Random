@@ -129,6 +129,14 @@ final class AppAutoUpdater: ObservableObject {
     func checkOnly() { Task { await run(.check) } }
     func update(_ app: TrackedApp) { Task { await run(.one(app.bundleID)) } }
     func refreshCertificates() { Task { await run(.certs) } }
+    /// Re-sign every tracked app with the active (or free-Apple-ID preferred) certificate, then pull updates.
+    func refreshAll() {
+        Task {
+            AppleIDStore.shared.activatePreferredSigningCertificate()
+            await run(.certs)
+            await run(.all)
+        }
+    }
     func rollBack(_ app: TrackedApp) { Task { await rollBackNow(app) } }
 
     /// The signed build an app would return to (newest one with a different version than the installed one).
