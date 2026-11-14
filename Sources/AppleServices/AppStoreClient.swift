@@ -183,13 +183,15 @@ final class AppStoreClient: ObservableObject {
                         "why": "signIn"
                     ],
                     anisette: anisette,
-                    // Authenticate with a real-device UA — spoofed iOS 99 / exotic identity
-                    // headers here are a common HTTP 403 cause. Spoof applies on download only.
+                    // Authenticate with a real-device UA + pristine Client-Info. Spoof /
+                    // rewriteClientInfo here is a common HTTP 204/403 cause — spoof is
+                    // for package download only.
                     extraHeaders: [
                         "Content-Type": "application/x-apple-plist",
                         "User-Agent": "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
                     ],
                     allowRedirectCapture: true,
+                    forcePristineClientInfo: true,
                     stripSpoofIdentity: true
                 )
                 last = dict
@@ -1071,7 +1073,7 @@ final class AppStoreClient: ObservableObject {
                 )
             }
             throw AppStoreClientError.network(
-                "Non-plist App Store response (HTTP 204). In Settings › Store Access turn spoof to This iPhone (Client-Info rewrite off), then refresh Owned — stay signed in."
+                "Non-plist App Store response (HTTP 204). Tap Retry Store unlock under Settings › Store Access (Client-Info rewrite is cleared automatically) — stay signed in."
             )
         }
         if data.isEmpty, status == 500 {

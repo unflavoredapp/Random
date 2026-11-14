@@ -37,32 +37,51 @@ final class DeviceDecryptService: ObservableObject {
 
     /// Apple ID purchase/download history (owned apps this account can redownload).
     func ownedStoreApps() async throws -> [OwnedStoreApp] {
+        AppleIDStore.shared.sanitizeStoreIdentityForAccountAPIs()
+
+        func history(_ account: StorefrontSession) async throws -> [OwnedStoreApp] {
+            try await AppStoreClient.shared.purchaseHistory(account: account)
+        }
+
+        func isDeadSessionError(_ error: Error) -> Bool {
+            if case AppStoreClientError.tokenExpired = error { return true }
+            let m = error.localizedDescription.lowercased()
+            return m.contains("http 204") || m.contains("http 403") || m.contains("http 404")
+                || m.contains("non-plist")
+        }
+
         // Prefer any persisted store session first — don't force a 2FA re-auth just to list Owned.
         if let existing = AppleIDStore.shared.storefrontSession(), existing.isUsable {
             do {
-                return try await AppStoreClient.shared.purchaseHistory(account: existing)
-            } catch AppStoreClientError.tokenExpired {
-                // Fall through to soft refresh below.
+                return try await history(existing)
             } catch {
-                // Non-expiry (204/403): retry once with the *same* session / soft ensure.
-                // Do NOT invalidate+forceRefresh here — that re-triggers a 2FA wall.
-                do {
-                    let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: false)
-                    return try await AppStoreClient.shared.purchaseHistory(account: account)
-                } catch {
-                    throw error
+                guard isDeadSessionError(error) else { throw error }
+                // Dead token / spoof 204: drop it and re-mint password-only (same Apple ID trust).
+                AppleIDStore.shared.clearPersistedStoreSession()
+                await AppleIDStore.shared.reconnectStoreSessionIfNeeded(force: true)
+                if let fresh = AppleIDStore.shared.storefrontSession(), fresh.isUsable {
+                    return try await history(fresh)
                 }
+                throw error
             }
         }
 
         do {
             let account = try await AppleIDStore.shared.ensureStorefrontSession()
-            return try await AppStoreClient.shared.purchaseHistory(account: account)
+            return try await history(account)
         } catch AppStoreClientError.tokenExpired {
             AppleIDStore.shared.invalidateStorefrontSession()
-            // forceRefresh only after real expiry — fall back to prior token if 2FA blocks.
             let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
-            return try await AppStoreClient.shared.purchaseHistory(account: account)
+            return try await history(account)
+        } catch {
+            if isDeadSessionError(error) {
+                AppleIDStore.shared.clearPersistedStoreSession()
+                await AppleIDStore.shared.reconnectStoreSessionIfNeeded(force: true)
+                if let fresh = AppleIDStore.shared.storefrontSession(), fresh.isUsable {
+                    return try await history(fresh)
+                }
+            }
+            throw error
         }
     }
 
