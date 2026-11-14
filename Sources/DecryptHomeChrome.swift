@@ -1,30 +1,32 @@
 //
 //  DecryptHomeChrome.swift
-//  TetherLess Decrypt tab chrome — header, DRM-free hero, and one-time setup card
-//  matching the glassmorphism reference screenshots.
+//  TetherLess Decrypt tab chrome — centered header, DRM-free hero, signed-in
+//  store card, search field, and pick-encrypted-IPA card.
 //
 
 import SwiftUI
 
-/// Soft chrome wrapper: gradient-friendly title row matching the Decrypt screenshot.
+/// Centered title + settings gear (reference Decrypt header).
 struct DecryptChromeHeader: View {
     var onSettings: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .center) {
+        ZStack {
             Text("Decrypt")
-                .font(.system(size: 40, weight: .bold))
+                .font(.system(size: 28, weight: .bold))
                 .foregroundStyle(.white)
-            Spacer()
-            if let onSettings {
-                Button(action: onSettings) {
-                    Image(systemName: "gearshape.fill")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
-                        .background(.ultraThinMaterial, in: Circle())
+            HStack {
+                Spacer()
+                if let onSettings {
+                    Button(action: onSettings) {
+                        Image(systemName: "gearshape.fill")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(width: 40, height: 40)
+                            .background(.ultraThinMaterial, in: Circle())
+                    }
+                    .accessibilityLabel("Settings")
                 }
-                .accessibilityLabel("Settings")
             }
         }
         .padding(.horizontal, 20)
@@ -50,65 +52,126 @@ struct DecryptHeroBlock: View {
                 .padding(.horizontal, 8)
         }
         .frame(maxWidth: .infinity)
-        .padding(.top, 28)
-        .padding(.bottom, 8)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
     }
 }
 
-/// One-time setup card (screenshot 3) or in-progress status (screenshot 4).
-struct DecryptSetupCard: View {
-    enum Phase {
-        case needed
-        case running(subtitle: String)
-    }
-
-    let phase: Phase
-    var onBegin: (() -> Void)?
+struct DecryptSignedInCard: View {
+    let email: String
+    var onSignOut: () -> Void
 
     var body: some View {
         GlassCard(corner: 24) {
-            switch phase {
-            case .needed:
-                VStack(alignment: .leading, spacing: 16) {
-                    HStack(alignment: .top, spacing: 14) {
-                        Image(systemName: "arrow.down.circle.fill")
-                            .font(.system(size: 28))
-                            .foregroundStyle(TetherlessPalette.accent)
-                            .frame(width: 36, height: 36)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("One-time setup needed")
-                                .font(.headline.weight(.semibold))
-                                .foregroundStyle(.white)
-                            Text("Needed once before you can sign in and download.")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.6))
-                        }
-                    }
-                    Button(action: { onBegin?() }) {
-                        Text("Begin Setup")
-                            .font(.title3.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .background(TetherlessPalette.accent, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                }
-            case .running(let subtitle):
-                HStack(alignment: .top, spacing: 14) {
-                    ProgressView()
-                        .tint(TetherlessPalette.accent)
-                        .frame(width: 28, height: 28)
-                        .padding(.top, 2)
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Setting up…")
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.title2)
+                        .foregroundStyle(.green)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Signed in")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text(subtitle)
+                        Text(email)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+                Button(action: onSignOut) {
+                    Text("Sign Out")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(.white.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+struct DecryptSearchBar: View {
+    @Binding var query: String
+    var focused: FocusState<Bool>.Binding
+    var onSearch: () -> Void
+
+    var body: some View {
+        GlassCard(corner: 22) {
+            HStack(spacing: 12) {
+                TextField("App name", text: $query)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .foregroundStyle(.white)
+                    .focused(focused)
+                    .submitLabel(.search)
+                    .onSubmit(onSearch)
+                Button(action: onSearch) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(TetherlessPalette.accent, in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Search")
+            }
+        }
+    }
+}
+
+struct DecryptPickIPACard: View {
+    var onPick: () -> Void
+
+    var body: some View {
+        GlassCard(corner: 24) {
+            VStack(alignment: .leading, spacing: 14) {
+                Text("Already have an encrypted IPA?")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.9))
+                Button(action: onPick) {
+                    Label("Pick an Encrypted IPA…", systemImage: "folder.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(TetherlessPalette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            }
+        }
+    }
+}
+
+struct DecryptStoreGateCard: View {
+    var onOpenSettings: () -> Void
+
+    var body: some View {
+        GlassCard(corner: 24) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    Image(systemName: "bag.fill")
+                        .font(.title2)
+                        .foregroundStyle(TetherlessPalette.accent)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Store Access needed")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text("Sign in with your Apple ID under Settings › Store Access so Decrypt can download apps you own.")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.6))
                     }
                 }
+                Button(action: onOpenSettings) {
+                    Text("Open Settings")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(TetherlessPalette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
             }
         }
     }

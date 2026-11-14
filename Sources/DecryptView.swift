@@ -10,6 +10,7 @@
 //
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 // MARK: - Models
 
@@ -303,121 +304,109 @@ private extension Int {
 // MARK: - View
 
 struct DecryptView: View {
-    @ObservedObject private var liveTheme = AppTheme.shared   // re-read accent live (auto-cycle) without rebuilding
+    @ObservedObject private var liveTheme = AppTheme.shared
     @ObservedObject private var c = DecryptClient.shared
-    @AppStorage("AirShare.decryptOneTimeSetupDone") private var setupDone = false
+    @ObservedObject private var store = AppleIDStore.shared
     @State private var query = ""
-    @State private var versionsOpen = false
-    @State private var showSearch = true
-    @State private var setupRunning = false
-    @State private var setupSubtitle = "Decrypting device compatibility files…"
+    @State private var versionsApp: DecryptApp?
+    @State private var pickingIPA = false
+    @State private var pickMessage: String?
     @FocusState private var searchFocused: Bool
 
-    private var showingSetupGate: Bool { !setupDone || setupRunning }
-    private var showingBrowseIdle: Bool {
-        setupDone && !setupRunning && c.results.isEmpty && c.selected == nil && c.phase == .idle && query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2
+    private var showingIdleHero: Bool {
+        store.isSignedIn && c.results.isEmpty && c.selected == nil && c.phase == .idle
+            && query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2
     }
 
     var body: some View {
         ZStack {
             Theme.bg.ignoresSafeArea().task {
                 await c.refreshQuota()
-                if setupDone { await c.loadHistory() }
+                if store.isSignedIn { await c.loadHistory() }
             }
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 16) {
-                    if showingSetupGate {
-                        DecryptHeroBlock()
-                        if setupRunning {
-                            DecryptSetupCard(phase: .running(subtitle: setupSubtitle))
-                        } else {
-                            DecryptSetupCard(phase: .needed, onBegin: beginSetup)
+                VStack(spacing: 14) {
+                    if showingIdleHero { DecryptHeroBlock() }
+
+                    if store.isSignedIn {
+                        DecryptSignedInCard(email: store.email, onSignOut: store.signOut)
+                        DecryptSearchBar(query: $query, focused: $searchFocused) {
+                            Task { await c.search(query) }
+                        }
+                        if showingIdleHero {
+                            DecryptPickIPACard { pickingIPA = true }
                         }
                     } else {
-                        if showingBrowseIdle { DecryptHeroBlock() }
+                        DecryptHeroBlock()
+                        DecryptStoreGateCard { AppNav.shared.go(AppTab.settings.rawValue) }
+                    }
 
-                        if showSearch {
-                            HStack(spacing: 8) {
-                                Image(systemName: "magnifyingglass").foregroundStyle(.white.opacity(0.55))
-                                TextField("Search the App Store or paste a link", text: $query)
-                                    .autocorrectionDisabled().textInputAutocapitalization(.never).foregroundStyle(.white)
-                                    .focused($searchFocused).submitLabel(.search)
-                                    .onSubmit { Task { await c.search(query) } }
-                            }
-                            .padding(.horizontal, 16).padding(.vertical, 13)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .overlay(Capsule().strokeBorder(.white.opacity(0.14), lineWidth: 1))
-                        }
+                    if c.searching {
+                        ProgressView().tint(TetherlessPalette.accent).frame(maxWidth: .infinity)
+                    }
+                    if let err = c.error, c.phase != .failed {
+                        GlassCard { Text(err).font(.caption).foregroundStyle(.orange) }
+                    }
+                    if let pickMessage {
+                        GlassCard { Text(pickMessage).font(.caption).foregroundStyle(.white.opacity(0.7)) }
+                    }
 
-                        if c.searching {
-                            HStack { Spacer(); ProgressView().tint(TetherlessPalette.accent); Spacer() }.padding(.vertical, 6)
-                        }
-                        if let q = c.quota {
-                            HStack(spacing: 6) {
-                                Image(systemName: q.unlimited ? "infinity" : "lock.open.fill").font(.system(size: 11))
-                                Text(q.summary).font(.system(size: 12, weight: .semibold))
-                                if q.tier == "guest" { Text("\u{00B7} sign in for more").font(.system(size: 12)).foregroundStyle(.white.opacity(0.55)) }
-                            }
-                            .foregroundStyle(q.exhausted ? Color.orange : .white.opacity(0.55))
-                            .frame(maxWidth: .infinity)
-                        }
-                        if let err = c.error, c.phase != .failed {
-                            GlassCard { Text(err).font(.caption).foregroundStyle(.orange) }
-                        }
-                        if !c.results.isEmpty { resultsCard }
-                        if let app = c.selected { selectedCard(app) }
-                        if c.phase != .idle { jobCard }
-                        if !c.history.isEmpty { historyCard }
+                    if c.phase != .idle, let app = c.selected ?? c.results.first {
+                        decryptJobCard(for: app)
+                    } else if let app = c.selected {
+                        resultAppCard(app, downloading: false)
+                    }
+
+                    ForEach(c.results.filter { $0.id != c.selected?.id }) { app in
+                        resultAppCard(app, downloading: false)
+                    }
+
+                    if store.isSignedIn, !c.history.isEmpty, c.results.isEmpty, c.phase == .idle {
+                        historySection
                     }
                 }
                 .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 120)
             }
         }
-        .task(id: query) {
-            guard setupDone, !setupRunning else { return }
-            try? await Task.sleep(nanoseconds: 450_000_000)
-            if Task.isCancelled { return }
-            await c.search(query)
+        .sheet(item: $versionsApp) { app in
+            DecryptVersionsSheet(app: app)
+                .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $pickingIPA) {
+            DocPicker(types: [UTType(filenameExtension: "ipa") ?? .data]) { urls in
+                handlePickedIPAs(urls)
+            }
         }
         .onAppear { consumePendingQuery() }
         .onChange(of: c.pendingQuery) { _ in consumePendingQuery() }
     }
 
-    private func beginSetup() {
-        guard !setupRunning else { return }
-        setupRunning = true
-        setupSubtitle = "Decrypting device compatibility files…"
-        Task {
-            await c.refreshQuota()
-            try? await Task.sleep(nanoseconds: 900_000_000)
-            if Task.isCancelled { return }
-            setupSubtitle = "Finishing local decrypt setup…"
-            await c.loadHistory()
-            try? await Task.sleep(nanoseconds: 700_000_000)
-            if Task.isCancelled { return }
-            withAnimation(.snappy(duration: 0.3)) {
-                setupDone = true
-                setupRunning = false
-                showSearch = true
-            }
-        }
-    }
-
-    /// An app sent over from the Library: show its name in the search box (the debounced search then runs by itself).
     private func consumePendingQuery() {
         guard let name = c.pendingQuery else { return }
         c.pendingQuery = nil
-        if !setupDone {
-            // Finish the gate first so Library deep-links can search immediately after.
-            setupDone = true
-        }
         if !c.busy { c.clearSelection() }
         query = name
-        withAnimation(.spring(response: 0.3, dampingFraction: 0.85)) { showSearch = true }
         searchFocused = true
+        Task { await c.search(query) }
     }
 
-    /// Percent parsed from the server message ("... 6%"), nil when none is reported.
+    private func handlePickedIPAs(_ urls: [URL]) {
+        guard let url = urls.first else { return }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let dest = AppPaths.dir("inbox").appendingPathComponent(url.lastPathComponent)
+        do {
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.copyItem(at: url, to: dest)
+            pickMessage = "Imported \(url.lastPathComponent) into Library."
+            AppNav.shared.go(AppTab.library.rawValue)
+        } catch {
+            pickMessage = error.localizedDescription
+        }
+    }
+
     private var percent: Double? {
         let m = c.message
         guard let r = m.range(of: #"(\d{1,3}(?:\.\d+)?)\s*%"#, options: .regularExpression) else { return nil }
@@ -428,229 +417,222 @@ struct DecryptView: View {
 
     // MARK: Cards
 
-
-    private var resultsCard: some View {
-        Card {
-            VStack(spacing: 0) {
-                ForEach(Array(c.results.enumerated()), id: \.element.id) { idx, app in
-                    Button { c.select(app); query = ""; searchFocused = false; versionsOpen = false } label: {
-                        appRow(icon: app.icon, title: app.name, subtitle: [app.dev, app.version.isEmpty ? "" : "v\(app.version)"].filter { !$0.isEmpty }.joined(separator: " · "), trailing: "chevron.right")
+    private func resultAppCard(_ app: DecryptApp, downloading: Bool) -> some View {
+        GlassCard(corner: 22) {
+            HStack(spacing: 12) {
+                iconView(app.icon, size: 52)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(app.name).font(.headline.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
+                    Text([app.dev, app.version.isEmpty ? "" : "v\(app.version)"].filter { !$0.isEmpty }.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .lineLimit(2)
+                }
+                Spacer(minLength: 8)
+                if downloading {
+                    SlimProgress(value: percent)
+                        .frame(width: 72)
+                } else {
+                    HStack(spacing: 8) {
+                        Button {
+                            versionsApp = app
+                            c.select(app)
+                            Task { await c.loadVersions(page: 1) }
+                        } label: {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                                .background(.white.opacity(0.10), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(c.busy)
+                        Button {
+                            c.select(app)
+                            c.start(url: app.url, version: nil, display: app.name)
+                        } label: {
+                            Image(systemName: "arrow.down.circle")
+                                .foregroundStyle(.white)
+                                .frame(width: 40, height: 40)
+                                .background(.white.opacity(0.10), in: Circle())
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(c.busy)
                     }
-                    .buttonStyle(.plain)
-                    if idx < c.results.count - 1 { Divider().overlay(Theme.stroke).padding(.leading, 62) }
                 }
             }
         }
     }
 
-    private func selectedCard(_ app: DecryptApp) -> some View {
-        Card {
-            VStack(alignment: .leading, spacing: 12) {
+    private func decryptJobCard(for app: DecryptApp) -> some View {
+        GlassCard(corner: 24) {
+            VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
-                    iconView(app.icon, size: 56)
+                    iconView(app.icon, size: 52)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(app.name).font(.system(size: 17, weight: .bold)).foregroundStyle(Theme.text).lineLimit(2)
-                        if !app.bundle.isEmpty { Text(app.bundle).font(.system(size: 11, design: .monospaced)).foregroundStyle(Theme.subtle).lineLimit(1) }
-                        if !app.dev.isEmpty { Text(app.dev).font(.system(size: 12)).foregroundStyle(Theme.subtle).lineLimit(1) }
+                        Text(app.name.isEmpty ? c.finishedName : app.name)
+                            .font(.headline.weight(.semibold)).foregroundStyle(.white)
+                        Text(app.dev).font(.caption).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                        Text(c.phase == .downloading ? (c.message.isEmpty ? "Downloading…" : c.message)
+                               : (c.phase == .done ? "Downloaded" : c.phase == .failed ? "Failed" : "Downloaded"))
+                            .font(.caption).foregroundStyle(.white.opacity(0.55))
                     }
-                    Spacer(minLength: 0)
-                    Button { c.clearSelection(); versionsOpen = false } label: {
-                        Image(systemName: "xmark.circle.fill").font(.system(size: 20)).foregroundStyle(Theme.subtle)
+                    Spacer()
+                    if c.phase == .done || c.phase == .running || c.phase == .queued {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else if c.phase == .failed {
+                        Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
+                    } else if c.phase == .downloading {
+                        SlimProgress(value: percent).frame(width: 64)
                     }
-                    .buttonStyle(.plain).disabled(c.busy)
-                }
-                HStack(spacing: 10) {
-                    Button {
-                        c.start(url: app.url, version: nil, display: app.name)
-                    } label: {
-                        Label(app.version.isEmpty ? "Decrypt latest" : "Decrypt v\(app.version)", systemImage: "lock.open.fill")
-                            .font(.system(size: 14, weight: .bold)).foregroundStyle(.black)
-                            .frame(maxWidth: .infinity).frame(height: 42)
-                            .background(Theme.accent).clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain).disabled(c.busy).opacity(c.busy ? 0.5 : 1)
-                    Button {
-                        withAnimation(.easeInOut(duration: 0.2)) { versionsOpen.toggle() }
-                        if versionsOpen { Task { await c.loadVersions(page: 1) } }
-                    } label: {
-                        Label("Versions", systemImage: versionsOpen ? "chevron.up" : "clock.arrow.circlepath")
-                            .font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.accent)
-                            .frame(maxWidth: .infinity).frame(height: 42)
-                            .background(Theme.accent.opacity(0.14)).clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain).disabled(c.busy).opacity(c.busy ? 0.5 : 1)
                 }
 
-                if versionsOpen { versionsInline(app) }
+                if c.busy || c.phase == .running || c.phase == .queued || c.phase == .downloading {
+                    Divider().overlay(.white.opacity(0.12))
+                    HStack(alignment: .top, spacing: 12) {
+                        ProgressView().tint(TetherlessPalette.accent)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(c.phase == .downloading
+                                  ? "Downloading \(app.name)…"
+                                  : "Preparing to decrypt \(app.name.isEmpty ? c.finishedName : app.name)…")
+                                .font(.headline.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Text(c.message.isEmpty ? "Working…" : c.message)
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+                    }
+                }
+
+                if c.phase == .done, let file = c.finished {
+                    VStack(spacing: 10) {
+                        Text("Confirm the install — it'll open automatically once it's ready.")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.7))
+                        Button {
+                            SignQueue.shared.enqueue(file)
+                        } label: {
+                            Text("Done")
+                                .font(.title3.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                                .background(TetherlessPalette.accent, in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        Button("Dismiss") { c.reset() }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                }
+                if c.phase == .failed {
+                    Text(c.error ?? "Decrypt failed.")
+                        .font(.caption).foregroundStyle(.orange)
+                    Button("Dismiss") { c.reset() }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
             }
         }
     }
 
-    /// Versions shown right under the app, in the same card — not a popup. Each row carries the app icon.
-    @ViewBuilder
-    private func versionsInline(_ app: DecryptApp) -> some View {
-        VStack(spacing: 0) {
-            Divider().overlay(Theme.stroke).padding(.top, 4)
-            if c.loadingVersions && c.versions.isEmpty {
-                HStack(spacing: 8) {
-                    ProgressView().tint(Theme.accent)
-                    Text("Asking the decrypt bot for versions…").font(.caption).foregroundStyle(Theme.subtle)
-                }
-                .padding(.vertical, 16)
-            } else if let err = c.error, c.versions.isEmpty {
-                Text(err).font(.caption).foregroundStyle(.orange).padding(.vertical, 14)
-            } else {
-                ForEach(Array(c.versions.enumerated()), id: \.element.id) { idx, v in
+    private var historySection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("RECENT")
+                    .font(.system(size: 12, weight: .semibold))
+                    .kerning(1.1)
+                    .foregroundStyle(.white.opacity(0.45))
+                Spacer()
+                Button("Clear") { Task { await c.clearHistory() } }
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
+            ForEach(c.history) { h in
+                GlassCard(corner: 22) {
                     Button {
-                        c.start(url: app.url, version: v.v, display: app.name)
-                        withAnimation(.easeInOut(duration: 0.2)) { versionsOpen = false }
+                        c.start(url: h.url, version: h.vreq.isEmpty ? nil : h.vreq, display: h.name)
                     } label: {
                         HStack(spacing: 12) {
-                            iconView(app.icon, size: 34)
-                            Text("v\(v.v)").font(.system(size: 15, weight: .semibold, design: .monospaced)).foregroundStyle(Theme.text)
-                            if v.current {
-                                Text("CURRENT").font(.system(size: 9, weight: .heavy, design: .monospaced)).foregroundStyle(Theme.accent)
-                                    .padding(.horizontal, 6).padding(.vertical, 2).background(Theme.accent.opacity(0.16)).clipShape(Capsule())
+                            iconView(h.icon, size: 48)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(h.name).font(.headline.weight(.semibold)).foregroundStyle(.white).lineLimit(1)
+                                Text([h.version.isEmpty ? "" : "v\(h.version)",
+                                       h.size > 0 ? ByteCountFormatter.string(fromByteCount: h.size, countStyle: .file) : ""]
+                                    .filter { !$0.isEmpty }.joined(separator: " · "))
+                                    .font(.caption).foregroundStyle(.white.opacity(0.55))
                             }
                             Spacer()
-                            Image(systemName: "lock.open.fill").font(.system(size: 13)).foregroundStyle(Theme.accent)
+                            Image(systemName: "arrow.down.circle").foregroundStyle(TetherlessPalette.accent)
                         }
-                        .padding(.vertical, 10).contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain).disabled(c.busy)
-                    if idx < c.versions.count - 1 { Divider().overlay(Theme.stroke).padding(.leading, 46) }
-                }
-                if c.versionPages > 1 {
-                    HStack(spacing: 16) {
-                        Button { Task { await c.loadVersions(page: c.versionPage - 1) } } label: { Image(systemName: "chevron.left") }
-                            .disabled(c.versionPage <= 1 || c.loadingVersions)
-                        Text("Page \(c.versionPage) / \(c.versionPages)").font(.system(size: 12, design: .monospaced)).foregroundStyle(Theme.subtle)
-                        Button { Task { await c.loadVersions(page: c.versionPage + 1) } } label: { Image(systemName: "chevron.right") }
-                            .disabled(c.versionPage >= c.versionPages || c.loadingVersions)
-                        if c.loadingVersions { ProgressView().tint(Theme.accent).scaleEffect(0.8) }
-                    }
-                    .foregroundStyle(Theme.accent).padding(.vertical, 12)
+                    .buttonStyle(.plain)
+                    .disabled(c.busy)
                 }
             }
         }
+        .padding(.top, 4)
     }
-
-    private var jobCard: some View {
-        Card {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 10) {
-                    switch c.phase {
-                    case .done: Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    case .failed: Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
-                    default: ProgressView().tint(Theme.accent)
-                    }
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(titleForPhase).font(.system(size: 15, weight: .bold)).foregroundStyle(Theme.text)
-                        if c.busy {
-                            SlimProgress(value: c.phase == .downloading ? nil : percent)
-                        } else {
-                            Text(c.phase == .failed ? (c.error ?? "Decrypt failed.") : subtitleForPhase)
-                                .font(.system(size: 12)).foregroundStyle(c.phase == .failed ? Color.orange : Theme.subtle)
-                        }
-                    }
-                    Spacer(minLength: 0)
-                    if c.busy {
-                        Button("Cancel") { c.cancel() }.font(.system(size: 13, weight: .semibold)).foregroundStyle(Theme.accent)
-                    }
-                }
-                if c.phase == .done, let file = c.finished {
-                    HStack(spacing: 10) {
-                        Button { SignQueue.shared.enqueue(file) } label: {
-                            Label("Sign", systemImage: "signature")
-                                .font(.system(size: 14, weight: .bold)).foregroundStyle(.black)
-                                .frame(maxWidth: .infinity).frame(height: 40).background(Theme.accent).clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                        Button { AppNav.shared.go(1) } label: {
-                            Label("Library", systemImage: "square.grid.2x2.fill")
-                                .font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.accent)
-                                .frame(maxWidth: .infinity).frame(height: 40).background(Theme.accent.opacity(0.14)).clipShape(Capsule())
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-                if c.phase == .done || c.phase == .failed {
-                    Button("Dismiss") { c.reset() }.font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.subtle)
-                }
-            }
-        }
-    }
-
-    private var titleForPhase: String {
-        switch c.phase {
-        case .queued: return c.queue > 0 ? "In queue (\(c.queue))" : "Queued"
-        case .running: return "Decrypting \(c.finishedName)"
-        case .downloading: return "Downloading"
-        case .done: return "\(c.finishedName) is ready"
-        case .failed: return "Decrypt failed"
-        case .idle: return ""
-        }
-    }
-    private var subtitleForPhase: String {
-        switch c.phase {
-        case .done: return "Saved to your Library as an unsigned IPA."
-        default: return c.message.isEmpty ? "Working…" : c.message
-        }
-    }
-
-    private var historyCard: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("RECENT").font(.system(size: 12, weight: .semibold)).kerning(1.1).foregroundStyle(Theme.subtle)
-                Spacer()
-                Button("Clear") { Task { await c.clearHistory() } }.font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accent)
-            }
-            Card {
-                VStack(spacing: 0) {
-                    ForEach(Array(c.history.enumerated()), id: \.element.id) { idx, h in
-                        Button {
-                            c.start(url: h.url, version: h.vreq.isEmpty ? nil : h.vreq, display: h.name)
-                        } label: {
-                            appRow(icon: h.icon, title: h.name,
-                                   subtitle: [h.version.isEmpty ? "" : "v\(h.version)", h.size > 0 ? ByteCountFormatter.string(fromByteCount: h.size, countStyle: .file) : "", h.cached ? "ready" : ""]
-                                       .filter { !$0.isEmpty }.joined(separator: " · "),
-                                   trailing: "arrow.down.circle")
-                        }
-                        .buttonStyle(.plain).disabled(c.busy)
-                        if idx < c.history.count - 1 { Divider().overlay(Theme.stroke).padding(.leading, 62) }
-                    }
-                }
-            }
-        }
-        .padding(.top, 6)
-    }
-
-    // MARK: Versions sheet
-
-    // MARK: Pieces
 
     private func iconView(_ url: URL?, size: CGFloat) -> some View {
         AsyncImage(url: url) { phase in
             switch phase {
             case .success(let img): img.resizable().scaledToFill()
-            default: Color.white.opacity(0.08).overlay(Image(systemName: "app.fill").foregroundStyle(Theme.subtle))
+            default: Color.white.opacity(0.08).overlay(Image(systemName: "app.fill").foregroundStyle(.white.opacity(0.45)))
             }
         }
         .frame(width: size, height: size)
         .clipShape(RoundedRectangle(cornerRadius: size * 0.225, style: .continuous))
     }
+}
 
-    private func appRow(icon: URL?, title: String, subtitle: String, trailing: String) -> some View {
-        HStack(spacing: 12) {
-            iconView(icon, size: 48)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text).lineLimit(1)
-                if !subtitle.isEmpty { Text(subtitle).font(.system(size: 12)).foregroundStyle(Theme.subtle).lineLimit(1) }
+// MARK: - Versions sheet
+
+private struct DecryptVersionsSheet: View {
+    let app: DecryptApp
+    @ObservedObject private var c = DecryptClient.shared
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppBackground().ignoresSafeArea()
+                List {
+                    if c.loadingVersions && c.versions.isEmpty {
+                        HStack {
+                            ProgressView().tint(TetherlessPalette.accent)
+                            Text("Loading versions…").foregroundStyle(.white.opacity(0.7))
+                        }
+                        .listRowBackground(Color.clear)
+                    } else {
+                        ForEach(c.versions) { v in
+                            Button {
+                                c.start(url: app.url, version: v.v, display: app.name)
+                                dismiss()
+                            } label: {
+                                HStack {
+                                    Text(v.v).foregroundStyle(.white)
+                                    Spacer()
+                                    if v.current {
+                                        Text("Latest").font(.subheadline).foregroundStyle(.white.opacity(0.45))
+                                    }
+                                }
+                            }
+                            .listRowBackground(Color.white.opacity(0.06))
+                        }
+                    }
+                }
+                .scrollContentBackground(.hidden)
             }
-            Spacer(minLength: 6)
-            Image(systemName: trailing).font(.system(size: 14, weight: .semibold)).foregroundStyle(Theme.accent)
+            .navigationTitle("\(app.name) — Versions")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .foregroundStyle(.white)
+                }
+            }
         }
-        .padding(.vertical, 8).contentShape(Rectangle())
+        .task { await c.loadVersions(page: 1) }
     }
 }
 

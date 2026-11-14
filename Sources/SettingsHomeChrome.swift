@@ -80,7 +80,7 @@ final class AppleIDStore: ObservableObject {
         phase = .verifying
         Task {
             try? await Task.sleep(nanoseconds: 1_100_000_000)
-            UserDefaults.standard.set("appleid", forKey: "uzd_signing_method")
+            // Store Access only — signing still uses Custom Certificate / TrustCore.
             verificationCode = ""
             withAnimation(.snappy) { phase = .preparing }
             await finishPreparing()
@@ -107,9 +107,6 @@ final class AppleIDStore: ObservableObject {
         statusMessage = nil
         presentedDisplayCode = nil
         phase = .signedOut
-        if UserDefaults.standard.string(forKey: "uzd_signing_method") == "appleid" {
-            UserDefaults.standard.set("saved", forKey: "uzd_signing_method")
-        }
     }
 
     private func finishPreparing() async {
@@ -123,28 +120,32 @@ final class AppleIDStore: ObservableObject {
 struct SettingsAppleIDCard: View {
     @ObservedObject private var store = AppleIDStore.shared
     @FocusState private var codeFocused: Bool
+    @State private var manageAccounts = false
 
     var body: some View {
         GlassCard(corner: 24) {
             VStack(alignment: .leading, spacing: 16) {
-                statusRow(
-                    icon: "person.crop.circle.fill",
-                    tint: TetherlessPalette.accent,
-                    title: "Apple ID",
-                    subtitle: "Signs your apps with your free Apple ID."
-                )
-
                 switch store.phase {
                 case .signedOut:
+                    statusRow(
+                        icon: "bag",
+                        tint: TetherlessPalette.accent,
+                        title: "Store Access",
+                        subtitle: "Lets Decrypt download apps from the App Store. Signing uses your certificate — no Apple ID needed."
+                    )
                     glassField("Apple ID email", text: $store.draftEmail, secure: false)
                     glassField("Password", text: $store.draftPassword, secure: true)
                     secondaryButton("Sign In", busy: false, action: store.signIn)
 
                 case .authenticating:
+                    statusRow(icon: "bag", tint: TetherlessPalette.accent, title: "Store Access",
+                              subtitle: "Lets Decrypt download apps from the App Store.")
                     statusRow(icon: nil, tint: TetherlessPalette.accent, title: "Signing in…",
                               subtitle: "Contacting Apple ID…", spinning: true)
 
                 case .needsCode:
+                    statusRow(icon: "bag", tint: TetherlessPalette.accent, title: "Store Access",
+                              subtitle: "Lets Decrypt download apps from the App Store.")
                     statusRow(
                         icon: "number",
                         tint: .green,
@@ -171,24 +172,13 @@ struct SettingsAppleIDCard: View {
                     primaryButton("Submit Code", action: store.submitVerificationCode)
 
                 case .verifying:
+                    statusRow(icon: "bag", tint: TetherlessPalette.accent, title: "Store Access",
+                              subtitle: "Lets Decrypt download apps from the App Store.")
                     statusRow(icon: nil, tint: TetherlessPalette.accent, title: "Verifying code…",
                               subtitle: "Checking with Apple…", spinning: true)
 
-                case .preparing:
-                    signedInBlock
-                    statusRow(icon: "bag", tint: TetherlessPalette.accent,
-                              title: "Store Access",
-                              subtitle: "Used by Decrypt to buy/download apps.")
-                    statusRow(icon: nil, tint: TetherlessPalette.accent, title: "Preparing…",
-                              subtitle: "Starting things back up…", spinning: true)
-
-                case .signedIn:
-                    signedInBlock
-                    statusRow(icon: "bag", tint: TetherlessPalette.accent,
-                              title: "Store Access",
-                              subtitle: store.storeReady
-                                ? "Used by Decrypt to buy/download apps."
-                                : "Used by Decrypt to buy/download apps.")
+                case .preparing, .signedIn:
+                    storeAccessSignedIn
                 }
 
                 if let msg = store.statusMessage {
@@ -203,16 +193,69 @@ struct SettingsAppleIDCard: View {
             VerificationCodeSheet(code: item.value) { store.dismissDisplayedCode() }
                 .presentationDetents([.medium])
         }
+        .sheet(isPresented: $manageAccounts) {
+            NavigationStack {
+                List {
+                    Section("Active") {
+                        Text(store.email).foregroundStyle(.primary)
+                    }
+                    Section {
+                        Button("Add another Apple ID…") {
+                            manageAccounts = false
+                            store.signOut()
+                        }
+                    }
+                }
+                .navigationTitle("Store Accounts")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Done") { manageAccounts = false }
+                    }
+                }
+            }
+            .preferredColorScheme(.dark)
+        }
     }
 
-    private var signedInBlock: some View {
-        VStack(spacing: 12) {
+    private var storeAccessSignedIn: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            statusRow(
+                icon: "bag",
+                tint: TetherlessPalette.accent,
+                title: "Store Access",
+                subtitle: "Lets Decrypt download apps from the App Store. Signing uses your certificate — no Apple ID needed."
+            )
             statusRow(
                 icon: "checkmark.seal.fill",
                 tint: .green,
-                title: "Signed in",
+                title: "Signed in for Store access",
                 subtitle: store.email
             )
+            Button { manageAccounts = true } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: "person.2.fill")
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                        .frame(width: 28)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Manage Store Accounts")
+                            .font(.headline.weight(.semibold))
+                            .foregroundStyle(.white)
+                        Text("Add another Apple ID for downloads, or switch accounts.")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.55))
+                    }
+                    Spacer(minLength: 8)
+                    Image(systemName: "chevron.right")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            }
+            .buttonStyle(.plain)
+            if store.phase == .preparing {
+                statusRow(icon: nil, tint: TetherlessPalette.accent, title: "Preparing…",
+                          subtitle: "Starting things back up…", spinning: true)
+            }
             secondaryButton("Sign Out", busy: false, action: store.signOut)
         }
     }
@@ -401,7 +444,7 @@ struct SettingsSoftwareUpdateCard: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.7))
                         } else {
-                            Text("You're on \(checker.localVersion)\(checker.remoteVersion.map { " · latest \($0)" } ?? "").")
+                            Text("You're on the latest version (\(checker.localVersion)).")
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.7))
                         }
