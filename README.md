@@ -1,44 +1,85 @@
-# TetherLess
+<p align="center">
+  <img src="docs/assets/tetherless-icon.png" width="148" alt="TetherLess app icon" />
+</p>
 
-On-device sideloading — pair, sign, install. No computer required.
+<h1 align="center">TetherLess</h1>
+
+<p align="center">
+  <strong>On-device sideloading — pair, sign, install. No computer required.</strong><br />
+  <a href="https://tetherless.dev">tetherless.dev</a>
+  · Bundle ID <code>dev.tetherless.app</code>
+  · v3.7
+</p>
+
+---
+
+## Look & feel
+
+TetherLess ships a glassmorphism shell over the existing signing and install stack:
+
+- **Purple → teal** full-bleed gradient background
+- **Glass cards** and capsule controls with soft material blur
+- **Floating tab bar** — Pair · Files · Library · Decrypt · Settings
+- Gradient **app icon** (no-cable mark) matching the UI palette
+
+Backends (TrustCore signing, OTA, native install) are unchanged under the new chrome.
+
+## Features
+
+| Area | What you get |
+| --- | --- |
+| **Pair** | On-device pairing + local VPN for native installs |
+| **Files** | Drop / open archives, extract, inspect, push |
+| **Library** | Source repos, staff picks, updates, device-installed apps |
+| **Decrypt** | Local decrypt / DRM tooling flows |
+| **Settings** | Install method (OTA vs Native), domain, certs, account, theme |
+| **Sign & install** | TrustCore signing, OTA via `*.tetherless.dev`, or native idevice install |
+| **Analysis** | Local Analysis Center — disassembler, CFG, pseudocode, reversible patch proposals |
+| **Identity** | ADID (`AS-XXXXXX-XX`) minted on first launch, stored in Keychain |
+
+### Install paths
+
+1. **OTA (default)** — `itms-services` over the tetherless.dev loopback HTTPS host  
+2. **Native** — built-in local VPN + device pairing (Settings › Install Method)
+
+### On-device OTA (`tetherless.dev`)
+
+1. DNS: `*.tetherless.dev` → `127.0.0.1` (apex hosts `pack.json` on the VPS)
+2. Generate & deploy the pack — see [`server/ota/tetherless-ota.md`](server/ota/tetherless-ota.md)
+3. App pulls the pack on launch; enable **Full Trust** for the pack CA once
+
+Native install details: [`NATIVE_INSTALL.md`](NATIVE_INSTALL.md)
 
 ## ADID identity
 
-New installations mint a cryptographically-random `AS-XXXXXX-XX` ADID on first use. The ID is stored in Keychain and is not derived from hardware or display fingerprints.
+New installations mint a cryptographically random `AS-XXXXXX-XX` ADID on first use. The ID is stored in Keychain and is not derived from hardware or display fingerprints.
 
 Administrators can reassign the ADID of their authenticated admin account from Settings → Account. The app calls `account.php` with `action=admin_set_mdid`; the server must atomically update the account ADID and its ADID-based role mapping before returning the canonical ADID. TetherLess only changes its local Keychain value after that server response.
 
-See `MDID_IDENTITY.md` for the API contract.
+See [`MDID_IDENTITY.md`](MDID_IDENTITY.md) for the API contract.
 
 ## Local Analysis Center
 
-The AVX512/TetherLess analysis stack is local-first and does not require a remote analysis service. The same annotated `UCFunction` feeds the Disassembler Browser, CFG Viewer, Pseudocode Viewer, and Analysis Center.
+The analysis stack is local-first — no remote analysis service. The same annotated `UCFunction` feeds the Disassembler Browser, CFG Viewer, Pseudocode Viewer, and Analysis Center.
 
-Analysis Center currently exposes:
+Analysis Center exposes:
+
 - Overview / local analysis statistics
 - String annotations
-- Resolved symbols/classes/methods
-- Function/call inspection
+- Resolved symbols / classes / methods
+- Function / call inspection
 - Basic-block graph edges
-- Call/branch/XREF flow
-- Hex/memory view of decoded function bytes
+- Call / branch / XREF flow
+- Hex / memory view of decoded function bytes
 - Reversible local NOP/RET patch proposals and patch manifest export
 - Original-vs-proposed patch diff
 - One-tap navigation back to Disassembler, CFG, and Pseudocode
 
-Patch proposals are deliberately kept as an in-memory/local manifest in this viewer; the source binary is not modified by opening the analysis UI.
+Patch proposals stay as an in-memory / local manifest in the viewer; opening the analysis UI does not modify the source binary.
 
-yur
+## Links
 
-## Native install
-
-TetherLess can install signed apps directly on-device (built-in local VPN + device pairing) as an alternative to OTA.
-Settings › Install Method. See `NATIVE_INSTALL.md`.
-
-## On-device OTA (tetherless.dev)
-
-Default OTA uses `*.tetherless.dev` as the backloop.dev-style loopback HTTPS host:
-
-1. DNS: `*.tetherless.dev` → `127.0.0.1` (apex hosts `pack.json` on the VPS)
-2. Generate & deploy the pack — see `server/ota/tetherless-ota.md`
-3. App pulls the pack on launch; enable Full Trust for the pack CA once
+- Site: [tetherless.dev](https://tetherless.dev)
+- OTA pack docs: [`server/ota/tetherless-ota.md`](server/ota/tetherless-ota.md)
+- Native install: [`NATIVE_INSTALL.md`](NATIVE_INSTALL.md)
+- ADID / MDID: [`MDID_IDENTITY.md`](MDID_IDENTITY.md)
