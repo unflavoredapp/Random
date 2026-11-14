@@ -605,12 +605,20 @@ final class AppleIDStore: ObservableObject {
             persistStoreSession(session)
             return session
         } catch AppStoreClientError.needsTwoFactor {
-            // Keep the Apple ID + prior store blob; user enters a code under Store Access.
+            // Prefer the existing store token over a 2FA wall — Owned/purchaseHistory can
+            // still succeed with a prior passwordToken. Only hard-fail when we have none.
+            if let existing = storefrontSession(), existing.isUsable {
+                storefrontNeedsRefresh = false
+                return existing
+            }
             throw AppStoreClientError.message(
-                "App Store sign-in needs a verification code. Open Settings › Store Access, enter the 6-digit code, then tap refresh on Owned."
+                "App Store needs a one-time verification code. Open Settings › Store Access, enter the 6-digit code (stay signed in), then tap refresh on Owned."
             )
         } catch {
-            // Leave the previous token in place so a transient failure doesn't look like logout.
+            if let existing = storefrontSession(), existing.isUsable {
+                storefrontNeedsRefresh = false
+                return existing
+            }
             throw error
         }
     }

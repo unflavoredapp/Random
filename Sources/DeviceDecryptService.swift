@@ -37,11 +37,28 @@ final class DeviceDecryptService: ObservableObject {
 
     /// Apple ID purchase/download history (owned apps this account can redownload).
     func ownedStoreApps() async throws -> [OwnedStoreApp] {
+        // Prefer any persisted store session first — don't force a 2FA re-auth just to list Owned.
+        if let existing = AppleIDStore.shared.storefrontSession(), existing.isUsable {
+            do {
+                return try await AppStoreClient.shared.purchaseHistory(account: existing)
+            } catch AppStoreClientError.tokenExpired {
+                // Fall through to soft refresh below.
+            } catch {
+                // Non-expiry failures (204/403): still try a soft refresh once, then surface.
+                AppleIDStore.shared.invalidateStorefrontSession()
+                do {
+                    let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
+                    return try await AppStoreClient.shared.purchaseHistory(account: account)
+                } catch {
+                    throw error
+                }
+            }
+        }
+
         do {
             let account = try await AppleIDStore.shared.ensureStorefrontSession()
             return try await AppStoreClient.shared.purchaseHistory(account: account)
         } catch AppStoreClientError.tokenExpired {
-            // Soft refresh — keeps the Apple ID signed in; replaces the store token in place.
             AppleIDStore.shared.invalidateStorefrontSession()
             let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
             return try await AppStoreClient.shared.purchaseHistory(account: account)

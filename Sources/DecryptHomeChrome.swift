@@ -189,8 +189,15 @@ struct DecryptOwnedStoreAppsSection: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
-                        if loadError.localizedCaseInsensitiveContains("204")
-                            || loadError.localizedCaseInsensitiveContains("verification")
+                        if loadError.localizedCaseInsensitiveContains("verification")
+                            || loadError.localizedCaseInsensitiveContains("2fa")
+                            || loadError.localizedCaseInsensitiveContains("two-factor") {
+                            Text("Tip: Settings › Store Access → enter the 6-digit code (or tap Text me a code). Stay signed in, then refresh Owned.")
+                                .font(.caption2)
+                                .foregroundStyle(.white.opacity(0.45))
+                                .fixedSize(horizontal: false, vertical: true)
+                        } else if loadError.localizedCaseInsensitiveContains("204")
+                            || loadError.localizedCaseInsensitiveContains("403")
                             || loadError.localizedCaseInsensitiveContains("expired") {
                             Text("Tip: Settings › Store Access → spoof “This iPhone”, Client-Info rewrite off, then refresh Owned (stay signed in).")
                                 .font(.caption2)
@@ -286,7 +293,7 @@ struct DecryptDeviceAppsSection: View {
                     }
                 }
 
-                Text("Decrypts main, frameworks, widgets, Watch, and App Clips with this device’s FairPlay keys. Pair with Native install if the list is empty.")
+                Text("Decrypts main, frameworks, widgets, and App Clips with this device’s FairPlay keys (Watch skipped — not decryptable on iPhone). Pair with Native install if the list is empty.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)

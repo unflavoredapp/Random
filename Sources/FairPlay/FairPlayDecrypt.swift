@@ -838,27 +838,39 @@ enum FairPlayDecrypt {
         }
 
         progress?("Frameworks…")
-        collectFrameworks(in: root)
+        // Bound Frameworks listing — large apps can stall on sandbox directory I/O.
+        if withTimeout(seconds: 12, work: { collectFrameworks(in: root); return true }) == nil {
+            progress?("Frameworks listing timed out — continuing with main executable…")
+        }
 
         progress?("PlugIns / Extensions…")
         for folder in ["PlugIns", "Extensions"] {
             let dir = root.appendingPathComponent(folder, isDirectory: true)
-            if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-                for item in items where item.pathExtension.lowercased() == "appex" {
-                    consider(bundleExecutableURL(in: item))
-                    collectFrameworks(in: item)
-                }
+            let items = withTimeout(seconds: 6, work: {
+                try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+            }) ?? nil
+            guard let items else { continue }
+            for item in items where item.pathExtension.lowercased() == "appex" {
+                consider(bundleExecutableURL(in: item))
+                _ = withTimeout(seconds: 8, work: { collectFrameworks(in: item); return true })
             }
         }
 
-        progress?("Watch / App Clips…")
-        for folder in ["Watch", "AppClips"] {
-            let dir = root.appendingPathComponent(folder, isDirectory: true)
-            if let items = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) {
-                for item in items where item.pathExtension.lowercased() == "app" {
-                    consider(bundleExecutableURL(in: item))
-                    collectFrameworks(in: item)
-                }
+        // FairPlayed `embed_ipa.sh` deletes Watch/ — watchOS Mach-Os are not decryptable
+        // with the iPhone's fairplayd, and listing `/Watch` on live App Store installs often
+        // hangs forever on stock iOS (UI stuck on “Watch / App Clips…”). Skip Watch always.
+        progress?("Skipping Watch (not decryptable on iPhone)…")
+
+        progress?("App Clips…")
+        let clips = root.appendingPathComponent("AppClips", isDirectory: true)
+        // Bound directory I/O — same hang class as Watch on some installs.
+        if let items = withTimeout(seconds: 6, work: {
+            try? fm.contentsOfDirectory(at: clips, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+        }) ?? nil {
+            for item in items where item.pathExtension.lowercased() == "app" {
+                consider(bundleExecutableURL(in: item))
+                // Nested frameworks under clips — keep shallow; don't recurse forever.
+                collectFrameworks(in: item)
             }
         }
 
