@@ -837,7 +837,9 @@ final class AppleIDStore: ObservableObject {
         storeNeedsVerification = true
     }
 
-    /// Ensure a usable storefront session (re-auth with saved password if needed).
+    /// Ensure a usable storefront session for silent buy/download.
+    /// Remints with the same PET → password+code cascade as sign-in (password-only fails for 2FA).
+    /// Never wipes a still-usable prior token when remint soft-fails.
     func ensureStorefrontSession(forceRefresh: Bool = false) async throws -> StorefrontSession {
         let refresh = forceRefresh || storefrontNeedsRefresh
         let prior = storefrontSession()
@@ -852,35 +854,82 @@ final class AppleIDStore: ObservableObject {
               let password = passwordForAccount(id: aid), !password.isEmpty else {
             throw AppStoreClientError.message("Missing Apple ID password — sign in again under Store Access.")
         }
-        do {
-            let session = try await AppStoreClient.shared.authenticate(
-                email: email,
-                password: password,
-                authCode: pendingStoreAuthCode
-            )
+
+        let code = (pendingStoreAuthCode ?? "").filter(\.isNumber)
+        let pet = storedPET()?.trimmingCharacters(in: .whitespacesAndNewlines)
+        var lastError: Error?
+
+        func accept(_ session: StorefrontSession) -> StorefrontSession {
             pendingStoreAuthCode = nil
             storefrontNeedsRefresh = false
             storeNeedsVerification = false
             persistStoreSession(session)
+            // Keep PET for later remints during Decrypt — only sign-out clears it.
             return session
-        } catch AppStoreClientError.needsTwoFactor {
-            // Prefer any existing store token over a 2FA wall — download/history often
-            // still work. Only hard-fail when we have none (or it isn't usable).
-            if let existing = prior, existing.isUsable {
-                storefrontNeedsRefresh = false
-                storeNeedsVerification = false
-                return existing
-            }
-            storeNeedsVerification = true
-            throw AppStoreClientError.needsTwoFactor
-        } catch {
-            if let existing = prior, existing.isUsable {
-                storefrontNeedsRefresh = false
-                storeNeedsVerification = false
-                return existing
-            }
-            throw error
         }
+
+        // 1) PET + Allow/SMS digits (often required even with a fresh PET).
+        if let pet, !pet.isEmpty, code.count == 6 {
+            do {
+                let session = try await authenticateStoreWithRetries(
+                    email: email, password: pet, authCode: code
+                )
+                if session.isUsable { return accept(session) }
+            } catch {
+                lastError = error
+            }
+        }
+
+        // 2) PET alone.
+        if let pet, !pet.isEmpty {
+            do {
+                let session = try await authenticateStoreWithRetries(
+                    email: email, password: pet, authCode: ""
+                )
+                if session.isUsable { return accept(session) }
+            } catch {
+                lastError = error
+            }
+        }
+
+        // 3) Password + digits.
+        if code.count == 6 {
+            do {
+                let session = try await authenticateStoreWithRetries(
+                    email: email, password: password, authCode: code
+                )
+                if session.isUsable { return accept(session) }
+            } catch {
+                lastError = error
+            }
+        }
+
+        // 4) Password-only (non-2FA / warm edge).
+        do {
+            let session = try await AppStoreClient.shared.authenticate(
+                email: email,
+                password: password,
+                authCode: nil
+            )
+            if session.isUsable { return accept(session) }
+        } catch {
+            lastError = error
+        }
+
+        // Prefer a still-usable prior token over a remint wall (downloads often still work).
+        if let existing = prior, existing.isUsable {
+            storefrontNeedsRefresh = false
+            storeNeedsVerification = false
+            return existing
+        }
+
+        if let lastError {
+            if let ase = lastError as? AppStoreClientError, case .needsTwoFactor = ase {
+                storeNeedsVerification = true
+            }
+            throw lastError
+        }
+        throw AppStoreClientError.message("App Store sign-in failed after retries.")
     }
 
     /// Complete App Store (MZFinance) 2FA without signing out — then silent download works.
@@ -1162,7 +1211,7 @@ final class AppleIDStore: ObservableObject {
             persistStoreSession(prefetched)
             storeNeedsVerification = false
             pendingStoreAuthCode = nil
-            clearStoredPET()
+            // Keep PET so Decrypt remints / Retry Store unlock work without a second OTP.
             lastError = nil
             statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
                 ?? "Signed in · free & purchased downloads ready"
@@ -1178,7 +1227,7 @@ final class AppleIDStore: ObservableObject {
             persistStoreSession(store)
             storeNeedsVerification = false
             pendingStoreAuthCode = nil
-            clearStoredPET()
+            // Keep PET for silent remint during purchase/download (cleared on Sign Out only).
             lastError = nil
             statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
                 ?? "Signed in · free & purchased downloads ready"
@@ -1282,11 +1331,6 @@ final class AppleIDStore: ObservableObject {
     private func storedPET() -> String? {
         guard let aid = activeAccountID else { return nil }
         return Keychain.getSessionSecret(Self.petPrefix + aid)
-    }
-
-    private func clearStoredPET() {
-        guard let aid = activeAccountID else { return }
-        Keychain.deleteSessionSecret(Self.petPrefix + aid)
     }
 
     private func finishPreparing() async {

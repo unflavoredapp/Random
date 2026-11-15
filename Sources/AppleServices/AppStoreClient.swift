@@ -17,9 +17,22 @@ struct StorefrontSession: Codable, Equatable, Sendable {
     var pod: String?
     var guid: String
     var createdAt: Date
+    /// `name=value; …` from authenticate Set-Cookie (mz_at / itspod). ApplePackage keeps these
+    /// on the Account; without them cold remints often get empty songList / soft 5002.
+    var cookieHeader: String? = nil
 
     var isUsable: Bool {
         !passwordToken.isEmpty && !dsid.isEmpty && !storeFront.isEmpty
+    }
+
+    /// ipatool expects a 6-byte (12 hex) GUID on commerce URLs/bodies.
+    func normalizedForCommerce() -> StorefrontSession {
+        var copy = self
+        let hex = guid.uppercased().filter(\.isHexDigit)
+        if hex.count >= 12 {
+            copy.guid = String(hex.prefix(12))
+        }
+        return copy
     }
 }
 
@@ -139,6 +152,8 @@ final class AppStoreClient: ObservableObject {
         static let downloadHost = "https://p25-buy.itunes.apple.com"
         static let downloadPath = "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
         static let redownload = "https://downloaddispatch.itunes.apple.com/r/redownload"
+        /// Bag updateProduct recovery when redownload returns empty HTTP 500 (ApplePackage).
+        static let updateProduct = "https://downloaddispatch.itunes.apple.com/up/updateProduct"
         static let purchaseHistory = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/purchaseHistory"
     }
 
@@ -337,6 +352,11 @@ final class AppStoreClient: ObservableObject {
                 // Some pods omit storefront on the body response — default US so Decrypt can proceed.
                 let resolvedFront = storeFront.isEmpty ? "143441-1,29" : storeFront
 
+                let cookies = Self.cookieHeader(
+                    from: headers,
+                    session: session,
+                    urls: [endpoint, "https://buy.itunes.apple.com/"]
+                )
                 return StorefrontSession(
                     email: email,
                     passwordToken: token,
@@ -344,7 +364,8 @@ final class AppStoreClient: ObservableObject {
                     storeFront: resolvedFront,
                     pod: pod,
                     guid: guid,
-                    createdAt: Date()
+                    createdAt: Date(),
+                    cookieHeader: cookies
                 )
             } catch let err as AppStoreClientError {
                 // Empty 204/403/404 from this host — bubble out so caller rotates endpoint
@@ -477,6 +498,7 @@ final class AppStoreClient: ObservableObject {
         externalVersionId: String? = nil
     ) async throws {
         guard price <= 0 else { throw AppStoreClientError.paidApp }
+        let account = account.normalizedForCommerce()
         let anisette = try await AnisetteClient.shared.fetch()
         do {
             try await purchaseOnce(
@@ -503,6 +525,7 @@ final class AppStoreClient: ObservableObject {
         account: StorefrontSession,
         externalVersionId: String? = nil
     ) async throws -> StoreDownloadItem {
+        let account = account.normalizedForCommerce()
         let anisette = try await AnisetteClient.shared.fetch()
         return try await downloadProduct(
             adamId: adamId,
@@ -794,6 +817,7 @@ final class AppStoreClient: ObservableObject {
         externalVersionId: String? = nil,
         onProgress: ((String) -> Void)? = nil
     ) async throws -> (url: URL, item: StoreDownloadItem) {
+        let account = account.normalizedForCommerce()
         let anisette = try await AnisetteClient.shared.fetch()
         onProgress?("Requesting App Store package…")
         let item = try await downloadProduct(
@@ -822,6 +846,7 @@ final class AppStoreClient: ObservableObject {
         version: String? = nil,
         onProgress: ((String) -> Void)? = nil
     ) async throws -> (url: URL, item: StoreDownloadItem) {
+        let account = account.normalizedForCommerce()
         var pin = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if pin.isEmpty {
             if let resolved = try? await resolveDownloadVersionId(
@@ -917,11 +942,16 @@ final class AppStoreClient: ObservableObject {
         if let ext = externalVersionId, !ext.isEmpty {
             body["externalVersionId"] = ext
         }
+        // Match ipatool / ApplePackage: Configurator UA + token (+ cookies). Spoof OS
+        // identity on buyProduct is a frequent HTTP 204/403 cause.
         let (dict, _, status) = try await postPlist(
             url: host,
             body: body,
             anisette: anisette,
-            extraHeaders: storeHeaders(account)
+            extraHeaders: commerceHeaders(account),
+            forcePristineClientInfo: true,
+            stripSpoofIdentity: true,
+            authenticateAnisetteStyle: true
         )
         let failure = string(dict["failureType"])
         let customer = string(dict["customerMessage"])
@@ -986,11 +1016,31 @@ final class AppStoreClient: ObservableObject {
                 externalVersionId: externalVersionId
             )
         } catch {
-            if isSoftDownloadFailure(error), let lastError {
-                throw lastError
-            }
-            throw error
+            if !isSoftDownloadFailure(error) { throw error }
+            lastError = error
         }
+
+        // ApplePackage: empty redownload HTTP 500 → bag updateProduct with pinned version.
+        let pin = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !pin.isEmpty {
+            do {
+                return try await downloadProductOnce(
+                    adamId: adamId,
+                    account: account,
+                    anisette: anisette,
+                    endpoint: "\(Paths.updateProduct)?guid=\(account.guid)",
+                    versionKey: "appExtVrsId",
+                    externalVersionId: pin
+                )
+            } catch {
+                if isSoftDownloadFailure(error), let lastError {
+                    throw lastError
+                }
+                throw error
+            }
+        }
+        if let lastError { throw lastError }
+        throw AppStoreClientError.message("App Store returned no download items.")
     }
 
     private func volumeStoreCandidates(account: StorefrontSession) -> [String] {
@@ -1055,11 +1105,16 @@ final class AppStoreClient: ObservableObject {
         if let ext = externalVersionId, !ext.isEmpty {
             body[versionKey] = ext
         }
+        // Commerce download: X-Token + DSID + storefront (+ auth cookies). Keep spoof OS
+        // headers off the MZFinance / dispatch edge — pin via externalVersionId instead.
         let (dict, _, _) = try await postPlist(
             url: endpoint,
             body: body,
             anisette: anisette,
-            extraHeaders: storeHeaders(account)
+            extraHeaders: commerceHeaders(account),
+            forcePristineClientInfo: true,
+            stripSpoofIdentity: true,
+            authenticateAnisetteStyle: true
         )
         let failure = string(dict["failureType"])
         let customer = string(dict["customerMessage"])
@@ -1111,6 +1166,9 @@ final class AppStoreClient: ObservableObject {
             "X-Apple-Store-Front": account.storeFront,
             "X-Token": account.passwordToken
         ]
+        if let cookie = account.cookieHeader, !cookie.isEmpty {
+            headers["Cookie"] = cookie
+        }
         let identity = StoreDeviceSpoof.current.storeIdentityHeaders()
         // Device-type / client-application are safe on account endpoints.
         if let dt = identity["X-Apple-I-Device-Type"] {
@@ -1126,6 +1184,22 @@ final class AppStoreClient: ObservableObject {
                 if k == "X-Apple-I-Device-Type" || k == "X-Apple-Client-Application" { continue }
                 headers[k] = v
             }
+        }
+        return headers
+    }
+
+    /// buyProduct / volumeStore / redownload / updateProduct — ipatool-shaped headers.
+    private func commerceHeaders(_ account: StorefrontSession) -> [String: String] {
+        var headers: [String: String] = [
+            "Content-Type": "application/x-apple-plist",
+            "User-Agent": configuratorUA,
+            "iCloud-DSID": account.dsid,
+            "X-Dsid": account.dsid,
+            "X-Apple-Store-Front": account.storeFront,
+            "X-Token": account.passwordToken
+        ]
+        if let cookie = account.cookieHeader, !cookie.isEmpty {
+            headers["Cookie"] = cookie
         }
         return headers
     }
@@ -1381,18 +1455,58 @@ final class AppStoreClient: ObservableObject {
 
     // MARK: - GUID
 
-    /// Stable store GUID: 12+ hex chars (ipatool uses MAC; on iPhone we derive from anisette device id).
+    /// Stable 6-byte store GUID as 12 hex chars (ipatool / Store AMD). Longer values break commerce.
     static func deviceGUID(from anisette: AnisetteHeaders) -> String {
         let raw = (anisette.deviceID + anisette.localUserID)
             .uppercased()
             .filter(\.isHexDigit)
         if raw.count >= 12 {
-            return String(raw.prefix(16))
+            return String(raw.prefix(12))
         }
         if let id = UIDevice.current.identifierForVendor?.uuidString {
-            return id.replacingOccurrences(of: "-", with: "").uppercased()
+            let hex = id.replacingOccurrences(of: "-", with: "").uppercased().filter(\.isHexDigit)
+            if hex.count >= 12 { return String(hex.prefix(12)) }
         }
-        return UUID().uuidString.replacingOccurrences(of: "-", with: "").uppercased()
+        let fallback = UUID().uuidString.replacingOccurrences(of: "-", with: "").uppercased()
+        return String(fallback.prefix(12))
+    }
+
+    /// Persist authenticate Set-Cookie values for later buy/download (cold start has no URLSession jar).
+    private static func cookieHeader(
+        from headers: [String: String],
+        session: URLSession,
+        urls: [String]
+    ) -> String? {
+        var byName: [String: String] = [:]
+        // Prefer the session cookie jar (handles multiple Set-Cookie correctly).
+        let storage = session.configuration.httpCookieStorage
+        for urlString in urls {
+            guard let url = URL(string: urlString) else { continue }
+            for cookie in storage?.cookies(for: url) ?? [] {
+                byName[cookie.name] = "\(cookie.name)=\(cookie.value)"
+            }
+        }
+        if let all = storage?.cookies {
+            for cookie in all {
+                let domain = cookie.domain.lowercased()
+                if domain.contains("itunes.apple.com") || domain.contains("apple.com") {
+                    byName[cookie.name] = "\(cookie.name)=\(cookie.value)"
+                }
+            }
+        }
+        // Fallback: single Set-Cookie echoed in header map (iOS often collapses multiples).
+        if byName.isEmpty {
+            for (key, value) in headers where key.lowercased() == "set-cookie" {
+                let nameValue = value.split(separator: ";").first.map(String.init)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard let eq = nameValue.firstIndex(of: "=") else { continue }
+                let name = String(nameValue[..<eq])
+                guard !name.isEmpty else { continue }
+                byName[name] = nameValue
+            }
+        }
+        guard !byName.isEmpty else { return nil }
+        return byName.values.sorted().joined(separator: "; ")
     }
 
     private func string(_ any: Any?) -> String {
