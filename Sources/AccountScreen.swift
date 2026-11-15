@@ -2,7 +2,7 @@
 //  AccountScreen.swift
 //  Settings › Account. Guest → sign in / register (ZefvAccountScreen inline).
 //  Signed in → local user settings (username · role · ADID · email), change password,
-//  sign out. Roles are assigned on the website (airshare.lol/admin/app).
+//  sign out. Roles are assigned on the website (tetherless.dev/admin/app).
 //
 
 import SwiftUI

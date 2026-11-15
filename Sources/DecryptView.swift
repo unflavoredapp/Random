@@ -91,12 +91,18 @@ final class DecryptClient: ObservableObject {
 
     var busy: Bool { phase == .queued || phase == .running || phase == .downloading }
 
-    /// Site root for LocalDecryptBridge / store fetch. Derived from the app API base;
-    /// override with UserDefaults `as_site_base`. Note: default `airshare.lol` currently
-    /// presents a mismatched TLS cert — backend IPA fetch is skipped when that host is used.
+    /// Site root for LocalDecryptBridge / store fetch. Derived from the app API base
+    /// (`https://tetherless.dev/` — same apex as OTA). Override with UserDefaults
+    /// `as_site_base`; legacy airshare.lol / zefv overrides are ignored.
     nonisolated static var siteBase: String {
-        let v = UserDefaults.standard.string(forKey: "as_site_base") ?? ""
-        var b = v.isEmpty ? ZefvAccount.apiBase : v
+        let raw = UserDefaults.standard.string(forKey: "as_site_base") ?? ""
+        let lower = raw.lowercased()
+        var b: String
+        if raw.isEmpty || lower.contains("airshare.lol") || lower.contains("zefv.dev") || lower.contains("mrzefv.com") {
+            b = ZefvAccount.apiBase
+        } else {
+            b = raw
+        }
         if b.hasSuffix("app/v1/") { b.removeLast("app/v1/".count) }
         return b.hasSuffix("/") ? b : b + "/"
     }

@@ -70,17 +70,19 @@ nonisolated enum LocalDecryptBridge {
         var errorDescription: String? { message }
     }
 
-    /// `airshare.lol` currently presents a cert for an unrelated host (hostname mismatch),
-    /// which surfaces on-device as “A TLS error caused the secure connection to fail.”
+    /// Retired hosts only. Default API is `tetherless.dev` (same apex as OTA); keep this
+    /// guard so a stale UserDefaults override to airshare.lol cannot burn a decrypt attempt
+    /// on a hostname-mismatched cert.
     static var backendTLSLikelyBroken: Bool {
         let host = (URL(string: DecryptClient.siteBase)?.host ?? "").lowercased()
         return host == "airshare.lol" || host.hasSuffix(".airshare.lol")
+            || host.contains("zefv.dev") || host.contains("mrzefv.com")
     }
 
     static func request(_ path: String, query: [String: String] = [:], body: [String: Any]? = nil, timeout: TimeInterval = 30) throws -> URLRequest {
         if backendTLSLikelyBroken {
             throw Failure(
-                "API host TLS is broken (\(DecryptClient.siteBase) — certificate does not match). Set as_site_base / as_api_base to a working TetherLess API host, or Decrypt from Installed."
+                "API host TLS is broken (\(DecryptClient.siteBase) — certificate does not match). TetherLess uses tetherless.dev (same as OTA); clear as_site_base / as_api_base, or Decrypt from Installed."
             )
         }
         guard var c = URLComponents(string: DecryptClient.siteBase + path) else { throw Failure("Bad URL") }
@@ -117,7 +119,7 @@ nonisolated enum LocalDecryptBridge {
                 || msg.localizedCaseInsensitiveContains("secure connection")
                 || msg.localizedCaseInsensitiveContains("certificate") {
                 throw Failure(
-                    "API TLS failed (\(r.url?.host ?? "backend")): \(msg). Decrypt from Installed if the app is on this iPhone, or fix as_site_base / as_api_base."
+                    "API TLS failed (\(r.url?.host ?? "backend")): \(msg). Decrypt from Installed if the app is on this iPhone, or clear as_site_base / as_api_base to use tetherless.dev."
                 )
             }
             throw Failure(msg)

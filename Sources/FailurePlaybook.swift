@@ -39,11 +39,11 @@ enum FailurePlaybook {
             action: .turnOffClientInfoRewrite
         ),
         // TLS before 403 — combined “HTTP 403… TLS error…” messages should open Library,
-        // not remint again (remint does not fix airshare.lol’s bad cert).
+        // not remint again (remint does not fix a bad API host cert).
         FailurePlay(
             id: "tls-backend",
             title: "Backend API TLS failed",
-            summary: "The Store backend host (often airshare.lol) presents a mismatched TLS certificate. Decrypt from Library if the app is installed, or set as_site_base / as_api_base to a working API host.",
+            summary: "API host TLS failed. TetherLess uses tetherless.dev (same apex as OTA). Clear legacy as_site_base / as_api_base overrides, or Decrypt from Library if the app is installed.",
             matches: ["tls error", "secure connection", "certificate does not match", "api host tls"],
             actionTitle: "Open Library",
             action: .openLibrary

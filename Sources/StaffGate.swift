@@ -1,7 +1,7 @@
 //
 //  StaffGate.swift
 //  Server-decided role gate. The list of staff device IDs lives on the VPS
-//  (airshare.lol/app/v1/roles) — never in the IPA, so it can't be pulled out
+//  (tetherless.dev/app/v1/roles) — never in the IPA, so it can't be pulled out
 //  of the binary. The app sends its random per-install ADID; the server returns the
 //  role. Result is cached in the Keychain with a short TTL so it works briefly
 //  offline and re-verifies when back online.
