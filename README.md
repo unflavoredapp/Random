@@ -27,7 +27,7 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 ## Features
 
 - **Sign & install any IPA** — using your free Apple ID, or your own certificate.
-- **Get a clean copy of apps you own** — FairPlay decrypt on this iPhone (Installed or Store). Optional **iPadn search** (Settings) vendors [mengangs/ipadn](https://github.com/mengangs/ipadn) multi-region / App ID lookup in Decrypt (GPL-2.0). Optional Telegram Phone Worker.
+- **Get a clean copy of apps you own** — FairPlay decrypt on this iPhone (Installed or Store). Optional **iPadn** (Settings) vendors [mengangs/ipadn](https://github.com/mengangs/ipadn) search + Store login into TetherLess (GPL-2.0). Optional Telegram Phone Worker.
 - **Multiple App Store accounts** — sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.
 - **Tweak injection** — add `.deb` or `.dylib` tweaks while you sign.
 - **Keep apps alive** — resign in one tap, Refresh All at once, or automate it with a Shortcut so your apps (and TetherLess itself) never expire — even while your iPhone is locked.
