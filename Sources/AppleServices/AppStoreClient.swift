@@ -958,6 +958,134 @@ final class AppStoreClient: ObservableObject {
         return (destination, item)
     }
 
+    /// Device mints SAP-signed commerce + anisette headers; TetherLess backend hits Apple/CDN.
+    /// FairPlay stays on-device — used after phone volumeStore HTTP 403 remint fails.
+    @discardableResult
+    func downloadIPAViaBackend(
+        adamId: Int,
+        account: StorefrontSession,
+        destination: URL,
+        externalVersionId: String? = nil,
+        onProgress: ((String) -> Void)? = nil
+    ) async throws -> (url: URL, item: StoreDownloadItem) {
+        let account = account.normalizedForCommerce()
+        let anisette = try await AnisetteClient.shared.fetch()
+        onProgress?("Preparing signed Store request for backend fetch…")
+
+        var body: [String: Any] = [
+            "creditDisplay": "",
+            "guid": account.guid,
+            "salableAdamId": adamId,
+            "serialNumber": "0",
+        ]
+        let pin = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !pin.isEmpty {
+            body["externalVersionId"] = pin
+        }
+        let bodyData = try PropertyListSerialization.data(
+            fromPropertyList: body, format: .xml, options: 0
+        )
+        let signer = try await SAPSigner.connect()
+        let signature = try await signer.sign(bodyData)
+
+        var headers = commerceHeaders(account)
+        headers["X-Apple-ActionSignature"] = signature.base64EncodedString()
+        // Commerce anisette (authenticate-style AMD aliases + pristine Client-Info).
+        headers["X-MMe-Client-Info"] = anisette.clientInfo
+        headers["X-Apple-I-MD-LU"] = anisette.localUserID
+        headers["X-Apple-I-MD-RINFO"] = anisette.routingInfo
+        headers["X-Mme-Device-Id"] = anisette.deviceID
+        headers["X-Apple-I-SRL-NO"] = anisette.serialNumber
+        headers["X-Apple-I-Client-Time"] = anisette.clientTime
+        headers["X-Apple-Locale"] = anisette.locale
+        headers["X-Apple-I-TimeZone"] = anisette.timeZone
+        headers["X-Apple-AMD"] = anisette.oneTimePassword
+        headers["X-Apple-AMD-M"] = anisette.machineID
+        headers["User-Agent"] = configuratorUA
+
+        var endpoints = volumeStoreCandidates(account: account)
+        endpoints.append(Paths.redownload)
+        if !pin.isEmpty {
+            endpoints.append("\(Paths.updateProduct)?guid=\(account.guid)")
+        }
+
+        let payload: [String: Any] = [
+            "adamId": adamId,
+            "guid": account.guid,
+            "externalVersionId": pin,
+            "bodyPlistBase64": bodyData.base64EncodedString(),
+            "headers": headers,
+            "endpoints": endpoints,
+        ]
+        onProgress?("Backend Store fetch (Apple commerce + CDN)…")
+        let req = try LocalDecryptBridge.request("api/store/fetch-ipa", body: payload, timeout: 600)
+        let (_, json) = try await LocalDecryptBridge.sendRaw(req)
+        guard let jobId = json["id"] as? String, !jobId.isEmpty else {
+            throw AppStoreClientError.message("Backend Store fetch returned no job id.")
+        }
+        let sinfs = Self.parseSinfsFromBackend(json["sinfs"])
+        var meta = (json["metadata"] as? [String: Any]) ?? [:]
+        if meta.isEmpty {
+            if let name = json["name"] as? String, !name.isEmpty { meta["itemName"] = name }
+            if let ver = json["version"] as? String, !ver.isEmpty {
+                meta["bundleShortVersionString"] = ver
+            }
+        }
+        let item = StoreDownloadItem(
+            url: nil,
+            md5: nil,
+            artworkURL: nil,
+            sinfs: sinfs,
+            metadata: meta
+        )
+
+        onProgress?("Downloading encrypted IPA from TetherLess…")
+        var dl = try LocalDecryptBridge.request("api/store/ipa/\(jobId)", timeout: 600)
+        dl.httpMethod = "GET"
+        dl.setValue(nil, forHTTPHeaderField: "Content-Type")
+        let (data, resp) = try await URLSession.shared.data(for: dl)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(code), data.count > 100 else {
+            let err = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["error"] as? String
+            throw AppStoreClientError.network(
+                err ?? "Backend IPA download failed (HTTP \(code))."
+            )
+        }
+        let fm = FileManager.default
+        try? fm.removeItem(at: destination)
+        try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: destination, options: .atomic)
+
+        onProgress?("Writing iTunesMetadata + FairPlay licenses…")
+        try? writeiTunesMetadata(item.metadata, email: account.email, intoIPA: destination)
+        if !item.sinfs.isEmpty {
+            do {
+                try injectSinfs(item.sinfs, intoIPA: destination)
+                onProgress?("Embedded \(item.sinfs.count) FairPlay license(s)…")
+            } catch {
+                onProgress?("SINF inject soft-failed (\(error.localizedDescription)) — decrypt may need a live install.")
+            }
+        }
+        return (destination, item)
+    }
+
+    private static func parseSinfsFromBackend(_ any: Any?) -> [StoreSinf] {
+        guard let rows = any as? [[String: Any]] else { return [] }
+        var out: [StoreSinf] = []
+        out.reserveCapacity(rows.count)
+        for (i, row) in rows.enumerated() {
+            let id: Int64
+            if let n = row["id"] as? Int64 { id = n }
+            else if let n = row["id"] as? Int { id = Int64(n) }
+            else if let n = row["id"] as? NSNumber { id = n.int64Value }
+            else { id = Int64(i) }
+            let b64 = (row["data"] as? String) ?? (row["sinf"] as? String) ?? ""
+            guard let data = Data(base64Encoded: b64), !data.isEmpty else { continue }
+            out.append(StoreSinf(id: id, data: data))
+        }
+        return out
+    }
+
     /// Purchase (if needed) + download for a free/owned adamId.
     func purchaseAndDownload(
         adamId: Int,

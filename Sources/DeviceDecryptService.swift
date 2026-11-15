@@ -662,9 +662,29 @@ final class DeviceDecryptService: ObservableObject {
                     continue downloadAttempt
                 }
                 if lower.contains("403") || lower.contains("client identity") {
-                    throw DecryptError(
-                        "App Store download failed (\(detail)). Store identity rejection after anisette rotate + remint. In Settings › Store Access pick another Anisette server (or enable Phone Worker / Telegram for backend decrypt), then Retry Store unlock."
+                    // Option 2: phone keeps FairPlay; backend runs volumeStore + CDN with the
+                    // device-minted SAP signature / anisette / passwordToken.
+                    publishDecryptProgress(
+                        "Phone Store still 403 — trying backend encrypted-IPA fetch…"
                     )
+                    do {
+                        let result = try await AppStoreClient.shared.downloadIPAViaBackend(
+                            adamId: adam,
+                            account: account,
+                            destination: dest,
+                            externalVersionId: pinned.isEmpty ? nil : pinned
+                        ) { [weak self] msg in
+                            Task { @MainActor in self?.publishDecryptProgress(msg) }
+                        }
+                        ipa = result.url
+                        downloadedVersion = result.item.displayVersion
+                        pinned = result.item.externalVersionId.isEmpty ? pinned : result.item.externalVersionId
+                        break downloadAttempt
+                    } catch {
+                        throw DecryptError(
+                            "App Store download failed (\(detail)). Backend fetch also failed: \(error.localizedDescription). Remint Store Access and retry."
+                        )
+                    }
                 }
                 throw DecryptError(
                     "App Store download failed (\(detail)). Retry from Settings › Store Access if needed."
