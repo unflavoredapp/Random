@@ -33,3 +33,17 @@ static inline bool fp_compute_remap_window(
     *remap_len = end - off;
     return true;
 }
+
+/// True when the crypt range is already a whole-number of native pages (buddy3 [M] exact path).
+static inline bool fp_crypt_range_is_exact(
+    uint64_t cryptoff,
+    uint64_t cryptsize,
+    uint64_t slice_size,
+    uint64_t page
+) {
+    if (!page || !cryptsize) return false;
+    if (cryptoff % page) return false;
+    if (cryptsize % page) return false;
+    if (cryptoff > UINT64_MAX - cryptsize) return false;
+    return cryptoff + cryptsize <= slice_size;
+}

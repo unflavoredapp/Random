@@ -103,6 +103,20 @@ static void test_no_hard_reject_semantics(void) {
     expect((0x1000 % page) != 0, "precondition: cryptoff is not page-aligned");
 }
 
+static void test_exact_geometry_helper(void) {
+    const uint64_t page = 16384;
+    expect(fp_crypt_range_is_exact(16384, 32768, 128 * 1024, page),
+           "exact: fully page-aligned crypt range");
+    expect(!fp_crypt_range_is_exact(4096, 8192, 64 * 1024, page),
+           "not exact: 4K cryptoff on 16K page");
+    expect(!fp_crypt_range_is_exact(16384, 8192, 64 * 1024, page),
+           "not exact: cryptsize not page multiple");
+    expect(!fp_crypt_range_is_exact(0, 16384, 8192, page),
+           "not exact: crypt past slice");
+    expect(fp_crypt_range_is_exact(0, 4096, 16384, 4096),
+           "exact on 4K page env");
+}
+
 int main(void) {
     printf("fpcore page/order regression tests\n");
     test_decrypt_order_starts_with_native();
@@ -111,6 +125,7 @@ int main(void) {
     test_4k_page_env();
     test_malformed_ranges();
     test_no_hard_reject_semantics();
+    test_exact_geometry_helper();
     if (g_failed) {
         fprintf(stderr, "%d failure(s)\n", g_failed);
         return 1;

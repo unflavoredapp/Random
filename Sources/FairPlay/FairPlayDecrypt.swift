@@ -612,6 +612,14 @@ enum FairPlayDecrypt {
             if delay > 0 {
                 Thread.sleep(forTimeInterval: delay)
             }
+            // Re-stage licenses before each round — IPA trees can lose SC_Info mid-pass.
+            if !isLiveAppStoreInstall(sourceApp) {
+                let bins = stillEncrypted.map { sourceApp.appendingPathComponent($0) }
+                let restaged = stageSinfsForEncryptedBinaries(bins, in: sourceApp)
+                if restaged > 0 {
+                    progress?("Re-staged \(restaged) SINF(s) before retry \(round + 1)…")
+                }
+            }
             progress?("Retry \(round + 1)/\(verifyRetryBackoffSeconds.count): \(stillEncrypted.count) file(s)…")
 
             var recovered: [String] = []
