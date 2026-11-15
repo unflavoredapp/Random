@@ -311,10 +311,13 @@ enum FairPlayDecrypt {
         return try zipDecryptedPayload(payload, displayName: displayName, report: report)
     }
 
-    /// Unpack IPA → decrypt → re-zip. Prefers live install path when the bundle is installed.
+    /// Unpack IPA → decrypt → re-zip.
+    /// - Parameter preferIPAContentsOnly: When true, never switch to a live App Store
+    ///   install path (avoids hanging cryptid probes after Store package download).
     static func decryptIPA(
         at ipaURL: URL,
         displayName: String,
+        preferIPAContentsOnly: Bool = false,
         progress: ((String) -> Void)? = nil
     ) throws -> URL {
         let fm = FileManager.default
@@ -330,7 +333,8 @@ enum FairPlayDecrypt {
         }
 
         var report: FairPlayDecryptReport
-        if let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist")) as? [String: Any],
+        if !preferIPAContentsOnly,
+           let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist")) as? [String: Any],
            let bid = info["CFBundleIdentifier"] as? String,
            let installed = installedAppURL(bundleID: bid) {
             progress?("Using installed path for FairPlay keys…")
@@ -692,26 +696,41 @@ enum FairPlayDecrypt {
 
 
     /// Report cryptid of every Mach-O under an `.app` (FairPlayed `verify_ipa.sh`).
+    /// Cryptid probes are bounded — live App Store installs can hang forever on `fp_*`.
     static func verifyApp(at app: URL) throws -> FairPlayVerifyReport {
+        if isLiveAppStoreInstall(app) {
+            // Never cryptid-probe live containers. Enumerate with timeout-safe collectMachOs
+            // and mark entries unknown/plain so callers can still slim-embed.
+            var report = FairPlayVerifyReport()
+            for url in try collectMachOs(under: app) {
+                let rel = relativePath(url, under: app)
+                report.entries.append(FairPlayCryptidEntry(path: rel, cryptid: -1, detail: "live-install:skipped-cryptid-probe"))
+                report.plain += 1
+            }
+            return report
+        }
         var report = FairPlayVerifyReport()
         for url in try collectMachOs(under: app) {
             let rel = relativePath(url, under: app)
-            var detailBuf = [CChar](repeating: 0, count: 256)
-            let sliceCount = url.path.withCString { path in
-                detailBuf.withUnsafeMutableBufferPointer { buf in
-                    fp_describe_cryptids(path, buf.baseAddress, buf.count)
+            let probed: (cryptid: Int32, sliceCount: Int32, detail: String) = withTimeout(seconds: 4, work: {
+                var detailBuf = [CChar](repeating: 0, count: 256)
+                let sliceCount = url.path.withCString { path in
+                    detailBuf.withUnsafeMutableBufferPointer { buf in
+                        fp_describe_cryptids(path, buf.baseAddress, buf.count)
+                    }
                 }
-            }
-            let detail = String(cString: detailBuf)
-            let cryptid = url.path.withCString { fp_max_cryptid($0) }
+                let cryptid = url.path.withCString { fp_max_cryptid($0) }
+                return (cryptid, sliceCount, String(cString: detailBuf))
+            }) ?? (0, 0, "cryptid-probe-timed-out")
+            let cryptid = probed.cryptid
+            let detail = probed.detail
             let entry = FairPlayCryptidEntry(path: rel, cryptid: Int(cryptid), detail: detail)
             report.entries.append(entry)
             if cryptid > 0 {
                 report.encrypted += 1
-            } else if cryptid == 0 && sliceCount > 0 && detail.contains("cryptid=0") {
+            } else if cryptid == 0 && probed.sliceCount > 0 && detail.contains("cryptid=0") {
                 report.clear += 1
             } else if cryptid == 0 {
-                // No encryption LC, or all clear.
                 if detail.contains("plain") && !detail.contains("cryptid=") {
                     report.plain += 1
                 } else {
@@ -931,14 +950,13 @@ enum FairPlayDecrypt {
         if FileManager.default.fileExists(atPath: sc.path, isDirectory: &isDir) {
             return
         }
-        // Some system layouts hide SC_Info from sandbox exists checks even when fairplayd can open it.
-        // Soft-warn via throwing only when the main binary looks encrypted AND we know SC_Info is gone.
+        // Never unbounded-probe live installs — fp_max_cryptid can hang forever.
+        if isLiveAppStoreInstall(app) { return }
+        // Soft-check: main binary cryptid with timeout. Don't hard-fail — fairplayd may still resolve.
         if let exe = mainExecutableURL(in: app) {
-            let enc = exe.path.withCString { fp_max_cryptid($0) }
-            if enc > 0 {
-                // Don't hard-fail — fairplayd may still resolve the license. Caller will fail on main exe.
-                return
-            }
+            _ = withTimeout(seconds: 3, work: {
+                exe.path.withCString { fp_max_cryptid($0) }
+            })
         }
         _ = sc
     }

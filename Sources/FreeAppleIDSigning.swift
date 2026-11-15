@@ -32,13 +32,15 @@ enum FreeAppleIDSigning {
             throw AppleAuthError.message("Sign in under Settings › Store Access first.")
         }
         // Refresh stale portal sessions before creating a cert.
-        do {
-            _ = try await DeveloperPortalClient.shared.listTeams(auth: auth!)
-        } catch {
-            if AppleIDStore.isPortalSessionExpired(error) {
-                auth = try await AppleIDStore.shared.refreshPortalSession()
-            } else {
-                throw error
+        if let current = auth {
+            do {
+                _ = try await DeveloperPortalClient.shared.listTeams(auth: current)
+            } catch {
+                if AppleIDStore.isPortalSessionExpired(error) {
+                    auth = try await AppleIDStore.shared.refreshPortalSession()
+                } else {
+                    throw error
+                }
             }
         }
         guard let auth else {
@@ -64,9 +66,11 @@ enum FreeAppleIDSigning {
                 )
             } catch let e as AppleAuthError {
                 if case .portal(35, _) = e { /* already registered */ }
-                else { /* non-fatal for cert create */ }
-            } catch {
-                // Non-fatal — profile download may still succeed.
+                else {
+                    // Surface non-duplicate registration failures — companion/sign
+                    // otherwise fails later with a vaguer profile/UDID error.
+                    throw e
+                }
             }
         }
 

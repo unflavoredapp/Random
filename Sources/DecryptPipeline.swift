@@ -68,6 +68,21 @@ final class DecryptPipeline: ObservableObject {
                     version: version,
                     externalVersionId: externalVersionId
                 )
+
+                // Companion handoff is a successful terminal state — FairPlay finishes
+                // in Tetherless Decrypt; there is no host-side clear IPA to sign.
+                if DecryptClient.shared.phase == .handedOff {
+                    let name = DecryptClient.shared.finishedName.isEmpty
+                        ? app.name
+                        : DecryptClient.shared.finishedName
+                    stage = .done("Companion installed for \(name) — open Tetherless Decrypt to finish.")
+                    if DecryptClient.shared.message.isEmpty {
+                        DecryptClient.shared.message =
+                            "Open Tetherless Decrypt — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
+                    }
+                    return
+                }
+
                 guard DecryptClient.shared.phase == .done, let ipa = DecryptClient.shared.finished else {
                     throw DecryptError(DecryptClient.shared.error ?? "Decrypt produced no IPA.")
                 }
@@ -141,10 +156,19 @@ final class DecryptPipeline: ObservableObject {
         let hold = "pipeline-\(UUID().uuidString)"
         if NativeInstaller.isSelected { BackgroundKeepAlive.shared.start(hold) }
         defer { BackgroundKeepAlive.shared.stop(hold) }
+
+        // Prefer Native when selected + paired; otherwise OTA. Autopilot may flip on failure.
         do {
-            try await OTAInstaller.shared.install(entry)
+            if NativeInstaller.isSelected, DevicePairingStore.hasSavedPairing {
+                try await NativeInstaller.shared.install(entry)
+            } else {
+                try await OTAInstaller.shared.install(entry)
+            }
         } catch {
             if InstallAutopilot.fallbackToOTAIfNeeded(error: error) {
+                try await OTAInstaller.shared.install(entry)
+            } else if NativeInstaller.isSelected {
+                // Native path failed without autopilot flip — try OTA once.
                 try await OTAInstaller.shared.install(entry)
             } else {
                 throw error

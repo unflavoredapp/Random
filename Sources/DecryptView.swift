@@ -60,7 +60,11 @@ struct DecryptError: LocalizedError {
 final class DecryptClient: ObservableObject {
     static let shared = DecryptClient()
 
-    enum Phase: Equatable { case idle, queued, running, downloading, done, failed }
+    enum Phase: Equatable {
+        case idle, queued, running, downloading, done, failed
+        /// Companion IPA installed — FairPlay continues there. Not busy.
+        case handedOff
+    }
 
     @Published var results: [DecryptApp] = []
     @Published var searching = false
@@ -190,6 +194,10 @@ final class DecryptClient: ObservableObject {
                 error = nil
                 return
             }
+            if let verErr = DeviceDecryptService.shared.lastVersionError, !verErr.isEmpty {
+                // Keep going to public iTunes fallback below, but remember the Store error.
+                error = verErr
+            }
         }
 
         // Telegram / server archive history (paged).
@@ -229,7 +237,8 @@ final class DecryptClient: ObservableObject {
             versionTotal = local.versions.count
             error = nil
         } else if versions.isEmpty {
-            error = "Couldn't load version history. Try again, or decrypt the latest build from search."
+            error = DeviceDecryptService.shared.lastVersionError
+                ?? "Couldn't load version history. Try again, or decrypt the latest build from search."
         }
     }
 
@@ -294,7 +303,7 @@ final class DecryptClient: ObservableObject {
         phase = .idle; message = ""; queue = 0
     }
 
-    func reset() { phase = .idle; message = ""; finished = nil; error = nil }
+    func reset() { phase = .idle; message = ""; finished = nil; finishedName = ""; error = nil }
 
     private func download(up: String, name: String, version: String) async throws -> URL {
         let r = try makeRequest("api/ipa/file/\(up)", timeout: 180)
@@ -510,8 +519,10 @@ struct DecryptView: View {
                     }
                 }
                 await MainActor.run {
-                    c.phase = .running
-                    c.message = "Open Tetherless Decrypt to finish decrypt."
+                    c.phase = .handedOff
+                    c.message =
+                        "Open Tetherless Decrypt — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
+                    c.error = nil
                     pickMessage = "Companion installed — open Tetherless Decrypt."
                 }
             } catch {
@@ -538,6 +549,8 @@ struct DecryptView: View {
             return c.message.isEmpty ? "Downloading…" : c.message
         case .done:
             return "Decrypted"
+        case .handedOff:
+            return "Companion ready"
         case .failed:
             return "Failed"
         case .queued:
@@ -680,7 +693,7 @@ struct DecryptView: View {
                             .font(.caption).foregroundStyle(.white.opacity(0.55))
                     }
                     Spacer()
-                    if c.phase == .done {
+                    if c.phase == .done || c.phase == .handedOff {
                         Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                     } else if c.phase == .failed {
                         Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -705,6 +718,20 @@ struct DecryptView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.white.opacity(0.55))
                         }
+                    }
+                }
+
+                if c.phase == .handedOff {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(c.message.isEmpty
+                             ? "Open Tetherless Decrypt to finish FairPlay."
+                             : c.message)
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.7))
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Dismiss") { c.reset() }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.55))
                     }
                 }
 

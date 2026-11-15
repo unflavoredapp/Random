@@ -17,6 +17,8 @@ final class DeviceDecryptService: ObservableObject {
     @Published private(set) var busy = false
     @Published var status = ""
     @Published var lastError: String?
+    /// Last versions-sheet failure (auth/network) — not “no versions”.
+    @Published var lastVersionError: String?
     /// Last batch / single-run detail line (counts, soft-fails).
     @Published var lastReportSummary = ""
 
@@ -50,10 +52,14 @@ final class DeviceDecryptService: ObservableObject {
 
     /// Version history: prefer authenticated MZFinance externalVersionIds, then public iTunes current build.
     func versionList(for app: DecryptApp) async -> (versions: [DecryptVersion], minOS: String?)? {
+        lastVersionError = nil
         if let store = await storeVersionHistory(for: app) {
             return store
         }
-        return await publicItunesVersionList(for: app)
+        if let pub = await publicItunesVersionList(for: app) {
+            return pub
+        }
+        return nil
     }
 
     /// Apple ID purchase/download history (owned apps this account can redownload).
@@ -117,7 +123,10 @@ final class DeviceDecryptService: ObservableObject {
         guard AppleIDStore.shared.isSignedIn else { return nil }
         do {
             let adam = try await resolveAdamId(bundleID: app.bundle, storeURL: app.url)
-            guard let adam else { return nil }
+            guard let adam else {
+                lastVersionError = "Couldn't resolve an App Store id for \(app.name)."
+                return nil
+            }
             let account = try await AppleIDStore.shared.ensureStorefrontSession()
             let versions = try await AppStoreClient.shared.resolveVersionHistory(
                 adamId: adam,
@@ -128,6 +137,7 @@ final class DeviceDecryptService: ObservableObject {
             let minOS = versions.first(where: \.current)?.minOS ?? versions.first?.minOS
             return (versions, minOS)
         } catch {
+            lastVersionError = error.localizedDescription
             return nil
         }
     }
@@ -491,9 +501,16 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.start(url: app.url, version: version, display: app.name)
         case .device:
             DecryptClient.shared.select(app)
-            DecryptClient.shared.phase = .running
-            DecryptClient.shared.message = "Starting…"
+            // Don't set .running before winning the busy lock — that left the UI stuck
+            // with no worker when a decrypt was already in flight.
+            if busy {
+                DecryptClient.shared.phase = .failed
+                DecryptClient.shared.error = "Already decrypting — wait for the current job to finish."
+                DecryptClient.shared.message = DecryptClient.shared.error ?? ""
+                return
+            }
             DecryptClient.shared.error = nil
+            DecryptClient.shared.message = "Starting…"
             let deviceApp = DeviceApp(
                 bundleID: app.bundle,
                 name: app.name,
@@ -519,9 +536,19 @@ final class DeviceDecryptService: ObservableObject {
         version: String? = nil,
         externalVersionId: String? = nil
     ) async {
-        guard !busy else { return }
+        guard !busy else {
+            if DecryptClient.shared.phase != .running && DecryptClient.shared.phase != .downloading {
+                DecryptClient.shared.phase = .failed
+                DecryptClient.shared.error = "Already decrypting — wait for the current job to finish."
+                DecryptClient.shared.message = DecryptClient.shared.error ?? ""
+            }
+            return
+        }
         busy = true
         lastError = nil
+        DecryptClient.shared.phase = .running
+        DecryptClient.shared.message = "Starting…"
+        DecryptClient.shared.error = nil
         defer { busy = false }
         do {
             guard AppleIDStore.shared.isSignedIn else {
@@ -569,11 +596,13 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     /// Host finished packaging — FairPlay console continues in the installed companion IPA.
+    /// Terminal for the host: not busy, so further decrypts / pipeline can proceed.
     private func markCompanionHandoff(displayName: String) {
-        DecryptClient.shared.phase = .running
+        DecryptClient.shared.phase = .handedOff
         DecryptClient.shared.message =
             "Open Tetherless Decrypt — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
         DecryptClient.shared.error = nil
+        DecryptClient.shared.finishedName = displayName
         status = "Companion installed for \(displayName)"
         DecryptCompanionController.shared.dismiss()
     }
@@ -598,6 +627,7 @@ final class DeviceDecryptService: ObservableObject {
         var account = reinforced
 
         // Explicit pin from Versions sheet, else display-version resolve inside client.
+        let requestedVersion = (version ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         var pinned = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if pinned.isEmpty {
             do {
@@ -610,18 +640,25 @@ final class DeviceDecryptService: ObservableObject {
             } catch AppStoreClientError.tokenExpired {
                 AppleIDStore.shared.invalidateStorefrontSession()
                 account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
-                pinned = (try? await AppStoreClient.shared.resolveDownloadVersionId(
+                pinned = try await AppStoreClient.shared.resolveDownloadVersionId(
                     adamId: adam,
                     account: account,
                     version: version,
                     externalVersionId: nil
-                )) ?? ""
+                ) ?? ""
             } catch {
+                if !requestedVersion.isEmpty {
+                    throw DecryptError(
+                        "Couldn't pin version \(requestedVersion) (\(error.localizedDescription)). Retry or pick another build."
+                    )
+                }
                 pinned = ""
             }
         }
-        if let version, !version.isEmpty, pinned.isEmpty {
-            publishDecryptProgress("Using latest owned build (couldn’t pin v\(version))…")
+        if !requestedVersion.isEmpty, pinned.isEmpty {
+            throw DecryptError(
+                "Couldn't pin version \(requestedVersion) for \(displayName). Pick another build or decrypt Latest."
+            )
         } else if !pinned.isEmpty {
             publishDecryptProgress("Pinning store build \(pinned)…")
         }
@@ -671,16 +708,22 @@ final class DeviceDecryptService: ObservableObject {
                     identityRetryUsed = true
                     StoreDeviceSpoof.clearPersistedSpoof()
                     // SideStore-style: rotate anisette server, then remint passwordToken.
+                    // Poison the dead token so soft-restore can't recycle it.
                     let nextAni = await AnisetteClient.shared.rotateServer()
                     publishDecryptProgress(
                         "Store HTTP 403 — rotated anisette to \(nextAni.host ?? "server"), reminting session…"
                     )
                     await AnisetteClient.shared.invalidate(resetProvisioning: true)
                     SAPSigner.invalidateCache()
+                    AppleIDStore.shared.clearPersistedStoreSession()
                     AppleIDStore.shared.invalidateStorefrontSession()
-                    if let refreshed = await AppleIDStore.shared.reinforceStoreConnection(forceRemint: true) {
-                        account = refreshed
+                    guard let refreshed = await AppleIDStore.shared.reinforceStoreConnection(forceRemint: true),
+                          refreshed.isUsable else {
+                        throw DecryptError(
+                            "Store session remint failed after HTTP 403. Sign Out / Sign In under Settings › Store Access, then retry."
+                        )
                     }
+                    account = refreshed
                     continue downloadAttempt
                 }
                 if lower.contains("403") || lower.contains("client identity") {
@@ -729,61 +772,25 @@ final class DeviceDecryptService: ObservableObject {
             markCompanionHandoff(displayName: displayName)
             return
         } catch {
-            // Last-resort fallback: in-process IPA decrypt (no companion console UI on host).
-            publishDecryptProgress("Companion install failed — trying in-app FairPlay…")
-            publishDecryptProgress(error.localizedDescription)
+            // Last-resort: in-process IPA decrypt from package contents only — never prefer
+            // a live install path here (that re-hangs FairPlay cryptid probes).
+            let companionError = error.localizedDescription
+            publishDecryptProgress("Companion install failed — trying in-app FairPlay on Store package…")
+            publishDecryptProgress(companionError)
             do {
                 let clear = try FairPlayDecrypt.decryptIPA(
                     at: ipa,
-                    displayName: displayName
+                    displayName: displayName,
+                    preferIPAContentsOnly: true
                 ) { [weak self] msg in
                     Task { @MainActor in self?.publishDecryptProgress(msg) }
                 }
                 finishSuccess(url: clear, name: displayName)
                 return
             } catch let ipaError {
-                if NativeInstaller.isSelected {
-                    publishDecryptProgress("Uploading target app to iPhone for install-path decrypt…")
-                    do {
-                        try await NativeInstaller.shared.install(
-                            ipaURL: ipa,
-                            bundleID: bundleID,
-                            name: displayName,
-                            version: downloadedVersion
-                        )
-                        if let installed = await resolveInstalledAppURL(bundleID: bundleID) {
-                            // Prefer companion embed from the fresh install over host console.
-                            do {
-                                _ = try await DecryptCompanionInstaller.installAndOpen(
-                                    embeddingInstalledApp: installed,
-                                    displayName: displayName
-                                ) { [weak self] msg in
-                                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                                }
-                                markCompanionHandoff(displayName: displayName)
-                                return
-                            } catch {
-                                let clear = try FairPlayDecrypt.decryptInstalledApp(
-                                    bundleID: bundleID,
-                                    displayName: displayName,
-                                    knownPath: installed.path
-                                ) { [weak self] msg in
-                                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                                }
-                                finishSuccess(url: clear, name: displayName)
-                                return
-                            }
-                        }
-                    } catch {
-                        throw DecryptError(
-                            "Companion + Pair fallback failed (\(error.localizedDescription)). Earlier FairPlay error: \(ipaError.localizedDescription)."
-                        )
-                    }
-                }
-                // Ack without real Media & Purchases keys → clear so Decrypt UI re-prompts sign-in.
                 AppStoreDecryptGuide.setAcknowledged(false, email: AppleIDStore.shared.email)
                 throw DecryptError(
-                    "Silent download succeeded, but FairPlay decrypt failed (\(ipaError.localizedDescription)). \(AppStoreDecryptGuide.failureHint)"
+                    "Companion failed (\(companionError)). In-app FairPlay on the Store package also failed (\(ipaError.localizedDescription)). Trust your Apple ID under Settings › General › VPN & Device Management if the companion installed, then open Tetherless Decrypt — or remint Store Access and retry. \(AppStoreDecryptGuide.failureHint)"
                 )
             }
         }

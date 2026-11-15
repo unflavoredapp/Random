@@ -105,9 +105,11 @@ enum FailurePlaybook {
         case .reauthStore:
             AppNav.shared.go(AppTab.settings.rawValue)
             do {
-                _ = try await AppleIDStore.shared.ensureStorefrontSession()
+                AppleIDStore.shared.clearPersistedStoreSession()
+                _ = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
             } catch {
-                // User may need to re-enter password / 2FA in Store Access UI.
+                AppleIDStore.shared.lastError = error.localizedDescription
+                await AppleIDStore.shared.requestStoreVerificationPrompt()
             }
         case .refreshPortal:
             do {

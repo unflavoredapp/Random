@@ -47,6 +47,7 @@ final class OTAInstaller: ObservableObject {
         case hostNotLoopback(host: String)
         case rootNotTrusted
         case trollStoreNotInstalled
+        case installdDidNotFetch(String)
 
         var errorDescription: String? {
             switch self {
@@ -67,6 +68,8 @@ final class OTAInstaller: ObservableObject {
             case .ipaMissing: return "Signed IPA not found on disk."
             case .openFailed:
                 return "iOS refused the itms-services URL. Check the TetherLess host resolves to 127.0.0.1 and matches the active cert (see Settings › TetherLess Domain — Active cert)."
+            case .installdDidNotFetch(let diagnosis):
+                return diagnosis
             }
         }
     }
@@ -86,7 +89,11 @@ final class OTAInstaller: ObservableObject {
         let host = ServerConfig.installHost
         let mode = ServerConfig.certMode
 
-        if let loop = await ZefvCert.resolvesToLoopback(host), loop == false {
+        // Refuse when DNS is confirmed non-loopback OR when the check itself failed
+        // (nil) — previously nil skipped validation and installd hung with no prompt.
+        if let loop = await ZefvCert.resolvesToLoopback(host) {
+            if loop == false { throw InstallError.hostNotLoopback(host: host) }
+        } else {
             throw InstallError.hostNotLoopback(host: host)
         }
 
@@ -158,14 +165,29 @@ final class OTAInstaller: ObservableObject {
         let activeCertName = CertificateStore.shared.active?.name
         let profileNote = Self.profileNote(ipaURL: ipaURL, certName: activeCertName)
 
-        // Give installd time to fetch manifest + IPA, then report what it did.
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 25 * 1_000_000_000)
-            guard let self else { return }
-            let t = OTATrace.shared
-            self.lastReport = Report(requests: t.all, diagnosis: t.diagnosis(ipaSize: ipaSize), profileNote: profileNote)
-            self.tracing = false
-            if t.ipaFetched { ZefvVPS.report(bundle: bundleID, version: version, name: name, stage: "installed") }
+        // Await installd fetching the IPA before claiming success. Keep the server
+        // alive for a while after so installd can finish; fail closed if nothing arrives.
+        let deadline = Date().addingTimeInterval(45)
+        var fetched = false
+        while Date() < deadline {
+            if OTATrace.shared.ipaFetched {
+                fetched = true
+                break
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        let t = OTATrace.shared
+        lastReport = Report(requests: t.all, diagnosis: t.diagnosis(ipaSize: ipaSize), profileNote: profileNote)
+        tracing = false
+        if fetched {
+            ZefvVPS.report(bundle: bundleID, version: version, name: name, stage: "installed")
+        } else {
+            let diagnosis = t.diagnosis(ipaSize: ipaSize)
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: 5 * 1_000_000_000)
+                if let self, self.current === server { self.tearDown() }
+            }
+            throw InstallError.installdDidNotFetch(diagnosis)
         }
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 90 * 1_000_000_000)
