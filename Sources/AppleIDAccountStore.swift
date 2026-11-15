@@ -230,11 +230,41 @@ final class AppleIDStore: ObservableObject {
         return nil
     }
 
-    /// Background: refresh aged store tokens without bouncing the user to Sign In.
+    /// Remint in the background when the token is missing or older than this (PET keeps 2FA quiet).
+    private static let storeSessionMaxAge: TimeInterval = 12 * 60 * 60
+
+    /// Background: refresh missing / aged store tokens without bouncing the user to Sign In.
     private func quietlyRefreshStorefrontIfNeeded() async {
         guard activeAccount != nil else { return }
-        if let existing = storefrontSession(), existing.isUsable { return }
+        if let existing = storefrontSession(), existing.isUsable {
+            if !existing.isAged(maxAge: Self.storeSessionMaxAge) { return }
+            // Aged but structurally usable — soft remint; keep prior if remint soft-fails.
+            storefrontNeedsRefresh = true
+            _ = try? await ensureStorefrontSession(forceRefresh: true)
+            return
+        }
         await reconnectStoreSessionIfNeeded()
+    }
+
+    /// Warm anisette + SAP + store session before Decrypt / Retry so the first download isn't cold.
+    @discardableResult
+    func reinforceStoreConnection(forceRemint: Bool = false) async -> StorefrontSession? {
+        sanitizeStoreIdentityForAccountAPIs()
+        async let warmAnisette: Void = AnisetteClient.shared.prefetchIfNeeded()
+        async let warmSAP: Void = SAPSigner.warm()
+        _ = await (warmAnisette, warmSAP)
+
+        let prior = storefrontSession()
+        let aged = prior?.isAged(maxAge: Self.storeSessionMaxAge) == true
+        let refresh = forceRemint || storefrontNeedsRefresh || aged || prior?.isUsable != true
+        do {
+            let session = try await ensureStorefrontSession(forceRefresh: refresh)
+            clearStaleStoreErrorIfSessionUsable()
+            return session
+        } catch {
+            if let prior, prior.isUsable { return prior }
+            return nil
+        }
     }
 
     /// Settings: finish “Signed in for Store access” using the saved Apple ID password (same session).
@@ -244,6 +274,8 @@ final class AppleIDStore: ObservableObject {
         if !force, !storefrontNeedsRefresh, let existing = storefrontSession(), existing.isUsable {
             storeNeedsVerification = false
             storeConnecting = false
+            // Keep the edge warm without blocking Settings chrome.
+            Task { await reinforceStoreConnection(forceRemint: false) }
             return
         }
         guard !storeConnecting else { return }
@@ -253,10 +285,13 @@ final class AppleIDStore: ObservableObject {
             storeNeedsVerification = true
             return
         }
+        // Never wipe a usable token before remint succeeds — snapshot + restore on failure.
+        let previous = storefrontSession()
         if force {
-            clearPersistedStoreSession()
             sanitizeStoreIdentityForAccountAPIs()
             await AnisetteClient.shared.invalidate(resetProvisioning: false)
+            SAPSigner.invalidateCache()
+            storefrontNeedsRefresh = true
         }
         // Keep Allow/SMS digits when Retrying — PET alone often still needs that code.
         await connectStoreSession(
@@ -267,6 +302,11 @@ final class AppleIDStore: ObservableObject {
             pet: storedPET(),
             teamName: activeAccount?.teamName
         )
+        if storefrontSession()?.isUsable != true, let previous, previous.isUsable {
+            persistStoreSession(previous)
+            storeNeedsVerification = false
+            lastError = nil
+        }
     }
 
     /// Drop a dead passwordToken so Retry / Owned can re-mint (keeps Apple ID signed in).
@@ -1051,6 +1091,8 @@ final class AppleIDStore: ObservableObject {
         // Snapshot so a failed remint (HTTP 404 edge) cannot leave Store Access empty
         // when we already had a usable passwordToken.
         let previous = storefrontSession()
+        await AnisetteClient.shared.prefetchIfNeeded()
+        await SAPSigner.warm()
         await reconnectStoreSessionIfNeeded(force: true)
 
         if let session = storefrontSession(), session.isUsable {
@@ -1058,7 +1100,10 @@ final class AppleIDStore: ObservableObject {
             lastError = nil
             // Owned list is best-effort — never demote green Store Access if it soft-fails.
             _ = try? await AppStoreClient.shared.purchaseHistory(account: session)
-            statusMessage = "Store access ready — free & purchased downloads unlocked"
+            let keptPrior = previous.map { $0.passwordToken == session.passwordToken } ?? false
+            statusMessage = keptPrior && previous != nil
+                ? "Store access ready — kept previous session (remint soft-failed). Try Decrypt search/download."
+                : "Store access ready — free & purchased downloads unlocked"
             withAnimation(.snappy) { authPhase = .idle }
             return
         }
@@ -1081,8 +1126,19 @@ final class AppleIDStore: ObservableObject {
         guard let idx = accounts.firstIndex(where: { $0.email.caseInsensitiveCompare(store.email) == .orderedSame })
                 ?? accounts.firstIndex(where: { $0.id == activeAccountID }) else { return }
         accounts[idx].storeSessionJSON = try? JSONEncoder().encode(store)
+        // Mirror into Keychain so a prefs wipe doesn't drop the passwordToken mid-session.
+        if let data = accounts[idx].storeSessionJSON {
+            _ = Keychain.setSessionData(Self.storeSessionPrefix + accounts[idx].id, data)
+        }
         storefrontNeedsRefresh = false
         save()
+    }
+
+    /// Fold live commerce Set-Cookie values into the persisted Store session jar.
+    func mergeLiveStoreCookies(_ header: String?) {
+        guard let header, !header.isEmpty else { return }
+        guard let existing = storefrontSession(), existing.isUsable else { return }
+        persistStoreSession(existing.mergingCookies(header))
     }
 
     func activatePreferredSigningCertificate() {

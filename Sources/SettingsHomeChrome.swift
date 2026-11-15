@@ -218,6 +218,10 @@ struct SettingsAppleIDCard: View {
                 Spacer(minLength: 0)
             }
             .onAppear { store.clearStaleStoreErrorIfSessionUsable() }
+            .task {
+                // Keep anisette + SAP + aged passwordToken warm while Settings is open.
+                _ = await store.reinforceStoreConnection()
+            }
 
             Text("Ready to fetch free apps and anything this Apple ID already purchased.")
                 .font(.caption)

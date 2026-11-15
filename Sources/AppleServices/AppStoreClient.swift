@@ -25,6 +25,11 @@ struct StorefrontSession: Codable, Equatable, Sendable {
         !passwordToken.isEmpty && !dsid.isEmpty && !storeFront.isEmpty
     }
 
+    /// True when the mint is older than `maxAge` (used for quiet remint, not a hard expiry).
+    func isAged(maxAge: TimeInterval) -> Bool {
+        Date().timeIntervalSince(createdAt) > maxAge
+    }
+
     /// ipatool expects a 6-byte (12 hex) GUID on commerce URLs/bodies.
     func normalizedForCommerce() -> StorefrontSession {
         var copy = self
@@ -32,6 +37,25 @@ struct StorefrontSession: Codable, Equatable, Sendable {
         if hex.count >= 12 {
             copy.guid = String(hex.prefix(12))
         }
+        return copy
+    }
+
+    /// Merge fresh Set-Cookie values into the persisted jar (name → name=value).
+    func mergingCookies(_ header: String?) -> StorefrontSession {
+        guard let header, !header.isEmpty else { return self }
+        var byName: [String: String] = [:]
+        for piece in (cookieHeader ?? "").split(separator: ";") {
+            let nv = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let eq = nv.firstIndex(of: "=") else { continue }
+            byName[String(nv[..<eq])] = nv
+        }
+        for piece in header.split(separator: ";") {
+            let nv = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let eq = nv.firstIndex(of: "=") else { continue }
+            byName[String(nv[..<eq])] = nv
+        }
+        var copy = self
+        copy.cookieHeader = byName.isEmpty ? cookieHeader : byName.values.sorted().joined(separator: "; ")
         return copy
     }
 }
@@ -167,11 +191,21 @@ final class AppStoreClient: ObservableObject {
 
     private init() {}
 
+    /// Live jar merged from authenticate + commerce Set-Cookie (cold start still uses session.cookieHeader).
+    private var liveCookieHeader: String?
+
     private var storeUserAgent: String {
         StoreDeviceSpoof.current.storeUserAgent(fallbackConfigurator: configuratorUA)
     }
 
     // MARK: - Public API
+
+    /// Prefetch anisette + SAP so the first buy/download isn't paying handshake latency.
+    func warmConnection() async {
+        async let a: Void = AnisetteClient.shared.prefetchIfNeeded()
+        async let s: Void = SAPSigner.warm()
+        _ = await (a, s)
+    }
 
     /// Sign in to the iTunes Store (passwordToken). Appends a 6-digit code when required.
     func authenticate(
@@ -191,6 +225,7 @@ final class AppStoreClient: ObservableObject {
         do {
             sapSigner = try await SAPSigner.connect()
         } catch {
+            SAPSigner.invalidateCache()
             throw AppStoreClientError.message(
                 "Store SAP setup failed (\(error.localizedDescription)). Tap Retry Store unlock — or Sign Out and Sign In once."
             )
@@ -365,6 +400,7 @@ final class AppStoreClient: ObservableObject {
                     session: session,
                     urls: [endpoint, "https://buy.itunes.apple.com/"]
                 )
+                liveCookieHeader = Self.mergeCookieStrings(liveCookieHeader, cookies)
                 return StorefrontSession(
                     email: email,
                     passwordToken: token,
@@ -373,7 +409,7 @@ final class AppStoreClient: ObservableObject {
                     pod: pod,
                     guid: guid,
                     createdAt: Date(),
-                    cookieHeader: cookies
+                    cookieHeader: liveCookieHeader ?? cookies
                 )
             } catch let err as AppStoreClientError {
                 // Empty 204/403/404 from this host — bubble out so caller rotates endpoint
@@ -851,6 +887,10 @@ final class AppStoreClient: ObservableObject {
                 onProgress?("SINF inject soft-failed (\(error.localizedDescription)) — decrypt may need a live install.")
             }
         }
+        // Fold commerce Set-Cookie into the persisted Store jar for the next cold start.
+        if let live = liveCookieHeader {
+            AppleIDStore.shared.mergeLiveStoreCookies(live)
+        }
         return (destination, item)
     }
 
@@ -962,7 +1002,7 @@ final class AppStoreClient: ObservableObject {
         }
         // Match ipatool / ApplePackage: Configurator UA + token (+ cookies). Spoof OS
         // identity on buyProduct is a frequent HTTP 204/403 cause.
-        let (dict, _, status) = try await postPlist(
+        let (dict, respHeaders, status) = try await postPlist(
             url: host,
             body: body,
             anisette: anisette,
@@ -971,6 +1011,7 @@ final class AppStoreClient: ObservableObject {
             stripSpoofIdentity: true,
             authenticateAnisetteStyle: true
         )
+        rememberCommerceCookies(from: respHeaders)
         let failure = string(dict["failureType"])
         let customer = string(dict["customerMessage"])
         if failure == "2034" || failure == "2042" || failure == "1008" {
@@ -1125,7 +1166,7 @@ final class AppStoreClient: ObservableObject {
         }
         // Commerce download: X-Token + DSID + storefront (+ auth cookies). Keep spoof OS
         // headers off the MZFinance / dispatch edge — pin via externalVersionId instead.
-        let (dict, _, _) = try await postPlist(
+        let (dict, respHeaders, _) = try await postPlist(
             url: endpoint,
             body: body,
             anisette: anisette,
@@ -1134,6 +1175,7 @@ final class AppStoreClient: ObservableObject {
             stripSpoofIdentity: true,
             authenticateAnisetteStyle: true
         )
+        rememberCommerceCookies(from: respHeaders)
         let failure = string(dict["failureType"])
         let customer = string(dict["customerMessage"])
         if failure == "2034" || failure == "2042" || failure == "1008" {
@@ -1246,10 +1288,36 @@ final class AppStoreClient: ObservableObject {
             "X-Apple-Store-Front": account.storeFront,
             "X-Token": account.passwordToken
         ]
-        if let cookie = account.cookieHeader, !cookie.isEmpty {
+        if let cookie = Self.mergeCookieStrings(account.cookieHeader, liveCookieHeader), !cookie.isEmpty {
             headers["Cookie"] = cookie
         }
         return headers
+    }
+
+    private func rememberCommerceCookies(from headers: [String: String]) {
+        let fresh = Self.cookieHeader(
+            from: headers,
+            session: session,
+            urls: [
+                "https://buy.itunes.apple.com/",
+                "https://downloaddispatch.itunes.apple.com/"
+            ]
+        )
+        liveCookieHeader = Self.mergeCookieStrings(liveCookieHeader, fresh)
+    }
+
+    private static func mergeCookieStrings(_ a: String?, _ b: String?) -> String? {
+        var byName: [String: String] = [:]
+        for raw in [a, b] {
+            guard let raw, !raw.isEmpty else { continue }
+            for piece in raw.split(separator: ";") {
+                let nv = piece.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let eq = nv.firstIndex(of: "=") else { continue }
+                byName[String(nv[..<eq])] = nv
+            }
+        }
+        guard !byName.isEmpty else { return nil }
+        return byName.values.sorted().joined(separator: "; ")
     }
 
     // MARK: - HTTP helpers
