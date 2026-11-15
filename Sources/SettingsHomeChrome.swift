@@ -228,6 +228,17 @@ struct SettingsAppleIDCard: View {
                 .foregroundStyle(.white.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
 
+            Button {
+                AppNav.shared.go(AppTab.decrypt.rawValue)
+                DeviceDecryptService.shared.runStoreConnectionSmokeTest()
+            } label: {
+                Text("Test download → companion")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
+            .buttonStyle(.plain)
+            .disabled(store.isBusy || store.storeConnecting || DeviceDecryptService.shared.busy)
+
             Button { showManageAccounts = true } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "person.2.fill")

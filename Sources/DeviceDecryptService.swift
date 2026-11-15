@@ -27,6 +27,25 @@ final class DeviceDecryptService: ObservableObject {
         DeviceLibrary.shared.apps.filter(\.isAppStore)
     }
 
+    /// Known-free App Store listing used for one-tap Store → download → companion smoke tests.
+    /// TestFlight is free on every storefront and small enough to validate the path quickly.
+    static let smokeTestApp = DecryptApp(
+        id: "smoke-testflight",
+        name: "TestFlight",
+        bundle: "com.apple.TestFlight",
+        icon: nil,
+        dev: "Apple",
+        version: "",
+        url: "https://apps.apple.com/app/id899247664"
+    )
+
+    /// One-tap path: reinforce Store → silent download TestFlight → companion install/open.
+    func runStoreConnectionSmokeTest() {
+        // Force device channel so Telegram bot mode can't swallow the smoke test.
+        DecryptChannel.current = .device
+        decryptFromSearch(Self.smokeTestApp)
+    }
+
     /// Version history: prefer authenticated MZFinance externalVersionIds, then public iTunes current build.
     func versionList(for app: DecryptApp) async -> (versions: [DecryptVersion], minOS: String?)? {
         if let store = await storeVersionHistory(for: app) {

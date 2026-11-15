@@ -247,6 +247,8 @@ final class AppleIDStore: ObservableObject {
     }
 
     /// Warm anisette + SAP + store session before Decrypt / Retry so the first download isn't cold.
+    /// Does **not** remint solely because the token is aged — that flapped green Store Access
+    /// into HTTP 404 during test downloads. Age remint stays in `quietlyRefreshStorefrontIfNeeded`.
     @discardableResult
     func reinforceStoreConnection(forceRemint: Bool = false) async -> StorefrontSession? {
         sanitizeStoreIdentityForAccountAPIs()
@@ -255,8 +257,11 @@ final class AppleIDStore: ObservableObject {
         _ = await (warmAnisette, warmSAP)
 
         let prior = storefrontSession()
-        let aged = prior?.isAged(maxAge: Self.storeSessionMaxAge) == true
-        let refresh = forceRemint || storefrontNeedsRefresh || aged || prior?.isUsable != true
+        if !forceRemint, !storefrontNeedsRefresh, let prior, prior.isUsable {
+            clearStaleStoreErrorIfSessionUsable()
+            return prior
+        }
+        let refresh = forceRemint || storefrontNeedsRefresh || prior?.isUsable != true
         do {
             let session = try await ensureStorefrontSession(forceRefresh: refresh)
             clearStaleStoreErrorIfSessionUsable()
@@ -265,6 +270,11 @@ final class AppleIDStore: ObservableObject {
             if let prior, prior.isUsable { return prior }
             return nil
         }
+    }
+
+    /// True when Settings shows the green “Signed in for Store access” seal.
+    var hasStoreDownloadSession: Bool {
+        storefrontSession()?.isUsable == true
     }
 
     /// Settings: finish “Signed in for Store access” using the saved Apple ID password (same session).
