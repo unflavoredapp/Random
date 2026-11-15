@@ -143,7 +143,7 @@ extension DecryptClient {
     /// Opens the Decrypt tab with this app's name already in the search box (fallback).
     @MainActor static func sendToDecrypt(name: String) {
         shared.pendingQuery = name
-        AppNav.shared.go(AppTab.decrypt.rawValue)
+        AppNav.shared.goSearch()
     }
 }
 

@@ -9,8 +9,32 @@ final class AppNav: ObservableObject {
     static let shared = AppNav()
     @Published var requestedTab: Int?
     @Published var openAccountScreen = false
+    /// Push target inside Account’s NavigationStack (Pair / Files / Library / Settings).
+    @Published var accountPush: AppAccountPush?
     private init() {}
-    func go(_ tab: Int) { requestedTab = tab; ZefvAccount.shared.panelShown = false }
+
+    func go(_ tab: Int) {
+        requestedTab = tab
+        ZefvAccount.shared.panelShown = false
+    }
+
+    func go(_ tab: AppTab) {
+        go(tab.rawValue)
+    }
+
+    /// Open Account and push a nested TetherLess screen (iPadn Account → Settings pattern).
+    func goAccount(_ push: AppAccountPush? = nil) {
+        accountPush = push
+        go(.account)
+    }
+
+    func goPair() { goAccount(.pair) }
+    func goFiles() { goAccount(.files) }
+    func goLibrary() { goAccount(.library) }
+    func goSettings() { goAccount(.settings) }
+    func goSearch() { go(.search) }
+    func goDownloads() { go(.downloads) }
+    func goPurchased() { go(.purchased) }
 }
 
 struct AccountChip: View {
@@ -218,8 +242,7 @@ struct AccountDropdown: View {
             Divider().overlay(Theme.stroke)
 
             Button {
-                nav.openAccountScreen = true
-                nav.go(4)
+                nav.goSettings()
             } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "gearshape.fill").foregroundStyle(Theme.accent).frame(width: 22)
@@ -233,7 +256,7 @@ struct AccountDropdown: View {
                 .padding(14)
             }.buttonStyle(.plain)
 
-            Button { nav.go(1) } label: {
+            Button { nav.goFiles() } label: {
                 HStack(spacing: 10) {
                     Image(systemName: "signature").foregroundStyle(Theme.accent).frame(width: 22)
                     Text("SIGNER").font(.system(size: 13, weight: .heavy, design: .monospaced)).foregroundStyle(Theme.text)

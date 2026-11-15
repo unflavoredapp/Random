@@ -236,15 +236,21 @@ struct IPadnAccountMenuButton: View {
                         }
                     }
                 }
+                Button("Account", systemImage: "person.crop.circle") {
+                    AppNav.shared.goAccount()
+                }
                 Button("Store Access settings", systemImage: "gearshape") {
-                    AppNav.shared.go(AppTab.settings.rawValue)
+                    AppNav.shared.goSettings()
                 }
                 Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                     store.signOut()
                 }
             } else {
+                Button("Account", systemImage: "person.crop.circle") {
+                    AppNav.shared.goAccount()
+                }
                 Button("Sign in — Store Access", systemImage: "person.crop.circle.badge.plus") {
-                    AppNav.shared.go(AppTab.settings.rawValue)
+                    AppNav.shared.goSettings()
                 }
             }
         } label: {

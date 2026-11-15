@@ -426,7 +426,7 @@ struct DecryptView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 16) {
                     // iPadn Search: large title + account avatar on one line.
-                    IPadnPageHeader(title: "Decrypt") {
+                    IPadnPageHeader(title: "Search") {
                         IPadnAccountMenuButton()
                     }
 
@@ -553,7 +553,7 @@ struct DecryptView: View {
                             .font(.callout)
                             .foregroundStyle(.white.opacity(0.65))
                             .fixedSize(horizontal: false, vertical: true)
-                        DecryptStoreGateCard { AppNav.shared.go(AppTab.settings.rawValue) }
+                        DecryptStoreGateCard { AppNav.shared.goSettings() }
                         DecryptAppStoreSignInHint()
                     }
                 }

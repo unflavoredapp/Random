@@ -81,7 +81,7 @@ struct IPadnOptionalCard: View {
 
                     HStack(spacing: 10) {
                         Button {
-                            AppNav.shared.go(AppTab.decrypt.rawValue)
+                            AppNav.shared.goSearch()
                         } label: {
                             Text("Open Decrypt")
                                 .font(.footnote.weight(.semibold))

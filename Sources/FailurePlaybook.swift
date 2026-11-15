@@ -114,7 +114,7 @@ enum FailurePlaybook {
         case .acknowledgeFairPlay:
             AppStoreDecryptGuide.setAcknowledged(true, email: AppleIDStore.shared.email)
         case .reauthStore:
-            AppNav.shared.go(AppTab.settings.rawValue)
+            AppNav.shared.goSettings()
             do {
                 AppleIDStore.shared.clearPersistedStoreSession()
                 _ = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
@@ -126,17 +126,17 @@ enum FailurePlaybook {
             do {
                 _ = try await AppleIDStore.shared.refreshPortalSession()
             } catch {
-                AppNav.shared.go(AppTab.settings.rawValue)
+                AppNav.shared.goSettings()
             }
         case .turnOffClientInfoRewrite:
             StoreDeviceSpoof.clearPersistedSpoof()
             await AppleIDStore.shared.requestStoreVerificationPrompt()
         case .openPair:
-            AppNav.shared.go(AppTab.pair.rawValue)
+            AppNav.shared.goPair()
         case .openLibrary:
-            AppNav.shared.go(AppTab.library.rawValue)
+            AppNav.shared.goLibrary()
         case .openStoreAccess:
-            AppNav.shared.go(AppTab.settings.rawValue)
+            AppNav.shared.goSettings()
         case .refreshAll:
             SideloadSurvival.refreshAllWithKeepAlive()
         }
