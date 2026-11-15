@@ -227,8 +227,12 @@ enum DecryptCompanionRuntime {
             let detail = e.detail.isEmpty ? "cryptid=\(e.cryptid)" : e.detail
             log("[\(prefix) DRM] \(e.path) · \(detail)")
         }
+        for e in report.entries where e.isUnknown {
+            let detail = e.detail.isEmpty ? "unknown" : e.detail
+            log("[\(prefix) UNKNOWN] \(e.path) · \(detail)")
+        }
         if prefix == "AFTER" || prefix == "IPA" {
-            for e in report.entries where !e.isEncrypted && e.cryptid == 0 {
+            for e in report.entries where !e.isEncrypted && !e.isUnknown && e.cryptid == 0 {
                 // Keep the log readable — only first wave of clears when many.
                 if report.clear + report.plain <= 40 || e.path.split(separator: "/").count <= 2 {
                     log("[\(prefix) CLEAR] \(e.path) · cryptid=0")
@@ -241,30 +245,61 @@ enum DecryptCompanionRuntime {
         guard !report.entries.isEmpty else {
             throw DecryptError("DRM verify found no Mach-Os in \(stage).")
         }
-        guard report.encrypted == 0 else {
-            let names = report.entries.filter(\.isEncrypted).prefix(6).map(\.path).joined(separator: ", ")
-            throw FairPlayDecryptError.stillEncrypted(
-                "DRM verify failed on \(stage): \(report.encrypted) Mach-O(s) still encrypted (\(names)\(report.encrypted > 6 ? "…" : "")). \(AppStoreDecryptGuide.failureHint)"
+        guard report.isFullyClear else {
+            if report.encrypted > 0 {
+                let names = report.entries.filter(\.isEncrypted).prefix(6).map(\.path).joined(separator: ", ")
+                throw FairPlayDecryptError.stillEncrypted(
+                    "DRM verify failed on \(stage): \(report.encrypted) Mach-O(s) still encrypted (\(names)\(report.encrypted > 6 ? "…" : "")). \(AppStoreDecryptGuide.failureHint)"
+                )
+            }
+            let names = report.entries.filter(\.isUnknown).prefix(6).map(\.path).joined(separator: ", ")
+            throw DecryptError(
+                "DRM verify failed on \(stage): \(report.unknown) Mach-O(s) could not be inspected (\(names)\(report.unknown > 6 ? "…" : "")). Refusing to treat as clear."
             )
         }
     }
 
     private static func copyTree(from src: URL, to destApp: URL) throws {
         let fm = FileManager.default
-        if let en = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey], options: [.skipsHiddenFiles]) {
-            for case let item as URL in en {
-                let vals = try? item.resourceValues(forKeys: [.isDirectoryKey])
-                let prefix = src.path.hasSuffix("/") ? src.path : src.path + "/"
-                let rel = item.path.hasPrefix(prefix) ? String(item.path.dropFirst(prefix.count)) : item.lastPathComponent
-                let out = destApp.appendingPathComponent(rel)
-                if vals?.isDirectory == true {
-                    try? fm.createDirectory(at: out, withIntermediateDirectories: true)
-                } else {
-                    try? fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+        var failures: [String] = []
+        var copied = 0
+        guard let en = fm.enumerator(
+            at: src,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            throw DecryptError("Could not enumerate EmbeddedPayload for packaging copy.")
+        }
+        for case let item as URL in en {
+            let vals = try? item.resourceValues(forKeys: [.isDirectoryKey])
+            let prefix = src.path.hasSuffix("/") ? src.path : src.path + "/"
+            let rel = item.path.hasPrefix(prefix) ? String(item.path.dropFirst(prefix.count)) : item.lastPathComponent
+            let out = destApp.appendingPathComponent(rel)
+            if vals?.isDirectory == true {
+                do {
+                    try fm.createDirectory(at: out, withIntermediateDirectories: true)
+                } catch {
+                    failures.append(rel)
+                }
+            } else {
+                do {
+                    try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try? fm.removeItem(at: out)
-                    try? fm.copyItem(at: item, to: out)
+                    try fm.copyItem(at: item, to: out)
+                    copied += 1
+                } catch {
+                    failures.append(rel)
                 }
             }
+        }
+        if copied == 0 {
+            throw DecryptError("Companion copy produced no files from EmbeddedPayload.")
+        }
+        if !failures.isEmpty {
+            let sample = failures.prefix(6).joined(separator: ", ")
+            throw DecryptError(
+                "Companion copy failed for \(failures.count) path(s): \(sample)\(failures.count > 6 ? "…" : ""). Refusing to package an incomplete app."
+            )
         }
     }
 
