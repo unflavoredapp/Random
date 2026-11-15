@@ -133,11 +133,11 @@ struct PurchasedHomeView: View {
                             }
                         }
                     } else {
-                        Text("Sign in under Store Access to sync purchases and download apps you own.")
+                        Text("Sign in with Apple Account to sync purchases and download apps you own.")
                             .font(.callout)
                             .foregroundStyle(.white.opacity(0.65))
                         Button {
-                            AppNav.shared.goSettings()
+                            AppNav.shared.goStoreLogin()
                         } label: {
                             Text("Sign In")
                                 .font(.subheadline.weight(.semibold))
@@ -357,6 +357,7 @@ struct AccountHomeView: View {
     @ObservedObject private var store = AppleIDStore.shared
     @ObservedObject private var nav = AppNav.shared
     @State private var path = NavigationPath()
+    @State private var showIPadnLogin = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -403,9 +404,18 @@ struct AccountHomeView: View {
             .navigationDestination(for: AppAccountPush.self) { dest in
                 accountDestination(dest)
             }
+            .sheet(isPresented: $showIPadnLogin) {
+                IPadnLoginView {
+                    showIPadnLogin = false
+                    nav.presentIPadnLogin = false
+                }
+            }
             .onAppear { consumePendingAccountNav() }
             .onChange(of: nav.accountPush) { _ in consumePendingAccountNav() }
             .onChange(of: nav.openAccountScreen) { _ in consumePendingAccountNav() }
+            .onChange(of: nav.presentIPadnLogin) { open in
+                if open { showIPadnLogin = true }
+            }
         }
     }
 
@@ -417,6 +427,9 @@ struct AccountHomeView: View {
         if nav.openAccountScreen {
             nav.openAccountScreen = false
             path.append(AppAccountPush.settings)
+        }
+        if nav.presentIPadnLogin {
+            showIPadnLogin = true
         }
     }
 
@@ -465,9 +478,9 @@ struct AccountHomeView: View {
     @ViewBuilder private var accountRows: some View {
         if store.accounts.isEmpty {
             Button {
-                path.append(AppAccountPush.settings)
+                showIPadnLogin = true
             } label: {
-                Label("Add Apple ID — Store Access", systemImage: "plus")
+                Label("Sign in to Apple Account", systemImage: "plus")
                     .font(.body.weight(.medium))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -504,7 +517,7 @@ struct AccountHomeView: View {
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.35))
             Button {
-                path.append(AppAccountPush.settings)
+                showIPadnLogin = true
             } label: {
                 Label("Add account", systemImage: "plus")
                     .foregroundStyle(.white)
