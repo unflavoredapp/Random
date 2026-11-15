@@ -423,6 +423,8 @@
 					"$(SRCROOT)/Sources/zsign/common",
 					"$(SRCROOT)/Sources/Capstone/include",
 					"$(SRCROOT)/Sources/Capstone",
+					"$(SRCROOT)/Sources/StoreSAP/C",
+					"$(SRCROOT)/Sources/StoreSAP/C/include",
 				);
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/unzip-drop-Bridging-Header.h";
 				SWIFT_OBJC_INTEROP_MODE = objc;
@@ -471,6 +473,8 @@
 					"$(SRCROOT)/Sources/zsign/common",
 					"$(SRCROOT)/Sources/Capstone/include",
 					"$(SRCROOT)/Sources/Capstone",
+					"$(SRCROOT)/Sources/StoreSAP/C",
+					"$(SRCROOT)/Sources/StoreSAP/C/include",
 				);
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/unzip-drop-Bridging-Header.h";
 				SWIFT_OBJC_INTEROP_MODE = objc;
