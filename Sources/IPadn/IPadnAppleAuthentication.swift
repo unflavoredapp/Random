@@ -86,7 +86,20 @@ enum IPadnAppleAuthentication {
         raw: [String: Any],
         response: HTTPURLResponse
     ) -> StoreMachineAction? {
-        var action = response.value(forHTTPHeaderField: "X-Apple-AMD-Action")?
+        storeMachineAction(
+            raw: raw,
+            amdAction: response.value(forHTTPHeaderField: "X-Apple-AMD-Action"),
+            amdData: response.value(forHTTPHeaderField: "X-Apple-AMD-Data")
+        )
+    }
+
+    /// Same SP/RP parsing when callers only have a header map (commerce postPlist).
+    static func storeMachineAction(
+        raw: [String: Any],
+        amdAction: String?,
+        amdData: String?
+    ) -> StoreMachineAction? {
+        var action = amdAction?
             .trimmingCharacters(in: .whitespacesAndNewlines).uppercased() ?? ""
         if action.isEmpty {
             let message = ipadnPlistString(raw["customerMessage"])
@@ -97,7 +110,7 @@ enum IPadnAppleAuthentication {
         }
         if action == "RP" { return .reset }
         guard action == "SP" else { return nil }
-        let challenge = response.value(forHTTPHeaderField: "X-Apple-AMD-Data")?
+        let challenge = amdData?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !challenge.isEmpty, challenge.count <= 16_384, challenge.count % 4 == 0,
               let decoded = Data(base64Encoded: challenge), !decoded.isEmpty,

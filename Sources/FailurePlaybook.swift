@@ -20,6 +20,7 @@ struct FailurePlay: Identifiable, Equatable {
         case refreshPortal
         case turnOffClientInfoRewrite
         case openPair
+        case openLibrary
         case openStoreAccess
         case acknowledgeFairPlay
         case refreshAll
@@ -37,10 +38,20 @@ enum FailurePlaybook {
             actionTitle: "Remint Store Access",
             action: .turnOffClientInfoRewrite
         ),
+        // TLS before 403 — combined “HTTP 403… TLS error…” messages should open Library,
+        // not remint again (remint does not fix airshare.lol’s bad cert).
+        FailurePlay(
+            id: "tls-backend",
+            title: "Backend API TLS failed",
+            summary: "The Store backend host (often airshare.lol) presents a mismatched TLS certificate. Decrypt from Library if the app is installed, or set as_site_base / as_api_base to a working API host.",
+            matches: ["tls error", "secure connection", "certificate does not match", "api host tls"],
+            actionTitle: "Open Library",
+            action: .openLibrary
+        ),
         FailurePlay(
             id: "403",
             title: "Store rejected client identity (HTTP 403)",
-            summary: "Apple blocked the silent store request. Store spoof is disabled — we remint + rotate anisette, then fall back to backend encrypted-IPA fetch. Or enable iPadn search (Settings) for multi-region / App ID lookup, then Decrypt from Installed or owned download.",
+            summary: "Apple blocked the silent store request. We remint + rotate anisette, retry with WASM ADI store-proof, then backend IPA fetch. If the app is already on this iPhone, Decrypt from Library / Installed (companion embed) — that path does not need a Store package.",
             matches: ["http 403", "403", "client identity"],
             actionTitle: "Remint Store Access",
             action: .turnOffClientInfoRewrite
@@ -122,6 +133,8 @@ enum FailurePlaybook {
             await AppleIDStore.shared.requestStoreVerificationPrompt()
         case .openPair:
             AppNav.shared.go(AppTab.pair.rawValue)
+        case .openLibrary:
+            AppNav.shared.go(AppTab.library.rawValue)
         case .openStoreAccess:
             AppNav.shared.go(AppTab.settings.rawValue)
         case .refreshAll:

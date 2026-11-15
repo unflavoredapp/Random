@@ -997,7 +997,8 @@ final class AppStoreClient: ObservableObject {
 
         var headers = commerceHeaders(account)
         headers["X-Apple-ActionSignature"] = signature.base64EncodedString()
-        // Commerce anisette (authenticate-style AMD aliases + pristine Client-Info).
+        // Commerce anisette (authenticate-style + pristine Client-Info). Prefer WASM ADI
+        // AMD when available — same store-proof Apple expects after login.
         headers["X-MMe-Client-Info"] = anisette.clientInfo
         headers["X-Apple-I-MD-LU"] = anisette.localUserID
         headers["X-Apple-I-MD-RINFO"] = anisette.routingInfo
@@ -1006,9 +1007,14 @@ final class AppStoreClient: ObservableObject {
         headers["X-Apple-I-Client-Time"] = anisette.clientTime
         headers["X-Apple-Locale"] = anisette.locale
         headers["X-Apple-I-TimeZone"] = anisette.timeZone
-        headers["X-Apple-AMD"] = anisette.oneTimePassword
-        headers["X-Apple-AMD-M"] = anisette.machineID
         headers["User-Agent"] = configuratorUA
+        let guid = IPadnStoreLogin.storeGUID()
+        if let proof = try? await IPadnWASMSPSigner.shared.storeProofHeaders(guid: guid, useCache: true) {
+            for (k, v) in proof where !v.isEmpty { headers[k] = v }
+        } else {
+            headers["X-Apple-AMD"] = anisette.oneTimePassword
+            headers["X-Apple-AMD-M"] = anisette.machineID
+        }
 
         var endpoints = volumeStoreCandidates(account: account)
         endpoints.append(Paths.redownload)
@@ -1554,7 +1560,8 @@ final class AppStoreClient: ObservableObject {
         return headers
     }
 
-    /// SAP-sign commerce POST bodies the same way authenticate does (ipatool #525 / bag).
+    /// SAP-sign commerce POST bodies + iPadn WASM ADI store-proof on buy/volumeStore/redownload.
+    /// Anisette AMD alone is what produced phone HTTP 403 after login already used WASM proof.
     private func postCommercePlist(
         url: String,
         body: [String: Any],
@@ -1575,6 +1582,24 @@ final class AppStoreClient: ObservableObject {
                 "Store SAP signing failed (\(error.localizedDescription)). Tap Retry Store unlock."
             )
         }
+        guard let endpoint = URL(string: url) else {
+            throw AppStoreClientError.message("Bad App Store URL.")
+        }
+
+        // iPadn applies WASM ADI store-proof to volumeStore / buyProduct / redownload.
+        // Do not fall through to Anisette-only after a real Apple 403 — that just
+        // repeats the phone failure that remint already couldn't fix.
+        if IPadnAppleAuthentication.needsStoreProof(endpoint) {
+            return try await postCommerceWithStoreProof(
+                endpoint: endpoint,
+                body: body,
+                bodyData: bodyData,
+                baseHeaders: headers,
+                anisette: anisette,
+                account: account
+            )
+        }
+
         return try await postPlist(
             url: url,
             body: body,
@@ -1585,6 +1610,89 @@ final class AppStoreClient: ObservableObject {
             stripSpoofIdentity: true,
             authenticateAnisetteStyle: true
         )
+    }
+
+    /// Commerce POST wrapped in iPadn `withStoreProof` (WASM ADI → Anisette fallback).
+    private func postCommerceWithStoreProof(
+        endpoint: URL,
+        body: [String: Any],
+        bodyData: Data,
+        baseHeaders: [String: String],
+        anisette: AnisetteHeaders,
+        account: StorefrontSession
+    ) async throws -> (dict: [String: Any], headers: [String: String], status: Int) {
+        let guid = IPadnStoreLogin.storeGUID()
+        let wasm = IPadnWASMSPSigner.shared
+        var lastHeaders: [String: String] = [:]
+        var lastStatus = 0
+
+        let (raw, response) = try await IPadnAppleAuthentication.withStoreProof(
+            endpoint: endpoint,
+            baseHeaders: baseHeaders,
+            loadProof: {
+                do {
+                    if let h = try await wasm.storeProofHeaders(guid: guid, useCache: true) {
+                        return h
+                    }
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    // WASM not ready — Anisette AMD for this attempt.
+                }
+                let a = try await AnisetteClient.shared.fetch()
+                return [
+                    "X-Apple-AMD": a.oneTimePassword,
+                    "X-Apple-AMD-M": a.machineID
+                ]
+            },
+            provisionProof: { challenge in
+                do {
+                    return try await wasm.provisionStoreProof(
+                        challenge: challenge,
+                        guid: guid,
+                        useCache: true
+                    )
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    await AnisetteClient.shared.invalidate(resetProvisioning: false)
+                    let a = try await AnisetteClient.shared.fetch()
+                    return [
+                        "X-Apple-AMD": a.oneTimePassword,
+                        "X-Apple-AMD-M": a.machineID
+                    ]
+                }
+            },
+            resetProof: {
+                wasm.resetStoreProof(guid: guid)
+            },
+            execute: { headerProvider in
+                let merged = try await headerProvider(endpoint)
+                let (dict, hdrs, status) = try await self.postPlist(
+                    url: endpoint.absoluteString,
+                    body: body,
+                    bodyData: bodyData,
+                    anisette: anisette,
+                    extraHeaders: merged,
+                    forcePristineClientInfo: true,
+                    stripSpoofIdentity: true,
+                    // Proof headers already carry AMD — don't also stamp Anisette aliases.
+                    authenticateAnisetteStyle: false
+                )
+                lastHeaders = hdrs
+                lastStatus = status
+                // Synthesize enough of HTTPURLResponse for SP/RP header reads.
+                let http = HTTPURLResponse(
+                    url: endpoint,
+                    statusCode: status,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: hdrs
+                ) ?? HTTPURLResponse()
+                return (dict, http)
+            }
+        )
+        _ = response
+        return (raw, lastHeaders, lastStatus)
     }
 
     private func rememberCommerceCookies(from headers: [String: String]) {

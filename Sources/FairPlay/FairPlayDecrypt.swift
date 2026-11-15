@@ -1262,6 +1262,8 @@ enum FairPlayDecrypt {
         let p = app.standardizedFileURL.path
         return p.contains("/Bundle/Application/")
             || p.contains("/Containers/Bundle/")
+            || p.contains("/private/var/containers/")
+            || p.contains("/var/containers/")
             || p.contains("/AppTranslocation/")
     }
 

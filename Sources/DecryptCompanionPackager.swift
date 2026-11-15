@@ -302,9 +302,10 @@ enum DecryptCompanionPackager {
 
         try? fm.removeItem(at: srcApp.appendingPathComponent("Watch"))
 
-        let liveInstall = isLiveAppStoreInstall(srcApp)
-        // Optional pre-audit only for non-live trees (extracted IPA Payload). Live
-        // installs skip cryptid probes — companion verifies EmbeddedPayload instead.
+        // Live installs + any path labeled "install path" must never call verifyApp on
+        // the source tree — cryptid probes hang the host (Cake Wallet / TestFlight).
+        // Companion audits the copied EmbeddedPayload instead.
+        let liveInstall = sourceLabel == "install path" || isLiveAppStoreInstall(srcApp)
         var sourceEncrypted: Int?
         var sourceMachOCount: Int?
         var sourceClear = 0
@@ -385,6 +386,8 @@ enum DecryptCompanionPackager {
         let p = app.standardizedFileURL.path
         return p.contains("/Bundle/Application/")
             || p.contains("/Containers/Bundle/")
+            || p.contains("/private/var/containers/")
+            || p.contains("/var/containers/")
             || p.contains("/AppTranslocation/")
     }
 
