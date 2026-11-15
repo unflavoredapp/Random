@@ -331,8 +331,11 @@ final class DeviceDecryptService: ObservableObject {
         guard let adam else {
             throw DecryptError("Couldn't resolve an App Store id from that link.")
         }
-        progress?("Contacting Apple…")
-        var account = try await AppleIDStore.shared.ensureStorefrontSession()
+        progress?("Reinforcing Store connection…")
+        guard let reinforced = await AppleIDStore.shared.reinforceStoreConnection() else {
+            throw DecryptError("Sign in under Settings › Store Access first.")
+        }
+        var account = reinforced
         var pinned = ""
         if let version, !version.isEmpty {
             pinned = (try? await AppStoreClient.shared.resolveDownloadVersionId(
@@ -546,11 +549,14 @@ final class DeviceDecryptService: ObservableObject {
         publishDecryptProgress("Contacting Apple…")
         let spoof = StoreDeviceSpoof.current
         if spoof.enabled {
-            publishDecryptProgress("Silent App Store session · spoof \(spoof.summaryLabel)…")
+            publishDecryptProgress("Reinforcing Store connection · spoof \(spoof.summaryLabel)…")
         } else {
-            publishDecryptProgress("Silent App Store session…")
+            publishDecryptProgress("Reinforcing Store connection…")
         }
-        var account = try await AppleIDStore.shared.ensureStorefrontSession()
+        guard let reinforced = await AppleIDStore.shared.reinforceStoreConnection() else {
+            throw DecryptError("Sign in under Settings › Store Access with the Apple ID that owns this app.")
+        }
+        var account = reinforced
 
         // Explicit pin from Versions sheet, else spoof-compatible / display-version resolve inside client.
         var pinned = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)

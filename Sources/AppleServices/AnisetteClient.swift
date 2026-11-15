@@ -58,6 +58,11 @@ actor AnisetteClient {
         static let server = "tetherless.anisette.server"
     }
 
+    /// Best-effort warm so Store authenticate / commerce isn't blocked on first anisette RTT.
+    func prefetchIfNeeded() async {
+        _ = try? await fetch()
+    }
+
     func fetch() async throws -> AnisetteHeaders {
         if let c = cached, Date().timeIntervalSince(c.1) < cacheTTL { return c.0 }
 

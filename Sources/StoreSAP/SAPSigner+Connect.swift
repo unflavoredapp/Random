@@ -4,20 +4,57 @@ extension SAPSigner {
     private static let setupUA =
         "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
 
+    /// Reuse one SAP session across authenticate remints (handshake is expensive / flaky on cellular).
+    private static let cacheTTL: TimeInterval = 20 * 60
+    private static var cached: SAPSigner?
+    private static var cachedAt: Date?
+    private static let cacheLock = NSLock()
+
     /// Establish protocol-200 state using Apple's certificate and two-round setup service.
     /// Retries transient network drops (common on cellular / brief Wi‑Fi blips).
-    static func connect() async throws -> SAPSigner {
+    static func connect(forceRefresh: Bool = false) async throws -> SAPSigner {
+        if !forceRefresh, let hit = cachedIfFresh() {
+            return hit
+        }
         var lastError: Error?
         for attempt in 1...3 {
             do {
-                return try await connectOnce()
+                let signer = try await connectOnce()
+                cacheLock.lock()
+                cached = signer
+                cachedAt = Date()
+                cacheLock.unlock()
+                return signer
             } catch {
                 lastError = error
+                invalidateCache()
                 if !isTransientSetupFailure(error) || attempt == 3 { throw error }
                 try? await Task.sleep(nanoseconds: UInt64(attempt) * 700_000_000)
             }
         }
         throw lastError ?? SAPError.invalidInput("SAP setup failed")
+    }
+
+    /// Drop cached SAP state (call after hard auth failures that look like a dead session).
+    static func invalidateCache() {
+        cacheLock.lock()
+        cached = nil
+        cachedAt = nil
+        cacheLock.unlock()
+    }
+
+    /// Prefetch SAP so Decrypt / Retry isn't blocked on the first handshake.
+    static func warm() async {
+        _ = try? await connect()
+    }
+
+    private static func cachedIfFresh() -> SAPSigner? {
+        cacheLock.lock()
+        defer { cacheLock.unlock() }
+        guard let cached, let cachedAt, Date().timeIntervalSince(cachedAt) < cacheTTL else {
+            return nil
+        }
+        return cached
     }
 
     private static func isTransientSetupFailure(_ error: Error) -> Bool {

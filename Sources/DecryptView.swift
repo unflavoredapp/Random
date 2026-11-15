@@ -461,15 +461,11 @@ struct DecryptView: View {
         .onChange(of: c.pendingQuery) { _ in consumePendingQuery() }
     }
 
-    /// Soft-check Store session so free/purchased fetch works without a yellow wall surprise.
+    /// Soft-check + warm anisette/SAP so free/purchased fetch isn't a cold edge surprise.
     private func warmStoreSessionForNiche() async {
         guard store.isSignedIn else { return }
-        do {
-            _ = try await store.ensureStorefrontSession(forceRefresh: false)
-        } catch AppStoreClientError.needsTwoFactor {
-            store.noteStoreNeedsVerification()
-        } catch {
-            // Leave UI to surface errors on first Owned refresh / decrypt.
+        if await store.reinforceStoreConnection() == nil, store.storeNeedsVerification {
+            // reinforce already kept any usable prior token; only surface the wall when none.
         }
     }
 
