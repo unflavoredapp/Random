@@ -32,25 +32,25 @@ enum FailurePlaybook {
         FailurePlay(
             id: "204",
             title: "Empty store response (HTTP 204)",
-            summary: "Apple returned no package. Usually Client-Info rewrite fighting anisette — turn rewrite off and retry.",
+            summary: "Apple returned no package. Remint Store Access with a fresh anisette session — stay on real-device identity (no Store spoof).",
             matches: ["http 204", "204", "empty response"],
-            actionTitle: "Turn off Client-Info rewrite",
+            actionTitle: "Remint Store Access",
             action: .turnOffClientInfoRewrite
         ),
         FailurePlay(
             id: "403",
             title: "Store rejected client identity (HTTP 403)",
-            summary: "Apple blocked the silent store request. We remint + rotate the anisette server (SideStore-style). You can also pick a server under Store Access, or use Phone Worker / Telegram backend decrypt.",
+            summary: "Apple blocked the silent store request. Store spoof is disabled — we remint + rotate anisette (SideStore-style). Pick a server under Store Access, or use Phone Worker / Telegram backend decrypt.",
             matches: ["http 403", "403", "client identity"],
-            actionTitle: "Use This iPhone spoof",
+            actionTitle: "Remint Store Access",
             action: .turnOffClientInfoRewrite
         ),
         FailurePlay(
             id: "404",
             title: "Package not found (HTTP 404)",
-            summary: "CDN or version pin missed. Match this iPhone’s spoof, clear a bad externalVersionId, and retry.",
+            summary: "CDN or version pin missed. Remint Store Access and retry the download.",
             matches: ["http 404", "404", "not found"],
-            actionTitle: "Match this iPhone spoof",
+            actionTitle: "Remint Store Access",
             action: .turnOffClientInfoRewrite
         ),
         FailurePlay(
@@ -116,7 +116,8 @@ enum FailurePlaybook {
                 AppNav.shared.go(AppTab.settings.rawValue)
             }
         case .turnOffClientInfoRewrite:
-            StoreDeviceSpoof.applyThisiPhone()
+            StoreDeviceSpoof.clearPersistedSpoof()
+            await AppleIDStore.shared.requestStoreVerificationPrompt()
         case .openPair:
             AppNav.shared.go(AppTab.pair.rawValue)
         case .openStoreAccess:

@@ -100,103 +100,39 @@ struct StoreDeviceSpoof: Equatable, Sendable {
         )
     }
 
+    /// Store iOS/device spoof is retired. Verified auth uses real device + plain Configurator UA
+    /// (ipatool / ApplePackage). Any leftover prefs are wiped so exotic UAs cannot 403 MZFinance.
     static var current: StoreDeviceSpoof {
         get {
-            if let data = UserDefaults.standard.data(forKey: defaultsKey),
-               var decoded = try? JSONDecoder().decode(StoreDeviceSpoof.self, from: data) {
-                let before = decoded
-                decoded.sanitizeAbsurdIOSClaim()
-                if decoded != before { Self.current = decoded }
-                return decoded
-            }
-            for key in legacyKeys {
-                guard let data = UserDefaults.standard.data(forKey: key) else { continue }
-                if let v2 = try? JSONDecoder().decode(LegacyV2.self, from: data) {
-                    var m = StoreDeviceSpoof.default
-                    m.enabled = v2.enabled
-                    m.iosVersion = v2.iosVersion
-                    m.deviceModel = v2.deviceModel
-                    m.build = v2.build
-                    m.hardwarePlatform = v2.hardwarePlatform ?? ""
-                    m.style = v2.style ?? .configuratorIOS
-                    m.autoSelectCompatibleVersion = true
-                    m.rewriteClientInfo = false
-                    m.sanitizeAbsurdIOSClaim()
-                    Self.current = m
-                    return m
-                }
-                if let v1 = try? JSONDecoder().decode(LegacyV1.self, from: data) {
-                    var m = StoreDeviceSpoof.default
-                    m.enabled = v1.enabled
-                    m.iosVersion = v1.iosVersion
-                    m.deviceModel = v1.deviceModel
-                    m.build = v1.build
-                    m.style = .configuratorIOS
-                    m.rewriteClientInfo = false
-                    m.sanitizeAbsurdIOSClaim()
-                    Self.current = m
-                    return m
-                }
-            }
+            clearPersistedSpoof()
             return .default
         }
         set {
-            var value = newValue
-            value.sanitizeAbsurdIOSClaim()
-            if let data = try? JSONEncoder().encode(value) {
-                UserDefaults.standard.set(data, forKey: defaultsKey)
-            }
+            clearPersistedSpoof()
         }
     }
 
-    /// Apply a one-tap profile and turn spoof on (except “This iPhone”).
+    static func clearPersistedSpoof() {
+        UserDefaults.standard.removeObject(forKey: defaultsKey)
+        for key in legacyKeys {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
+    }
+
+    /// No-op profiles — spoof presets are disabled.
     mutating func apply(_ profile: StoreSpoofProfile) {
-        iosVersion = profile.iosVersion
-        build = profile.build
-        if let model = profile.deviceModel, !model.isEmpty {
-            deviceModel = model
-        }
-        style = profile.style
-        hardwarePlatform = Self.hardwarePlatform(forModel: deviceModel) ?? hardwarePlatform
-        autoSelectCompatibleVersion = true
-        rewriteClientInfo = false
-        preferLatestPackage = (profile.id == "newest")
-        enabled = profile.id != "device"
-        if profile.id == "device" {
-            iosVersion = UIDevice.current.systemVersion
-            deviceModel = Self.realModelIdentifier()
-            build = ""
-            hardwarePlatform = Self.hardwarePlatform(forModel: deviceModel) ?? ""
-            preferLatestPackage = false
-        }
-        sanitizeAbsurdIOSClaim()
+        self = .default
     }
 
-    /// Persist This iPhone (spoof off + real UA). Use after HTTP 403 or before smoke tests.
+    /// Clear any leftover spoof prefs (real-device identity only).
     @discardableResult
     static func applyThisiPhone() -> StoreDeviceSpoof {
-        var spoof = current
-        spoof.rewriteClientInfo = false
-        let profiles = StoreSpoofProfile.builtIn(realModel: realModelIdentifier())
-        if let device = profiles.first(where: { $0.id == "device" }) {
-            spoof.apply(device)
-        } else {
-            spoof = .default
-        }
-        current = spoof
-        return spoof
+        clearPersistedSpoof()
+        return .default
     }
 
-    /// True when a persisted spoof is likely to get MZFinance HTTP 403.
-    var looksLikeRejectedIdentity: Bool {
-        guard enabled else { return false }
-        if rewriteClientInfo { return true }
-        let major = Self.versionTuple(iosVersion).first ?? 0
-        if major >= 90 { return true }
-        // Exotic / non-device models with absurd builds (legacy iOS 99 migrations).
-        if build.hasPrefix("99") { return true }
-        return false
-    }
+    /// Always false — spoof cannot be enabled.
+    var looksLikeRejectedIdentity: Bool { false }
 
     /// Literal iOS 99 / 90+ in the UA causes MZFinance HTTP 403. Keep “newest package”
     /// behavior via `preferLatestPackage` and advertise a real iOS string instead.
@@ -259,79 +195,20 @@ struct StoreDeviceSpoof: Equatable, Sendable {
         return "iOS \(effectiveIOSVersion) · \(effectiveModel)\(auto)"
     }
 
-    /// Primary store User-Agent for MZFinance + CDN.
+    /// Primary store User-Agent for MZFinance + CDN — plain Configurator only (no iOS spoof tokens).
     func storeUserAgent(fallbackConfigurator: String) -> String {
         let configuratorBase = fallbackConfigurator.isEmpty
             ? "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
             : fallbackConfigurator
-        // Spoof off → plain Configurator UA. Inventing iOS/model/build tokens with a guessed
-        // build string still 403s CDN / volumeStore even when `enabled` is false.
-        guard enabled else { return configuratorBase }
-
-        let ios = effectiveIOSVersion
-        let model = effectiveModel
-        let build = effectiveBuild
-        let hwp = effectiveHardwarePlatform
-        let dt = effectiveDeviceType
-
-        switch style {
-        case .configuratorIOS:
-            // ipatool-py pattern: Configurator UA + iOS/hwp tokens Apple’s store still honors.
-            return "\(configuratorBase) iOS/\(ios) model/\(model) hwp/\(hwp) build/\(build)"
-        case .itunesstored:
-            return "itunesstored/1.0 iOS/\(ios) model/\(model) hwp/\(hwp) build/\(build) (6; dt:\(dt))"
-        case .appStore:
-            return "AppStore/3.0 iOS/\(ios) model/\(model) hwp/\(hwp) build/\(build) (6; dt:\(dt)) AMS/1"
-        case .configurator:
-            return configuratorBase
-        }
+        return configuratorBase
     }
 
-    /// Extra identity headers alongside UA. Keep conservative — exotic keys have 404’d some pods.
-    /// Empty when spoof is off so CDN / volumeStore match authenticate’s pristine identity.
-    func storeIdentityHeaders() -> [String: String] {
-        guard enabled else { return [:] }
-        return [
-            "X-Apple-I-Device-Type": effectiveModel.hasPrefix("iPad") ? "2" : "1",
-            "X-Apple-Client-Application": "Software",
-            "X-Apple-I-OS-Version": effectiveIOSVersion,
-            "X-Apple-I-Requested-Model": effectiveModel,
-        ]
-    }
+    /// Extra identity headers — always empty (Store spoof removed).
+    func storeIdentityHeaders() -> [String: String] { [:] }
 
-    /// Rewrite anisette `X-MMe-Client-Info` so store requests claim the spoofed device/OS.
-    /// Only when `rewriteClientInfo` is on — mismatched Client-Info vs MID/OTP often 204/404s.
+    /// Never rewrite anisette Client-Info — mismatched MID/OTP 204/404s MZFinance.
     func rewritingClientInfo(_ original: String) -> String {
-        guard enabled, rewriteClientInfo else { return original }
-        var info = original
-        let model = effectiveModel
-        let ios = effectiveIOSVersion
-        let build = effectiveBuild
-
-        // `<iPhone14,2> <iPhone OS;16.0;20A362> <com.apple…>`
-        if let re = try? NSRegularExpression(pattern: #"<[^>]+>\s*<iPhone OS;[^>]+>"#) {
-            let range = NSRange(info.startIndex..<info.endIndex, in: info)
-            info = re.stringByReplacingMatches(
-                in: info, range: range,
-                withTemplate: "<\(model)> <iPhone OS;\(ios);\(build)>"
-            )
-        }
-        // `<Mac…> <Mac OS X;…;…>` → still rewrite OS token if present so headers agree.
-        if let re = try? NSRegularExpression(pattern: #"<Mac OS X;[^>]+>"#) {
-            let range = NSRange(info.startIndex..<info.endIndex, in: info)
-            info = re.stringByReplacingMatches(
-                in: info, range: range,
-                withTemplate: "<iPhone OS;\(ios);\(build)>"
-            )
-        }
-        // Windows / PC anisette fallback from some providers.
-        if info.contains("<PC>") || info.contains("Windows;") {
-            return "<\(model)> <iPhone OS;\(ios);\(build)> <com.apple.AuthKit/1 (com.apple.AppStore/1.0)>"
-        }
-        if !info.contains("iPhone OS;") {
-            return "<\(model)> <iPhone OS;\(ios);\(build)> <com.apple.AuthKit/1 (com.apple.AppStore/1.0)>"
-        }
-        return info
+        original
     }
 
     /// Extra plist fields — keep minimal. Extra keys have caused Apple HTTP 404 on some pods.
