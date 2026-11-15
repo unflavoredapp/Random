@@ -18,6 +18,8 @@ struct UnzipDropApp: App {
         _ = IPADownloader.shared
         // Must register before launch finishes (pairing keeps running via a continued-processing task).
         DevicePairingService.registerBackgroundTask()
+        // iPadn Store search on by default (Decrypt name / App ID / link + version feeds).
+        IPadnOptional.registerDefaults()
     }
 
     var body: some Scene {

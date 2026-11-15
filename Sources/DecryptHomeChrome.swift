@@ -481,7 +481,7 @@ struct DecryptSearchBar: View {
     var body: some View {
         GlassCard(corner: 22) {
             HStack(spacing: 12) {
-                TextField("Free or purchased app", text: $query)
+                TextField("Name, App ID, or apps.apple.com link", text: $query)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .foregroundStyle(.white)

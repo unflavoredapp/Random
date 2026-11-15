@@ -1,6 +1,7 @@
 //
 //  IPadnBrowserChrome.swift
-//  In-app iPadn-style search (derived from mengangs/ipadn) → TetherLess decrypt.
+//  In-app iPadn region/platform controls + quick search (mengangs/ipadn).
+//  Main Decrypt search bar already uses IPadnStoreClient when enabled.
 //
 
 import SwiftUI
@@ -8,8 +9,11 @@ import SwiftUI
 @MainActor
 final class IPadnBrowserModel: ObservableObject {
     @Published var query = ""
-    @Published var country = "US"
-    @Published var platform: IPadnPlatform = .iOS
+    @Published var country: String = UserDefaults.standard.string(forKey: IPadnOptional.countryKey) ?? "US"
+    @Published var platform: IPadnPlatform = {
+        let raw = UserDefaults.standard.string(forKey: IPadnOptional.platformKey) ?? IPadnPlatform.iOS.rawValue
+        return IPadnPlatform(rawValue: raw) ?? .iOS
+    }()
     @Published var results: [IPadnStoreApp] = []
     @Published var searching = false
     @Published var error: String?
@@ -19,12 +23,18 @@ final class IPadnBrowserModel: ObservableObject {
         "US", "CN", "HK", "TW", "JP", "GB", "SG", "CA", "AU", "KR", "DE", "FR", "IN", "BR", "MX"
     ]
 
+    func persistContext() {
+        UserDefaults.standard.set(country, forKey: IPadnOptional.countryKey)
+        UserDefaults.standard.set(platform.rawValue, forKey: IPadnOptional.platformKey)
+    }
+
     func search() async {
         let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard q.count >= 1 else {
             error = "Enter an app name, App ID, or App Store link."
             return
         }
+        persistContext()
         searching = true
         error = nil
         status = "Searching…"
@@ -63,9 +73,9 @@ final class IPadnBrowserModel: ObservableObject {
     }
 }
 
-/// Full Decrypt-tab browser powered by iPadn search logic.
+/// Region / platform for iPadn-backed Decrypt search + optional quick results.
 struct IPadnBrowserSection: View {
-    @AppStorage(IPadnOptional.defaultsKey) private var enabled = false
+    @AppStorage(IPadnOptional.defaultsKey) private var enabled = true
     @StateObject private var model = IPadnBrowserModel()
 
     var body: some View {
@@ -73,7 +83,7 @@ struct IPadnBrowserSection: View {
             GlassCard(corner: 22) {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("IPADN SEARCH")
+                        Text("IPADN STORE")
                             .font(.system(size: 12, weight: .semibold))
                             .kerning(1.1)
                             .foregroundStyle(.white.opacity(0.45))
@@ -83,7 +93,7 @@ struct IPadnBrowserSection: View {
                         }
                     }
 
-                    Text("Search like iPadn — name, App ID, or store link — across regions (delisted stubs included). Decrypt uses TetherLess FairPlay / Installed path.")
+                    Text("Decrypt’s search bar uses iPadn lookup (App ID, store link, multi-region, delisted). Pick region / platform here — also used by the main search field.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)
@@ -94,6 +104,7 @@ struct IPadnBrowserSection: View {
                         }
                         .pickerStyle(.menu)
                         .tint(TetherlessPalette.accent)
+                        .onChange(of: model.country) { _ in model.persistContext() }
 
                         Picker("Platform", selection: $model.platform) {
                             ForEach(IPadnPlatform.allCases.filter { $0 != .macOS && $0 != .tvOS }) { p in
@@ -102,10 +113,11 @@ struct IPadnBrowserSection: View {
                         }
                         .pickerStyle(.menu)
                         .tint(TetherlessPalette.accent)
+                        .onChange(of: model.platform) { _ in model.persistContext() }
                     }
 
                     HStack(spacing: 8) {
-                        TextField("Name, App ID, or apps.apple.com link", text: $model.query)
+                        TextField("Quick search — name, App ID, or link", text: $model.query)
                             .textInputAutocapitalization(.never)
                             .autocorrectionDisabled()
                             .foregroundStyle(.white)
@@ -190,6 +202,10 @@ struct IPadnBrowserSection: View {
                         }
                     }
                 }
+            }
+            .onAppear {
+                IPadnOptional.registerDefaults()
+                model.persistContext()
             }
         }
     }

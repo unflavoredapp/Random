@@ -53,13 +53,81 @@ final class DeviceDecryptService: ObservableObject {
     /// Version history: prefer authenticated MZFinance externalVersionIds, then public iTunes current build.
     func versionList(for app: DecryptApp) async -> (versions: [DecryptVersion], minOS: String?)? {
         lastVersionError = nil
-        if let store = await storeVersionHistory(for: app) {
-            return store
+        let store = await storeVersionHistory(for: app)
+        let pub = await publicItunesVersionList(for: app)
+        // iPadn third-party history feeds (Timbrd / Bilin / iosdump) — same sources
+        // as mengangs/ipadn VersionService — fill gaps Store / iTunes omit.
+        let adam = await resolveAdamIdString(for: app)
+        let ipadn: [DecryptVersion]
+        if IPadnOptional.isEnabled, let adam {
+            ipadn = await IPadnVersionHistory.fetch(adamId: adam)
+        } else {
+            ipadn = []
         }
-        if let pub = await publicItunesVersionList(for: app) {
-            return pub
+        let merged = Self.mergeVersionLists(store?.versions ?? [], pub?.versions ?? [], ipadn)
+        guard !merged.isEmpty else { return nil }
+        if !merged.isEmpty, store == nil, !ipadn.isEmpty {
+            lastVersionError = nil
+        }
+        let minOS = store?.minOS ?? pub?.minOS ?? merged.first(where: \.current)?.minOS ?? merged.first?.minOS
+        return (merged, minOS)
+    }
+
+    private func resolveAdamIdString(for app: DecryptApp) async -> String? {
+        if let r = app.url.range(of: #"/id(\d+)"#, options: .regularExpression) {
+            let digits = String(app.url[r]).filter(\.isNumber)
+            if !digits.isEmpty { return digits }
+        }
+        if let id = app.id.split(separator: "-").dropFirst().first, id.allSatisfy(\.isNumber) {
+            return String(id)
+        }
+        if let adam = try? await resolveAdamId(bundleID: app.bundle, storeURL: app.url) {
+            return String(adam)
         }
         return nil
+    }
+
+    /// Prefer Store rows (minOS / current), then fill missing external IDs from public / iPadn feeds.
+    private static func mergeVersionLists(_ store: [DecryptVersion], _ pub: [DecryptVersion], _ ipadn: [DecryptVersion]) -> [DecryptVersion] {
+        var byKey: [String: DecryptVersion] = [:]
+        var order: [String] = []
+        func key(_ v: DecryptVersion) -> String {
+            let ext = (v.externalId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !ext.isEmpty { return "e:\(ext)" }
+            return "v:\(v.v)"
+        }
+        func ingest(_ list: [DecryptVersion], preferIncomingMinOS: Bool) {
+            for item in list {
+                let k = key(item)
+                if let existing = byKey[k] {
+                    byKey[k] = DecryptVersion(
+                        v: item.v.count > existing.v.count || existing.v == "—" ? item.v : existing.v,
+                        current: existing.current || item.current,
+                        minOS: preferIncomingMinOS ? (item.minOS ?? existing.minOS) : (existing.minOS ?? item.minOS),
+                        externalId: existing.externalId ?? item.externalId
+                    )
+                } else {
+                    byKey[k] = item
+                    order.append(k)
+                }
+            }
+        }
+        ingest(store, preferIncomingMinOS: true)
+        ingest(pub, preferIncomingMinOS: false)
+        ingest(ipadn, preferIncomingMinOS: false)
+        var out = order.compactMap { byKey[$0] }
+        if let first = out.firstIndex(where: \.current) {
+            // Keep a single "Latest" flag.
+            for i in out.indices where i != first {
+                if out[i].current {
+                    out[i] = DecryptVersion(v: out[i].v, current: false, minOS: out[i].minOS, externalId: out[i].externalId)
+                }
+            }
+        } else if !out.isEmpty {
+            let i = 0
+            out[i] = DecryptVersion(v: out[i].v, current: true, minOS: out[i].minOS, externalId: out[i].externalId)
+        }
+        return out
     }
 
     /// Apple ID purchase/download history (owned apps this account can redownload).
@@ -212,14 +280,55 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     /// Public iTunes search across every linked Store Access storefront — no FastDecryptBot / Telegram.
+    /// Store search powered by vendored iPadn StoreService logic (name / App ID /
+    /// apps.apple.com link, multi-region + delisted stubs). Falls back to the
+    /// legacy iTunes-only path if iPadn is disabled or the query fails.
     func searchAppStore(_ term: String) async throws -> [DecryptApp] {
         let q = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard q.count >= 2 else { return [] }
-        if DecryptClient.isStoreLink(q) {
-            return try await [appInfo(url: q)]
-        }
+        guard !q.isEmpty else { return [] }
+
         let linked = AppleIDStore.shared.linkedStorefrontCountryCodes()
-        let countries = linked.isEmpty ? ["us"] : linked
+        guard IPadnOptional.isEnabled else {
+            if DecryptClient.isStoreLink(q) {
+                return try await [appInfo(url: q)]
+            }
+            return try await legacyItunesSearch(q, countries: linked.isEmpty ? ["us"] : linked)
+        }
+
+        let accountCountry = linked.first?.uppercased()
+        let country = UserDefaults.standard.string(forKey: IPadnOptional.countryKey)
+            ?? accountCountry
+            ?? "US"
+        let platformRaw = UserDefaults.standard.string(forKey: IPadnOptional.platformKey) ?? IPadnPlatform.iOS.rawValue
+        let platform = IPadnPlatform(rawValue: platformRaw) ?? .iOS
+        let ctx = IPadnStoreContext(country: country.uppercased(), platform: platform)
+
+        do {
+            let apps = try await IPadnStoreClient.search(
+                q,
+                context: ctx,
+                accountCountry: accountCountry,
+                limit: 30
+            )
+            if !apps.isEmpty {
+                return apps.map { $0.asDecryptApp() }
+            }
+            // Empty keyword search — try legacy multi-storefront iTunes as a second pass.
+            if let parsed = try? IPadnSearchQuery.parse(q), case .keyword = parsed {
+                return try await legacyItunesSearch(q, countries: linked.isEmpty ? ["us"] : linked)
+            }
+            return []
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            if DecryptClient.isStoreLink(q) {
+                return try await [appInfo(url: q)]
+            }
+            return try await legacyItunesSearch(q, countries: linked.isEmpty ? ["us"] : linked)
+        }
+    }
+
+    private func legacyItunesSearch(_ q: String, countries: [String]) async throws -> [DecryptApp] {
         let batches = await withTaskGroup(of: [DecryptApp].self, returning: [[DecryptApp]].self) { group in
             for country in countries {
                 group.addTask {

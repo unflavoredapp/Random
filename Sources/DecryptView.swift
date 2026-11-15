@@ -162,11 +162,21 @@ final class DecryptClient: ObservableObject {
 
     func search(_ raw: String) async {
         let q = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if q.count < 2 { results = []; searching = false; return }
+        // iPadn accepts App IDs / store links at length 1+; keyword needs 2+.
+        let isAppIDOrLink: Bool = {
+            if Self.isStoreLink(q) { return true }
+            if let parsed = try? IPadnSearchQuery.parse(q), case .appID = parsed { return true }
+            return false
+        }()
+        if q.isEmpty || (!isAppIDOrLink && q.count < 2) {
+            results = []
+            searching = false
+            return
+        }
         searching = true; error = nil
         defer { searching = false }
         do {
-            // On-device App Store search (iTunes) — no Telegram / FastDecryptBot.
+            // iPadn StoreService-backed search (name / App ID / link, multi-region, delisted).
             let found = try await DeviceDecryptService.shared.searchAppStore(q)
             if !Task.isCancelled { results = found }
         } catch {
