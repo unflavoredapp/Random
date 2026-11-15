@@ -290,6 +290,10 @@ struct DownloadsHomeView: View {
             Text(job.progressLabel.isEmpty ? "Downloading…" : job.progressLabel)
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.55))
+        case .processing:
+            Text("Decrypting…")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(TetherlessPalette.accent)
         case .paused:
             Text("Paused · \(job.progressLabel)")
                 .font(.caption)
@@ -299,7 +303,7 @@ struct DownloadsHomeView: View {
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(TetherlessPalette.success)
         case .failed:
-            Text("Download failed")
+            Text(job.error?.isEmpty == false ? "Failed" : "Download failed")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.red.opacity(0.9))
         default:
@@ -368,7 +372,7 @@ struct DownloadsHomeView: View {
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
             Text(manager.jobs.isEmpty
-                 ? "Search for apps, or tap + to import a package. Progress, pause, resume, and Install show up here."
+                 ? "Search Get downloads the Store IPA here, then FairPlay decrypt runs automatically. Pause, resume, and Install show up after."
                  : "Try another filter or clear the search.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.5))

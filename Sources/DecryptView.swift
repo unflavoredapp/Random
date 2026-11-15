@@ -539,12 +539,7 @@ struct DecryptView: View {
                                 IPadnDecryptAppRow(
                                     app: app,
                                     onGet: {
-                                        do {
-                                            try IPadnDownloadManager.shared.enqueueStore(app: app)
-                                            AppNav.shared.goDownloads()
-                                        } catch {
-                                            DeviceDecryptService.shared.decryptFromSearch(app)
-                                        }
+                                        IPadnDecryptPipeline.get(app)
                                     },
                                     onVersions: {
                                         detailPath.append(app.asIPadnStoreApp)

@@ -7,7 +7,6 @@ import SwiftUI
 
 struct IPadnAppDetailView: View {
     @State var app: IPadnStoreApp
-    @ObservedObject private var manager = IPadnDownloadManager.shared
     @ObservedObject private var store = AppleIDStore.shared
     @State private var versions: [DecryptVersion] = []
     @State private var versionsLoading = false
@@ -18,7 +17,6 @@ struct IPadnAppDetailView: View {
     @State private var showAllVersions = false
     @State private var expandedNotes = Set<String>()
     @State private var showDescription = false
-    @State private var enqueueError: String?
 
     private var filteredVersions: [DecryptVersion] {
         let q = versionSearch.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -64,14 +62,6 @@ struct IPadnAppDetailView: View {
         .navigationBarTitleDisplayMode(.inline)
         .task { await loadListing() }
         .task(id: "\(official)-\(app.id)") { await loadVersions() }
-        .alert("Download", isPresented: Binding(
-            get: { enqueueError != nil },
-            set: { if !$0 { enqueueError = nil } }
-        )) {
-            Button("OK", role: .cancel) { enqueueError = nil }
-        } message: {
-            Text(enqueueError ?? "")
-        }
     }
 
     private var header: some View {
@@ -339,27 +329,25 @@ struct IPadnAppDetailView: View {
     }
 
     private func enqueueDownload(versionID: String?) {
-        do {
-            var decrypt = app.asDecryptApp()
-            if let adam = app.adamId {
-                decrypt = DecryptApp(
-                    id: "owned-\(adam)",
-                    name: app.name,
-                    bundle: app.bundleID,
-                    icon: app.iconURL,
-                    dev: app.developer,
-                    version: app.version,
-                    url: app.storeURL,
-                    category: app.category,
-                    sizeBytes: app.size,
-                    externalVersionId: versionID ?? app.externalVersionID ?? ""
-                )
-            }
-            try manager.enqueueStore(app: decrypt, externalVersionId: versionID ?? app.externalVersionID)
-            AppNav.shared.goDownloads()
-        } catch {
-            enqueueError = error.localizedDescription
+        var decrypt = app.asDecryptApp()
+        if let adam = app.adamId {
+            decrypt = DecryptApp(
+                id: "owned-\(adam)",
+                name: app.name,
+                bundle: app.bundleID,
+                icon: app.iconURL,
+                dev: app.developer,
+                version: app.version,
+                url: app.storeURL,
+                category: app.category,
+                sizeBytes: app.size,
+                externalVersionId: versionID ?? app.externalVersionID ?? ""
+            )
         }
+        IPadnDecryptPipeline.get(
+            decrypt,
+            externalVersionId: versionID ?? app.externalVersionID
+        )
     }
 
     private func loadListing() async {

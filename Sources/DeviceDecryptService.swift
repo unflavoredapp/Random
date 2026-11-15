@@ -929,6 +929,67 @@ final class DeviceDecryptService: ObservableObject {
             }
         }
 
+        try await handoffStoreIPAToFairPlay(
+            ipa: ipa,
+            displayName: displayName,
+            downloadedVersion: downloadedVersion
+        )
+    }
+
+    /// FairPlay a Store IPA already on disk (iPadn Downloads Get → purchaseAndDownload).
+    /// Same companion + in-app fallback as the silent-purchase path.
+    func decryptDownloadedStoreIPA(at ipa: URL, displayName: String) async {
+        guard FileManager.default.fileExists(atPath: ipa.path) else {
+            let text = "Downloaded IPA missing — retry Get."
+            lastError = text
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = text
+            DecryptClient.shared.message = text
+            return
+        }
+        if busy {
+            // Wait briefly for an in-flight job (Downloads queue serializes callers).
+            for _ in 0..<120 {
+                if !busy { break }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+            }
+            if busy {
+                let text = "Already decrypting — wait for the current job to finish."
+                lastError = text
+                DecryptClient.shared.phase = .failed
+                DecryptClient.shared.error = text
+                DecryptClient.shared.message = text
+                return
+            }
+        }
+        busy = true
+        lastError = nil
+        DecryptClient.shared.phase = .running
+        DecryptClient.shared.message = "Decrypting \(displayName)…"
+        DecryptClient.shared.error = nil
+        defer { busy = false }
+        do {
+            try await handoffStoreIPAToFairPlay(
+                ipa: ipa,
+                displayName: displayName,
+                downloadedVersion: ""
+            )
+        } catch {
+            let text = error.localizedDescription
+            lastError = text
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = text
+            DecryptClient.shared.message = text
+            status = ""
+        }
+    }
+
+    /// Companion embed first; in-app FairPlay on the Store package if companion install fails.
+    private func handoffStoreIPAToFairPlay(
+        ipa: URL,
+        displayName: String,
+        downloadedVersion: String
+    ) async throws {
         let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
         // Competition path: build/sign/install a real “Tetherless Decrypt” companion
         // IPA (EmbeddedPayload + user’s Apple ID cert). The console UI runs only there.
