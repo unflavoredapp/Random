@@ -381,7 +381,7 @@ struct DecryptDeviceAppsSection: View {
                     }
                 }
 
-                Text("Decrypts main, frameworks, and widgets with this device’s FairPlay keys (Watch + App Clips skipped — avoid install-path hangs). Pair with Native install if the list is empty.")
+                Text("Decrypts from the live install with this iPhone’s FairPlay keys — Store Access login is not required. Watch + App Clips skipped. Pair with Native if the list is empty.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)

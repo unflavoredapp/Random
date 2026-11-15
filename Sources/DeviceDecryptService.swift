@@ -389,7 +389,8 @@ final class DeviceDecryptService: ObservableObject {
         return (clear, name, result.item.displayVersion)
     }
 
-    /// Decrypt via a signed “Tetherless Decrypt” companion IPA (FairPlayed-style console lives there).
+    /// Decrypt an app already on this iPhone via companion FairPlay.
+    /// Prefers the live install path so Store Access / silent download is optional.
     func decryptInstalled(_ app: DeviceApp, version: String? = nil) async {
         guard !busy else { return }
         busy = true
@@ -397,13 +398,6 @@ final class DeviceDecryptService: ObservableObject {
         status = "Preparing \(app.name)…"
         defer { busy = false }
         do {
-            guard AppleIDStore.shared.isSignedIn else {
-                throw DecryptError("Sign in under Settings › Store Access with the Apple ID that owns this app.")
-            }
-            if !AppStoreDecryptGuide.isAcknowledged(email: AppleIDStore.shared.email) {
-                publishDecryptProgress("Confirm this Apple ID has signed in to the App Store on this iPhone once…")
-            }
-
             DecryptClient.shared.select(
                 DecryptApp(
                     id: app.bundleID,
@@ -416,41 +410,72 @@ final class DeviceDecryptService: ObservableObject {
                 )
             )
             DecryptClient.shared.phase = .running
-            publishDecryptProgress("Building Tetherless Decrypt companion for \(app.name)…")
 
-            // Prefer store IPA → companion embed (competition path). Fall back to packaging
-            // the live install into the companion when silent download isn’t available.
-            do {
-                let storeURL = try await storeURL(forBundleID: app.bundleID)
-                try await silentPurchaseDownloadDecrypt(
-                    bundleID: app.bundleID,
-                    displayName: app.name,
-                    storeURL: storeURL,
-                    version: version
-                )
+            // 1) Live install → companion (no Store session required — FairPlay keys are
+            //    already on-device from the App Store install of this title).
+            if let installed = await resolveInstalledAppURL(bundleID: app.bundleID) {
+                publishDecryptProgress("Using installed \(app.name) — Store login not required…")
+                try await decryptFromInstalledPath(installed, displayName: app.name, bundleID: app.bundleID)
                 return
-            } catch {
-                publishDecryptProgress("Store package unavailable — embedding installed app into companion…")
-                publishDecryptProgress(error.localizedDescription)
             }
 
-            guard let installed = await resolveInstalledAppURL(bundleID: app.bundleID) else {
-                throw FairPlayDecryptError.noInstalledApp(app.bundleID)
+            // 2) Optional Store download only when install path is missing and Store is green.
+            if AppleIDStore.shared.storefrontSession()?.isUsable == true {
+                publishDecryptProgress("Install path missing — trying Store package…")
+                do {
+                    let storeURL = try await storeURL(forBundleID: app.bundleID)
+                    try await silentPurchaseDownloadDecrypt(
+                        bundleID: app.bundleID,
+                        displayName: app.name,
+                        storeURL: storeURL,
+                        version: version
+                    )
+                    return
+                } catch {
+                    publishDecryptProgress(error.localizedDescription)
+                }
             }
-            try FairPlayKeyGate.requireReady()
-            _ = try await DecryptCompanionInstaller.installAndOpen(
-                embeddingInstalledApp: installed,
-                displayName: app.name
-            ) { [weak self] msg in
-                Task { @MainActor in self?.publishDecryptProgress(msg) }
-            }
-            markCompanionHandoff(displayName: app.name)
+
+            throw FairPlayDecryptError.noInstalledApp(
+                "Can’t find \(app.name) on disk (\(app.bundleID)). Pair Native and refresh Installed, or unlock Store Access to download."
+            )
         } catch {
             lastError = error.localizedDescription
             DecryptClient.shared.phase = .failed
             DecryptClient.shared.error = error.localizedDescription
             DecryptClient.shared.message = error.localizedDescription
             status = ""
+        }
+    }
+
+    /// Companion embed from a live `/var/containers/Bundle/Application/…/*.app`, then
+    /// in-process FairPlay if companion signing/install fails.
+    private func decryptFromInstalledPath(
+        _ installed: URL,
+        displayName: String,
+        bundleID: String
+    ) async throws {
+        publishDecryptProgress("Building Tetherless Decrypt companion for \(displayName)…")
+        do {
+            _ = try await DecryptCompanionInstaller.installAndOpen(
+                embeddingInstalledApp: installed,
+                displayName: displayName
+            ) { [weak self] msg in
+                Task { @MainActor in self?.publishDecryptProgress(msg) }
+            }
+            markCompanionHandoff(displayName: displayName)
+            return
+        } catch {
+            publishDecryptProgress("Companion install failed — trying in-app FairPlay…")
+            publishDecryptProgress(error.localizedDescription)
+            let clear = try FairPlayDecrypt.decryptInstalledApp(
+                bundleID: bundleID,
+                displayName: displayName,
+                knownPath: installed.path
+            ) { [weak self] msg in
+                Task { @MainActor in self?.publishDecryptProgress(msg) }
+            }
+            finishSuccess(url: clear, name: displayName)
         }
     }
 
@@ -825,15 +850,12 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     /// Decrypt every listed App Store app with on-device FairPlay (main + frameworks + nested).
+    /// Uses live install paths — Store Access is not required.
     func decryptAllInstalled(stopOnError: Bool = false) async {
         guard !busy else { return }
         let apps = drmApps
         guard !apps.isEmpty else {
             lastError = "No App Store apps listed. Pair Native and refresh."
-            return
-        }
-        guard AppleIDStore.shared.isSignedIn else {
-            lastError = "Sign in under Settings › Store Access with the Apple ID that owns these apps."
             return
         }
         busy = true
