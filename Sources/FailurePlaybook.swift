@@ -40,7 +40,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "403",
             title: "Store rejected client identity (HTTP 403)",
-            summary: "Apple blocked the silent store request. Usually spoof advertising iOS 99 / exotic headers — switch to This iPhone, then retry (download will auto-retry once).",
+            summary: "Apple blocked the silent store request. Switch to This iPhone and remint Store Access — a green seal can still hold a dead download token.",
             matches: ["http 403", "403", "client identity"],
             actionTitle: "Use This iPhone spoof",
             action: .turnOffClientInfoRewrite

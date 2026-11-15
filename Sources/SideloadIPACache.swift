@@ -96,7 +96,11 @@ extension AppStoreClient {
         }
 
         var req = URLRequest(url: url)
-        req.setValue(StoreDeviceSpoof.current.storeUserAgent(fallbackConfigurator: "Configurator/2.15"), forHTTPHeaderField: "User-Agent")
+        // Spoof off → plain Configurator UA (storeUserAgent no longer invents iOS/build tokens).
+        let ua = StoreDeviceSpoof.current.storeUserAgent(
+            fallbackConfigurator: "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
+        )
+        req.setValue(ua, forHTTPHeaderField: "User-Agent")
         req.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         if start > 0 {
             req.setValue("bytes=\(start)-", forHTTPHeaderField: "Range")
