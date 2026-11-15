@@ -32,6 +32,7 @@ final class AppNav: ObservableObject {
     func goFiles() { goAccount(.files) }
     func goLibrary() { goAccount(.library) }
     func goSettings() { goAccount(.settings) }
+    func goInstallation() { goAccount(.installation) }
     func goSearch() { go(.search) }
     func goDownloads() { go(.downloads) }
     func goPurchased() { go(.purchased) }
