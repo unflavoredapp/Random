@@ -1,9 +1,9 @@
 //
 //  ZefvClient.swift
-//  Account client for the AirShare backend (airshare.lol/app/v1). Registration/login are
-//  OPTIONAL — the app works fully as a guest keyed on the device MDID. An
-//  account links this ADID to a username + role so staff tools follow you
-//  across reinstalls and devices.
+//  Account client for the TetherLess backend (tetherless.dev/app/v1 — same apex as
+//  OTA pack hosting). Registration/login are OPTIONAL — the app works fully as a
+//  guest keyed on the device MDID. An account links this ADID to a username + role
+//  so staff tools follow you across reinstalls and devices.
 //
 //  All requests carry the shared X-OTA-Token (ServerConfig.certSourceToken).
 //  The per-user session token is stored in the Keychain.
@@ -69,16 +69,19 @@ final class ZefvAccount: ObservableObject {
         UserDefaults.standard.set(true, forKey: flag)
     }
 
-    // MARK: - Endpoint base — the PHP account API lives on apii (api.zefv.dev is a router)
+    // MARK: - Endpoint base — same apex as OTA (`ServerConfig.defaultDomain`)
 
     /// Account / decrypt API base. Override with UserDefaults `as_api_base`.
-    /// Default remains airshare.lol for account endpoints; that host currently serves a
-    /// mismatched TLS cert, so Store backend IPA fetch detects and skips it (see
-    /// `LocalDecryptBridge.backendTLSLikelyBroken`).
-    nonisolated static let defaultBase = "https://airshare.lol/app/v1/"
+    /// Default is `https://tetherless.dev/app/v1/` (same host as OTA pack.json).
+    /// Legacy `airshare.lol` overrides are migrated away — that host’s TLS cert no longer matches.
+    nonisolated static let defaultBase = "https://\(ServerConfig.defaultDomain)/app/v1/"
     nonisolated static var apiBase: String {
-        let v = UserDefaults.standard.string(forKey: "as_api_base") ?? ""
-        return v.isEmpty ? defaultBase : (v.hasSuffix("/") ? v : v + "/")
+        let raw = UserDefaults.standard.string(forKey: "as_api_base") ?? ""
+        let lower = raw.lowercased()
+        if raw.isEmpty || lower.contains("airshare.lol") || lower.contains("zefv.dev") || lower.contains("mrzefv.com") {
+            return defaultBase
+        }
+        return raw.hasSuffix("/") ? raw : raw + "/"
     }
     private func base() -> URL? {
         URL(string: Self.apiBase)

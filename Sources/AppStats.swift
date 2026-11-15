@@ -1,7 +1,7 @@
 //
 //  AppStats.swift
 //  View + download counters for apps in the AirShare source. The website and the app write to the
-//  same counters on airshare.lol, so the numbers shown here are website + app combined.
+//  same counters on tetherless.dev, so the numbers shown here are website + app combined.
 //
 
 import Foundation
