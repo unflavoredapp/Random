@@ -54,7 +54,7 @@ final class DeviceDecryptService: ObservableObject {
         return try await history(account)
     }
 
-    /// purchaseAndDownload with one automatic store-token refresh on expiry (no sign-out).
+    /// purchaseAndDownload with one automatic store-token remint on expiry (PET cascade; no sign-out).
     private func purchaseAndDownloadWithStoreRefresh(
         adamId: Int,
         account: inout StorefrontSession,
@@ -62,31 +62,33 @@ final class DeviceDecryptService: ObservableObject {
         externalVersionId: String?,
         version: String?
     ) async throws -> (url: URL, item: StoreDownloadItem) {
+        func run(_ session: StorefrontSession) async throws -> (url: URL, item: StoreDownloadItem) {
+            try await AppStoreClient.shared.purchaseAndDownload(
+                adamId: adamId,
+                account: session,
+                destination: destination,
+                externalVersionId: externalVersionId,
+                version: version,
+                onProgress: { [weak self] msg in
+                    Task { @MainActor in self?.publishDecryptProgress(msg) }
+                }
+            )
+        }
         do {
-            return try await AppStoreClient.shared.purchaseAndDownload(
-                adamId: adamId,
-                account: account,
-                destination: destination,
-                externalVersionId: externalVersionId,
-                version: version,
-                onProgress: { [weak self] msg in
-                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                }
-            )
+            return try await run(account)
         } catch AppStoreClientError.tokenExpired {
-            publishDecryptProgress("Refreshing App Store session…")
+            publishDecryptProgress("Refreshing App Store download session…")
             AppleIDStore.shared.invalidateStorefrontSession()
-            account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
-            return try await AppStoreClient.shared.purchaseAndDownload(
-                adamId: adamId,
-                account: account,
-                destination: destination,
-                externalVersionId: externalVersionId,
-                version: version,
-                onProgress: { [weak self] msg in
-                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                }
-            )
+            let refreshed = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
+            account = refreshed
+            return try await run(refreshed)
+        } catch AppStoreClientError.licenseRequired {
+            // Owned but license probe failed — remint once then retry buy+download.
+            publishDecryptProgress("Re-checking App Store license…")
+            AppleIDStore.shared.invalidateStorefrontSession()
+            let refreshed = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
+            account = refreshed
+            return try await run(refreshed)
         }
     }
 
