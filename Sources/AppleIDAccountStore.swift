@@ -1056,9 +1056,11 @@ final class AppleIDStore: ObservableObject {
         } catch AppStoreClientError.needsTwoFactor {
             throw AppStoreClientError.needsTwoFactor
         } catch {
-            // Brief pause + fresh anisette often clears HTTP 204/empty token after SMS.
+            // Brief pause + fresh anisette/SAP often clears HTTP 204 / 302-without-Location.
             try? await Task.sleep(nanoseconds: 1_200_000_000)
             await AnisetteClient.shared.invalidate(resetProvisioning: false)
+            SAPSigner.invalidateCache()
+            await SAPSigner.warm()
             return try await AppStoreClient.shared.authenticate(
                 email: email,
                 password: password,
@@ -1106,6 +1108,10 @@ final class AppleIDStore: ObservableObject {
         // Snapshot so a failed remint (HTTP 404 edge) cannot leave Store Access empty
         // when we already had a usable passwordToken.
         let previous = storefrontSession()
+        // 302-without-Location / HTTP 204 Retry loops often follow exotic spoof + stale SAP.
+        StoreDeviceSpoof.applyThisiPhone()
+        await AnisetteClient.shared.invalidate(resetProvisioning: false)
+        SAPSigner.invalidateCache()
         await AnisetteClient.shared.prefetchIfNeeded()
         await SAPSigner.warm()
         await reconnectStoreSessionIfNeeded(force: true)

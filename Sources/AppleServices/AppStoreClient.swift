@@ -219,9 +219,14 @@ final class AppStoreClient: ObservableObject {
             throw AppStoreClientError.message("Enter Apple ID and password for Store downloads.")
         }
 
+        // Soft 204/302 often follows a leftover exotic spoof — pin This iPhone before minting.
+        if StoreDeviceSpoof.current.looksLikeRejectedIdentity || StoreDeviceSpoof.current.rewriteClientInfo {
+            StoreDeviceSpoof.applyThisiPhone()
+        }
+
         // SAP ActionSignature is required for Apple's current store edge (ipatool #525 /
         // ApplePackage). Unsigned posts get HTML 301-without-Location or empty 204.
-        let sapSigner: SAPSigner
+        var sapSigner: SAPSigner
         do {
             sapSigner = try await SAPSigner.connect()
         } catch {
@@ -245,6 +250,19 @@ final class AppStoreClient: ObservableObject {
             if index > 0 {
                 await AnisetteClient.shared.invalidate(resetProvisioning: false)
                 try? await Task.sleep(nanoseconds: 600_000_000)
+                // Soft 204 / 302-without-Location often means a stale ActionSignature —
+                // remint SAP before the next starter instead of burning pods with a dead signer.
+                if Self.shouldRotateAuthenticateEndpoint(lastError) {
+                    SAPSigner.invalidateCache()
+                    do {
+                        sapSigner = try await SAPSigner.connect()
+                    } catch {
+                        lastError = AppStoreClientError.message(
+                            "Store SAP setup failed (\(error.localizedDescription)). Tap Retry Store unlock — or Sign Out and Sign In once."
+                        )
+                        continue
+                    }
+                }
             }
             let anisette = try await AnisetteClient.shared.fetch()
             let guid = Self.deviceGUID(from: anisette)
@@ -331,9 +349,17 @@ final class AppStoreClient: ObservableObject {
                 lastTransient = nil
 
                 if (300..<400).contains(status) {
-                    let loc = headers["Location"] ?? headers["location"] ?? ""
+                    // Fold Set-Cookie from the redirect hop before re-POSTing (mz_at / itspod).
+                    if let hopCookies = Self.cookieHeader(
+                        from: headers,
+                        session: session,
+                        urls: [endpoint, "https://buy.itunes.apple.com/", "https://auth.itunes.apple.com/"]
+                    ) {
+                        liveCookieHeader = Self.mergeCookieStrings(liveCookieHeader, hopCookies)
+                    }
+                    let loc = Self.extractRedirectLocation(from: headers, excludingEndpoint: endpoint)
                     if loc.isEmpty {
-                        // 301/302 without Location — common soft reject; rotate endpoint.
+                        // 301/302 without usable Location — soft reject; rotate endpoint.
                         throw AppStoreClientError.network(
                             "Store authenticate redirected (HTTP \(status)) without Location."
                         )
@@ -350,7 +376,7 @@ final class AppStoreClient: ObservableObject {
                     if nextURL?.host?.lowercased() == curURL?.host?.lowercased(),
                        nextURL?.path == curURL?.path {
                         throw AppStoreClientError.network(
-                            "Store authenticate redirected (HTTP \(status)) without Location."
+                            "Store authenticate redirected (HTTP \(status)) to the same endpoint (soft reject)."
                         )
                     }
                     endpoint = next
@@ -442,8 +468,48 @@ final class AppStoreClient: ObservableObject {
             || m.contains("http 403")
             || m.contains("http 404")
             || m.contains("without location")
+            || m.contains("same endpoint")
+            || m.contains("soft reject")
             || m.contains("empty or non-plist")
             || m.contains("non-plist")
+    }
+
+    /// Prefer real Location / Apple jingle redirect headers; ignore self-echo URLs.
+    private static func extractRedirectLocation(
+        from headers: [String: String],
+        excludingEndpoint: String
+    ) -> String {
+        let preferredKeys = [
+            "Location", "location",
+            "X-Apple-jingle-redirect-location", "x-apple-jingle-redirect-location"
+        ]
+        var candidates: [String] = []
+        for key in preferredKeys {
+            if let v = headers[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !v.isEmpty {
+                candidates.append(v)
+            }
+        }
+        for (key, value) in headers {
+            let lk = key.lowercased()
+            guard lk == "location"
+                || lk.hasSuffix("redirect-location")
+                || lk.contains("jingle-redirect") else { continue }
+            let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !v.isEmpty { candidates.append(v) }
+        }
+        let cur = URL(string: excludingEndpoint)
+        for raw in candidates {
+            guard let resolved = URL(string: raw, relativeTo: cur)?.absoluteURL else {
+                if !raw.isEmpty { return raw }
+                continue
+            }
+            if resolved.host?.lowercased() == cur?.host?.lowercased(),
+               resolved.path == cur?.path {
+                continue // self-echo from cancelled redirect — not a usable hop
+            }
+            return resolved.absoluteString
+        }
+        return ""
     }
 
     private static func authenticateURL(guid: String) -> String {
@@ -1359,6 +1425,12 @@ final class AppStoreClient: ObservableObject {
             // Prefer a non-spoofed configurator UA when recovering from 403.
             req.setValue(configuratorUA, forHTTPHeaderField: "User-Agent")
         }
+        // Carry authenticate hop cookies across pod redirects (session jar alone can miss mz_at).
+        if allowRedirectCapture,
+           let cookie = liveCookieHeader?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !cookie.isEmpty {
+            req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        }
 
         let (data, resp) = try await session.data(for: req)
         let http = resp as? HTTPURLResponse
@@ -1369,11 +1441,17 @@ final class AppStoreClient: ObservableObject {
                 headerMap[String(describing: k)] = String(describing: v)
             }
         }
-        if let http, let loc = http.value(forHTTPHeaderField: "Location"), !loc.isEmpty {
-            headerMap["Location"] = loc
+        if let http {
+            for key in ["Location", "X-Apple-jingle-redirect-location"] {
+                if let loc = http.value(forHTTPHeaderField: key)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !loc.isEmpty {
+                    headerMap["Location"] = loc
+                    break
+                }
+            }
         }
         // iOS often omits Location from allHeaderFields when the redirect is cancelled —
-        // recover it from the redirect delegate's newRequest.url.
+        // recover it from the redirect delegate's newRequest.url / jingle header.
         if (300..<400).contains(status),
            (headerMap["Location"] ?? headerMap["location"] ?? "").isEmpty,
            let captured = StoreRedirectBlocker.shared.takeLastRedirectLocation() {
@@ -1736,6 +1814,10 @@ private final class StoreRedirectBlocker: NSObject, URLSessionTaskDelegate, @unc
     ) {
         var location = response.value(forHTTPHeaderField: "Location")?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if location.isEmpty {
+            location = response.value(forHTTPHeaderField: "X-Apple-jingle-redirect-location")?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
         if location.isEmpty, let url = request.url?.absoluteString, !url.isEmpty {
             // newRequest is built from Location even when allHeaderFields later drops it.
             location = url
