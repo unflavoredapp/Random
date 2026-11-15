@@ -43,7 +43,7 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 | **Decrypt** | All-in-one This Device FairPlay (in-app, no helper) or optional Telegram Bot + multi-account Store Access |
 | **Settings** | Install method (OTA vs Native), Store Access, certs, account |
 
-**Decrypt tip:** Prefer **Library › Installed → Decrypt**. Enable **iPadn search** in Settings for in-app multi-region / App ID / delisted lookup (Sources/IPadn). **Telegram / Phone Worker** remains optional.
+**Decrypt tip:** Prefer **Library › Installed → Decrypt**. **iPadn Store search** is on by default (Settings) for name / App ID / store-link / multi-region / delisted lookup plus Timbrd·Bilin·iosdump version history (Sources/IPadn, GPL-2.0). **Telegram / Phone Worker** remains optional.
 | **Sign & install** | TrustCore signing, OTA via `*.tetherless.dev`, or native idevice install |
 | **Analysis** | Local Analysis Center — disassembler, CFG, pseudocode, reversible patch proposals |
 | **Identity** | ADID (`AS-XXXXXX-XX`) minted on first launch, stored in Keychain |
