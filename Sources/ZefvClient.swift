@@ -71,7 +71,10 @@ final class ZefvAccount: ObservableObject {
 
     // MARK: - Endpoint base — the PHP account API lives on apii (api.zefv.dev is a router)
 
-    /// AirShare backend (Node). Override with UserDefaults "as_api_base" if it ever moves.
+    /// Account / decrypt API base. Override with UserDefaults `as_api_base`.
+    /// Default remains airshare.lol for account endpoints; that host currently serves a
+    /// mismatched TLS cert, so Store backend IPA fetch detects and skips it (see
+    /// `LocalDecryptBridge.backendTLSLikelyBroken`).
     nonisolated static let defaultBase = "https://airshare.lol/app/v1/"
     nonisolated static var apiBase: String {
         let v = UserDefaults.standard.string(forKey: "as_api_base") ?? ""

@@ -70,7 +70,19 @@ nonisolated enum LocalDecryptBridge {
         var errorDescription: String? { message }
     }
 
+    /// `airshare.lol` currently presents a cert for an unrelated host (hostname mismatch),
+    /// which surfaces on-device as “A TLS error caused the secure connection to fail.”
+    static var backendTLSLikelyBroken: Bool {
+        let host = (URL(string: DecryptClient.siteBase)?.host ?? "").lowercased()
+        return host == "airshare.lol" || host.hasSuffix(".airshare.lol")
+    }
+
     static func request(_ path: String, query: [String: String] = [:], body: [String: Any]? = nil, timeout: TimeInterval = 30) throws -> URLRequest {
+        if backendTLSLikelyBroken {
+            throw Failure(
+                "API host TLS is broken (\(DecryptClient.siteBase) — certificate does not match). Set as_site_base / as_api_base to a working TetherLess API host, or Decrypt from Installed."
+            )
+        }
         guard var c = URLComponents(string: DecryptClient.siteBase + path) else { throw Failure("Bad URL") }
         if !query.isEmpty { c.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) } }
         guard let url = c.url else { throw Failure("Bad URL") }
@@ -95,7 +107,21 @@ nonisolated enum LocalDecryptBridge {
 
     /// Raw backend JSON, so the local API returns the same fields the tab reads.
     static func sendRaw(_ r: URLRequest) async throws -> (Data, [String: Any]) {
-        let (d, resp) = try await URLSession.shared.data(for: r)
+        let d: Data
+        let resp: URLResponse
+        do {
+            (d, resp) = try await URLSession.shared.data(for: r)
+        } catch {
+            let msg = error.localizedDescription
+            if msg.localizedCaseInsensitiveContains("tls")
+                || msg.localizedCaseInsensitiveContains("secure connection")
+                || msg.localizedCaseInsensitiveContains("certificate") {
+                throw Failure(
+                    "API TLS failed (\(r.url?.host ?? "backend")): \(msg). Decrypt from Installed if the app is on this iPhone, or fix as_site_base / as_api_base."
+                )
+            }
+            throw Failure(msg)
+        }
         let o = (try? JSONSerialization.jsonObject(with: d) as? [String: Any]) ?? [:]
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         if code >= 400 || (o["ok"] as? Bool) == false {

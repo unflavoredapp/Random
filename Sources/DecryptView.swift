@@ -91,7 +91,9 @@ final class DecryptClient: ObservableObject {
 
     var busy: Bool { phase == .queued || phase == .running || phase == .downloading }
 
-    /// Site root (airshare.lol). Derived from the app API base; override with UserDefaults "as_site_base".
+    /// Site root for LocalDecryptBridge / store fetch. Derived from the app API base;
+    /// override with UserDefaults `as_site_base`. Note: default `airshare.lol` currently
+    /// presents a mismatched TLS cert — backend IPA fetch is skipped when that host is used.
     nonisolated static var siteBase: String {
         let v = UserDefaults.standard.string(forKey: "as_site_base") ?? ""
         var b = v.isEmpty ? ZefvAccount.apiBase : v

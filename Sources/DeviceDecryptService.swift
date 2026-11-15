@@ -568,16 +568,35 @@ final class DeviceDecryptService: ObservableObject {
             guard !bid.isEmpty || hasAdam else {
                 throw DecryptError("Missing bundle ID — search again or paste an App Store link.")
             }
-            // Always fetch the Store download link / IPA and hand FairPlay to the
-            // companion IPA. Do not fall back to live install-path embed here — that
-            // path hangs the host on DRM audit; companion verifies + decrypts the package.
-            try await silentPurchaseDownloadDecrypt(
-                bundleID: bid,
-                displayName: app.name,
-                storeURL: link,
-                version: version,
-                externalVersionId: externalVersionId
-            )
+            // Prefer Store package → companion. On Store 403 / backend TLS failure,
+            // fall back to installed companion embed when the app is already on disk
+            // (packager skips hanging live cryptid audits; companion verifies DRM).
+            do {
+                try await silentPurchaseDownloadDecrypt(
+                    bundleID: bid,
+                    displayName: app.name,
+                    storeURL: link,
+                    version: version,
+                    externalVersionId: externalVersionId
+                )
+            } catch {
+                guard !bid.isEmpty,
+                      let installed = await resolveInstalledAppURL(bundleID: bid) else {
+                    throw error
+                }
+                publishDecryptProgress(
+                    "Store package unavailable — embedding installed \(app.name) into companion…"
+                )
+                publishDecryptProgress(error.localizedDescription)
+                try FairPlayKeyGate.requireReady()
+                _ = try await DecryptCompanionInstaller.installAndOpen(
+                    embeddingInstalledApp: installed,
+                    displayName: app.name
+                ) { [weak self] msg in
+                    Task { @MainActor in self?.publishDecryptProgress(msg) }
+                }
+                markCompanionHandoff(displayName: app.name)
+            }
         } catch {
             let text = error.localizedDescription
             lastError = text
@@ -727,8 +746,31 @@ final class DeviceDecryptService: ObservableObject {
                     continue downloadAttempt
                 }
                 if lower.contains("403") || lower.contains("client identity") {
-                    // Option 2: phone keeps FairPlay; backend runs volumeStore + CDN with the
-                    // device-minted SAP signature / anisette / passwordToken.
+                    // Prefer installed companion embed before backend when the app is on disk
+                    // (unblocks Cake Wallet / TestFlight without airshare.lol TLS).
+                    if !bundleID.isEmpty,
+                       let installed = await resolveInstalledAppURL(bundleID: bundleID) {
+                        publishDecryptProgress(
+                            "Store HTTP 403 — embedding installed \(displayName) into companion…"
+                        )
+                        try FairPlayKeyGate.requireReady()
+                        _ = try await DecryptCompanionInstaller.installAndOpen(
+                            embeddingInstalledApp: installed,
+                            displayName: displayName
+                        ) { [weak self] msg in
+                            Task { @MainActor in self?.publishDecryptProgress(msg) }
+                        }
+                        markCompanionHandoff(displayName: displayName)
+                        return
+                    }
+                    // Option 2: phone keeps FairPlay; backend runs volumeStore + CDN.
+                    // Skip when the configured API host can't do TLS (airshare.lol currently
+                    // serves a mismatched cert → “A TLS error caused the secure connection…”).
+                    if LocalDecryptBridge.backendTLSLikelyBroken {
+                        throw DecryptError(
+                            "App Store download failed (\(detail)). Backend IPA fetch skipped — API host TLS is broken (\(DecryptClient.siteBase)). Decrypt from Library if the app is already installed, or fix as_api_base / as_site_base."
+                        )
+                    }
                     publishDecryptProgress(
                         "Phone Store still 403 — trying backend encrypted-IPA fetch…"
                     )
@@ -746,8 +788,30 @@ final class DeviceDecryptService: ObservableObject {
                         pinned = result.item.externalVersionId.isEmpty ? pinned : result.item.externalVersionId
                         break downloadAttempt
                     } catch {
+                        let backend = error.localizedDescription
+                        let tlsHint = backend.localizedCaseInsensitiveContains("tls")
+                            || backend.localizedCaseInsensitiveContains("secure connection")
+                        // Last chance: installed embed after backend TLS failure.
+                        if tlsHint, !bundleID.isEmpty,
+                           let installed = await resolveInstalledAppURL(bundleID: bundleID) {
+                            publishDecryptProgress(
+                                "Backend TLS failed — embedding installed \(displayName) into companion…"
+                            )
+                            try FairPlayKeyGate.requireReady()
+                            _ = try await DecryptCompanionInstaller.installAndOpen(
+                                embeddingInstalledApp: installed,
+                                displayName: displayName
+                            ) { [weak self] msg in
+                                Task { @MainActor in self?.publishDecryptProgress(msg) }
+                            }
+                            markCompanionHandoff(displayName: displayName)
+                            return
+                        }
                         throw DecryptError(
-                            "App Store download failed (\(detail)). Backend fetch also failed: \(error.localizedDescription). Remint Store Access and retry."
+                            "App Store download failed (\(detail)). Backend fetch also failed: \(backend)."
+                                + (tlsHint
+                                   ? " API host TLS is failing — if the app is installed, Decrypt from Library / Installed; otherwise remint Store Access and retry."
+                                   : " Remint Store Access and retry.")
                         )
                     }
                 }
