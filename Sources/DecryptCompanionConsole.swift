@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 @MainActor
 final class DecryptCompanionController: ObservableObject {
@@ -15,6 +16,7 @@ final class DecryptCompanionController: ObservableObject {
     @Published var displayName = ""
     @Published var version = ""
     @Published var iconURL: URL?
+    @Published var iconImage: UIImage?
     @Published var logLines: [String] = []
     @Published var busy = false
     @Published var done = false
@@ -29,11 +31,13 @@ final class DecryptCompanionController: ObservableObject {
         name: String,
         version: String = "",
         icon: URL? = nil,
+        iconImage: UIImage? = nil,
         clearLog: Bool = true
     ) {
         displayName = name
         self.version = version
         iconURL = icon
+        self.iconImage = iconImage
         if clearLog { logLines = [] }
         busy = true
         done = false
@@ -51,6 +55,8 @@ final class DecryptCompanionController: ObservableObject {
         if logLines.count > 400 {
             logLines.removeFirst(logLines.count - 400)
         }
+        // Don't clobber a finished status with mid-run log chatter.
+        if done { return }
         if trimmed.hasPrefix("[DECRYPTED]") || trimmed.hasPrefix("[plain]") || trimmed.hasPrefix("[FAILED]") {
             statusTitle = "Decrypting…"
         } else if trimmed.localizedCaseInsensitiveContains("DRM audit")
@@ -77,7 +83,7 @@ final class DecryptCompanionController: ObservableObject {
         if !verifySummary.isEmpty {
             statusTitle = "Verified · \(verifySummary)"
         } else {
-            statusTitle = url == nil ? "Failed" : "Done — saving automatically…"
+            statusTitle = url == nil ? "Failed" : "Done"
         }
         if let url {
             appendLog("Wrote \(url.lastPathComponent).")
@@ -119,7 +125,6 @@ struct DecryptCompanionConsole: View {
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .ignoresSafeArea()
 
             VStack(spacing: 0) {
                 header
@@ -135,7 +140,10 @@ struct DecryptCompanionConsole: View {
                     .padding(.bottom, 12)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
         .preferredColorScheme(.dark)
+        .statusBarHidden(false)
         .onChange(of: client.message) { msg in
             // Mirror DecryptClient progress into the companion log when presented.
             guard companion.isPresented, !msg.isEmpty else { return }
@@ -146,7 +154,7 @@ struct DecryptCompanionConsole: View {
     }
 
     private var header: some View {
-        HStack {
+        HStack(spacing: 10) {
             if showsDismiss {
                 Button {
                     companion.dismiss()
@@ -156,14 +164,35 @@ struct DecryptCompanionConsole: View {
                         .foregroundStyle(.white.opacity(0.45))
                 }
                 .buttonStyle(.plain)
-            } else {
-                Color.clear.frame(width: 28, height: 28)
             }
-            Spacer()
+
+            // TetherLess brand mark (“Theresa” / cable-slash icon).
+            Group {
+                if UIImage(named: "airshare_mark") != nil {
+                    Image("airshare_mark")
+                        .resizable()
+                        .scaledToFit()
+                } else if UIImage(named: "aircore_logo") != nil {
+                    Image("aircore_logo")
+                        .resizable()
+                        .scaledToFit()
+                } else {
+                    Image(systemName: "bolt.slash.circle.fill")
+                        .resizable()
+                        .scaledToFit()
+                        .foregroundStyle(TetherlessPalette.accent)
+                }
+            }
+            .frame(width: 28, height: 28)
+            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
             Text("Tetherless Decrypt")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.white)
-            Spacer()
+                .lineLimit(1)
+
+            Spacer(minLength: 0)
+
             if companion.done, companion.finishedURL != nil {
                 Button {
                     shareURL = companion.finishedURL
@@ -173,38 +202,18 @@ struct DecryptCompanionConsole: View {
                         .foregroundStyle(.white.opacity(0.85))
                 }
                 .buttonStyle(.plain)
-            } else {
-                Color.clear.frame(width: 28, height: 28)
             }
         }
         .padding(.horizontal, 16)
-        .padding(.top, 12)
-        .padding(.bottom, 4)
+        .padding(.top, 56)
+        .padding(.bottom, 8)
     }
 
     private var appCard: some View {
         HStack(spacing: 14) {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.white.opacity(0.08))
+            targetAppIcon
                 .frame(width: 56, height: 56)
-                .overlay {
-                    if let icon = companion.iconURL {
-                        AsyncImage(url: icon) { phase in
-                            switch phase {
-                            case .success(let img):
-                                img.resizable().scaledToFill()
-                            default:
-                                Image(systemName: "app.fill")
-                                    .foregroundStyle(.white.opacity(0.5))
-                            }
-                        }
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                    } else {
-                        Image(systemName: "app.fill")
-                            .font(.title2)
-                            .foregroundStyle(.white.opacity(0.45))
-                    }
-                }
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
             VStack(alignment: .leading, spacing: 4) {
                 Text(companion.displayName.isEmpty ? "App" : companion.displayName)
                     .font(.title3.weight(.bold))
@@ -220,6 +229,36 @@ struct DecryptCompanionConsole: View {
         }
         .padding(14)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var targetAppIcon: some View {
+        if let img = companion.iconImage {
+            Image(uiImage: img)
+                .resizable()
+                .scaledToFill()
+        } else if let icon = companion.iconURL {
+            AsyncImage(url: icon) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().scaledToFill()
+                default:
+                    placeholderIcon
+                }
+            }
+        } else {
+            placeholderIcon
+        }
+    }
+
+    private var placeholderIcon: some View {
+        RoundedRectangle(cornerRadius: 14, style: .continuous)
+            .fill(Color.white.opacity(0.08))
+            .overlay {
+                Image(systemName: "app.fill")
+                    .font(.title2)
+                    .foregroundStyle(.white.opacity(0.45))
+            }
     }
 
     private var statusPill: some View {

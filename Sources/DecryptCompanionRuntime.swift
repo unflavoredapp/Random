@@ -68,7 +68,14 @@ enum DecryptCompanionRuntime {
             throw DecryptError("EmbeddedPayload/\(name) missing.")
         }
 
-        DecryptCompanionController.shared.present(name: name, clearLog: true)
+        let version = Self.embeddedAppVersion(at: src) ?? ""
+        let icon = Self.loadEmbeddedAppIcon(at: src)
+        DecryptCompanionController.shared.present(
+            name: name,
+            version: version,
+            iconImage: icon,
+            clearLog: true
+        )
         DecryptCompanionController.shared.statusTitle = "Auditing DRM…"
         log("Found embedded app: \(name)")
 
@@ -165,6 +172,53 @@ enum DecryptCompanionRuntime {
         return outIPA
     }
 
+    // MARK: - Embedded metadata
+
+    private static func embeddedAppVersion(at app: URL) -> String? {
+        let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist"))
+        let short = info?["CFBundleShortVersionString"] as? String
+        let build = info?["CFBundleVersion"] as? String
+        if let short, !short.isEmpty { return short }
+        if let build, !build.isEmpty { return build }
+        return nil
+    }
+
+    /// Best-effort icon from EmbeddedPayload (PNGs copied at package time).
+    private static func loadEmbeddedAppIcon(at app: URL) -> UIImage? {
+        let fm = FileManager.default
+        let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist"))
+        var bases: [String] = []
+        if let icons = info?["CFBundleIcons"] as? [String: Any],
+           let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+           let files = primary["CFBundleIconFiles"] as? [String] {
+            bases.append(contentsOf: files.reversed())
+        }
+        bases.append(contentsOf: [
+            "AppIcon60x60@3x", "AppIcon60x60@2x", "Icon-60@3x", "Icon-60@2x",
+            "iTunesArtwork@2x", "iTunesArtwork", "Icon@2x", "Icon"
+        ])
+        let pngs = (try? fm.contentsOfDirectory(at: app, includingPropertiesForKeys: [.fileSizeKey]))?
+            .filter { $0.pathExtension.lowercased() == "png" } ?? []
+        for base in bases {
+            if let hit = pngs.first(where: {
+                $0.deletingPathExtension().lastPathComponent.hasPrefix(base)
+                    || $0.lastPathComponent.hasPrefix(base)
+            }), let img = UIImage(contentsOfFile: hit.path) {
+                return img
+            }
+        }
+        let iconish = pngs.filter {
+            $0.lastPathComponent.localizedCaseInsensitiveContains("AppIcon")
+                || $0.lastPathComponent.localizedCaseInsensitiveContains("Icon")
+        }
+        let pool = iconish.isEmpty ? pngs : iconish
+        let largest = pool.max {
+            ((try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                < ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return largest.flatMap { UIImage(contentsOfFile: $0.path) }
+    }
+
     // MARK: - Audit helpers
 
     private static func logAudit(_ report: FairPlayVerifyReport, prefix: String, log: (String) -> Void) {
@@ -233,6 +287,8 @@ struct DecryptCompanionRoot: View {
 
     var body: some View {
         DecryptCompanionConsole(showsDismiss: false, shareURL: $shareURL)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color(red: 0.05, green: 0.07, blue: 0.12).ignoresSafeArea())
             .task {
                 do {
                     let url = try await DecryptCompanionRuntime.runEmbeddedDecrypt()
