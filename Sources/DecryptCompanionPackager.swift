@@ -279,6 +279,11 @@ enum DecryptCompanionPackager {
     }
 
     /// Shared FairPlayed-style EmbeddedPayload staging from any `.app` tree.
+    ///
+    /// Never call `verifyApp` on a live App Store install path — `fp_max_cryptid` /
+    /// `fp_describe_cryptids` can hang the host forever. Collect Mach-Os with the
+    /// timeout-safe walker, slim-copy, then audit the **copied** EmbeddedPayload.
+    /// Full DRM verification + decrypt runs inside the companion IPA.
     private static func stageEmbeddedPayload(
         from srcApp: URL,
         into companionApp: URL,
@@ -295,17 +300,33 @@ enum DecryptCompanionPackager {
         try? fm.removeItem(at: dest)
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
 
-        progress?("Auditing FairPlay DRM on \(sourceLabel)…")
         try? fm.removeItem(at: srcApp.appendingPathComponent("Watch"))
-        let fullAudit = try FairPlayDecrypt.verifyApp(at: srcApp)
-        progress?(
-            "\(sourceLabel) · \(fullAudit.entries.count) Mach-O(s) · \(fullAudit.encrypted) encrypted · \(fullAudit.clear) clear"
-        )
-        for e in fullAudit.entries where e.isEncrypted {
-            progress?("[DRM] \(e.path) · cryptid=\(e.cryptid)")
-        }
-        if fullAudit.entries.isEmpty {
-            throw DecryptError("No Mach-Os in \(name).app — cannot build companion EmbeddedPayload.")
+
+        let liveInstall = isLiveAppStoreInstall(srcApp)
+        // Optional pre-audit only for non-live trees (extracted IPA Payload). Live
+        // installs skip cryptid probes — companion verifies EmbeddedPayload instead.
+        var sourceEncrypted: Int?
+        var sourceMachOCount: Int?
+        var sourceClear = 0
+        var sourcePlain = 0
+        if liveInstall {
+            progress?("Skipping host DRM audit on install path — companion will verify…")
+        } else {
+            progress?("Auditing FairPlay DRM on \(sourceLabel)…")
+            let fullAudit = try FairPlayDecrypt.verifyApp(at: srcApp)
+            sourceEncrypted = fullAudit.encrypted
+            sourceMachOCount = fullAudit.entries.count
+            sourceClear = fullAudit.clear
+            sourcePlain = fullAudit.plain
+            progress?(
+                "\(sourceLabel) · \(fullAudit.entries.count) Mach-O(s) · \(fullAudit.encrypted) encrypted · \(fullAudit.clear) clear"
+            )
+            for e in fullAudit.entries where e.isEncrypted {
+                progress?("[DRM] \(e.path) · cryptid=\(e.cryptid)")
+            }
+            if fullAudit.entries.isEmpty {
+                throw DecryptError("No Mach-Os in \(name).app — cannot build companion EmbeddedPayload.")
+            }
         }
 
         // Slim embed: Mach-Os + SC_Info + Info.plist (FairPlayed needs SINFs next to binaries;
@@ -321,18 +342,22 @@ enum DecryptCompanionPackager {
             progress?("Replicated \(staged) nested SINF license(s)…")
         }
 
+        // Audit the copied EmbeddedPayload (safe — not the live install container).
         let slimAudit = try FairPlayDecrypt.verifyApp(at: dest)
         progress?(
             "EmbeddedPayload · \(slimAudit.entries.count) Mach-O(s) · \(slimAudit.encrypted) encrypted"
         )
-        if slimAudit.encrypted < fullAudit.encrypted {
+        if slimAudit.entries.isEmpty {
+            throw DecryptError("No Mach-Os in \(name).app — cannot build companion EmbeddedPayload.")
+        }
+        if let expected = sourceEncrypted, slimAudit.encrypted < expected {
             throw DecryptError(
-                "Companion embed dropped FairPlay binaries (\(slimAudit.encrypted) encrypted vs \(fullAudit.encrypted) in \(sourceLabel)). Aborting."
+                "Companion embed dropped FairPlay binaries (\(slimAudit.encrypted) encrypted vs \(expected) in \(sourceLabel)). Aborting."
             )
         }
-        if slimAudit.entries.count < fullAudit.entries.count {
+        if let expectedCount = sourceMachOCount, slimAudit.entries.count < expectedCount {
             progress?(
-                "Note: slim embed has \(slimAudit.entries.count)/\(fullAudit.entries.count) Mach-Os (extras were already clear / non-DRM)."
+                "Note: slim embed has \(slimAudit.entries.count)/\(expectedCount) Mach-Os (extras were already clear / non-DRM)."
             )
         }
 
@@ -341,17 +366,26 @@ enum DecryptCompanionPackager {
             "embeddedAt": ISO8601DateFormatter().string(from: Date()),
             "hostBundle": Bundle.main.bundleIdentifier ?? "",
             "source": sourceLabel,
-            "machOs": fullAudit.entries.count,
-            "encryptedMachOs": fullAudit.encrypted,
-            "clearMachOs": fullAudit.clear,
-            "plainMachOs": fullAudit.plain,
+            "machOs": sourceMachOCount ?? slimAudit.entries.count,
+            "encryptedMachOs": sourceEncrypted ?? slimAudit.encrypted,
+            "clearMachOs": sourceEncrypted == nil ? slimAudit.clear : sourceClear,
+            "plainMachOs": sourceEncrypted == nil ? slimAudit.plain : sourcePlain,
             "embeddedMachOs": slimAudit.entries.count,
             "embeddedEncryptedMachOs": slimAudit.encrypted,
+            "hostSkippedLiveAudit": liveInstall,
         ]
         if let data = try? PropertyListSerialization.data(fromPropertyList: meta, format: .xml, options: 0) {
             try? data.write(to: embedRoot.appendingPathComponent("manifest.plist"))
         }
         return name
+    }
+
+    /// True when `app` is still under the system App Store container (not a temp Payload).
+    private static func isLiveAppStoreInstall(_ app: URL) -> Bool {
+        let p = app.standardizedFileURL.path
+        return p.contains("/Bundle/Application/")
+            || p.contains("/Containers/Bundle/")
+            || p.contains("/AppTranslocation/")
     }
 
     private static func copySlimAppTree(from src: URL, to dest: URL, progress: ((String) -> Void)?) throws {
@@ -362,21 +396,11 @@ enum DecryptCompanionPackager {
             try fm.copyItem(at: info, to: dest.appendingPathComponent("Info.plist"))
         }
 
-        // Prefer every Mach-O `verifyApp` found (full DRM coverage), then fall back to
-        // structured discovery if verify somehow returned empty.
-        var machos: [URL] = []
-        var seen = Set<String>()
-        if let audit = try? FairPlayDecrypt.verifyApp(at: src) {
-            for e in audit.entries {
-                let file = src.appendingPathComponent(e.path)
-                let key = file.standardizedFileURL.path
-                guard !seen.contains(key), fm.fileExists(atPath: file.path) else { continue }
-                seen.insert(key)
-                machos.append(file)
-            }
-        }
-        if machos.isEmpty {
-            machos = (try? FairPlayDecrypt.collectMachOsForCompanion(under: src)) ?? []
+        // Timeout-safe Mach-O discovery only — never verifyApp on live installs
+        // (cryptid probes hang). Companion audits the EmbeddedPayload copy.
+        let machos = try FairPlayDecrypt.collectMachOsForCompanion(under: src)
+        guard !machos.isEmpty else {
+            throw DecryptError("No Mach-Os found under \(src.lastPathComponent) for companion embed.")
         }
         progress?("Embedding \(machos.count) Mach-O file(s)…")
         for file in machos {
