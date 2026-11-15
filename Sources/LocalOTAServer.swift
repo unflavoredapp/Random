@@ -331,9 +331,12 @@ nonisolated enum ZefvCert {
     static func fetchFromGitHub(token: String?) async throws -> Meta {
         let o = ServerConfig.certRepoOwner, r = ServerConfig.certRepoName, b = ServerConfig.certBranch
         func raw(_ path: String) async throws -> Data {
-            var c = URLComponents(string: "https://api.github.com/repos/\(o)/\(r)/contents/\(path)")!
+            guard var c = URLComponents(string: "https://api.github.com/repos/\(o)/\(r)/contents/\(path)") else {
+                throw CertError.badPack("Bad GitHub contents URL for \(path).")
+            }
             c.queryItems = [URLQueryItem(name: "ref", value: b)]
-            var req = URLRequest(url: c.url!)
+            guard let url = c.url else { throw CertError.badPack("Bad GitHub contents URL for \(path).") }
+            var req = URLRequest(url: url)
             req.cachePolicy = .reloadIgnoringLocalCacheData
             req.setValue("application/vnd.github.raw+json", forHTTPHeaderField: "Accept")
             req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
@@ -686,9 +689,12 @@ extension ZefvCert {
     /// challenge.json from the certs branch (nil if the branch/file doesn't exist yet).
     static func challengeBoard(token: String?) async -> AcmeBoard? {
         let o = ServerConfig.certRepoOwner, r = ServerConfig.certRepoName, b = ServerConfig.certBranch
-        var c = URLComponents(string: "https://api.github.com/repos/\(o)/\(r)/contents/challenge.json")!
+        guard var c = URLComponents(string: "https://api.github.com/repos/\(o)/\(r)/contents/challenge.json") else {
+            return nil
+        }
         c.queryItems = [URLQueryItem(name: "ref", value: b)]
-        var req = URLRequest(url: c.url!)
+        guard let url = c.url else { return nil }
+        var req = URLRequest(url: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("application/vnd.github.raw+json", forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
@@ -765,9 +771,12 @@ extension ZefvCert {
     static func probeCertBranch(token: String?) async -> BranchProbe {
         var p = BranchProbe()
         let o = ServerConfig.certRepoOwner, r = ServerConfig.certRepoName, b = ServerConfig.certBranch
-        var c = URLComponents(string: "https://api.github.com/repos/\(o)/\(r)/git/trees/\(b)")!
+        guard var c = URLComponents(string: "https://api.github.com/repos/\(o)/\(r)/git/trees/\(b)") else {
+            return p
+        }
         c.queryItems = [URLQueryItem(name: "recursive", value: "0")]
-        var req = URLRequest(url: c.url!)
+        guard let url = c.url else { return p }
+        var req = URLRequest(url: url)
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
@@ -919,7 +928,8 @@ nonisolated final class LocalOTAServer: Identifiable, @unchecked Sendable {
             .init(name: "action", value: "download-manifest"),
             .init(name: "url", value: "https://\(Self.host()):\(LocalZSignAPI.shared.port)/ota/\(id.uuidString)/manifest.plist"),
         ]
-        return c.url!
+        // itms-services URLComponents always produce a URL for this shape.
+        return c.url ?? URL(string: "itms-services://?action=download-manifest")!
     }
 
     func response(for resource: String, request: Request) throws -> Response {

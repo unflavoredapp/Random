@@ -95,10 +95,12 @@ final class NativeInstaller: ObservableObject {
 
     enum InstallError: LocalizedError {
         case ipaMissing, busy
+        case message(String)
         var errorDescription: String? {
             switch self {
             case .ipaMissing: return "Signed IPA not found on disk."
             case .busy: return "A native install is already running."
+            case .message(let m): return m
             }
         }
     }
@@ -275,7 +277,10 @@ final class NativeInstaller: ObservableObject {
         enter(.packing)
         let tailURL = p.dir.appendingPathComponent("tail.bin")
         do {
-            let prefix = try await p.prefixTask!.value
+            guard let prefixTask = p.prefixTask else {
+                throw InstallError.message("Native install prefix task missing — retry the install.")
+            }
+            let prefix = try await prefixTask.value
             let original = p.original
             _ = try await Task.detached(priority: .userInitiated) {
                 try ZipDelta.repack(signed: signed, original: original, to: tailURL, prefix: prefix)
@@ -288,7 +293,10 @@ final class NativeInstaller: ObservableObject {
         enter(.uploading)
         p.streamed.setTail(.success(tailURL))
         do {
-            try await p.installTask!.value
+            guard let installTask = p.installTask else {
+                throw InstallError.message("Native install task missing — retry the install.")
+            }
+            try await installTask.value
             progress = 1
             finishTimings()
             AppAutoUpdater.shared.recordInstalled(bundleID: bundleID, name: name, version: version)

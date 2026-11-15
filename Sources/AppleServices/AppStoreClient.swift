@@ -905,13 +905,14 @@ final class AppStoreClient: ObservableObject {
     }
 
     /// Check whether this account can download `adamId` (owns a license).
-    func hasLicense(adamId: Int, account: StorefrontSession) async -> Bool {
+    /// Transport / SAP failures rethrow — only true “no license” returns false.
+    func hasLicense(adamId: Int, account: StorefrontSession) async throws -> Bool {
         do {
             _ = try await fetchDownloadItem(adamId: adamId, account: account)
             return true
         } catch AppStoreClientError.licenseRequired {
             return false
-        } catch {
+        } catch AppStoreClientError.paidApp {
             return false
         }
     }
@@ -940,7 +941,11 @@ final class AppStoreClient: ObservableObject {
         onProgress?("Downloading encrypted IPA\(item.displayVersion.isEmpty ? "" : " v\(item.displayVersion)")…")
         try await downloadFileResumable(from: cdn, to: destination, onProgress: onProgress)
         onProgress?("Writing iTunesMetadata + FairPlay licenses…")
-        try? writeiTunesMetadata(item.metadata, email: account.email, intoIPA: destination)
+        do {
+            try writeiTunesMetadata(item.metadata, email: account.email, intoIPA: destination)
+        } catch {
+            onProgress?("iTunesMetadata write failed (\(error.localizedDescription)) — continuing.")
+        }
         // CDN package has no SC_Info — inject songList sinfs so companion FairPlay can run
         // without a live App Store install (ApplePackage SignatureInjector).
         if !item.sinfs.isEmpty {
@@ -948,7 +953,9 @@ final class AppStoreClient: ObservableObject {
                 try injectSinfs(item.sinfs, intoIPA: destination)
                 onProgress?("Embedded \(item.sinfs.count) FairPlay license(s)…")
             } catch {
-                onProgress?("SINF inject soft-failed (\(error.localizedDescription)) — decrypt may need a live install.")
+                throw AppStoreClientError.message(
+                    "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Remint Store Access and retry."
+                )
             }
         }
         // Fold commerce Set-Cookie into the persisted Store jar for the next cold start.
@@ -1057,13 +1064,19 @@ final class AppStoreClient: ObservableObject {
         try data.write(to: destination, options: .atomic)
 
         onProgress?("Writing iTunesMetadata + FairPlay licenses…")
-        try? writeiTunesMetadata(item.metadata, email: account.email, intoIPA: destination)
+        do {
+            try writeiTunesMetadata(item.metadata, email: account.email, intoIPA: destination)
+        } catch {
+            onProgress?("iTunesMetadata write failed (\(error.localizedDescription)) — continuing.")
+        }
         if !item.sinfs.isEmpty {
             do {
                 try injectSinfs(item.sinfs, intoIPA: destination)
                 onProgress?("Embedded \(item.sinfs.count) FairPlay license(s)…")
             } catch {
-                onProgress?("SINF inject soft-failed (\(error.localizedDescription)) — decrypt may need a live install.")
+                throw AppStoreClientError.message(
+                    "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Remint Store Access and retry."
+                )
             }
         }
         return (destination, item)

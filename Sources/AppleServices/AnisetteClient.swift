@@ -409,24 +409,27 @@ actor AnisetteClient {
         identifier: String,
         spim: Data
     ) async throws -> Data {
-        while true {
-            let json = try await receiveJSON(from: session)
-            guard let result = json["result"] as? String else {
-                throw AnisetteError.provisioning("Missing result in provisioning WebSocket.")
-            }
-            switch result {
-            case "GiveIdentifier":
-                try await sendJSON(["identifier": identifier], to: session)
-            case "GiveStartProvisioningData":
-                try await sendJSON(["spim": spim.base64EncodedString()], to: session)
-            case "GiveEndProvisioningData":
-                guard let cpimB64 = json["cpim"] as? String, let cpim = Data(base64Encoded: cpimB64) else {
-                    throw AnisetteError.provisioning("Missing cpim from anisette server.")
+        try await withProvisionDeadline(seconds: 45) {
+            while true {
+                try Task.checkCancellation()
+                let json = try await self.receiveJSON(from: session)
+                guard let result = json["result"] as? String else {
+                    throw AnisetteError.provisioning("Missing result in provisioning WebSocket.")
                 }
-                return cpim
-            default:
-                let msg = (json["message"] as? String) ?? result
-                throw AnisetteError.provisioning(msg)
+                switch result {
+                case "GiveIdentifier":
+                    try await self.sendJSON(["identifier": identifier], to: session)
+                case "GiveStartProvisioningData":
+                    try await self.sendJSON(["spim": spim.base64EncodedString()], to: session)
+                case "GiveEndProvisioningData":
+                    guard let cpimB64 = json["cpim"] as? String, let cpim = Data(base64Encoded: cpimB64) else {
+                        throw AnisetteError.provisioning("Missing cpim from anisette server.")
+                    }
+                    return cpim
+                default:
+                    let msg = (json["message"] as? String) ?? result
+                    throw AnisetteError.provisioning(msg)
+                }
             }
         }
     }
@@ -440,21 +443,43 @@ actor AnisetteClient {
             "ptm": ptm.base64EncodedString(),
             "tk": tk.base64EncodedString()
         ], to: session)
-        while true {
-            let json = try await receiveJSON(from: session)
-            guard let result = json["result"] as? String else {
-                throw AnisetteError.provisioning("Missing result at end of provisioning.")
-            }
-            switch result {
-            case "ProvisioningSuccess":
-                guard let adi = json["adi_pb"] as? String, let data = Data(base64Encoded: adi), !data.isEmpty else {
-                    throw AnisetteError.provisioning("Missing adi_pb after ProvisioningSuccess.")
+        return try await withProvisionDeadline(seconds: 45) {
+            while true {
+                try Task.checkCancellation()
+                let json = try await self.receiveJSON(from: session)
+                guard let result = json["result"] as? String else {
+                    throw AnisetteError.provisioning("Missing result at end of provisioning.")
                 }
-                return data
-            default:
-                let msg = (json["message"] as? String) ?? result
-                throw AnisetteError.provisioning(msg)
+                switch result {
+                case "ProvisioningSuccess":
+                    guard let adi = json["adi_pb"] as? String, let data = Data(base64Encoded: adi), !data.isEmpty else {
+                        throw AnisetteError.provisioning("Missing adi_pb after ProvisioningSuccess.")
+                    }
+                    return data
+                default:
+                    let msg = (json["message"] as? String) ?? result
+                    throw AnisetteError.provisioning(msg)
+                }
             }
+        }
+    }
+
+    /// Overall deadline for anisette WS provision loops (otherwise `while true` can hang forever).
+    private func withProvisionDeadline<T: Sendable>(
+        seconds: TimeInterval,
+        _ work: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await work() }
+            group.addTask {
+                try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                throw AnisetteError.provisioning("Provisioning timed out after \(Int(seconds))s.")
+            }
+            guard let first = try await group.next() else {
+                throw AnisetteError.provisioning("Provisioning cancelled.")
+            }
+            group.cancelAll()
+            return first
         }
     }
 

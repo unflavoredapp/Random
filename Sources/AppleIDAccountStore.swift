@@ -267,6 +267,9 @@ final class AppleIDStore: ObservableObject {
             clearStaleStoreErrorIfSessionUsable()
             return session
         } catch {
+            // Never soft-restore a prior token after an explicit remint/refresh failure —
+            // that left Settings green while downloads kept 403'ing.
+            if forceRemint || storefrontNeedsRefresh { return nil }
             if let prior, prior.isUsable { return prior }
             return nil
         }
@@ -428,16 +431,22 @@ final class AppleIDStore: ObservableObject {
             // Keep Allow/SMS digits for PET+code / password+code Store mint after GSA.
             await finishRealSignIn(session: session, password: pw)
         } catch {
-            if pendingStoreSession?.isUsable == true {
+            if let storeOnly = pendingStoreSession, storeOnly.isUsable {
                 await finishRealSignInWithStoreOnly(
                     email: email,
                     password: pw,
-                    store: pendingStoreSession!
+                    store: storeOnly
                 )
                 lastError = nil
                 statusMessage = "Signed in · free & purchased downloads ready"
             } else {
-                lastError = error.localizedDescription
+                // Surface Store unlock failure when portal 2FA also failed — don't look signed-in.
+                if pendingStoreSession == nil {
+                    lastError = error.localizedDescription
+                        + " Store unlock with that code also failed — try Resend, or Sign Out / Sign In."
+                } else {
+                    lastError = error.localizedDescription
+                }
                 statusMessage = twoFactorPromptMessage()
                 authPhase = .awaitingTwoFactor
             }
@@ -969,8 +978,10 @@ final class AppleIDStore: ObservableObject {
             lastError = error
         }
 
-        // Prefer a still-usable prior token over a remint wall (downloads often still work).
-        if let existing = prior, existing.isUsable {
+        // Soft-restore only when we were not force-refreshing. After invalidate / 403
+        // remint, recycling a structurally “usable” dead passwordToken leaves Settings
+        // green while downloads keep failing.
+        if !forceRefresh, let existing = prior, existing.isUsable {
             storefrontNeedsRefresh = false
             storeNeedsVerification = false
             return existing
@@ -1013,20 +1024,36 @@ final class AppleIDStore: ObservableObject {
         let pet = storedPET()?.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             var session: StorefrontSession?
+            var petError: Error?
             if let pet, !pet.isEmpty {
-                session = try? await authenticateStoreWithRetries(
-                    email: email,
-                    password: pet,
-                    authCode: digits
-                )
+                do {
+                    session = try await authenticateStoreWithRetries(
+                        email: email,
+                        password: pet,
+                        authCode: digits
+                    )
+                } catch {
+                    petError = error
+                    session = nil
+                }
             }
             if session?.isUsable != true {
                 // Hit MZFinance with password+code (not ensure→reuse stale flags).
-                session = try await authenticateStoreWithRetries(
-                    email: email,
-                    password: password,
-                    authCode: digits
-                )
+                do {
+                    session = try await authenticateStoreWithRetries(
+                        email: email,
+                        password: password,
+                        authCode: digits
+                    )
+                } catch {
+                    // Prefer password-path error; keep PET failure as context if both fail.
+                    if let petError {
+                        throw AppStoreClientError.message(
+                            "Store unlock failed (\(error.localizedDescription)). PET path also failed: \(petError.localizedDescription)."
+                        )
+                    }
+                    throw error
+                }
             }
             guard let session, session.isUsable else {
                 throw AppStoreClientError.message("App Store sign-in failed after retries.")

@@ -133,18 +133,17 @@ enum DecryptCompanionInstaller {
         try? await Task.sleep(nanoseconds: 800_000_000)
         let opened = await openCompanion(bundleID: entry.bundleID, embeddedName: package.embeddedAppName)
         if !opened {
-            progress?("Installed — open “Tetherless Decrypt” from the Home Screen to finish decrypt.")
+            progress?(
+                "Installed — open “Tetherless Decrypt” from the Home Screen (Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks)."
+            )
         }
         return entry.bundleID
     }
 
     @discardableResult
     static func openCompanion(bundleID: String, embeddedName: String) async -> Bool {
-        // Prefer LaunchServices open by companion bundle id. Host no longer
-        // registers tetherless-decrypt:// — that scheme belongs to the companion IPA.
-        if openApplication(bundleID: bundleID) {
-            return true
-        }
+        // Prefer the companion URL scheme — UIApplication.open reports real success.
+        // LS openApplicationWithBundleID: does not return a reliable Bool.
         var comps = URLComponents()
         comps.scheme = DecryptCompanionPackager.companionURLScheme
         comps.host = "run"
@@ -153,23 +152,30 @@ enum DecryptCompanionInstaller {
             URLQueryItem(name: "bundle", value: bundleID),
         ]
         if let url = comps.url {
-            return await UIApplication.shared.open(url)
+            if await UIApplication.shared.open(url) {
+                return true
+            }
+        }
+        // Best-effort LaunchServices kick — do not claim success from a void perform.
+        openApplicationBestEffort(bundleID: bundleID)
+        // Honest signal: scheme registered means companion is installed (Trust may still block).
+        if let probe = URL(string: "\(DecryptCompanionPackager.companionURLScheme)://") {
+            return UIApplication.shared.canOpenURL(probe)
         }
         return false
     }
 
-    private static func openApplication(bundleID: String) -> Bool {
+    private static func openApplicationBestEffort(bundleID: String) {
         guard let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type else {
-            return false
+            return
         }
         let selDefault = NSSelectorFromString("defaultWorkspace")
         guard workspaceClass.responds(to: selDefault),
               let workspace = workspaceClass.perform(selDefault)?.takeUnretainedValue() as? NSObject else {
-            return false
+            return
         }
         let selOpen = NSSelectorFromString("openApplicationWithBundleID:")
-        guard workspace.responds(to: selOpen) else { return false }
+        guard workspace.responds(to: selOpen) else { return }
         _ = workspace.perform(selOpen, with: bundleID)
-        return true
     }
 }
