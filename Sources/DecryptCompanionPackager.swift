@@ -183,9 +183,22 @@ enum DecryptCompanionPackager {
             "MinimumOSVersion": (host.infoDictionary?["MinimumOSVersion"] as? String)
                 ?? (host.infoDictionary?["LSMinimumSystemVersion"] as? String)
                 ?? "15.0",
-            "UILaunchScreen": [String: Any](),
+            // Full-screen phone app — empty launch dict + missing RequiresFullScreen
+            // letterboxed the console as a floating card under the “← TetherLess” banner.
+            "UILaunchScreen": [
+                "UIColorName": "LaunchBackground"
+            ] as [String: Any],
+            "UIRequiresFullScreen": true,
+            "UIStatusBarStyle": "UIStatusBarStyleLightContent",
+            "UIViewControllerBasedStatusBarAppearance": true,
             "UIRequiredDeviceCapabilities": ["arm64"],
             "UISupportedInterfaceOrientations": ["UIInterfaceOrientationPortrait"],
+            "CFBundleIcons": [
+                "CFBundlePrimaryIcon": [
+                    "CFBundleIconFiles": ["AppIcon60x60"],
+                    "CFBundleIconName": "AppIcon"
+                ]
+            ],
             // Only the companion owns tetherless-decrypt:// — host must not register
             // that scheme or iOS may reopen TetherLess instead of this IPA.
             "CFBundleURLTypes": [[
@@ -382,6 +395,51 @@ enum DecryptCompanionPackager {
                 try? fm.removeItem(at: out)
                 try? fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? fm.copyItem(at: dir, to: out)
+            }
+        }
+
+        // App icon PNGs so the companion console can show the target (not a placeholder).
+        try copyAppIcons(from: src, to: dest)
+    }
+
+    private static func copyAppIcons(from src: URL, to dest: URL) throws {
+        let fm = FileManager.default
+        let info = NSDictionary(contentsOf: src.appendingPathComponent("Info.plist"))
+        var names: [String] = []
+        if let icons = info?["CFBundleIcons"] as? [String: Any],
+           let primary = icons["CFBundlePrimaryIcon"] as? [String: Any],
+           let files = primary["CFBundleIconFiles"] as? [String] {
+            names.append(contentsOf: files)
+        }
+        names.append(contentsOf: [
+            "AppIcon60x60@2x", "AppIcon60x60@3x", "AppIcon76x76@2x~ipad",
+            "iTunesArtwork", "iTunesArtwork@2x", "Icon", "Icon@2x", "Icon-60", "Icon-60@2x", "Icon-60@3x"
+        ])
+        let pngs = (try? fm.contentsOfDirectory(at: src, includingPropertiesForKeys: nil))?
+            .filter { $0.pathExtension.lowercased() == "png" } ?? []
+        var copied = Set<String>()
+        for base in names {
+            for hit in pngs where hit.deletingPathExtension().lastPathComponent.hasPrefix(base)
+                || hit.lastPathComponent.hasPrefix(base) {
+                let key = hit.lastPathComponent
+                guard copied.insert(key).inserted else { continue }
+                let out = dest.appendingPathComponent(key)
+                try? fm.removeItem(at: out)
+                try? fm.copyItem(at: hit, to: out)
+            }
+        }
+        // Largest AppIcon* / Icon* leftover if plist names missed.
+        if copied.isEmpty {
+            let iconish = pngs.filter {
+                $0.lastPathComponent.localizedCaseInsensitiveContains("AppIcon")
+                    || $0.lastPathComponent.localizedCaseInsensitiveContains("Icon")
+            }
+            if let largest = iconish.max(by: {
+                ((try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                    < ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+            }) {
+                let out = dest.appendingPathComponent(largest.lastPathComponent)
+                try? fm.copyItem(at: largest, to: out)
             }
         }
     }

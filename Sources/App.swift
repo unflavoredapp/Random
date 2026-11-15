@@ -25,6 +25,7 @@ struct UnzipDropApp: App {
             if DecryptCompanionRuntime.isCompanionProcess {
                 // Installed “Tetherless Decrypt” companion (cloned binary + EmbeddedPayload).
                 DecryptCompanionRoot()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .preferredColorScheme(.dark)
             } else {
                 RootView()
