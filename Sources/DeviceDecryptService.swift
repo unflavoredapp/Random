@@ -747,7 +747,7 @@ final class DeviceDecryptService: ObservableObject {
                 }
                 if lower.contains("403") || lower.contains("client identity") {
                     // Prefer installed companion embed before backend when the app is on disk
-                    // (unblocks Cake Wallet / TestFlight without airshare.lol TLS).
+                    // (unblocks Cake Wallet / TestFlight without waiting on API fetch).
                     if !bundleID.isEmpty,
                        let installed = await resolveInstalledAppURL(bundleID: bundleID) {
                         publishDecryptProgress(
@@ -763,12 +763,11 @@ final class DeviceDecryptService: ObservableObject {
                         markCompanionHandoff(displayName: displayName)
                         return
                     }
-                    // Option 2: phone keeps FairPlay; backend runs volumeStore + CDN.
-                    // Skip when the configured API host can't do TLS (airshare.lol currently
-                    // serves a mismatched cert → “A TLS error caused the secure connection…”).
+                    // Option 2: phone keeps FairPlay; backend (tetherless.dev) runs volumeStore + CDN.
+                    // Skip when a legacy API host override still points at a broken TLS host.
                     if LocalDecryptBridge.backendTLSLikelyBroken {
                         throw DecryptError(
-                            "App Store download failed (\(detail)). Backend IPA fetch skipped — API host TLS is broken (\(DecryptClient.siteBase)). Decrypt from Library if the app is already installed, or fix as_api_base / as_site_base."
+                            "App Store download failed (\(detail)). Backend IPA fetch skipped — API host TLS is broken (\(DecryptClient.siteBase)). Clear as_api_base / as_site_base to use tetherless.dev, or Decrypt from Library if installed."
                         )
                     }
                     publishDecryptProgress(
