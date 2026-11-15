@@ -550,9 +550,11 @@ enum FairPlayDecrypt {
     /// Prefer Manifest `SinfPaths[0]`, else first regular file under `SC_Info/*.sinf`.
     static func findFolderRootSinf(in app: URL) -> URL? {
         let man = app.appendingPathComponent("SC_Info/Manifest.plist")
-        if let plist = withTimeout(seconds: 5, work: {
+        // withTimeout wraps T?; plist reads are already T? — flatten like replicateSinfs.
+        let plist: [String: Any]? = withTimeout(seconds: 5, work: {
             NSDictionary(contentsOf: man) as? [String: Any]
-        }),
+        }) ?? nil
+        if let plist,
            let paths = plist["SinfPaths"] as? [String],
            let first = paths.first, !first.isEmpty {
             let url = app.appendingPathComponent(first)
