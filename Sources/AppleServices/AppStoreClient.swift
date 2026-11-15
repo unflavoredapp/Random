@@ -1128,16 +1128,12 @@ final class AppStoreClient: ObservableObject {
         if let ext = externalVersionId, !ext.isEmpty {
             body["externalVersionId"] = ext
         }
-        // Match ipatool / ApplePackage: Configurator UA + token (+ cookies). Spoof OS
-        // identity on buyProduct is a frequent HTTP 204/403 cause.
-        let (dict, respHeaders, status) = try await postPlist(
+        // Match ipatool / ApplePackage: SAP-signed body + Configurator UA + token.
+        let (dict, respHeaders, status) = try await postCommercePlist(
             url: host,
             body: body,
             anisette: anisette,
-            extraHeaders: commerceHeaders(account),
-            forcePristineClientInfo: true,
-            stripSpoofIdentity: true,
-            authenticateAnisetteStyle: true
+            account: account
         )
         rememberCommerceCookies(from: respHeaders)
         let failure = string(dict["failureType"])
@@ -1292,16 +1288,13 @@ final class AppStoreClient: ObservableObject {
         if let ext = externalVersionId, !ext.isEmpty {
             body[versionKey] = ext
         }
-        // Commerce download: X-Token + DSID + storefront (+ auth cookies). Keep spoof OS
-        // headers off the MZFinance / dispatch edge — pin via externalVersionId instead.
-        let (dict, respHeaders, _) = try await postPlist(
+        // Commerce download: SAP ActionSignature + X-Token (ipatool / ApplePackage).
+        // Keep spoof OS headers off — pin via externalVersionId instead.
+        let (dict, respHeaders, _) = try await postCommercePlist(
             url: endpoint,
             body: body,
             anisette: anisette,
-            extraHeaders: commerceHeaders(account),
-            forcePristineClientInfo: true,
-            stripSpoofIdentity: true,
-            authenticateAnisetteStyle: true
+            account: account
         )
         rememberCommerceCookies(from: respHeaders)
         let failure = string(dict["failureType"])
@@ -1420,6 +1413,39 @@ final class AppStoreClient: ObservableObject {
             headers["Cookie"] = cookie
         }
         return headers
+    }
+
+    /// SAP-sign commerce POST bodies the same way authenticate does (ipatool #525 / bag).
+    private func postCommercePlist(
+        url: String,
+        body: [String: Any],
+        anisette: AnisetteHeaders,
+        account: StorefrontSession
+    ) async throws -> (dict: [String: Any], headers: [String: String], status: Int) {
+        let bodyData = try PropertyListSerialization.data(
+            fromPropertyList: body, format: .xml, options: 0
+        )
+        var headers = commerceHeaders(account)
+        do {
+            let signer = try await SAPSigner.connect()
+            let signature = try await signer.sign(bodyData)
+            headers["X-Apple-ActionSignature"] = signature.base64EncodedString()
+        } catch {
+            // Unsigned commerce often HTML-403s on current pods — surface a clear remint hint.
+            throw AppStoreClientError.message(
+                "Store SAP signing failed (\(error.localizedDescription)). Tap Retry Store unlock."
+            )
+        }
+        return try await postPlist(
+            url: url,
+            body: body,
+            bodyData: bodyData,
+            anisette: anisette,
+            extraHeaders: headers,
+            forcePristineClientInfo: true,
+            stripSpoofIdentity: true,
+            authenticateAnisetteStyle: true
+        )
     }
 
     private func rememberCommerceCookies(from headers: [String: String]) {

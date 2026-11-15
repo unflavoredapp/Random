@@ -420,6 +420,7 @@ struct SettingsAppleIDCard: View {
 
                 AuthClientSpoofCard()
                 StoreDeviceSpoofCard()
+                AnisetteServerCard()
                 PhoneDecryptWorkerCard()
             }
             .padding(20)
@@ -793,6 +794,107 @@ struct AuthClientSpoofCard: View {
 
     private func persist() {
         AuthClientSpoof.current = spoof
+    }
+}
+
+/// SideStore-style anisette v3 server picker (backend list + built-in fallbacks).
+struct AnisetteServerCard: View {
+    @State private var current = ""
+    @State private var servers: [String] = AnisetteClient.builtInServers
+    @State private var status: String?
+
+    var body: some View {
+        GlassCard(corner: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Anisette server")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("Store Access uses a remote v3 anisette host (SideStore / jkcoxson pattern). Rotate after HTTP 403, or point at your site’s `/anisette` if you host one.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.45))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Text(current.isEmpty ? "Loading…" : current)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(TetherlessPalette.accent)
+                    .lineLimit(2)
+
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(servers, id: \.self) { server in
+                            let on = server.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+                                == current.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+                            Button {
+                                Task { await select(server) }
+                            } label: {
+                                Text(shortLabel(server))
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(on ? .white : .white.opacity(0.7))
+                                    .padding(.horizontal, 10)
+                                    .padding(.vertical, 8)
+                                    .background(on ? TetherlessPalette.accent : Color.white.opacity(0.08), in: Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+
+                Button {
+                    Task { await rotate() }
+                } label: {
+                    Text("Rotate anisette server")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.white.opacity(0.10), in: Capsule())
+                }
+                .buttonStyle(.plain)
+
+                if let status {
+                    Text(status)
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            }
+        }
+        .task { await reload() }
+    }
+
+    private func shortLabel(_ server: String) -> String {
+        URL(string: server)?.host ?? server
+    }
+
+    private func reload() async {
+        let url = await AnisetteClient.shared.serverURL
+        current = url.absoluteString
+        var list = AnisetteClient.builtInServers
+        if let req = try? LocalDecryptBridge.request("api/store/anisette-servers"),
+           let (_, json) = try? await LocalDecryptBridge.sendRaw(req),
+           let rows = json["servers"] as? [String] {
+            list = rows + list
+        }
+        var seen = Set<String>()
+        servers = list.filter { seen.insert($0.lowercased()).inserted }
+        if !servers.contains(where: { $0.caseInsensitiveCompare(current) == .orderedSame }) {
+            servers.insert(current, at: 0)
+        }
+    }
+
+    private func select(_ server: String) async {
+        guard let url = URL(string: server) else { return }
+        await AnisetteClient.shared.setServerURL(url)
+        current = url.absoluteString
+        status = "Using \(url.host ?? server) — tap Retry Store unlock."
+        await AppleIDStore.shared.requestStoreVerificationPrompt()
+    }
+
+    private func rotate() async {
+        let next = await AnisetteClient.shared.rotateServer()
+        current = next.absoluteString
+        status = "Rotated to \(next.host ?? next.absoluteString) — reminting Store…"
+        await AppleIDStore.shared.requestStoreVerificationPrompt()
+        await reload()
     }
 }
 

@@ -656,7 +656,13 @@ final class DeviceDecryptService: ObservableObject {
                 if (lower.contains("403") || lower.contains("client identity")), !identityRetryUsed {
                     identityRetryUsed = true
                     StoreDeviceSpoof.applyThisiPhone()
-                    publishDecryptProgress("Store rejected identity (HTTP 403) — This iPhone + reminting session, retrying…")
+                    // SideStore-style: rotate anisette server, then remint passwordToken.
+                    let nextAni = await AnisetteClient.shared.rotateServer()
+                    publishDecryptProgress(
+                        "Store HTTP 403 — rotated anisette to \(nextAni.host ?? "server"), reminting session…"
+                    )
+                    await AnisetteClient.shared.invalidate(resetProvisioning: true)
+                    SAPSigner.invalidateCache()
                     AppleIDStore.shared.invalidateStorefrontSession()
                     if let refreshed = await AppleIDStore.shared.reinforceStoreConnection(forceRemint: true) {
                         account = refreshed
@@ -665,7 +671,7 @@ final class DeviceDecryptService: ObservableObject {
                 }
                 if lower.contains("403") || lower.contains("client identity") {
                     throw DecryptError(
-                        "App Store download failed (\(detail)). Store identity rejection — not missing FairPlay keys. Session was reminted with This iPhone; tap Retry Store unlock if it still fails."
+                        "App Store download failed (\(detail)). Store identity rejection after anisette rotate + remint. In Settings › Store Access pick another Anisette server (or enable Phone Worker / Telegram for backend decrypt), then Retry Store unlock."
                     )
                 }
                 throw DecryptError(
