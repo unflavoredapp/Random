@@ -674,10 +674,9 @@ final class AppStoreClient: ObservableObject {
         do {
             // DAAP success (including empty library) is authoritative.
             return try await StoreOwnedAppsClient.fetch(account: account)
-        } catch AppStoreClientError.tokenExpired {
-            throw AppStoreClientError.tokenExpired
         } catch {
-            // Fall through to legacy MZFinance for older sessions / partial rollout.
+            // Fall through to legacy MZFinance — never escalate Owned failures to tokenExpired
+            // here (that used to wipe green Store Access).
         }
 
         do {
@@ -699,19 +698,19 @@ final class AppStoreClient: ObservableObject {
             )
             let failure = string(dict["failureType"])
             let customer = string(dict["customerMessage"])
+            // Legacy expiry codes: soft-empty for Owned listing (downloads remint on demand).
             if failure == "2034" || failure == "2042" || failure == "1008" || failure == "9610" {
-                throw AppStoreClientError.tokenExpired
+                return []
             }
             if !failure.isEmpty {
                 throw AppStoreClientError.message(customer.isEmpty ? "Purchase history failed (\(failure))." : customer)
             }
             return parseLegacyPurchaseHistory(dict)
-        } catch AppStoreClientError.tokenExpired {
-            throw AppStoreClientError.tokenExpired
         } catch {
-            // Soft: Owned list is convenience — don't fail Decrypt when Store Access is green.
+            // Soft: Owned list is convenience — empty is better than wiping Store Access.
             let m = error.localizedDescription.lowercased()
-            if m.contains("404") || m.contains("204") || m.contains("non-plist") || m.contains("403") {
+            if m.contains("404") || m.contains("204") || m.contains("non-plist") || m.contains("403")
+                || m.contains("owned list") || m.contains("token expired") {
                 return []
             }
             throw error

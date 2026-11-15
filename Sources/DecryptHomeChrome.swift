@@ -162,6 +162,10 @@ struct DecryptOwnedStoreAppsSection: View {
                             || loadError.localizedCaseInsensitiveContains("204")
                             || loadError.localizedCaseInsensitiveContains("non-plist")
                             || loadError.localizedCaseInsensitiveContains("owned")
+                            || loadError.localizedCaseInsensitiveContains("token expired")
+                            || loadError.localizedCaseInsensitiveContains("session expired")
+                            || loadError.localizedCaseInsensitiveContains("search still works")
+                            || loadError.localizedCaseInsensitiveContains("search works")
                         Text(soft
                              ? "Owned list couldn’t load from Apple right now. Search still works for free & purchased apps — Store Access can stay signed in."
                              : loadError)
@@ -229,15 +233,31 @@ struct DecryptOwnedStoreAppsSection: View {
         defer { loading = false }
         do {
             owned = try await DeviceDecryptService.shared.ownedStoreApps()
+            if owned.isEmpty, AppleIDStore.shared.storefrontSession()?.isUsable == true {
+                // Soft empty — keep tip mild when Store Access is already green.
+                loadError = nil
+            }
         } catch AppStoreClientError.needsTwoFactor {
             owned = []
             loadError = "Store needs the first Sign In trust — Sign Out, then Sign In once under Settings › Store Access. The Allow / verification code unlocks Store automatically (no second text)."
             AppleIDStore.shared.noteStoreNeedsVerification()
         } catch {
             owned = []
-            loadError = error.localizedDescription
-            if error.localizedDescription.localizedCaseInsensitiveContains("verification") {
-                AppleIDStore.shared.noteStoreNeedsVerification()
+            let detail = error.localizedDescription
+            if AppleIDStore.shared.storefrontSession()?.isUsable == true {
+                loadError = "Owned list couldn’t load right now. Store Access is still signed in — Search works for free & purchased apps."
+            } else if detail.localizedCaseInsensitiveContains("token expired")
+                        || detail.localizedCaseInsensitiveContains("session expired") {
+                loadError = "Store Access needs a refresh — open Settings › Store Access and tap Retry Store unlock (or Sign Out → Sign In once)."
+            } else {
+                loadError = detail
+            }
+            if detail.localizedCaseInsensitiveContains("verification")
+                || AppleIDStore.shared.storefrontSession()?.isUsable != true {
+                // Only flag verification when we truly have no usable Store session.
+                if AppleIDStore.shared.storefrontSession()?.isUsable != true {
+                    AppleIDStore.shared.noteStoreNeedsVerification()
+                }
             }
         }
     }
