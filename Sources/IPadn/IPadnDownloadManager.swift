@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import IDeviceSwift
 import Network
 import UniformTypeIdentifiers
 import UIKit
