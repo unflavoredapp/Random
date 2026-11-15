@@ -991,30 +991,92 @@ final class AppStoreClient: ObservableObject {
             }
         }
 
-        onProgress?("Ensuring App Store license…")
+        // Prefer owned volumeStore/redownload first — free Apple apps (TestFlight) and already-
+        // purchased titles often 403 on buyProduct while redownload still works.
         do {
-            try await purchaseFreeLicense(
+            var result = try await downloadIPA(
                 adamId: adamId,
                 account: account,
-                price: price,
-                externalVersionId: pin.isEmpty ? nil : pin
+                destination: destination,
+                externalVersionId: pin.isEmpty ? nil : pin,
+                onProgress: onProgress
             )
-        } catch AppStoreClientError.message(let m)
-            where m.localizedCaseInsensitiveContains("already") || m.localizedCaseInsensitiveContains("license") {
-            // Already owned — continue.
-        } catch let e as AppStoreClientError {
-            if case .tokenExpired = e { throw e }
-            // License already exists often surfaces as HTTP 500 in ipatool — continue to download.
+            return try await finishPurchaseDownload(
+                result: result,
+                adamId: adamId,
+                account: account,
+                pin: pin,
+                destination: destination,
+                onProgress: onProgress
+            )
+        } catch let first as AppStoreClientError where Self.shouldAttemptLicenseThenDownload(first) {
+            onProgress?("Ensuring App Store license…")
+            do {
+                try await purchaseFreeLicense(
+                    adamId: adamId,
+                    account: account,
+                    price: price,
+                    externalVersionId: pin.isEmpty ? nil : pin
+                )
+            } catch AppStoreClientError.message(let m)
+                where m.localizedCaseInsensitiveContains("already") || m.localizedCaseInsensitiveContains("license") {
+                // Already owned — continue.
+            } catch let e as AppStoreClientError {
+                if case .tokenExpired = e { throw e }
+                if case .paidApp = e { throw e }
+                if case .licenseRequired = e { throw e }
+                // License already exists often surfaces as HTTP 500 in ipatool — continue.
+            }
+            let result = try await downloadIPA(
+                adamId: adamId,
+                account: account,
+                destination: destination,
+                externalVersionId: pin.isEmpty ? nil : pin,
+                onProgress: onProgress
+            )
+            return try await finishPurchaseDownload(
+                result: result,
+                adamId: adamId,
+                account: account,
+                pin: pin,
+                destination: destination,
+                onProgress: onProgress
+            )
         }
+    }
 
-        var result = try await downloadIPA(
-            adamId: adamId,
-            account: account,
-            destination: destination,
-            externalVersionId: pin.isEmpty ? nil : pin,
-            onProgress: onProgress
-        )
+    /// After a failed owned download, buy+download may recover (missing license / soft 5002).
+    private static func shouldAttemptLicenseThenDownload(_ error: AppStoreClientError) -> Bool {
+        switch error {
+        case .licenseRequired:
+            return true
+        case .message(let m):
+            let lower = m.lowercased()
+            return lower.contains("no download")
+                || lower.contains("5002")
+                || lower.contains("license")
+                || lower.contains("empty")
+        case .network(let m):
+            let lower = m.lowercased()
+            // Don't buy-first on identity 403 — remint/session fix is the right recovery.
+            return lower.contains("204")
+                || lower.contains("404")
+                || lower.contains("500")
+                || lower.contains("non-plist")
+        default:
+            return false
+        }
+    }
 
+    private func finishPurchaseDownload(
+        result: (url: URL, item: StoreDownloadItem),
+        adamId: Int,
+        account: StorefrontSession,
+        pin: String,
+        destination: URL,
+        onProgress: ((String) -> Void)?
+    ) async throws -> (url: URL, item: StoreDownloadItem) {
+        var result = result
         // If spoof wanted a lower OS but Apple still handed a newer-min package, walk older IDs.
         let spoof = StoreDeviceSpoof.current
         if spoof.enabled,
@@ -1416,7 +1478,10 @@ final class AppStoreClient: ObservableObject {
         )
         for (k, v) in extraHeaders {
             if stripSpoofIdentity,
-               k == "X-Apple-I-OS-Version" || k == "X-Apple-I-Requested-Model" {
+               k == "X-Apple-I-OS-Version"
+                || k == "X-Apple-I-Requested-Model"
+                || k == "X-Apple-I-Device-Type"
+                || k == "X-Apple-Client-Application" {
                 continue
             }
             req.setValue(v, forHTTPHeaderField: k)
@@ -1616,6 +1681,7 @@ final class AppStoreClient: ObservableObject {
 
     private func downloadFile(from url: URL, to destination: URL) async throws {
         var req = URLRequest(url: url)
+        // Match commerce: plain Configurator UA when spoof is off (no invented iOS/build tokens).
         req.setValue(storeUserAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         for (k, v) in StoreDeviceSpoof.current.storeIdentityHeaders() {

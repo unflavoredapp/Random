@@ -656,15 +656,16 @@ final class DeviceDecryptService: ObservableObject {
                 if (lower.contains("403") || lower.contains("client identity")), !identityRetryUsed {
                     identityRetryUsed = true
                     StoreDeviceSpoof.applyThisiPhone()
-                    publishDecryptProgress("Store rejected spoof identity (HTTP 403) — switched to This iPhone, retrying…")
-                    if let refreshed = await AppleIDStore.shared.reinforceStoreConnection() {
+                    publishDecryptProgress("Store rejected identity (HTTP 403) — This iPhone + reminting session, retrying…")
+                    AppleIDStore.shared.invalidateStorefrontSession()
+                    if let refreshed = await AppleIDStore.shared.reinforceStoreConnection(forceRemint: true) {
                         account = refreshed
                     }
                     continue downloadAttempt
                 }
                 if lower.contains("403") || lower.contains("client identity") {
                     throw DecryptError(
-                        "App Store download failed (\(detail)). Store identity rejection — not missing FairPlay keys. Spoof was reset to This iPhone; tap Retry or re-auth Store Access if it still fails."
+                        "App Store download failed (\(detail)). Store identity rejection — not missing FairPlay keys. Session was reminted with This iPhone; tap Retry Store unlock if it still fails."
                     )
                 }
                 throw DecryptError(

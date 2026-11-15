@@ -261,17 +261,20 @@ struct StoreDeviceSpoof: Equatable, Sendable {
 
     /// Primary store User-Agent for MZFinance + CDN.
     func storeUserAgent(fallbackConfigurator: String) -> String {
+        let configuratorBase = fallbackConfigurator.isEmpty
+            ? "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
+            : fallbackConfigurator
+        // Spoof off → plain Configurator UA. Inventing iOS/model/build tokens with a guessed
+        // build string still 403s CDN / volumeStore even when `enabled` is false.
+        guard enabled else { return configuratorBase }
+
         let ios = effectiveIOSVersion
         let model = effectiveModel
         let build = effectiveBuild
         let hwp = effectiveHardwarePlatform
         let dt = effectiveDeviceType
-        let activeStyle = enabled ? style : StoreUserAgentStyle.configuratorIOS
-        let configuratorBase = fallbackConfigurator.isEmpty
-            ? "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
-            : fallbackConfigurator
 
-        switch activeStyle {
+        switch style {
         case .configuratorIOS:
             // ipatool-py pattern: Configurator UA + iOS/hwp tokens Apple’s store still honors.
             return "\(configuratorBase) iOS/\(ios) model/\(model) hwp/\(hwp) build/\(build)"
@@ -285,16 +288,15 @@ struct StoreDeviceSpoof: Equatable, Sendable {
     }
 
     /// Extra identity headers alongside UA. Keep conservative — exotic keys have 404’d some pods.
+    /// Empty when spoof is off so CDN / volumeStore match authenticate’s pristine identity.
     func storeIdentityHeaders() -> [String: String] {
-        var headers: [String: String] = [
+        guard enabled else { return [:] }
+        return [
             "X-Apple-I-Device-Type": effectiveModel.hasPrefix("iPad") ? "2" : "1",
             "X-Apple-Client-Application": "Software",
+            "X-Apple-I-OS-Version": effectiveIOSVersion,
+            "X-Apple-I-Requested-Model": effectiveModel,
         ]
-        if enabled {
-            headers["X-Apple-I-OS-Version"] = effectiveIOSVersion
-            headers["X-Apple-I-Requested-Model"] = effectiveModel
-        }
-        return headers
     }
 
     /// Rewrite anisette `X-MMe-Client-Info` so store requests claim the spoofed device/OS.
