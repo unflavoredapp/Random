@@ -258,10 +258,11 @@ final class AppleIDStore: ObservableObject {
             sanitizeStoreIdentityForAccountAPIs()
             await AnisetteClient.shared.invalidate(resetProvisioning: false)
         }
+        // Keep Allow/SMS digits when Retrying — PET alone often still needs that code.
         await connectStoreSession(
             email: email,
             password: password,
-            authCode: force ? nil : pendingStoreAuthCode,
+            authCode: pendingStoreAuthCode,
             prefetched: nil,
             pet: storedPET(),
             teamName: activeAccount?.teamName
@@ -371,10 +372,7 @@ final class AppleIDStore: ObservableObject {
 
         do {
             let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
-            // clear authCode for connect when store-first failed — password-only after GSA.
-            if pendingStoreSession?.isUsable != true {
-                pendingStoreAuthCode = nil
-            }
+            // Keep Allow/SMS digits for PET+code / password+code Store mint after GSA.
             await finishRealSignIn(session: session, password: pw)
         } catch {
             if pendingStoreSession?.isUsable == true {
@@ -987,14 +985,15 @@ final class AppleIDStore: ObservableObject {
     }
 
     /// Recovery when Store never piggybacked the first trust / Owned HTTP 204:
-    /// clear dead token, pristine Client-Info, password-only re-mint. No second Store SMS.
+    /// clear dead token, pristine Client-Info, re-mint with PET (+ Allow digits if still held).
     func requestStoreVerificationPrompt() async {
         storefrontNeedsRefresh = true
-        pendingStoreAuthCode = nil
         lastError = nil
         statusMessage = storedPET() == nil
             ? "No Store trust token yet — Sign Out, then Sign In once so Apple’s Allow code can mint Store…"
-            : "Retrying Store with your Apple ID trust token…"
+            : (pendingStoreAuthCode?.count == 6
+                ? "Retrying Store with trust token + the same verification code…"
+                : "Retrying Store with your Apple ID trust token…")
         // Drop stray GSA SMS challenges — Store must not ask for its own code.
         if GSAAuthClient.shared.hasPendingTwoFactor {
             GSAAuthClient.shared.cancel()
@@ -1158,50 +1157,61 @@ final class AppleIDStore: ObservableObject {
             return
         }
 
-        // 1) PET exchange — standard GSA → Store bridge after Allow / SMS trust.
+        let code = (authCode ?? "").filter(\.isNumber)
         let resolvedPET = (pet ?? storedPET())?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        var lastStoreError: String?
+
+        func succeed(_ store: StorefrontSession) {
+            persistStoreSession(store)
+            storeNeedsVerification = false
+            pendingStoreAuthCode = nil
+            clearStoredPET()
+            lastError = nil
+            statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
+                ?? "Signed in · free & purchased downloads ready"
+        }
+
+        // 1) PET + same Allow/SMS digits — PET alone often still reports needsTwoFactor.
+        if let resolvedPET, !resolvedPET.isEmpty, code.count == 6 {
+            statusMessage = "Unlocking Store with trust token + code…"
+            do {
+                let store = try await authenticateStoreWithRetries(
+                    email: email, password: resolvedPET, authCode: code
+                )
+                if store.isUsable { succeed(store); return }
+            } catch {
+                lastStoreError = "PET+code: \(error.localizedDescription)"
+            }
+        }
+
+        // 2) PET alone.
         if let resolvedPET, !resolvedPET.isEmpty {
             statusMessage = "Unlocking Store with Apple ID trust token…"
             do {
                 let store = try await authenticateStoreWithRetries(
-                    email: email,
-                    password: resolvedPET,
-                    authCode: ""
+                    email: email, password: resolvedPET, authCode: ""
                 )
-                if store.isUsable {
-                    persistStoreSession(store)
-                    storeNeedsVerification = false
-                    pendingStoreAuthCode = nil
-                    clearStoredPET()
-                    statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
-                        ?? "Signed in · free & purchased downloads ready"
-                    return
-                }
+                if store.isUsable { succeed(store); return }
             } catch {
-                lastError = "Store PET unlock: \(error.localizedDescription)"
+                lastStoreError = "Store PET unlock: \(error.localizedDescription)"
             }
         }
 
-        // 2) SMS-style OTP still works when digits are real store codes.
-        let code = (authCode ?? "").filter(\.isNumber)
+        // 3) Password + same digits (SMS-style store OTPs).
         if code.count == 6 {
-            if let store = try? await authenticateStoreWithRetries(
-                email: email,
-                password: password,
-                authCode: code
-            ), store.isUsable {
-                persistStoreSession(store)
-                storeNeedsVerification = false
-                pendingStoreAuthCode = nil
-                clearStoredPET()
-                statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
-                    ?? "Signed in · free & purchased downloads ready"
-                return
+            statusMessage = "Unlocking Store with the same verification code…"
+            do {
+                let store = try await authenticateStoreWithRetries(
+                    email: email, password: password, authCode: code
+                )
+                if store.isUsable { succeed(store); return }
+            } catch {
+                lastStoreError = "password+code: \(error.localizedDescription)"
             }
         }
 
-        // 3) Legacy password-only (non-2FA / rare warm sessions).
+        // 4) Legacy password-only (non-2FA / rare warm sessions).
         for attempt in 1...2 {
             statusMessage = attempt == 1
                 ? "Unlocking Store from the same Apple ID trust…"
@@ -1210,18 +1220,13 @@ final class AppleIDStore: ObservableObject {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 await AnisetteClient.shared.invalidate(resetProvisioning: false)
             }
-            if let store = try? await AppStoreClient.shared.authenticate(
-                email: email,
-                password: password,
-                authCode: nil
-            ), store.isUsable {
-                persistStoreSession(store)
-                storeNeedsVerification = false
-                pendingStoreAuthCode = nil
-                clearStoredPET()
-                statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
-                    ?? "Signed in · free & purchased downloads ready"
-                return
+            do {
+                let store = try await AppStoreClient.shared.authenticate(
+                    email: email, password: password, authCode: nil
+                )
+                if store.isUsable { succeed(store); return }
+            } catch {
+                lastStoreError = error.localizedDescription
             }
         }
 
@@ -1231,6 +1236,9 @@ final class AppleIDStore: ObservableObject {
             statusMessage = teamName.map { "Signed in · \($0)" } ?? "Signed in"
         } else {
             storeNeedsVerification = true
+            if let lastStoreError, !lastStoreError.isEmpty {
+                lastError = lastStoreError
+            }
             statusMessage = "Signed in — tap Retry Store unlock (uses the same Apple ID trust). Or Sign Out and Sign In once."
         }
     }
