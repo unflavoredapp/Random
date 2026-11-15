@@ -162,28 +162,46 @@ final class AppStoreClient: ObservableObject {
             throw AppStoreClientError.message("Enter Apple ID and password for Store downloads.")
         }
 
-        let anisette = try await AnisetteClient.shared.fetch()
-        let guid = Self.deviceGUID(from: anisette)
-        // Try modern native/fast/ first, then legacy MZFinance (ipatool / blacktop).
-        let endpointCandidates = [
-            Self.authenticateNativeURL(guid: guid),
-            Self.authenticateURL(guid: guid)
-        ]
+        // Legacy MZFinance first — native/fast/ often 204/404s before credentials are checked
+        // (ipatool #513/#530). Then try common buy pods when the edge never redirects.
         var lastError: Error = AppStoreClientError.message("App Store sign-in failed after retries.")
-
-        for startEndpoint in endpointCandidates {
+        let starters: [(String) -> String] = [
+            Self.authenticateURL,
+            Self.authenticateNativeURL,
+            { Self.authenticatePodURL(pod: 7, guid: $0) },
+            { Self.authenticatePodURL(pod: 25, guid: $0) },
+            { Self.authenticatePodURL(pod: 35, guid: $0) }
+        ]
+        for (index, makeURL) in starters.enumerated() {
+            if index > 0 {
+                await AnisetteClient.shared.invalidate(resetProvisioning: false)
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
+            let anisette = try await AnisetteClient.shared.fetch()
+            let guid = Self.deviceGUID(from: anisette)
             do {
                 return try await authenticateOnce(
                     email: e,
                     passwordWithCode: password + code,
                     guid: guid,
                     anisette: anisette,
-                    startEndpoint: startEndpoint,
+                    startEndpoint: makeURL(guid),
                     hadAuthCode: !code.isEmpty
                 )
             } catch {
                 lastError = error
-                // Try next endpoint when this one is empty/204/403/needs2FA without a code.
+                if let ase = error as? AppStoreClientError {
+                    switch ase {
+                    case .needsTwoFactor, .message:
+                        // Credential / 2FA answers are definitive — don't burn more endpoints.
+                        throw ase
+                    case .network where Self.shouldRotateAuthenticateEndpoint(ase):
+                        continue
+                    default:
+                        continue
+                    }
+                }
+                if Self.shouldRotateAuthenticateEndpoint(error) { continue }
                 continue
             }
         }
@@ -204,8 +222,13 @@ final class AppStoreClient: ObservableObject {
         var last: [String: Any] = [:]
         var headers: [String: String] = [:]
         var lastTransient: Error?
+        // ipatool loginRequest: AMD aliases only (not duplicate X-Apple-I-MD / I-MD-M).
+        let authHeaders: [String: String] = [
+            "Content-Type": "application/x-apple-plist",
+            "User-Agent": configuratorUA
+        ]
 
-        while attempt <= 4, redirects <= 4 {
+        while attempt <= 3, redirects <= 4 {
             do {
                 let (dict, respHeaders, status) = try await postPlist(
                     url: endpoint,
@@ -215,27 +238,27 @@ final class AppStoreClient: ObservableObject {
                         "guid": guid,
                         "password": passwordWithCode,
                         "rmp": "0",
-                        "why": "signIn",
-                        "createSession": "true"
+                        "why": "signIn"
                     ],
                     anisette: anisette,
-                    // Authenticate with a real-device UA + pristine Client-Info. Spoof /
-                    // rewriteClientInfo here is a common HTTP 204/403 cause — spoof is
-                    // for package download only.
-                    extraHeaders: [
-                        "Content-Type": "application/x-apple-plist",
-                        "User-Agent": "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
-                    ],
+                    extraHeaders: authHeaders,
                     allowRedirectCapture: true,
                     forcePristineClientInfo: true,
-                    stripSpoofIdentity: true
+                    stripSpoofIdentity: true,
+                    authenticateAnisetteStyle: true
                 )
                 last = dict
                 headers = respHeaders
                 lastTransient = nil
 
-                if (300..<400).contains(status),
-                   let loc = headers["Location"] ?? headers["location"], !loc.isEmpty {
+                if (300..<400).contains(status) {
+                    let loc = headers["Location"] ?? headers["location"] ?? ""
+                    if loc.isEmpty {
+                        // 301/302 without Location — common soft reject; rotate endpoint.
+                        throw AppStoreClientError.network(
+                            "Store authenticate redirected (HTTP \(status)) without Location."
+                        )
+                    }
                     endpoint = try Self.resolveAuthenticateRedirect(
                         from: endpoint,
                         location: loc,
@@ -279,21 +302,25 @@ final class AppStoreClient: ObservableObject {
                     // Empty success-shaped plist — needs code or wrong PET/password.
                     throw AppStoreClientError.needsTwoFactor
                 }
-                guard !storeFront.isEmpty else {
-                    throw AppStoreClientError.message("App Store sign-in missing storefront.")
-                }
+                // Some pods omit storefront on the body response — default US so Decrypt can proceed.
+                let resolvedFront = storeFront.isEmpty ? "143441-1,29" : storeFront
 
                 return StorefrontSession(
                     email: email,
                     passwordToken: token,
                     dsid: dsid,
-                    storeFront: storeFront,
+                    storeFront: resolvedFront,
                     pod: pod,
                     guid: guid,
                     createdAt: Date()
                 )
             } catch let err as AppStoreClientError {
-                // Transient pod HTML 404/403/5xx — reset to start endpoint and retry.
+                // Empty 204/403/404 from this host — bubble out so caller rotates endpoint
+                // instead of hammering the same URL (ipatool #513).
+                if case .network = err, Self.shouldRotateAuthenticateEndpoint(err) {
+                    throw err
+                }
+                // Transient 5xx at pod — reset and retry same start.
                 if case .network(let msg) = err, Self.isTransientAuthenticateFailure(msg) {
                     lastTransient = err
                     endpoint = startEndpoint
@@ -311,12 +338,27 @@ final class AppStoreClient: ObservableObject {
         throw AppStoreClientError.message(customer.isEmpty ? "App Store sign-in failed after retries." : customer)
     }
 
+    private static func shouldRotateAuthenticateEndpoint(_ error: Error) -> Bool {
+        let m = (error as? LocalizedError)?.errorDescription?.lowercased()
+            ?? error.localizedDescription.lowercased()
+        return m.contains("http 204")
+            || m.contains("http 403")
+            || m.contains("http 404")
+            || m.contains("without location")
+            || m.contains("empty or non-plist")
+            || m.contains("non-plist")
+    }
+
     private static func authenticateURL(guid: String) -> String {
         "\(Paths.authenticate)?guid=\(guid)"
     }
 
     private static func authenticateNativeURL(guid: String) -> String {
         "\(Paths.authenticateNativeFast)?guid=\(guid)"
+    }
+
+    private static func authenticatePodURL(pod: Int, guid: String) -> String {
+        "https://p\(pod)-buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate?guid=\(guid)&Pod=\(pod)&PRH=\(pod)"
     }
 
     private static func resolveAuthenticateRedirect(
@@ -351,12 +393,11 @@ final class AppStoreClient: ObservableObject {
 
     private static func isTransientAuthenticateFailure(_ message: String) -> Bool {
         let m = message.lowercased()
-        return m.contains("http 404")
-            || m.contains("http 403")
-            || m.contains("http 500")
+        // 204/403/404 rotate endpoints at the outer loop — only 5xx stays on-host transient.
+        return m.contains("http 500")
             || m.contains("http 502")
             || m.contains("http 503")
-            || m.contains("http 204")
+            || m.contains("http 429")
     }
 
     private static func dsidFromSetCookie(_ headers: [String: String]) -> String? {
@@ -611,7 +652,8 @@ final class AppStoreClient: ObservableObject {
             anisette: anisette,
             extraHeaders: headers,
             forcePristineClientInfo: true,
-            stripSpoofIdentity: true
+            stripSpoofIdentity: true,
+            authenticateAnisetteStyle: true
         )
         let failure = string(dict["failureType"])
         let customer = string(dict["customerMessage"])
@@ -1042,7 +1084,8 @@ final class AppStoreClient: ObservableObject {
         extraHeaders: [String: String],
         allowRedirectCapture: Bool = false,
         forcePristineClientInfo: Bool = false,
-        stripSpoofIdentity: Bool = false
+        stripSpoofIdentity: Bool = false,
+        authenticateAnisetteStyle: Bool = false
     ) async throws -> (dict: [String: Any], headers: [String: String], status: Int) {
         guard let endpoint = URL(string: url) else {
             throw AppStoreClientError.message("Bad App Store URL.")
@@ -1052,7 +1095,12 @@ final class AppStoreClient: ObservableObject {
         req.httpMethod = "POST"
         req.httpBody = plist
         req.httpShouldHandleCookies = true
-        applyAnisette(&req, anisette, forcePristineClientInfo: forcePristineClientInfo)
+        applyAnisette(
+            &req,
+            anisette,
+            forcePristineClientInfo: forcePristineClientInfo,
+            authenticateStyle: authenticateAnisetteStyle
+        )
         for (k, v) in extraHeaders {
             if stripSpoofIdentity,
                k == "X-Apple-I-OS-Version" || k == "X-Apple-I-Requested-Model" {
@@ -1062,10 +1110,7 @@ final class AppStoreClient: ObservableObject {
         }
         if stripSpoofIdentity {
             // Prefer a non-spoofed configurator UA when recovering from 403.
-            req.setValue(
-                "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5",
-                forHTTPHeaderField: "User-Agent"
-            )
+            req.setValue(configuratorUA, forHTTPHeaderField: "User-Agent")
         }
 
         let (data, resp) = try await session.data(for: req)
@@ -1091,7 +1136,8 @@ final class AppStoreClient: ObservableObject {
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: false,
                     forcePristineClientInfo: forcePristineClientInfo,
-                    stripSpoofIdentity: stripSpoofIdentity
+                    stripSpoofIdentity: stripSpoofIdentity,
+                    authenticateAnisetteStyle: authenticateAnisetteStyle
                 )
             }
             throw AppStoreClientError.network("Store redirected (HTTP \(status)) without a usable Location.")
@@ -1108,7 +1154,8 @@ final class AppStoreClient: ObservableObject {
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: allowRedirectCapture,
                     forcePristineClientInfo: true,
-                    stripSpoofIdentity: true
+                    stripSpoofIdentity: true,
+                    authenticateAnisetteStyle: authenticateAnisetteStyle
                 )
             }
             throw AppStoreClientError.network(
@@ -1127,7 +1174,8 @@ final class AppStoreClient: ObservableObject {
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: allowRedirectCapture,
                     forcePristineClientInfo: true,
-                    stripSpoofIdentity: true
+                    stripSpoofIdentity: true,
+                    authenticateAnisetteStyle: authenticateAnisetteStyle
                 )
             }
             throw AppStoreClientError.network(Self.friendlyNonPlistError(status: 404, data: data))
@@ -1142,7 +1190,8 @@ final class AppStoreClient: ObservableObject {
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: allowRedirectCapture,
                     forcePristineClientInfo: true,
-                    stripSpoofIdentity: true
+                    stripSpoofIdentity: true,
+                    authenticateAnisetteStyle: authenticateAnisetteStyle
                 )
             }
             throw AppStoreClientError.network(Self.friendlyNonPlistError(status: 403, data: data))
@@ -1157,7 +1206,8 @@ final class AppStoreClient: ObservableObject {
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: allowRedirectCapture,
                     forcePristineClientInfo: true,
-                    stripSpoofIdentity: true
+                    stripSpoofIdentity: true,
+                    authenticateAnisetteStyle: authenticateAnisetteStyle
                 )
             }
             throw AppStoreClientError.network(Self.friendlyNonPlistError(status: status, data: data))
@@ -1197,7 +1247,8 @@ final class AppStoreClient: ObservableObject {
     private func applyAnisette(
         _ req: inout URLRequest,
         _ a: AnisetteHeaders,
-        forcePristineClientInfo: Bool = false
+        forcePristineClientInfo: Bool = false,
+        authenticateStyle: Bool = false
     ) {
         // Keep Client-Info aligned with anisette MID/OTP unless user explicitly enables rewrite.
         let clientInfo: String
@@ -1207,8 +1258,6 @@ final class AppStoreClient: ObservableObject {
             clientInfo = StoreDeviceSpoof.current.rewritingClientInfo(a.clientInfo)
         }
         req.setValue(clientInfo, forHTTPHeaderField: "X-MMe-Client-Info")
-        req.setValue(a.machineID, forHTTPHeaderField: "X-Apple-I-MD-M")
-        req.setValue(a.oneTimePassword, forHTTPHeaderField: "X-Apple-I-MD")
         req.setValue(a.localUserID, forHTTPHeaderField: "X-Apple-I-MD-LU")
         req.setValue(a.routingInfo, forHTTPHeaderField: "X-Apple-I-MD-RINFO")
         req.setValue(a.deviceID, forHTTPHeaderField: "X-Mme-Device-Id")
@@ -1216,9 +1265,13 @@ final class AppStoreClient: ObservableObject {
         req.setValue(a.clientTime, forHTTPHeaderField: "X-Apple-I-Client-Time")
         req.setValue(a.locale, forHTTPHeaderField: "X-Apple-Locale")
         req.setValue(a.timeZone, forHTTPHeaderField: "X-Apple-I-TimeZone")
-        // Configurator-style AMD aliases some clients still send.
+        // Authenticate (ipatool): AMD aliases only — duplicate I-MD / I-MD-M can soft-204.
         req.setValue(a.oneTimePassword, forHTTPHeaderField: "X-Apple-AMD")
         req.setValue(a.machineID, forHTTPHeaderField: "X-Apple-AMD-M")
+        if !authenticateStyle {
+            req.setValue(a.machineID, forHTTPHeaderField: "X-Apple-I-MD-M")
+            req.setValue(a.oneTimePassword, forHTTPHeaderField: "X-Apple-I-MD")
+        }
     }
 
     private func downloadFile(from url: URL, to destination: URL) async throws {
