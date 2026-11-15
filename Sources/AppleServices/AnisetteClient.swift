@@ -39,12 +39,26 @@ enum AnisetteError: LocalizedError {
 actor AnisetteClient {
     static let shared = AnisetteClient()
 
+    /// SideStore-style v3 defaults + optional site-hosted anisette (open-source pattern).
+    nonisolated static var builtInServers: [String] {
+        var list = [
+            "https://ani.jkcoxson.com",
+            "https://ani.sidestore.io",
+        ]
+        // Prefer a backend-hosted anisette when the site exposes /anisette (v3).
+        let site = DecryptClient.siteBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if let host = URL(string: site)?.host, !host.isEmpty {
+            list.insert("\(site)/anisette", at: 0)
+        }
+        return list
+    }
+
     /// Override with UserDefaults "tetherless.anisette.server" if needed.
     var serverURL: URL {
-        let raw = UserDefaults.standard.string(forKey: "tetherless.anisette.server")?
+        let raw = UserDefaults.standard.string(forKey: Keys.server)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if let u = URL(string: raw), !raw.isEmpty { return u }
-        return URL(string: "https://ani.jkcoxson.com")!
+        return URL(string: Self.builtInServers[0])!
     }
 
     private var cached: (AnisetteHeaders, Date)?
@@ -56,6 +70,53 @@ actor AnisetteClient {
         static let adiPb = "tetherless.anisette.adi_pb"
         static let routing = "tetherless.anisette.routing"
         static let server = "tetherless.anisette.server"
+    }
+
+    /// Persist a v3 anisette base URL (SideStore / jkcoxson / site `/anisette`).
+    func setServerURL(_ url: URL) {
+        UserDefaults.standard.set(url.absoluteString, forKey: Keys.server)
+        resetProvisioningState()
+    }
+
+    /// Rotate to the next built-in / backend-listed server after Store HTTP 403.
+    @discardableResult
+    func rotateServer() async -> URL {
+        var servers = Self.builtInServers
+        if let remote = try? await fetchBackendServerList() {
+            servers = remote + servers
+        }
+        var seen = Set<String>()
+        let normalized: [String] = servers.compactMap { raw in
+            let trimmed = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            guard !trimmed.isEmpty else { return nil }
+            let key = trimmed.lowercased()
+            guard seen.insert(key).inserted else { return nil }
+            return trimmed
+        }
+        let current = serverURL.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/")).lowercased()
+        let idx = normalized.firstIndex { $0.lowercased() == current } ?? -1
+        let nextRaw = normalized.isEmpty
+            ? "https://ani.jkcoxson.com"
+            : normalized[(idx + 1) % normalized.count]
+        let next = URL(string: nextRaw) ?? URL(string: "https://ani.jkcoxson.com")!
+        setServerURL(next)
+        return next
+    }
+
+    /// Pull `{ servers: [...] }` from our site (open-source SideStore list pattern).
+    private func fetchBackendServerList() async throws -> [String] {
+        let base = DecryptClient.siteBase
+        guard let url = URL(string: base + "api/store/anisette-servers") else { return [] }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 8
+        req.cachePolicy = .reloadIgnoringLocalCacheData
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rows = json["servers"] as? [String] else { return [] }
+        return rows
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty && URL(string: $0) != nil }
     }
 
     /// Best-effort warm so Store authenticate / commerce isn't blocked on first anisette RTT.

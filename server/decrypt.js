@@ -224,6 +224,24 @@ function create({ db /*, secret */ }) {
   }
 
   function attachWorkerRoutes(web, { jsonBody, fail }) {
+    // SideStore-style anisette server list for Store Access (client rotates on HTTP 403).
+    web.get("/api/store/anisette-servers", (_req, res) => {
+      const env = String(process.env.ANISETTE_SERVERS || process.env.ANISETTE_SERVER || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const defaults = ["https://ani.jkcoxson.com", "https://ani.sidestore.io"];
+      const seen = new Set();
+      const servers = [];
+      for (const s of [...env, ...defaults]) {
+        const key = s.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        servers.push(s);
+      }
+      return res.json({ ok: true, servers, build: BUILD });
+    });
+
     web.post("/api/decrypt/worker/claim", jsonBody, (req, res) => {
       const auth = authWorker(req);
       if (!auth.ok) return fail(res, 401, auth.error);
