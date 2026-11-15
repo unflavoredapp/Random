@@ -158,7 +158,13 @@ struct DecryptOwnedStoreAppsSection: View {
                         .fixedSize(horizontal: false, vertical: true)
 
                     if let loadError, !loadError.isEmpty {
-                        Text(loadError)
+                        let soft = loadError.localizedCaseInsensitiveContains("404")
+                            || loadError.localizedCaseInsensitiveContains("204")
+                            || loadError.localizedCaseInsensitiveContains("non-plist")
+                            || loadError.localizedCaseInsensitiveContains("owned")
+                        Text(soft
+                             ? "Owned list couldn’t load from Apple right now. Search still works for free & purchased apps — Store Access can stay signed in."
+                             : loadError)
                             .font(.caption)
                             .foregroundStyle(.orange)
                             .fixedSize(horizontal: false, vertical: true)
@@ -167,10 +173,10 @@ struct DecryptOwnedStoreAppsSection: View {
                             || loadError.localizedCaseInsensitiveContains("two-factor")
                             || AppleIDStore.shared.storeNeedsVerification {
                             OwnedStoreTrustHint(onRetry: { await refresh() })
-                        } else if loadError.localizedCaseInsensitiveContains("204")
-                            || loadError.localizedCaseInsensitiveContains("403")
-                            || loadError.localizedCaseInsensitiveContains("expired") {
-                            Text("Tip: Settings › Store Access → spoof “This iPhone”, Client-Info rewrite off, then refresh Owned (stay signed in).")
+                        } else if soft || loadError.localizedCaseInsensitiveContains("403")
+                            || loadError.localizedCaseInsensitiveContains("expired")
+                            || loadError.localizedCaseInsensitiveContains("token") {
+                            Text("Tip: pull to refresh here, or Settings › Store Access → Retry Store unlock (stay signed in). Search still works.")
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.45))
                                 .fixedSize(horizontal: false, vertical: true)

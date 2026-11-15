@@ -43,20 +43,20 @@ final class DeviceDecryptService: ObservableObject {
             try await AppStoreClient.shared.purchaseHistory(account: account)
         }
 
-        func isDeadSessionError(_ error: Error) -> Bool {
+        func isTokenExpiredError(_ error: Error) -> Bool {
             if case AppStoreClientError.tokenExpired = error { return true }
             let m = error.localizedDescription.lowercased()
-            return m.contains("http 204") || m.contains("http 403") || m.contains("http 404")
-                || m.contains("non-plist")
+            return m.contains("token expired") || m.contains("2034") || m.contains("2042")
         }
 
         // Prefer any persisted store session first — don't force a 2FA re-auth just to list Owned.
+        // Important: Owned endpoint 404/204 is NOT a dead passwordToken — clearing the session
+        // here used to wipe green Store Access when Purchase History failed.
         if let existing = AppleIDStore.shared.storefrontSession(), existing.isUsable {
             do {
                 return try await history(existing)
             } catch {
-                guard isDeadSessionError(error) else { throw error }
-                // Dead token / spoof 204: drop it and re-mint password-only (same Apple ID trust).
+                guard isTokenExpiredError(error) else { throw error }
                 AppleIDStore.shared.clearPersistedStoreSession()
                 await AppleIDStore.shared.reconnectStoreSessionIfNeeded(force: true)
                 if let fresh = AppleIDStore.shared.storefrontSession(), fresh.isUsable {
@@ -74,7 +74,7 @@ final class DeviceDecryptService: ObservableObject {
             let account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
             return try await history(account)
         } catch {
-            if isDeadSessionError(error) {
+            if isTokenExpiredError(error) {
                 AppleIDStore.shared.clearPersistedStoreSession()
                 await AppleIDStore.shared.reconnectStoreSessionIfNeeded(force: true)
                 if let fresh = AppleIDStore.shared.storefrontSession(), fresh.isUsable {

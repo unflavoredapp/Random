@@ -669,32 +669,56 @@ final class AppStoreClient: ObservableObject {
     }
 
     /// Best-effort purchase / download history for this Apple ID.
-    /// Account endpoints must not advertise spoofed OS identity — that commonly yields HTTP 204.
+    /// Prefer modern Purchase DAAP (SAP-signed). Legacy MZFinance purchaseHistory often 404s.
     func purchaseHistory(account: StorefrontSession) async throws -> [OwnedStoreApp] {
-        let anisette = try await AnisetteClient.shared.fetch()
-        var headers = storeHeaders(account, includeSpoofIdentity: false)
-        // Match authenticate: Configurator UA + pristine Client-Info (not itunesstored spoof).
-        headers["User-Agent"] = configuratorUA
-        let (dict, _, _) = try await postPlist(
-            url: Paths.purchaseHistory,
-            body: [
-                "guid": account.guid,
-                "requestId": UUID().uuidString.lowercased()
-            ],
-            anisette: anisette,
-            extraHeaders: headers,
-            forcePristineClientInfo: true,
-            stripSpoofIdentity: true,
-            authenticateAnisetteStyle: true
-        )
-        let failure = string(dict["failureType"])
-        let customer = string(dict["customerMessage"])
-        if failure == "2034" || failure == "2042" || failure == "1008" || failure == "9610" {
+        do {
+            // DAAP success (including empty library) is authoritative.
+            return try await StoreOwnedAppsClient.fetch(account: account)
+        } catch AppStoreClientError.tokenExpired {
             throw AppStoreClientError.tokenExpired
+        } catch {
+            // Fall through to legacy MZFinance for older sessions / partial rollout.
         }
-        if !failure.isEmpty {
-            throw AppStoreClientError.message(customer.isEmpty ? "Purchase history failed (\(failure))." : customer)
+
+        do {
+            let anisette = try await AnisetteClient.shared.fetch()
+            var headers = storeHeaders(account, includeSpoofIdentity: false)
+            // Match authenticate: Configurator UA + pristine Client-Info (not itunesstored spoof).
+            headers["User-Agent"] = configuratorUA
+            let (dict, _, _) = try await postPlist(
+                url: Paths.purchaseHistory,
+                body: [
+                    "guid": account.guid,
+                    "requestId": UUID().uuidString.lowercased()
+                ],
+                anisette: anisette,
+                extraHeaders: headers,
+                forcePristineClientInfo: true,
+                stripSpoofIdentity: true,
+                authenticateAnisetteStyle: true
+            )
+            let failure = string(dict["failureType"])
+            let customer = string(dict["customerMessage"])
+            if failure == "2034" || failure == "2042" || failure == "1008" || failure == "9610" {
+                throw AppStoreClientError.tokenExpired
+            }
+            if !failure.isEmpty {
+                throw AppStoreClientError.message(customer.isEmpty ? "Purchase history failed (\(failure))." : customer)
+            }
+            return parseLegacyPurchaseHistory(dict)
+        } catch AppStoreClientError.tokenExpired {
+            throw AppStoreClientError.tokenExpired
+        } catch {
+            // Soft: Owned list is convenience — don't fail Decrypt when Store Access is green.
+            let m = error.localizedDescription.lowercased()
+            if m.contains("404") || m.contains("204") || m.contains("non-plist") || m.contains("403") {
+                return []
+            }
+            throw error
         }
+    }
+
+    private func parseLegacyPurchaseHistory(_ dict: [String: Any]) -> [OwnedStoreApp] {
 
         let rows: [[String: Any]] = {
             if let a = dict["purchaseHistoryInfo"] as? [[String: Any]] { return a }
