@@ -1,8 +1,8 @@
 //
 //  IPadnDownloadManager.swift
 //  Real download queue modeled on mengangs/ipadn DownloadManager (GPL-2.0).
-//  English UI; Store IPA via AppStoreClient, URL/import via URLSession resume data.
-//  Install bridges to TetherLess SignQueue / OTAInstaller / NativeInstaller.
+//  English UI; Store IPA via AppStoreClient, then FairPlay via DeviceDecryptService.
+//  URL/import via URLSession resume data. Install → SignQueue / OTA / Native.
 //
 
 import Foundation
@@ -21,7 +21,7 @@ enum IPadnDownloadStatus: String, Codable, CaseIterable {
         case .running: return "Downloading"
         case .pausing: return "Pausing"
         case .paused: return "Paused"
-        case .processing: return "Processing package"
+        case .processing: return "Decrypting"
         case .completed: return "Completed"
         case .failed: return "Download failed"
         }
@@ -154,6 +154,8 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
     private var progressState: [UUID: IPadnDownloadProgress] = [:]
     private var resumeData: [UUID: Data] = [:]
     private var storeTasks: [UUID: Task<Void, Never>] = [:]
+    /// Serializes FairPlay handoffs so DeviceDecryptService.busy is not contended.
+    private var decryptTail: Task<Void, Never>?
     private var session: URLSession!
     private var maxConcurrent = 3
     private var pathMonitor: NWPathMonitor?
@@ -402,32 +404,48 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                     url: job.storeURL,
                     externalVersionId: job.externalVersionId ?? ""
                 )
-                // Prefer store purchase/download; fall back to decrypt pipeline destination.
                 let dest = IPadnDownloadStorage.packagesDir
                     .appendingPathComponent("\(id.uuidString)_\(job.bundleID.isEmpty ? "app" : job.bundleID).ipa")
+
+                // Same Store reinforce as DeviceDecryptService silent purchase.
+                guard let reinforced = await AppleIDStore.shared.reinforceStoreConnection() else {
+                    throw IPadnDownloadError.message(
+                        "Sign in under Settings › Store Access with the Apple ID that owns this app."
+                    )
+                }
+                var account = reinforced
+
                 if let adam = job.adamId, adam > 0 {
-                    var account = try await AppleIDStore.shared.ensureStorefrontSession()
-                    let result = try await AppStoreClient.shared.purchaseAndDownload(
-                        adamId: adam,
-                        account: account,
-                        destination: dest,
-                        externalVersionId: job.externalVersionId,
-                        version: job.version.isEmpty ? nil : job.version,
-                        onProgress: { [weak self] msg in
-                            Task { @MainActor in
-                                guard let self, let i = self.jobs.firstIndex(where: { $0.id == id }) else { return }
-                                // Best-effort byte parse from progress strings when present.
-                                if let (w, e) = Self.parseBytes(msg) {
-                                    self.jobs[i].downloaded = w
-                                    self.jobs[i].expected = e
-                                    let p = self.progress(for: id)
-                                    p.written = w; p.expected = e
+                    let result: (url: URL, item: StoreDownloadItem)
+                    do {
+                        result = try await AppStoreClient.shared.purchaseAndDownload(
+                            adamId: adam,
+                            account: account,
+                            destination: dest,
+                            externalVersionId: job.externalVersionId,
+                            version: job.version.isEmpty ? nil : job.version,
+                            onProgress: { [weak self] msg in
+                                Task { @MainActor in
+                                    guard let self, let i = self.jobs.firstIndex(where: { $0.id == id }) else { return }
+                                    if let (w, e) = Self.parseBytes(msg) {
+                                        self.jobs[i].downloaded = w
+                                        self.jobs[i].expected = e
+                                        let p = self.progress(for: id)
+                                        p.written = w; p.expected = e
+                                    }
                                 }
                             }
-                        }
-                    )
+                        )
+                    } catch {
+                        // Full device path has 403 remint / backend / installed-embed fallbacks.
+                        try Task.checkCancellation()
+                        await self.runOwnedStoreDecrypt(id: id, app: app, job: job)
+                        _ = account
+                        self.storeTasks[id] = nil
+                        self.schedule()
+                        return
+                    }
                     try Task.checkCancellation()
-                    let filename = result.url.lastPathComponent
                     if result.url != dest {
                         try? FileManager.default.removeItem(at: dest)
                         try FileManager.default.copyItem(at: result.url, to: dest)
@@ -437,15 +455,17 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                     self.jobs[i].localFilename = dest.lastPathComponent
                     self.jobs[i].downloaded = size
                     self.jobs[i].expected = size
-                    self.jobs[i].status = .completed
+                    self.jobs[i].status = .processing
                     self.jobs[i].error = nil
                     if self.jobs[i].version.isEmpty { self.jobs[i].version = result.item.displayVersion }
                     if self.jobs[i].bundleID.isEmpty { self.jobs[i].bundleID = result.item.bundleID }
-                    _ = account
                     self.persist()
+                    _ = account
+                    // iPadn IPA on disk → FairPlay companion / in-app decrypt.
+                    await self.enqueueSerialDecrypt(id: id, ipa: dest, name: job.name)
                 } else {
-                    // No adam — hand off to device decrypt search path and mark failed with guidance.
-                    throw IPadnDownloadError.message("Missing App ID — open Search and Get this app again.")
+                    // No adam on the job — resolve via store URL / bundle in DeviceDecryptService.
+                    await self.runOwnedStoreDecrypt(id: id, app: app, job: job)
                 }
             } catch is CancellationError {
                 guard let i = self.jobs.firstIndex(where: { $0.id == id }) else { return }
@@ -460,6 +480,118 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             self.storeTasks[id] = nil
             self.schedule()
         }
+    }
+
+    private func enqueueSerialDecrypt(id: UUID, ipa: URL, name: String) async {
+        let previous = decryptTail
+        let done = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            await self.performStoreDecrypt(id: id, ipa: ipa, name: name)
+        }
+        decryptTail = done
+        await done.value
+    }
+
+    private func performStoreDecrypt(id: UUID, ipa: URL, name: String) async {
+        guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
+        jobs[i].status = .processing
+        persist()
+        await DeviceDecryptService.shared.decryptDownloadedStoreIPA(at: ipa, displayName: name)
+        guard let j = jobs.firstIndex(where: { $0.id == id }) else { return }
+        switch DecryptClient.shared.phase {
+        case .handedOff:
+            jobs[j].status = .completed
+            jobs[j].error = nil
+        case .done:
+            if let clear = DecryptClient.shared.finished,
+               FileManager.default.fileExists(atPath: clear.path) {
+                let filename = "\(id.uuidString)_decrypted_\(clear.lastPathComponent)"
+                let dest = IPadnDownloadStorage.packagesDir.appendingPathComponent(filename)
+                try? FileManager.default.removeItem(at: dest)
+                try? FileManager.default.copyItem(at: clear, to: dest)
+                if FileManager.default.fileExists(atPath: dest.path) {
+                    if let old = jobs[j].fileURL, old != dest {
+                        try? FileManager.default.removeItem(at: old)
+                    }
+                    jobs[j].localFilename = filename
+                    let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
+                    jobs[j].downloaded = size
+                    jobs[j].expected = size
+                }
+            }
+            jobs[j].status = .completed
+            jobs[j].error = nil
+        case .failed:
+            jobs[j].status = .failed
+            jobs[j].error = DecryptClient.shared.error
+                ?? DecryptClient.shared.message
+                ?? "Decrypt failed."
+        default:
+            // Still running / unknown — treat as completed if IPA exists.
+            jobs[j].status = jobs[j].fileURL != nil ? .completed : .failed
+            if jobs[j].status == .failed {
+                jobs[j].error = DecryptClient.shared.message.isEmpty
+                    ? "Decrypt did not finish."
+                    : DecryptClient.shared.message
+            }
+        }
+        persist()
+    }
+
+    private func runOwnedStoreDecrypt(id: UUID, app: DecryptApp, job: IPadnDownloadJob) async {
+        guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
+        jobs[i].status = .processing
+        persist()
+        let previous = decryptTail
+        let done = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled else { return }
+            let deviceApp = DeviceApp(
+                bundleID: app.bundle.isEmpty ? job.bundleID : app.bundle,
+                name: app.name,
+                version: app.version.isEmpty ? job.version : app.version,
+                isAppStore: true
+            )
+            await DeviceDecryptService.shared.decryptOwnedStoreApp(
+                deviceApp,
+                storeURL: app.url.isEmpty ? job.storeURL : app.url,
+                version: job.version.isEmpty ? nil : job.version,
+                externalVersionId: job.externalVersionId
+            )
+            guard let j = self.jobs.firstIndex(where: { $0.id == id }) else { return }
+            switch DecryptClient.shared.phase {
+            case .handedOff, .done:
+                if let clear = DecryptClient.shared.finished,
+                   FileManager.default.fileExists(atPath: clear.path) {
+                    let filename = "\(id.uuidString)_decrypted_\(clear.lastPathComponent)"
+                    let dest = IPadnDownloadStorage.packagesDir.appendingPathComponent(filename)
+                    try? FileManager.default.removeItem(at: dest)
+                    try? FileManager.default.copyItem(at: clear, to: dest)
+                    if FileManager.default.fileExists(atPath: dest.path) {
+                        self.jobs[j].localFilename = filename
+                        let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
+                        self.jobs[j].downloaded = size
+                        self.jobs[j].expected = size
+                    }
+                }
+                self.jobs[j].status = .completed
+                self.jobs[j].error = nil
+            case .failed:
+                self.jobs[j].status = .failed
+                self.jobs[j].error = DecryptClient.shared.error
+                    ?? DecryptClient.shared.message
+                    ?? "Decrypt failed."
+            default:
+                self.jobs[j].status = .failed
+                self.jobs[j].error = DecryptClient.shared.message.isEmpty
+                    ? "Decrypt did not finish."
+                    : DecryptClient.shared.message
+            }
+            self.persist()
+        }
+        decryptTail = done
+        await done.value
     }
 
     private func startURL(_ id: UUID) {

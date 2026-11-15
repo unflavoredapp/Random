@@ -36,13 +36,23 @@ struct PurchasedHomeView: View {
 
     private var downloadBadges: [Int: (text: String, tint: Color)] {
         var badges: [Int: (text: String, tint: Color)] = [:]
-        for job in manager.jobs where job.status == .completed {
+        for job in manager.jobs {
             guard let adam = job.adamId else { continue }
-            if badges[adam] == nil {
+            if badges[adam] != nil { continue }
+            switch job.status {
+            case .queued, .running, .pausing:
+                badges[adam] = ("Downloading…", TetherlessPalette.accent)
+            case .processing:
+                badges[adam] = ("Decrypting…", TetherlessPalette.accent)
+            case .completed:
                 badges[adam] = (
-                    job.version.isEmpty ? "Downloaded" : "Downloaded \(job.version)",
+                    job.version.isEmpty ? "Decrypted" : "Decrypted \(job.version)",
                     TetherlessPalette.success
                 )
+            case .failed:
+                badges[adam] = ("Failed", .orange)
+            case .paused:
+                badges[adam] = ("Paused", .white.opacity(0.5))
             }
         }
         return badges
@@ -239,8 +249,7 @@ struct PurchasedHomeView: View {
             Spacer(minLength: 0)
             if showCloud {
                 Button {
-                    try? manager.enqueueStore(owned: app)
-                    AppNav.shared.goDownloads()
+                    IPadnDecryptPipeline.getOwned(app)
                 } label: {
                     Image(systemName: "arrow.down.circle")
                         .font(.title2)
@@ -323,7 +332,7 @@ struct PurchasedHomeView: View {
         Task {
             var done = 0
             for app in apps {
-                try? manager.enqueueStore(owned: app)
+                IPadnDecryptPipeline.getOwned(app, openDownloads: false)
                 done += 1
                 batchProgress = (done, apps.count)
             }
