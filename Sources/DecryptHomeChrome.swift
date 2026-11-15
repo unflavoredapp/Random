@@ -60,16 +60,19 @@ struct DecryptSignedInCard: View {
     let email: String
     var onSignOut: () -> Void
     @ObservedObject private var store = AppleIDStore.shared
+    @ObservedObject private var decrypting = DeviceDecryptService.shared
+
+    private var storeReady: Bool { store.hasStoreDownloadSession }
 
     var body: some View {
         GlassCard(corner: 24) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
-                    Image(systemName: "checkmark.seal.fill")
+                    Image(systemName: storeReady ? "checkmark.seal.fill" : "exclamationmark.triangle.fill")
                         .font(.title2)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(storeReady ? Color.green : Color.orange)
                     VStack(alignment: .leading, spacing: 3) {
-                        Text(store.accounts.count > 1 ? "Store account" : "Signed in")
+                        Text(storeReady ? "Store ready for downloads" : "Store not connected yet")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.white)
                         Text(email)
@@ -99,6 +102,57 @@ struct DecryptSignedInCard: View {
                                 .background(TetherlessPalette.accent.opacity(0.15), in: Capsule())
                         }
                     }
+                }
+
+                Text(storeReady
+                     ? "Tap Test download to pull free TestFlight, install the companion, and run FairPlay."
+                     : "Connect Store first (uses your Sign In trust token). Then Test download runs the full path.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.5))
+                    .fixedSize(horizontal: false, vertical: true)
+
+                if storeReady {
+                    Button {
+                        DeviceDecryptService.shared.runStoreConnectionSmokeTest()
+                    } label: {
+                        HStack {
+                            if decrypting.busy {
+                                ProgressView().tint(.white)
+                            }
+                            Text(decrypting.busy ? "Testing…" : "Test download → companion")
+                                .font(.body.weight(.semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(TetherlessPalette.accent, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(decrypting.busy || store.isBusy || store.storeConnecting)
+                } else {
+                    Button {
+                        Task {
+                            if let session = await store.reinforceStoreConnection(forceRemint: true),
+                               session.isUsable {
+                                return
+                            }
+                            await store.requestStoreVerificationPrompt()
+                        }
+                    } label: {
+                        HStack {
+                            if store.storeConnecting {
+                                ProgressView().tint(.white)
+                            }
+                            Text(store.storeConnecting ? "Connecting Store…" : "Connect Store Access")
+                                .font(.body.weight(.semibold))
+                        }
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(TetherlessPalette.accent, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(store.isBusy || store.storeConnecting || decrypting.busy)
                 }
 
                 Button(action: onSignOut) {
