@@ -38,7 +38,7 @@ struct IPadnOptionalCard: View {
                         Text("iPadn search (optional)")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text("Uses iPadn’s store search in TetherLess (multi-region, App ID, delisted stubs). Decrypt still runs FairPlay here. Source: mengangs/ipadn (GPL-2.0).")
+                        Text("Uses iPadn’s store search + login (bag.xml / MZFinance) in TetherLess. Decrypt still runs FairPlay here. Source: mengangs/ipadn (GPL-2.0).")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.45))
                             .fixedSize(horizontal: false, vertical: true)

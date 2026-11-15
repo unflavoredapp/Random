@@ -1058,12 +1058,31 @@ final class AppleIDStore: ObservableObject {
         }
     }
 
-    /// MZFinance authenticate with one anisette refresh retry (common empty-token flake).
+    /// MZFinance authenticate — prefer iPadn bag.xml + redirect login, then AppStoreClient.
     private func authenticateStoreWithRetries(
         email: String,
         password: String,
         authCode: String
     ) async throws -> StorefrontSession {
+        // 1) iPadn-derived path (bag.xml endpoint, Configurator UA, AMD proof loop).
+        do {
+            let session = try await IPadnStoreLogin.authenticate(
+                email: email,
+                password: password,
+                authCode: authCode
+            )
+            if session.isUsable {
+                statusMessage = "Store unlocked (iPadn login)…"
+                return session
+            }
+        } catch AppStoreClientError.needsTwoFactor {
+            throw AppStoreClientError.needsTwoFactor
+        } catch {
+            // Fall through to legacy mint — keep last iPadn diagnostic for Settings.
+            lastError = "iPadn login: \(error.localizedDescription)"
+        }
+
+        // 2) Existing AppStoreClient starters (legacy / native / pods).
         do {
             return try await AppStoreClient.shared.authenticate(
                 email: email,
