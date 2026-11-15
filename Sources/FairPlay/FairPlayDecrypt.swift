@@ -367,7 +367,7 @@ enum FairPlayDecrypt {
         } else {
             let staged = replicateSinfs(in: sourceApp)
             report.sinfsReplicated = staged
-            if staged > 0 { progress?("Staged \(staged) nested SINF license(s)…") }
+            if staged > 0 { progress?("Staged \(staged) Manifest SINF license(s)…") }
         }
 
         progress?("Locating Mach-Os under \(isLiveAppStoreInstall(sourceApp) ? "install path" : "app bundle")…")
@@ -378,15 +378,28 @@ enum FairPlayDecrypt {
         report.scanned = binaries.count
         // Don't pre-open every binary for cryptid counts — that re-hangs on install paths.
         // Count after we know the list, with a short timeout per file.
+        var encryptedBins: [URL] = []
         var encCount = 0
         for url in binaries {
             if let n = withTimeout(seconds: 3, work: {
                 Int(url.path.withCString { fp_count_encrypted_slices($0) })
             }), n > 0 {
                 encCount += n
+                encryptedBins.append(url)
             }
         }
         report.encryptedBefore = encCount
+
+        // buddy3 `stage_folder_sinfs`: copy root .sinf next to every encrypted Mach-O
+        // (`…/SC_Info/<exe>.sinf`) so fairplayd can resolve licenses without a live install.
+        if !isLiveAppStoreInstall(sourceApp), !encryptedBins.isEmpty {
+            let perBinary = stageSinfsForEncryptedBinaries(encryptedBins, in: sourceApp)
+            report.sinfsReplicated += perBinary
+            if perBinary > 0 {
+                progress?("Staged \(perBinary) per-binary SINF license(s)…")
+            }
+        }
+
         progress?("Decrypting \(binaries.count) Mach-O file(s)…")
         if encCount > 0 {
             progress?("(\(encCount) encrypted slice(s) to clear)")
@@ -447,30 +460,14 @@ enum FairPlayDecrypt {
             }
         }
 
-        // One shorter retry pass for soft flakes only (skip hard timeouts already marked failed).
-        let softRetry = report.softFailed
-        if !softRetry.isEmpty {
-            progress?("Retrying \(softRetry.count) soft-failed binaries…")
-            report.softFailed.removeAll()
-            for (i, rel) in softRetry.enumerated() {
-                let file = sourceApp.appendingPathComponent(rel)
-                guard FileManager.default.fileExists(atPath: file.path) else { continue }
-                let r = role(of: file, under: sourceApp, app: sourceApp)
-                progress?("Retry \(rel) (\(i + 1)/\(softRetry.count))…")
-                let outcome = decryptOneWithTimeout(
-                    file: file, sourceApp: sourceApp, destApp: destApp,
-                    index: i, total: softRetry.count, role: r, timeout: 60
-                )
-                if case .ok(let mini) = outcome {
-                    report.decrypted.append(contentsOf: mini.decrypted)
-                    report.plain.append(contentsOf: mini.plain)
-                    report.failed.append(contentsOf: mini.failed)
-                    report.softFailed.append(contentsOf: mini.softFailed)
-                } else {
-                    report.softFailed.append(rel)
-                }
-            }
-        }
+        // buddy3 `verify_with_targeted_retries`: re-probe dest cryptids and retry only
+        // still-encrypted required binaries (backoff), instead of blind soft-fail retries.
+        try verifyWithTargetedRetries(
+            sourceApp: sourceApp,
+            destApp: destApp,
+            report: &report,
+            progress: progress
+        )
 
         // FairPlayed-style -PARTIAL.ipa: if the main executable is clear, keep going even when
         // a required framework stayed encrypted. hardenDecryptedApp + zip tag the triage IPA.
@@ -525,6 +522,164 @@ enum FairPlayDecrypt {
         }
         return count
     }
+
+    /// buddy3 `find_folder_root_sinf` + `stage_folder_sinfs`: place root license next to each
+    /// encrypted binary so IPA-only / silent-download trees decrypt without a live install.
+    @discardableResult
+    static func stageSinfsForEncryptedBinaries(_ encrypted: [URL], in app: URL) -> Int {
+        if isLiveAppStoreInstall(app) { return 0 }
+        guard let root = findFolderRootSinf(in: app) else { return 0 }
+        let fm = FileManager.default
+        var count = 0
+        for bin in encrypted {
+            let sc = bin.deletingLastPathComponent().appendingPathComponent("SC_Info", isDirectory: true)
+            let dest = sc.appendingPathComponent("\(bin.lastPathComponent).sinf")
+            if fm.fileExists(atPath: dest.path) { continue }
+            if dest.standardizedFileURL == root.standardizedFileURL { continue }
+            try? fm.createDirectory(at: sc, withIntermediateDirectories: true)
+            do {
+                try fm.copyItem(at: root, to: dest)
+                count += 1
+            } catch {
+                continue
+            }
+        }
+        return count
+    }
+
+    /// Prefer Manifest `SinfPaths[0]`, else first regular file under `SC_Info/*.sinf`.
+    static func findFolderRootSinf(in app: URL) -> URL? {
+        let man = app.appendingPathComponent("SC_Info/Manifest.plist")
+        if let plist = withTimeout(seconds: 5, work: {
+            NSDictionary(contentsOf: man) as? [String: Any]
+        }),
+           let paths = plist["SinfPaths"] as? [String],
+           let first = paths.first, !first.isEmpty {
+            let url = app.appendingPathComponent(first)
+            if FileManager.default.fileExists(atPath: url.path) { return url }
+        }
+        let sc = app.appendingPathComponent("SC_Info", isDirectory: true)
+        if let hit = firstSinf(in: sc) { return hit }
+        // Nested frameworks sometimes only keep licenses under Frameworks/*/SC_Info.
+        if let enumerator = FileManager.default.enumerator(
+            at: app,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) {
+            for case let url as URL in enumerator where url.pathExtension.lowercased() == "sinf" {
+                if url.path.contains("/Watch/") { continue }
+                return url
+            }
+        }
+        return nil
+    }
+
+    private static func firstSinf(in directory: URL) -> URL? {
+        guard let items = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return nil }
+        return items.first { $0.pathExtension.lowercased() == "sinf" }
+    }
+
+    /// buddy3 verify loop: up to 5 rounds, only binaries that still show cryptid ≠ 0.
+    private static let verifyRetryBackoffSeconds: [TimeInterval] = [0.10, 0.25, 0.50, 1.0, 2.0]
+
+    private static func verifyWithTargetedRetries(
+        sourceApp: URL,
+        destApp: URL,
+        report: inout FairPlayDecryptReport,
+        progress: ((String) -> Void)?
+    ) throws {
+        let probeRoot = FileManager.default.fileExists(atPath: destApp.path) ? destApp : sourceApp
+        var stillEncrypted = stillEncryptedRequired(under: probeRoot, report: report)
+        guard !stillEncrypted.isEmpty else {
+            // Also clear soft-failed entries that verify says are now clear.
+            report.softFailed = report.softFailed.filter { rel in
+                let url = probeRoot.appendingPathComponent(rel)
+                return url.path.withCString { fp_has_encrypted_slice($0) } == 1
+            }
+            return
+        }
+
+        progress?(
+            "\(stillEncrypted.count) binary(ies) still encrypted — targeted retries (up to \(verifyRetryBackoffSeconds.count) rounds)…"
+        )
+
+        for (round, delay) in verifyRetryBackoffSeconds.enumerated() {
+            guard !stillEncrypted.isEmpty else { break }
+            if delay > 0 {
+                Thread.sleep(forTimeInterval: delay)
+            }
+            progress?("Retry \(round + 1)/\(verifyRetryBackoffSeconds.count): \(stillEncrypted.count) file(s)…")
+
+            var recovered: [String] = []
+            for (i, rel) in stillEncrypted.enumerated() {
+                let file = sourceApp.appendingPathComponent(rel)
+                guard FileManager.default.fileExists(atPath: file.path) else { continue }
+                let r = role(of: file, under: sourceApp, app: sourceApp)
+                let outcome = decryptOneWithTimeout(
+                    file: file, sourceApp: sourceApp, destApp: destApp,
+                    index: i, total: stillEncrypted.count, role: r, timeout: 60
+                )
+                if case .ok(let mini) = outcome {
+                    report.decrypted.append(contentsOf: mini.decrypted)
+                    report.plain.append(contentsOf: mini.plain)
+                    // Drop from failed/softFailed if this pass cleared it.
+                    if mini.decrypted.contains(rel) || mini.plain.contains(rel) {
+                        recovered.append(rel)
+                        report.failed.removeAll { $0 == rel }
+                        report.softFailed.removeAll { $0 == rel }
+                        progress?("[DECRYPTED] \(rel) (retry \(round + 1))")
+                    } else {
+                        report.failed.append(contentsOf: mini.failed.filter { !report.failed.contains($0) })
+                        report.softFailed.append(contentsOf: mini.softFailed.filter { !report.softFailed.contains($0) })
+                    }
+                }
+            }
+
+            let probe = FileManager.default.fileExists(atPath: destApp.path) ? destApp : sourceApp
+            stillEncrypted = stillEncryptedRequired(under: probe, report: report)
+            if stillEncrypted.isEmpty {
+                progress?("Retry \(round + 1)/\(verifyRetryBackoffSeconds.count) recovered everything.")
+                break
+            }
+            let recoveredCount = recovered.count
+            progress?(
+                "Retry \(round + 1)/\(verifyRetryBackoffSeconds.count): \(recoveredCount) recovered; \(stillEncrypted.count) remain."
+            )
+        }
+
+        // Reconcile failed list with final cryptid probe.
+        let probe = FileManager.default.fileExists(atPath: destApp.path) ? destApp : sourceApp
+        let leftover = stillEncryptedRequired(under: probe, report: report)
+        report.failed = Array(Set(report.failed + leftover)).sorted()
+        report.softFailed = report.softFailed.filter { !leftover.contains($0) && !report.failed.contains($0) }
+    }
+
+    private static func stillEncryptedRequired(
+        under app: URL,
+        report: FairPlayDecryptReport
+    ) -> [String] {
+        guard let bins = try? collectMachOs(under: app) else { return [] }
+        var out: [String] = []
+        for url in bins {
+            let enc = withTimeout(seconds: 3, work: {
+                Int(url.path.withCString { fp_has_encrypted_slice($0) })
+            }) ?? 0
+            guard enc == 1 else { continue }
+            let rel = relativePath(url, under: app)
+            let r = role(of: url, under: app, app: app)
+            if report.isPartial {
+                if r == .main { out.append(rel) }
+            } else if r.isRequired {
+                out.append(rel)
+            }
+        }
+        return out
+    }
+
 
     /// Report cryptid of every Mach-O under an `.app` (FairPlayed `verify_ipa.sh`).
     static func verifyApp(at app: URL) throws -> FairPlayVerifyReport {
