@@ -172,6 +172,32 @@ struct StoreDeviceSpoof: Equatable, Sendable {
         sanitizeAbsurdIOSClaim()
     }
 
+    /// Persist This iPhone (spoof off + real UA). Use after HTTP 403 or before smoke tests.
+    @discardableResult
+    static func applyThisiPhone() -> StoreDeviceSpoof {
+        var spoof = current
+        spoof.rewriteClientInfo = false
+        let profiles = StoreSpoofProfile.builtIn(realModel: realModelIdentifier())
+        if let device = profiles.first(where: { $0.id == "device" }) {
+            spoof.apply(device)
+        } else {
+            spoof = .default
+        }
+        current = spoof
+        return spoof
+    }
+
+    /// True when a persisted spoof is likely to get MZFinance HTTP 403.
+    var looksLikeRejectedIdentity: Bool {
+        guard enabled else { return false }
+        if rewriteClientInfo { return true }
+        let major = Self.versionTuple(iosVersion).first ?? 0
+        if major >= 90 { return true }
+        // Exotic / non-device models with absurd builds (legacy iOS 99 migrations).
+        if build.hasPrefix("99") { return true }
+        return false
+    }
+
     /// Literal iOS 99 / 90+ in the UA causes MZFinance HTTP 403. Keep “newest package”
     /// behavior via `preferLatestPackage` and advertise a real iOS string instead.
     mutating func sanitizeAbsurdIOSClaim() {
@@ -355,7 +381,8 @@ struct StoreDeviceSpoof: Equatable, Sendable {
     ]
 
     static let iosVersionPresets: [String] = [
-        "99.0", "18.4", "18.2", "18.0", "17.6.1", "17.0", "16.7.10", "16.0", "15.8.3", "15.0", "14.8.1", "14.0"
+        // Do not list iOS 99 — MZFinance returns HTTP 403 for that UA. Use Newest IPA instead.
+        "18.4", "18.2", "18.0", "17.6.1", "17.0", "16.7.10", "16.0", "15.8.3", "15.0", "14.8.1", "14.0"
     ]
 
     static func realModelIdentifier() -> String {

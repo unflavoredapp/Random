@@ -40,7 +40,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "403",
             title: "Store rejected client identity (HTTP 403)",
-            summary: "Apple blocked the silent store request. Usually spoof advertising iOS 99 / exotic headers — switch to This iPhone or Newest IPA, then re-auth Store Access.",
+            summary: "Apple blocked the silent store request. Usually spoof advertising iOS 99 / exotic headers — switch to This iPhone, then retry (download will auto-retry once).",
             matches: ["http 403", "403", "client identity"],
             actionTitle: "Use This iPhone spoof",
             action: .turnOffClientInfoRewrite
@@ -72,7 +72,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "cryptid",
             title: "FairPlay still encrypted (cryptid)",
-            summary: "iOS never stored Media & Purchases keys for this Apple ID. Sign in once in the App Store, then acknowledge.",
+            summary: "iOS never stored Media & Purchases keys for this Apple ID. Sign in once in the App Store (Media & Purchases), then tap I’ve signed in on this iPhone.",
             matches: ["cryptid", "fairplay", "still encrypted", "decryption keys", "media & purchases"],
             actionTitle: "Open App Store sign-in",
             action: .openAppStoreSignIn
@@ -97,6 +97,8 @@ enum FailurePlaybook {
     static func run(_ play: FailurePlay) async {
         switch play.action {
         case .openAppStoreSignIn:
+            // Force the Decrypt ack sheet again after a real Media & Purchases sign-in.
+            AppStoreDecryptGuide.setAcknowledged(false, email: AppleIDStore.shared.email)
             AppStoreDecryptGuide.openAppStore()
         case .acknowledgeFairPlay:
             AppStoreDecryptGuide.setAcknowledged(true, email: AppleIDStore.shared.email)
@@ -114,15 +116,7 @@ enum FailurePlaybook {
                 AppNav.shared.go(AppTab.settings.rawValue)
             }
         case .turnOffClientInfoRewrite:
-            var spoof = StoreDeviceSpoof.current
-            spoof.rewriteClientInfo = false
-            spoof.sanitizeAbsurdIOSClaim()
-            let profiles = StoreSpoofProfile.builtIn(realModel: StoreDeviceSpoof.realModelIdentifier())
-            // Prefer a safe preset when recovering from 403/404.
-            if let match = profiles.first(where: { $0.id == "device" }) {
-                spoof.apply(match)
-            }
-            StoreDeviceSpoof.current = spoof
+            StoreDeviceSpoof.applyThisiPhone()
         case .openPair:
             AppNav.shared.go(AppTab.pair.rawValue)
         case .openStoreAccess:

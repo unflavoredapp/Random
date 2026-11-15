@@ -43,6 +43,8 @@ final class DeviceDecryptService: ObservableObject {
     func runStoreConnectionSmokeTest() {
         // Force device channel so Telegram bot mode can't swallow the smoke test.
         DecryptChannel.current = .device
+        // Leftover exotic spoof (iOS 99 / Client-Info rewrite) 403s MZFinance — pin This iPhone first.
+        StoreDeviceSpoof.applyThisiPhone()
         decryptFromSearch(Self.smokeTestApp)
     }
 
@@ -617,50 +619,64 @@ final class DeviceDecryptService: ObservableObject {
         let ipa: URL
         let downloadedVersion: String
         let downloadedMinOS: String?
-        do {
-            let result = try await purchaseAndDownloadWithStoreRefresh(
-                adamId: adam,
-                account: &account,
-                destination: dest,
-                externalVersionId: pinned.isEmpty ? nil : pinned,
-                version: version
-            )
-            ipa = result.url
-            downloadedVersion = result.item.displayVersion
-            downloadedMinOS = result.item.minimumOS
-            pinned = result.item.externalVersionId.isEmpty ? pinned : result.item.externalVersionId
-        } catch AppStoreClientError.paidApp {
-            throw DecryptError(
-                "\(displayName) is paid — silent download only covers free/owned apps. Buy it once with this Apple ID, then decrypt again (still no App Store UI from TetherLess)."
-            )
-        } catch AppStoreClientError.licenseRequired {
-            throw DecryptError(
-                "This Apple ID doesn’t own a license for \(displayName). Buy or redeem it once, then decrypt again."
-            )
-        } catch AppStoreClientError.needsTwoFactor {
-            AppleIDStore.shared.noteStoreNeedsVerification()
-            throw DecryptError(
-                "Store needs the first Sign In trust. In Settings › Store Access, Sign Out then Sign In once — the Allow / verification code unlocks Store automatically (no second text)."
-            )
-        } catch AppStoreClientError.tokenExpired {
-            throw DecryptError(
-                "App Store session couldn’t refresh automatically — open Settings › Store Access and tap refresh, then retry. You should still be signed in."
-            )
-        } catch AppStoreClientError.network(let detail) {
-            let lower = detail.lowercased()
-            if lower.contains("403") || lower.contains("client identity") {
+        var identityRetryUsed = false
+        downloadAttempt: while true {
+            do {
+                let result = try await purchaseAndDownloadWithStoreRefresh(
+                    adamId: adam,
+                    account: &account,
+                    destination: dest,
+                    externalVersionId: pinned.isEmpty ? nil : pinned,
+                    version: version
+                )
+                ipa = result.url
+                downloadedVersion = result.item.displayVersion
+                downloadedMinOS = result.item.minimumOS
+                pinned = result.item.externalVersionId.isEmpty ? pinned : result.item.externalVersionId
+                break downloadAttempt
+            } catch AppStoreClientError.paidApp {
                 throw DecryptError(
-                    "App Store download failed (\(detail)). Store identity rejection — not missing FairPlay keys. In Settings › Store Access, switch spoof to “This iPhone” (or “Newest IPA”), then retry (no need to sign out)."
+                    "\(displayName) is paid — silent download only covers free/owned apps. Buy it once with this Apple ID, then decrypt again (still no App Store UI from TetherLess)."
+                )
+            } catch AppStoreClientError.licenseRequired {
+                throw DecryptError(
+                    "This Apple ID doesn’t own a license for \(displayName). Buy or redeem it once, then decrypt again."
+                )
+            } catch AppStoreClientError.needsTwoFactor {
+                AppleIDStore.shared.noteStoreNeedsVerification()
+                throw DecryptError(
+                    "Store needs the first Sign In trust. In Settings › Store Access, Sign Out then Sign In once — the Allow / verification code unlocks Store automatically (no second text)."
+                )
+            } catch AppStoreClientError.tokenExpired {
+                throw DecryptError(
+                    "App Store session couldn’t refresh automatically — open Settings › Store Access and tap refresh, then retry. You should still be signed in."
+                )
+            } catch AppStoreClientError.network(let detail) {
+                let lower = detail.lowercased()
+                if (lower.contains("403") || lower.contains("client identity")), !identityRetryUsed {
+                    identityRetryUsed = true
+                    StoreDeviceSpoof.applyThisiPhone()
+                    publishDecryptProgress("Store rejected spoof identity (HTTP 403) — switched to This iPhone, retrying…")
+                    if let refreshed = await AppleIDStore.shared.reinforceStoreConnection() {
+                        account = refreshed
+                    }
+                    continue downloadAttempt
+                }
+                if lower.contains("403") || lower.contains("client identity") {
+                    throw DecryptError(
+                        "App Store download failed (\(detail)). Store identity rejection — not missing FairPlay keys. Spoof was reset to This iPhone; tap Retry or re-auth Store Access if it still fails."
+                    )
+                }
+                throw DecryptError(
+                    "App Store download failed (\(detail)). Retry from Settings › Store Access if needed. If spoof is on, leave Auto-pick on and keep Client-Info rewrite off."
                 )
             }
-            throw DecryptError(
-                "App Store download failed (\(detail)). Retry from Settings › Store Access if needed. If spoof is on, leave Auto-pick on and keep Client-Info rewrite off."
-            )
         }
 
         let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
-        if spoof.enabled, let min = downloadedMinOS, !spoof.acceptsMinimumOS(min) {
-            publishDecryptProgress("Warning: package wants iOS \(min)+ but spoof claims \(spoof.effectiveIOSVersion)…")
+        let activeSpoof = StoreDeviceSpoof.current
+        if activeSpoof.enabled, let min = downloadedMinOS, !activeSpoof.acceptsMinimumOS(min) {
+            publishDecryptProgress("Warning: package wants iOS \(min)+ but spoof claims \(activeSpoof.effectiveIOSVersion)…")
         }
         // Competition path: build/sign/install a real “Tetherless Decrypt” companion
         // IPA (EmbeddedPayload + user’s Apple ID cert). The console UI runs only there.
@@ -727,6 +743,8 @@ final class DeviceDecryptService: ObservableObject {
                         )
                     }
                 }
+                // Ack without real Media & Purchases keys → clear so Decrypt UI re-prompts sign-in.
+                AppStoreDecryptGuide.setAcknowledged(false, email: AppleIDStore.shared.email)
                 throw DecryptError(
                     "Silent download succeeded, but FairPlay decrypt failed (\(ipaError.localizedDescription)). \(AppStoreDecryptGuide.failureHint)"
                 )
