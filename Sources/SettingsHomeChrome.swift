@@ -479,6 +479,7 @@ struct SettingsAppleIDCard: View {
                 AuthClientSpoofCard()
                 AnisetteServerCard()
                 PhoneDecryptWorkerCard()
+                IPadnOptionalCard()
             }
             .padding(20)
             .padding(.bottom, 28)

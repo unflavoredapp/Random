@@ -40,7 +40,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "403",
             title: "Store rejected client identity (HTTP 403)",
-            summary: "Apple blocked the silent store request. Store spoof is disabled — we remint + rotate anisette, then fall back to backend encrypted-IPA fetch (FairPlay stays on device).",
+            summary: "Apple blocked the silent store request. Store spoof is disabled — we remint + rotate anisette, then fall back to backend encrypted-IPA fetch. Or enable optional iPadn (Settings) to download owned/history IPAs and Decrypt from Installed.",
             matches: ["http 403", "403", "client identity"],
             actionTitle: "Remint Store Access",
             action: .turnOffClientInfoRewrite
