@@ -162,6 +162,17 @@ final class AppStoreClient: ObservableObject {
             throw AppStoreClientError.message("Enter Apple ID and password for Store downloads.")
         }
 
+        // SAP ActionSignature is required for Apple's current store edge (ipatool #525 /
+        // ApplePackage). Unsigned posts get HTML 301-without-Location or empty 204.
+        let sapSigner: SAPSigner
+        do {
+            sapSigner = try await SAPSigner.connect()
+        } catch {
+            throw AppStoreClientError.message(
+                "Store SAP setup failed (\(error.localizedDescription)). Check network and retry."
+            )
+        }
+
         // Legacy MZFinance first — native/fast/ often 204/404s before credentials are checked
         // (ipatool #513/#530). Then try common buy pods when the edge never redirects.
         var lastError: Error = AppStoreClientError.message("App Store sign-in failed after retries.")
@@ -186,7 +197,8 @@ final class AppStoreClient: ObservableObject {
                     guid: guid,
                     anisette: anisette,
                     startEndpoint: makeURL(guid),
-                    hadAuthCode: !code.isEmpty
+                    hadAuthCode: !code.isEmpty,
+                    sapSigner: sapSigner
                 )
             } catch {
                 lastError = error
@@ -214,7 +226,8 @@ final class AppStoreClient: ObservableObject {
         guid: String,
         anisette: AnisetteHeaders,
         startEndpoint: String,
-        hadAuthCode: Bool
+        hadAuthCode: Bool,
+        sapSigner: SAPSigner
     ) async throws -> StorefrontSession {
         var endpoint = startEndpoint
         var attempt = 1
@@ -222,24 +235,32 @@ final class AppStoreClient: ObservableObject {
         var last: [String: Any] = [:]
         var headers: [String: String] = [:]
         var lastTransient: Error?
-        // ipatool loginRequest: AMD aliases only (not duplicate X-Apple-I-MD / I-MD-M).
-        let authHeaders: [String: String] = [
-            "Content-Type": "application/x-apple-plist",
-            "User-Agent": configuratorUA
-        ]
 
         while attempt <= 3, redirects <= 4 {
             do {
+                let body: [String: Any] = [
+                    "appleId": email,
+                    "attempt": "\(attempt)",
+                    "guid": guid,
+                    "password": passwordWithCode,
+                    "rmp": "0",
+                    "why": "signIn"
+                ]
+                let bodyData = try PropertyListSerialization.data(
+                    fromPropertyList: body, format: .xml, options: 0
+                )
+                // Signature must cover the exact POST bytes (ApplePackage / ipatool).
+                let signature = try await sapSigner.sign(bodyData)
+                let authHeaders: [String: String] = [
+                    "Content-Type": "application/x-apple-plist",
+                    "User-Agent": configuratorUA,
+                    "X-Apple-ActionSignature": signature.base64EncodedString()
+                ]
+
                 let (dict, respHeaders, status) = try await postPlist(
                     url: endpoint,
-                    body: [
-                        "appleId": email,
-                        "attempt": "\(attempt)",
-                        "guid": guid,
-                        "password": passwordWithCode,
-                        "rmp": "0",
-                        "why": "signIn"
-                    ],
+                    body: body,
+                    bodyData: bodyData,
                     anisette: anisette,
                     extraHeaders: authHeaders,
                     allowRedirectCapture: true,
@@ -259,13 +280,24 @@ final class AppStoreClient: ObservableObject {
                             "Store authenticate redirected (HTTP \(status)) without Location."
                         )
                     }
-                    endpoint = try Self.resolveAuthenticateRedirect(
+                    let next = try Self.resolveAuthenticateRedirect(
                         from: endpoint,
                         location: loc,
                         guid: guid
                     )
+                    // newRequest.url can echo the current URL when Location was missing —
+                    // that is a soft edge reject, not a real pod hop.
+                    let nextURL = URL(string: next)
+                    let curURL = URL(string: endpoint)
+                    if nextURL?.host?.lowercased() == curURL?.host?.lowercased(),
+                       nextURL?.path == curURL?.path {
+                        throw AppStoreClientError.network(
+                            "Store authenticate redirected (HTTP \(status)) without Location."
+                        )
+                    }
+                    endpoint = next
                     redirects += 1
-                    continue // same attempt payload (ipatool)
+                    continue // same attempt payload (ipatool) — re-sign happens next loop
                 }
 
                 let failure = string(dict["failureType"])
@@ -1080,6 +1112,7 @@ final class AppStoreClient: ObservableObject {
     private func postPlist(
         url: String,
         body: [String: Any],
+        bodyData: Data? = nil,
         anisette: AnisetteHeaders,
         extraHeaders: [String: String],
         allowRedirectCapture: Bool = false,
@@ -1090,7 +1123,8 @@ final class AppStoreClient: ObservableObject {
         guard let endpoint = URL(string: url) else {
             throw AppStoreClientError.message("Bad App Store URL.")
         }
-        let plist = try PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
+        // Prefer pre-serialized bytes when a SAP signature was computed over them.
+        let plist = try bodyData ?? PropertyListSerialization.data(fromPropertyList: body, format: .xml, options: 0)
         var req = URLRequest(url: endpoint)
         req.httpMethod = "POST"
         req.httpBody = plist
@@ -1122,6 +1156,16 @@ final class AppStoreClient: ObservableObject {
                 headerMap[String(describing: k)] = String(describing: v)
             }
         }
+        if let http, let loc = http.value(forHTTPHeaderField: "Location"), !loc.isEmpty {
+            headerMap["Location"] = loc
+        }
+        // iOS often omits Location from allHeaderFields when the redirect is cancelled —
+        // recover it from the redirect delegate's newRequest.url.
+        if (300..<400).contains(status),
+           (headerMap["Location"] ?? headerMap["location"] ?? "").isEmpty,
+           let captured = StoreRedirectBlocker.shared.takeLastRedirectLocation() {
+            headerMap["Location"] = captured
+        }
         if (300..<400).contains(status) {
             if allowRedirectCapture {
                 return ([:], headerMap, status)
@@ -1132,6 +1176,7 @@ final class AppStoreClient: ObservableObject {
                 return try await postPlist(
                     url: next,
                     body: body,
+                    bodyData: bodyData,
                     anisette: anisette,
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: false,
@@ -1150,6 +1195,7 @@ final class AppStoreClient: ObservableObject {
                 return try await postPlist(
                     url: url,
                     body: body,
+                    bodyData: bodyData,
                     anisette: anisette,
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: allowRedirectCapture,
@@ -1170,6 +1216,7 @@ final class AppStoreClient: ObservableObject {
                 return try await postPlist(
                     url: url,
                     body: body,
+                    bodyData: bodyData,
                     anisette: anisette,
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: allowRedirectCapture,
@@ -1186,6 +1233,7 @@ final class AppStoreClient: ObservableObject {
                 return try await postPlist(
                     url: url,
                     body: body,
+                    bodyData: bodyData,
                     anisette: anisette,
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: allowRedirectCapture,
@@ -1202,6 +1250,7 @@ final class AppStoreClient: ObservableObject {
                 return try await postPlist(
                     url: url,
                     body: body,
+                    bodyData: bodyData,
                     anisette: anisette,
                     extraHeaders: extraHeaders,
                     allowRedirectCapture: allowRedirectCapture,
@@ -1343,8 +1392,20 @@ final class AppStoreClient: ObservableObject {
 }
 
 /// Blocks HTTP redirects so authenticate can re-POST to pod `Location` (ipatool-style).
+/// Captures Location from both response headers and `newRequest.url` — on iOS,
+/// cancelled redirects often omit Location from `allHeaderFields` even when present.
 private final class StoreRedirectBlocker: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     static let shared = StoreRedirectBlocker()
+    private let lock = NSLock()
+    private var lastRedirectLocation: String?
+
+    func takeLastRedirectLocation() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        let value = lastRedirectLocation
+        lastRedirectLocation = nil
+        return value
+    }
 
     func urlSession(
         _ session: URLSession,
@@ -1353,6 +1414,17 @@ private final class StoreRedirectBlocker: NSObject, URLSessionTaskDelegate, @unc
         newRequest request: URLRequest,
         completionHandler: @escaping (URLRequest?) -> Void
     ) {
+        var location = response.value(forHTTPHeaderField: "Location")?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if location.isEmpty, let url = request.url?.absoluteString, !url.isEmpty {
+            // newRequest is built from Location even when allHeaderFields later drops it.
+            location = url
+        }
+        if !location.isEmpty {
+            lock.lock()
+            lastRedirectLocation = location
+            lock.unlock()
+        }
         completionHandler(nil)
     }
 }

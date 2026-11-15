@@ -1,0 +1,2 @@
+// StoreSAP: FairPlay SAP signing adapted from ApplePackage (Lakr233/ApplePackage),
+// used to mint X-Apple-ActionSignature for MZFinance authenticate.
