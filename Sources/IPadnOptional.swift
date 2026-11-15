@@ -1,8 +1,7 @@
 //
 //  IPadnOptional.swift
-//  Optional companion: mengangs/ipadn downloads owned / history / delisted
-//  encrypted IPAs; TetherLess FairPlay-decrypts them (or Installed apps).
-//  We do not vendor iPadn — link only (GPL-2.0).
+//  Optional in-app iPadn search (vendored logic under Sources/IPadn, GPL-2.0).
+//  Upstream: https://github.com/mengangs/ipadn
 //
 
 import SwiftUI
@@ -12,9 +11,6 @@ enum IPadnOptional {
     static let defaultsKey = "tetherless.optional.ipadn.enabled"
     static let repoURL = URL(string: "https://github.com/mengangs/ipadn")!
     static let releasesURL = URL(string: "https://github.com/mengangs/ipadn/releases/latest")!
-    static let altStoreSourceURL = URL(
-        string: "https://raw.githubusercontent.com/mengangs/ipadn/main/altstore-source.json"
-    )!
 
     static var isEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: defaultsKey) }
@@ -30,7 +26,7 @@ enum IPadnOptional {
     }
 }
 
-/// Settings toggle — opt into iPadn as an encrypted-IPA downloader beside TetherLess.
+/// Settings toggle — enables in-app iPadn search on the Decrypt tab.
 struct IPadnOptionalCard: View {
     @AppStorage(IPadnOptional.defaultsKey) private var enabled = false
 
@@ -39,10 +35,10 @@ struct IPadnOptionalCard: View {
             VStack(alignment: .leading, spacing: 12) {
                 Toggle(isOn: $enabled) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("iPadn (optional)")
+                        Text("iPadn search (optional)")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text("Open-source owned-app downloader (history versions, delisted, regional). Sign their unsigned IPA, download encrypted packages there, then FairPlay-decrypt here — or Decrypt from Library › Installed.")
+                        Text("Uses iPadn’s store search in TetherLess (multi-region, App ID, delisted stubs). Decrypt still runs FairPlay here. Source: mengangs/ipadn (GPL-2.0).")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.45))
                             .fixedSize(horizontal: false, vertical: true)
@@ -51,11 +47,16 @@ struct IPadnOptionalCard: View {
                 .tint(TetherlessPalette.accent)
 
                 if enabled {
+                    Text("Open Decrypt — the iPadn Search card appears under This Device. You can still install the standalone iPadn IPA for history downloads.")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.4))
+                        .fixedSize(horizontal: false, vertical: true)
+
                     HStack(spacing: 10) {
                         Button {
-                            IPadnOptional.openReleases()
+                            AppNav.shared.go(AppTab.decrypt.rawValue)
                         } label: {
-                            Text("Get iPadn IPA")
+                            Text("Open Decrypt")
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
@@ -67,7 +68,7 @@ struct IPadnOptionalCard: View {
                         Button {
                             IPadnOptional.openRepo()
                         } label: {
-                            Text("GitHub")
+                            Text("Source")
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)
@@ -76,47 +77,9 @@ struct IPadnOptionalCard: View {
                         }
                         .buttonStyle(.plain)
                     }
-
-                    Text("SideStore / AltStore source: raw.githubusercontent.com/mengangs/ipadn/main/altstore-source.json — or Library › + after you share an encrypted IPA from iPadn into TetherLess.")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.4))
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
     }
 }
 
-/// Decrypt-tab tip when the optional iPadn path is enabled.
-struct IPadnDecryptTipCard: View {
-    @AppStorage(IPadnOptional.defaultsKey) private var enabled = false
-
-    var body: some View {
-        if enabled {
-            GlassCard(corner: 22) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 10) {
-                        Image(systemName: "arrow.down.app.fill")
-                            .foregroundStyle(TetherlessPalette.accent)
-                        Text("iPadn → TetherLess")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                        Spacer(minLength: 0)
-                    }
-                    Text("Use iPadn to pull owned / older / delisted encrypted IPAs when Store Access is stuck. Share the IPA into Library › Unsigned, install it, then Decrypt from Installed — FairPlay stays on this iPhone.")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.5))
-                        .fixedSize(horizontal: false, vertical: true)
-                    Button {
-                        IPadnOptional.openReleases()
-                    } label: {
-                        Text("Open iPadn releases")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(TetherlessPalette.accent)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-}

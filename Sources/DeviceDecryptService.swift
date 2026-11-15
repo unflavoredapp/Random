@@ -493,7 +493,7 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.message = "Starting…"
             DecryptClient.shared.error = nil
             let deviceApp = DeviceApp(
-                bundleID: app.bundle.isEmpty ? app.id : app.bundle,
+                bundleID: app.bundle,
                 name: app.name,
                 version: app.version,
                 isAppStore: true
@@ -526,12 +526,21 @@ final class DeviceDecryptService: ObservableObject {
                 throw DecryptError("Sign in under Settings › Store Access with the Apple ID that owns this app.")
             }
             let bid = app.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !bid.isEmpty else {
+            let link: String
+            if !storeURL.isEmpty {
+                link = storeURL
+            } else if !bid.isEmpty {
+                link = try await self.storeURL(forBundleID: bid)
+            } else {
+                throw DecryptError("Missing App Store link or bundle ID — search again or paste an App Store link.")
+            }
+            // Adam ID in the store URL is enough for silent download (iPadn delisted stubs).
+            let hasAdam = link.range(of: #"/id\d+"#, options: .regularExpression) != nil
+            guard !bid.isEmpty || hasAdam else {
                 throw DecryptError("Missing bundle ID — search again or paste an App Store link.")
             }
             // Always hand FairPlay to the separate “Tetherless Decrypt” companion IPA
             // (store package preferred; live install embed if download fails).
-            let link = storeURL.isEmpty ? try await self.storeURL(forBundleID: bid) : storeURL
             do {
                 try await silentPurchaseDownloadDecrypt(
                     bundleID: bid,
@@ -542,7 +551,7 @@ final class DeviceDecryptService: ObservableObject {
                 )
                 return
             } catch {
-                guard let installed = await resolveInstalledAppURL(bundleID: bid) else { throw error }
+                guard !bid.isEmpty, let installed = await resolveInstalledAppURL(bundleID: bid) else { throw error }
                 publishDecryptProgress("Store package failed — embedding installed \(app.name) into companion…")
                 publishDecryptProgress(error.localizedDescription)
                 try FairPlayKeyGate.requireReady()
