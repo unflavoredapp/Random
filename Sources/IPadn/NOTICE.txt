@@ -8,5 +8,8 @@ Included:
 - Store search (IPadnStoreClient) — keyword / App ID / multi-region
 - Store login (IPadnAppleAuthentication, IPadnHTTPClient, IPadnStoreLogin) —
   bag.xml authenticate, Configurator redirects, AMD proof loop
-ActionSignature uses TetherLess StoreSAP (native); AMD uses Anisette.
-WASM SAPRuntime / ADI store-proof is not compiled into the app.
+- WASM SAPRuntime store-proof (IPadnWASMSPSigner, IPadnLoopbackServer,
+  IPadnStoreProofStore) — bundled under Resources/SAPRuntime for sapSign +
+  sapStoreProofHeaders / sapStoreProvision (ADI AMD-Action SP/RP).
+  Named IPadnWASMSPSigner so it does not clash with StoreSAP/SAPSigner.
+  On WASM failure, login falls back once to native StoreSAP + Anisette AMD.

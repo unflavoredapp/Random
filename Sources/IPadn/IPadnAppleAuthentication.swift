@@ -176,8 +176,7 @@ enum IPadnAppleAuthentication {
                     throw IPadnToolError.message("Device verification incomplete — retry Store unlock.")
                 }
                 didProvision = true
-                // Anisette remint stands in for WASM ADI store-proof (challenge unused without sap.wasm).
-                _ = challenge
+                // Challenge is consumed by WASM ADI (sapStoreProvision) or Anisette remint fallback.
                 state.buffered = try await provisionProof(challenge)
                 state.isProvisioned = true
             case .invalidChallenge:

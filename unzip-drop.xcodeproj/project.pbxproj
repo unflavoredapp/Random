@@ -14,6 +14,7 @@
 		424653534C00000000000001 /* OpenSSL in Frameworks */ = {isa = PBXBuildFile; productRef = 50524F4453534C0000000001 /* OpenSSL */; };
 		5641504F520000000000001 /* Vapor in Frameworks */ = {isa = PBXBuildFile; productRef = 5641504F52500000000001 /* Vapor */; };
 		A403726B2E112543E3434DCA /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7682B969F8DF974AA9306D80 /* Assets.xcassets */; };
+		B5A9C0DE0000000000000001 /* SAPRuntime in Resources */ = {isa = PBXBuildFile; fileRef = B5A9C0DE0000000000000002 /* SAPRuntime */; };
 		AD5E00000000000000000001 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD5E0000000000000000000A /* PacketTunnelProvider.swift */; };
 		AD5E00000000000000000002 /* LocalPacketReflection.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD5E0000000000000000000B /* LocalPacketReflection.swift */; };
 		AD5E00000000000000000003 /* AirShareDeviceTunnel.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AD5E0000000000000000000E /* AirShareDeviceTunnel.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -62,6 +63,7 @@
 		8C7D82082434432C835A5512 /* AVX512ObjcInternal.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = AVX512ObjcInternal.m; sourceTree = "<group>"; };
 		2456595988ACDF120DEEB9B4 /* unzip-drop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "unzip-drop.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		7682B969F8DF974AA9306D80 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		B5A9C0DE0000000000000002 /* SAPRuntime */ = {isa = PBXFileReference; lastKnownFileType = folder; name = SAPRuntime; path = Sources/IPadn/Resources/SAPRuntime; sourceTree = "<group>"; };
 		93A01B663D5573D864F29811 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		115CB1AE83B2B9BBFB0A9A95 /* unzip-drop.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = "unzip-drop.entitlements"; sourceTree = "<group>"; };
 		AD5E0000000000000000000A /* PacketTunnelProvider.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PacketTunnelProvider.swift; sourceTree = "<group>"; };
@@ -76,8 +78,25 @@
 		AD5F0000000000000000000F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		B5A9C0DE0000000000000003 /* Exceptions for "Sources" folder in "unzip-drop" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				IPadn/Resources/SAPRuntime,
+			);
+			target = 7161E63E34B4EFFA56B6844D /* unzip-drop */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		CF0E7EE12920CA355A866327 /* Sources */ = {isa = PBXFileSystemSynchronizedRootGroup; path = Sources; sourceTree = "<group>"; };
+		CF0E7EE12920CA355A866327 /* Sources */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				B5A9C0DE0000000000000003 /* Exceptions for "Sources" folder in "unzip-drop" target */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -117,6 +136,7 @@
 			children = (
 				CF0E7EE12920CA355A866327 /* Sources */,
 				7682B969F8DF974AA9306D80 /* Assets.xcassets */,
+				B5A9C0DE0000000000000002 /* SAPRuntime */,
 				93A01B663D5573D864F29811 /* Info.plist */,
 				115CB1AE83B2B9BBFB0A9A95 /* unzip-drop.entitlements */,
 				CFC214850958184838F815CE /* Products */,
@@ -295,6 +315,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A403726B2E112543E3434DCA /* Assets.xcassets in Resources */,
+				B5A9C0DE0000000000000001 /* SAPRuntime in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
