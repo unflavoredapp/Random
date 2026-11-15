@@ -329,18 +329,9 @@ final class AppleIDStore: ObservableObject {
         save()
     }
 
-    /// Account APIs (authenticate / Owned) must not rewrite Client-Info — that 204s MZFinance.
-    /// Also clear spoofs Apple rejects with HTTP 403 (literal iOS 99 / rewrite on).
+    /// Account APIs (authenticate / Owned) use real-device identity only — wipe any leftover Store spoof.
     func sanitizeStoreIdentityForAccountAPIs() {
-        var spoof = StoreDeviceSpoof.current
-        if spoof.looksLikeRejectedIdentity {
-            StoreDeviceSpoof.applyThisiPhone()
-            return
-        }
-        if spoof.rewriteClientInfo {
-            spoof.rewriteClientInfo = false
-            StoreDeviceSpoof.current = spoof
-        }
+        StoreDeviceSpoof.clearPersistedSpoof()
     }
 
     // MARK: Auth — Settings / Decrypt API

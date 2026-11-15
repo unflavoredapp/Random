@@ -219,10 +219,8 @@ final class AppStoreClient: ObservableObject {
             throw AppStoreClientError.message("Enter Apple ID and password for Store downloads.")
         }
 
-        // Soft 204/302 often follows a leftover exotic spoof — pin This iPhone before minting.
-        if StoreDeviceSpoof.current.looksLikeRejectedIdentity || StoreDeviceSpoof.current.rewriteClientInfo {
-            StoreDeviceSpoof.applyThisiPhone()
-        }
+        // Real-device identity only — never mint under a leftover Store spoof profile.
+        StoreDeviceSpoof.clearPersistedSpoof()
 
         // SAP ActionSignature is required for Apple's current store edge (ipatool #525 /
         // ApplePackage). Unsigned posts get HTML 301-without-Location or empty 204.
@@ -1654,8 +1652,8 @@ final class AppStoreClient: ObservableObject {
             || raw.localizedCaseInsensitiveContains("<head>")
         if status == 403 {
             return looksHTML
-                ? "Store rejected this device identity (HTTP 403). In Settings › Store Access set spoof to This iPhone, then Retry Store unlock."
-                : "Non-plist App Store response (HTTP 403). Turn spoof off or use This iPhone, then Retry Store unlock."
+                ? "Store rejected this device identity (HTTP 403). Tap Retry Store unlock under Settings › Store Access."
+                : "Non-plist App Store response (HTTP 403). Tap Retry Store unlock under Settings › Store Access."
         }
         if status == 404 {
             return "Store endpoint returned HTTP 404. Tap Retry Store unlock — or Sign Out and Sign In once. Stay signed in."

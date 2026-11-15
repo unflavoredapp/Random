@@ -43,8 +43,8 @@ final class DeviceDecryptService: ObservableObject {
     func runStoreConnectionSmokeTest() {
         // Force device channel so Telegram bot mode can't swallow the smoke test.
         DecryptChannel.current = .device
-        // Leftover exotic spoof (iOS 99 / Client-Info rewrite) 403s MZFinance — pin This iPhone first.
-        StoreDeviceSpoof.applyThisiPhone()
+        // Real-device identity only — wipe any leftover Store spoof prefs before smoke test.
+        StoreDeviceSpoof.clearPersistedSpoof()
         decryptFromSearch(Self.smokeTestApp)
     }
 
@@ -568,18 +568,14 @@ final class DeviceDecryptService: ObservableObject {
             throw DecryptError("Couldn't resolve an App Store id for \(displayName). Try another search result.")
         }
         publishDecryptProgress("Contacting Apple…")
-        let spoof = StoreDeviceSpoof.current
-        if spoof.enabled {
-            publishDecryptProgress("Reinforcing Store connection · spoof \(spoof.summaryLabel)…")
-        } else {
-            publishDecryptProgress("Reinforcing Store connection…")
-        }
+        StoreDeviceSpoof.clearPersistedSpoof()
+        publishDecryptProgress("Reinforcing Store connection…")
         guard let reinforced = await AppleIDStore.shared.reinforceStoreConnection() else {
             throw DecryptError("Sign in under Settings › Store Access with the Apple ID that owns this app.")
         }
         var account = reinforced
 
-        // Explicit pin from Versions sheet, else spoof-compatible / display-version resolve inside client.
+        // Explicit pin from Versions sheet, else display-version resolve inside client.
         var pinned = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if pinned.isEmpty {
             do {
@@ -602,9 +598,7 @@ final class DeviceDecryptService: ObservableObject {
                 pinned = ""
             }
         }
-        if spoof.enabled, pinned.isEmpty {
-            publishDecryptProgress("Spoof \(spoof.summaryLabel) · downloading with store UA…")
-        } else if let version, !version.isEmpty, pinned.isEmpty {
+        if let version, !version.isEmpty, pinned.isEmpty {
             publishDecryptProgress("Using latest owned build (couldn’t pin v\(version))…")
         } else if !pinned.isEmpty {
             publishDecryptProgress("Pinning store build \(pinned)…")
@@ -618,7 +612,6 @@ final class DeviceDecryptService: ObservableObject {
 
         let ipa: URL
         let downloadedVersion: String
-        let downloadedMinOS: String?
         var identityRetryUsed = false
         downloadAttempt: while true {
             do {
@@ -631,7 +624,6 @@ final class DeviceDecryptService: ObservableObject {
                 )
                 ipa = result.url
                 downloadedVersion = result.item.displayVersion
-                downloadedMinOS = result.item.minimumOS
                 pinned = result.item.externalVersionId.isEmpty ? pinned : result.item.externalVersionId
                 break downloadAttempt
             } catch AppStoreClientError.paidApp {
@@ -655,7 +647,7 @@ final class DeviceDecryptService: ObservableObject {
                 let lower = detail.lowercased()
                 if (lower.contains("403") || lower.contains("client identity")), !identityRetryUsed {
                     identityRetryUsed = true
-                    StoreDeviceSpoof.applyThisiPhone()
+                    StoreDeviceSpoof.clearPersistedSpoof()
                     // SideStore-style: rotate anisette server, then remint passwordToken.
                     let nextAni = await AnisetteClient.shared.rotateServer()
                     publishDecryptProgress(
@@ -675,16 +667,12 @@ final class DeviceDecryptService: ObservableObject {
                     )
                 }
                 throw DecryptError(
-                    "App Store download failed (\(detail)). Retry from Settings › Store Access if needed. If spoof is on, leave Auto-pick on and keep Client-Info rewrite off."
+                    "App Store download failed (\(detail)). Retry from Settings › Store Access if needed."
                 )
             }
         }
 
         let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
-        let activeSpoof = StoreDeviceSpoof.current
-        if activeSpoof.enabled, let min = downloadedMinOS, !activeSpoof.acceptsMinimumOS(min) {
-            publishDecryptProgress("Warning: package wants iOS \(min)+ but spoof claims \(activeSpoof.effectiveIOSVersion)…")
-        }
         // Competition path: build/sign/install a real “Tetherless Decrypt” companion
         // IPA (EmbeddedPayload + user’s Apple ID cert). The console UI runs only there.
         publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
