@@ -19,7 +19,7 @@ TetherLess ships a glassmorphism shell over the existing signing and install sta
 
 - **Purple → teal** full-bleed gradient background
 - **Glass cards** and capsule controls with soft material blur
-- **Floating tab bar** — Pair · Files · Library · Decrypt · Settings
+- **Floating tab bar** — Pair · Files · Library · Search · Account (Decrypt search mirrors iPadn’s Search layout)
 - Gradient **app icon** (no-cable mark) matching the UI palette
 
 Backends (TrustCore signing, OTA, native install) are unchanged under the new chrome.
@@ -40,8 +40,8 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 | **Pair** | On-device pairing + local VPN for native installs |
 | **Files** | Drop / open archives, extract, inspect, push |
 | **Library** | Source repos, staff picks, updates, device-installed apps |
-| **Decrypt** | All-in-one This Device FairPlay (in-app, no helper) or optional Telegram Bot + multi-account Store Access |
-| **Settings** | Install method (OTA vs Native), Store Access, certs, account |
+| **Search** | iPadn-style Store search → Get / Versions → FairPlay decrypt (or optional Telegram Bot) |
+| **Account** | Install method (OTA vs Native), Store Access, certs, settings |
 
 **Decrypt tip:** Prefer **Library › Installed → Decrypt**. **iPadn Store search** is on by default (Settings) for name / App ID / store-link / multi-region / delisted lookup plus Timbrd·Bilin·iosdump version history (Sources/IPadn, GPL-2.0). **Telegram / Phone Worker** remains optional.
 | **Sign & install** | TrustCore signing, OTA via `*.tetherless.dev`, or native idevice install |
