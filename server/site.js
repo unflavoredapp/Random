@@ -1301,6 +1301,21 @@ function mountSite(web, d0) {
       decMod.attachWorkerRoutes(web, { jsonBody, fail });
     }
 
+    // Backend encrypted-IPA fetch: device signs commerce (SAP + anisette + passwordToken);
+    // this host hits Apple / CDN so phone HTTP 403 can fall back without Phone Worker.
+    try {
+      const storeFetchJson = expressLib.json({ limit: "512kb", type: "application/json" });
+      require("./storeFetch").attachRoutes(web, {
+        jsonBody: storeFetchJson,
+        fail,
+        guard,
+        needUser,
+        actorId,
+      });
+    } catch (e) {
+      console.warn("Store fetch-ipa disabled:", e.message);
+    }
+
     // Own Telegram bot → same decrypt jobs (phone worker). Optional TELEGRAM_BOT_TOKEN.
     if (decMod && typeof decMod.startTelegramBot === "function") {
       decMod.startTelegramBot({
