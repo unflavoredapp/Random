@@ -130,14 +130,22 @@ enum StoreOwnedAppsClient {
     }
 
     private static func throwIfHTTPOrDAAPFailed(_ status: Int, body: Data, label: String) throws {
+        // DAAP 401/403 often means this Purchase-DAAP path rejected the token — not that
+        // MZFinance passwordToken is dead for downloads. Soft-fail Owned; keep Store Access.
         if status == 401 || status == 403 {
-            throw AppStoreClientError.tokenExpired
+            throw AppStoreClientError.message(
+                "Owned list unavailable (HTTP \(status)). Search still works — Store Access can stay signed in."
+            )
         }
         if status != 200 {
             throw AppStoreClientError.network("\(label) returned HTTP \(status).")
         }
         if let daap = firstDMAPUint(body, tag: "mstt") {
-            if daap == 401 || daap == 403 { throw AppStoreClientError.tokenExpired }
+            if daap == 401 || daap == 403 {
+                throw AppStoreClientError.message(
+                    "Owned list unavailable (DAAP \(daap)). Search still works — Store Access can stay signed in."
+                )
+            }
             if daap != 200 {
                 throw AppStoreClientError.network("\(label) returned DAAP status \(daap).")
             }

@@ -985,7 +985,7 @@ final class AppleIDStore: ObservableObject {
     }
 
     /// Recovery when Store never piggybacked the first trust / Owned HTTP 204:
-    /// clear dead token, pristine Client-Info, re-mint with PET (+ Allow digits if still held).
+    /// re-mint with PET (+ Allow digits if still held). Keeps the prior session if remint fails.
     func requestStoreVerificationPrompt() async {
         storefrontNeedsRefresh = true
         lastError = nil
@@ -998,37 +998,31 @@ final class AppleIDStore: ObservableObject {
         if GSAAuthClient.shared.hasPendingTwoFactor {
             GSAAuthClient.shared.cancel()
         }
+
+        // Snapshot so a failed remint (HTTP 404 edge) cannot leave Store Access empty
+        // when we already had a usable passwordToken.
+        let previous = storefrontSession()
         await reconnectStoreSessionIfNeeded(force: true)
+
         if let session = storefrontSession(), session.isUsable {
-            // Prove with Owned when possible — but never wipe a just-minted passwordToken
-            // on Owned HTTP 204. Decrypt buy/download can still work with the token.
             storeNeedsVerification = false
-            do {
-                _ = try await AppStoreClient.shared.purchaseHistory(account: session)
-                lastError = nil
-                statusMessage = "Store access ready — free & purchased downloads unlocked"
-            } catch {
-                let detail = error.localizedDescription
-                if let ase = error as? AppStoreClientError, case .tokenExpired = ase {
-                    clearPersistedStoreSession()
-                    storeNeedsVerification = true
-                    lastError = detail
-                    statusMessage = "Store session expired — Sign Out, then Sign In once for a fresh trust token."
-                    withAnimation(.snappy) { authPhase = .idle }
-                    return
-                }
-                // Soft Owned / edge noise must not paint red under a green Store session.
-                if Self.isSoftStoreNoise(detail) {
-                    lastError = nil
-                    statusMessage = "Store access ready — free & purchased downloads unlocked"
-                } else {
-                    lastError = nil // keep chrome green; Decrypt will surface real download errors
-                    statusMessage = "Store access ready — Owned check skipped; try Decrypt search/download"
-                }
-            }
+            lastError = nil
+            // Owned list is best-effort — never demote green Store Access if it soft-fails.
+            _ = try? await AppStoreClient.shared.purchaseHistory(account: session)
+            statusMessage = "Store access ready — free & purchased downloads unlocked"
             withAnimation(.snappy) { authPhase = .idle }
             return
         }
+
+        if let previous, previous.isUsable {
+            persistStoreSession(previous)
+            storeNeedsVerification = false
+            lastError = nil
+            statusMessage = "Store access ready — kept previous session (remint soft-failed). Try Decrypt search/download."
+            withAnimation(.snappy) { authPhase = .idle }
+            return
+        }
+
         storeNeedsVerification = true
         statusMessage = "Store still needs the Allow-sheet trust token. Sign Out, then Sign In once — Submit Code unlocks Store automatically (no second text)."
         withAnimation(.snappy) { authPhase = .idle }
@@ -1280,6 +1274,9 @@ final class AppleIDStore: ObservableObject {
             || m.contains("network connection was lost")
             || m.contains("resend text")
             || m.contains("owned")
+            || m.contains("token expired")
+            || m.contains("session expired")
+            || m.contains("daap")
     }
 
     private func storedPET() -> String? {
