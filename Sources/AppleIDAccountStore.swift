@@ -1000,17 +1000,34 @@ final class AppleIDStore: ObservableObject {
         }
         await reconnectStoreSessionIfNeeded(force: true)
         if let session = storefrontSession(), session.isUsable {
-            // Prove the token with Owned — structurally “usable” can still 204.
+            // Prove with Owned when possible — but never wipe a just-minted passwordToken
+            // on Owned HTTP 204. Decrypt buy/download can still work with the token.
+            storeNeedsVerification = false
             do {
                 _ = try await AppStoreClient.shared.purchaseHistory(account: session)
-                storeNeedsVerification = false
+                lastError = nil
                 statusMessage = "Store access ready — free & purchased downloads unlocked"
-                withAnimation(.snappy) { authPhase = .idle }
-                return
             } catch {
-                clearPersistedStoreSession()
-                lastError = error.localizedDescription
+                let detail = error.localizedDescription
+                if let ase = error as? AppStoreClientError, case .tokenExpired = ase {
+                    clearPersistedStoreSession()
+                    storeNeedsVerification = true
+                    lastError = detail
+                    statusMessage = "Store session expired — Sign Out, then Sign In once for a fresh trust token."
+                    withAnimation(.snappy) { authPhase = .idle }
+                    return
+                }
+                if detail.localizedCaseInsensitiveContains("204")
+                    || detail.localizedCaseInsensitiveContains("non-plist") {
+                    lastError = nil
+                    statusMessage = "Store access ready — Owned list soft-failed (HTTP 204); downloads still use this session"
+                } else {
+                    lastError = detail
+                    statusMessage = "Store access ready — Owned check failed; try Decrypt search/download"
+                }
             }
+            withAnimation(.snappy) { authPhase = .idle }
+            return
         }
         storeNeedsVerification = true
         statusMessage = "Store still needs the Allow-sheet trust token. Sign Out, then Sign In once — Submit Code unlocks Store automatically (no second text)."
