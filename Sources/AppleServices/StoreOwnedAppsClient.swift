@@ -219,7 +219,9 @@ enum StoreOwnedAppsClient {
             // Prefer iOS / iPadOS-ish entries; skip pure Mac-only later if needed.
             apps.append(app)
         }
-        return apps
+        return apps.sorted {
+            ($0.purchaseDate ?? .distantPast) > ($1.purchaseDate ?? .distantPast)
+        }
     }
 
     private static func parseOwnedApp(_ data: Data) -> OwnedStoreApp? {
@@ -228,6 +230,7 @@ enum StoreOwnedAppsClient {
         var name = ""
         var version = ""
         var mediaKind: UInt64 = 0
+        var purchaseDate: Date?
         _ = walkDMAP(data, depth: 0) { tag, payload in
             switch tag {
             case "aeSI":
@@ -240,6 +243,10 @@ enum StoreOwnedAppsClient {
                 if name.isEmpty { name = String(data: payload, encoding: .utf8) ?? "" }
             case "aePd":
                 version = String(data: payload, encoding: .utf8) ?? ""
+            case "asdp":
+                if let v = dmapInt64(payload) {
+                    purchaseDate = Date(timeIntervalSince1970: TimeInterval(v))
+                }
             case "aeMk":
                 mediaKind = dmapUInt(payload)
             default:
@@ -255,7 +262,8 @@ enum StoreOwnedAppsClient {
             bundleId: bundleId,
             version: version,
             artistName: "",
-            iconURL: nil
+            iconURL: nil,
+            purchaseDate: purchaseDate
         )
     }
 

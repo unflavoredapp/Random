@@ -124,6 +124,8 @@ struct OwnedStoreApp: Identifiable, Hashable, Sendable {
     var version: String
     var artistName: String
     var iconURL: URL?
+    /// Purchase / redownload timestamp from DAAP `asdp` when available.
+    var purchaseDate: Date? = nil
 
     var id: Int { adamId }
 
@@ -138,6 +140,19 @@ struct OwnedStoreApp: Identifiable, Hashable, Sendable {
             dev: artistName,
             version: version,
             url: storeURL
+        )
+    }
+
+    var asIPadnStoreApp: IPadnStoreApp {
+        IPadnStoreApp(
+            id: "\(adamId)",
+            name: name,
+            bundleID: bundleId,
+            version: version,
+            iconURL: iconURL,
+            developer: artistName,
+            storeURL: storeURL,
+            country: "US"
         )
     }
 }

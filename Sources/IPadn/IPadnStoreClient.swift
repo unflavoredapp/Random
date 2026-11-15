@@ -56,15 +56,22 @@ struct IPadnStoreApp: Identifiable, Hashable, Sendable {
     var size: Int64 = 0
     var price: String = ""
     var priceValue: Double?
+    var currency: String? = nil
+    var rating: Double = 0
     var minimumOS: String = ""
     var externalVersionID: String?
     var developer: String = ""
     var storeURL: String = ""
     var country: String = "US"
     var delisted: Bool = false
+    var screenshotURLs: [URL] = []
 
     var isFree: Bool { price.isEmpty || priceValue == 0 || price.lowercased() == "free" }
     var adamId: Int? { Int(id) }
+    var sizeLabel: String {
+        guard size > 0 else { return "" }
+        return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+    }
 
     func asDecryptApp() -> DecryptApp {
         let code = country.lowercased()
@@ -359,6 +366,13 @@ enum IPadnStoreClient {
             ?? (row["artworkUrl100"] as? String).flatMap(URL.init(string:))
         let priceValue = row["price"] as? Double ?? (row["price"] as? NSNumber)?.doubleValue
         let formatted = row["formattedPrice"] as? String ?? ""
+        let rating = (row["averageUserRating"] as? Double)
+            ?? (row["averageUserRating"] as? NSNumber)?.doubleValue
+            ?? 0
+        let shots = ((row["screenshotUrls"] as? [String]) ?? [])
+            .compactMap(URL.init(string:))
+        let ipadShots = ((row["ipadScreenshotUrls"] as? [String]) ?? [])
+            .compactMap(URL.init(string:))
         return IPadnStoreApp(
             id: trackId,
             name: string(row["trackName"]).isEmpty ? "App" : string(row["trackName"]),
@@ -370,13 +384,31 @@ enum IPadnStoreClient {
             size: int64(row["fileSizeBytes"]),
             price: formatted,
             priceValue: priceValue,
+            currency: string(row["currency"]).isEmpty ? nil : string(row["currency"]),
+            rating: rating,
             minimumOS: string(row["minimumOsVersion"]),
             developer: string(row["artistName"]),
             storeURL: string(row["trackViewUrl"]).isEmpty
                 ? "https://apps.apple.com/\(country.lowercased())/app/id\(trackId)"
                 : string(row["trackViewUrl"]),
-            country: country.uppercased()
+            country: country.uppercased(),
+            screenshotURLs: Array((shots.isEmpty ? ipadShots : shots).prefix(10))
         )
+    }
+
+    /// Public iTunes lookup for detail / multi-region price pages.
+    static func lookupPublic(id: String, country: String) async throws -> IPadnStoreApp? {
+        let url = try endpoint(
+            "https://itunes.apple.com/lookup",
+            items: [
+                URLQueryItem(name: "id", value: id),
+                URLQueryItem(name: "country", value: country.lowercased()),
+                URLQueryItem(name: "entity", value: "software")
+            ]
+        )
+        let data = try await json(url)
+        let results = (data["results"] as? [[String: Any]]) ?? []
+        return results.first.flatMap { mapLookup($0, country: country.uppercased()) }
     }
 
     private static func endpoint(_ base: String, items: [URLQueryItem]) throws -> URL {

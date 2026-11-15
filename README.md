@@ -37,10 +37,10 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 
 | Area | What you get |
 | --- | --- |
-| **Search** | iPadn-style Store search → Get / Versions → FairPlay decrypt (or optional Telegram Bot) |
-| **Downloads** | Active decrypt jobs, recent history, signed installs; jump to Files |
-| **Purchased** | Apple ID purchase history → Get / Versions (requires Store Access) |
-| **Account** | Apple ID, Purchased / Downloads shortcuts, Pair, Files, Library, Settings |
+| **Search** | iPadn-style Store search → App Detail / Get → Downloads (or FairPlay decrypt) |
+| **Downloads** | Real download manager — pause / resume / progress / Install / Retry / Edit |
+| **Purchased** | Purchase history with dates, Select, cloud redownload, App Detail |
+| **Account** | Apple ID, Installation settings (One-tap / Native / Certificate / Proxy), Pair, Files, Library, Settings |
 
 **Decrypt tip:** Prefer **Account › Installed & sources → Decrypt**, or **Purchased**. **iPadn Store search** is on by default (Settings) for name / App ID / store-link / multi-region / delisted lookup plus Timbrd·Bilin·iosdump version history (Sources/IPadn, GPL-2.0). **Telegram / Phone Worker** remains optional.
 | **Sign & install** | TrustCore signing, OTA via `*.tetherless.dev`, or native idevice install |

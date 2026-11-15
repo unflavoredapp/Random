@@ -11,8 +11,16 @@ Included:
 - Search chrome (IPadnSearchChrome) — PageHeader, capsule SearchInput, filter
   chips, AppRow + Get capsule, recent-search chips (from SearchView /
   DesignSystem / SharedViews patterns)
-- Tab homes (IPadnTabHomes) — English Downloads / Purchased / Account roots
-  modeled on DownloadsView, PurchasedView, AccountsView
+- Tab homes (IPadnTabHomes, IPadnDownloadsView) — English Downloads /
+  Purchased / Account roots modeled on DownloadsView, PurchasedView,
+  AccountsView (real download queue, purchase dates, Select / Install)
+- App detail + version history (IPadnAppDetailView) — rating/size/preview/
+  Version History / Apple sync toggle
+- Multi-region prices (IPadnPriceViews) — RegionPriceView English clone
+- Installation settings (IPadnInstallationSettings) — One-tap / Native /
+  Certificate / Proxy segments wired to TetherLess install stack
+- Download manager (IPadnDownloadManager) — pause / resume / Store IPA /
+  URL import, modeled on DownloadManager
 - Store login (IPadnAppleAuthentication, IPadnHTTPClient, IPadnStoreLogin) —
   bag.xml authenticate, Configurator redirects, AMD proof loop
 - WASM SAPRuntime store-proof (IPadnWASMSPSigner, IPadnLoopbackServer,

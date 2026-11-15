@@ -187,7 +187,7 @@ enum AppTab: Int, CaseIterable, Identifiable {
 
 /// Nested destinations under Account (TetherLess Pair / Files / Library / Settings).
 enum AppAccountPush: String, Identifiable, Hashable {
-    case pair, files, library, settings
+    case pair, files, library, settings, installation
     var id: String { rawValue }
 
     var title: String {
@@ -196,6 +196,7 @@ enum AppAccountPush: String, Identifiable, Hashable {
         case .files: return "Files"
         case .library: return "Library"
         case .settings: return "Settings"
+        case .installation: return "Installation settings"
         }
     }
 
@@ -205,6 +206,7 @@ enum AppAccountPush: String, Identifiable, Hashable {
         case .files: return "folder.fill"
         case .library: return "square.stack.3d.up.fill"
         case .settings: return "gearshape.fill"
+        case .installation: return "wrench.and.screwdriver"
         }
     }
 }

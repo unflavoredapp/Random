@@ -23,6 +23,20 @@ struct DecryptApp: Identifiable, Hashable {
     var countryCode: String = ""
     /// Short badge label (e.g. `US`, `JP`).
     var countryLabel: String = ""
+
+    var asIPadnStoreApp: IPadnStoreApp {
+        let adam = id.split(separator: "-").last.map(String.init) ?? id.filter(\.isNumber)
+        return IPadnStoreApp(
+            id: adam.isEmpty ? id : adam,
+            name: name,
+            bundleID: bundle,
+            version: version,
+            iconURL: icon,
+            developer: dev,
+            storeURL: url,
+            country: countryCode.isEmpty ? "US" : countryCode.uppercased()
+        )
+    }
 }
 
 struct DecryptVersion: Identifiable, Hashable {
@@ -417,7 +431,10 @@ struct DecryptView: View {
             && !c.searching
     }
 
+    @State private var detailPath = NavigationPath()
+
     var body: some View {
+        NavigationStack(path: $detailPath) {
         ZStack {
             Theme.bg.ignoresSafeArea().task {
                 await c.refreshQuota()
@@ -508,14 +525,19 @@ struct DecryptView: View {
                                 IPadnDecryptAppRow(
                                     app: app,
                                     onGet: {
-                                        DeviceDecryptService.shared.decryptFromSearch(app)
+                                        do {
+                                            try IPadnDownloadManager.shared.enqueueStore(app: app)
+                                            AppNav.shared.goDownloads()
+                                        } catch {
+                                            DeviceDecryptService.shared.decryptFromSearch(app)
+                                        }
                                     },
                                     onVersions: {
-                                        versionsApp = app
-                                        c.select(app)
-                                        Task { await c.loadVersions(page: 1) }
+                                        detailPath.append(app.asIPadnStoreApp)
                                     }
                                 )
+                                .contentShape(Rectangle())
+                                .onTapGesture { detailPath.append(app.asIPadnStoreApp) }
                                 Divider().overlay(.white.opacity(0.08))
                             }
                         } else if showingIdleSuggestions {
@@ -562,6 +584,9 @@ struct DecryptView: View {
                 .padding(.bottom, 120)
             }
         }
+        .navigationDestination(for: IPadnStoreApp.self) { app in
+            IPadnAppDetailView(app: app)
+        }
         .sheet(item: $versionsApp) { app in
             DecryptVersionsSheet(app: app)
                 .preferredColorScheme(.dark)
@@ -578,6 +603,7 @@ struct DecryptView: View {
             Task { await warmStoreSessionForNiche() }
         }
         .onChange(of: c.pendingQuery) { _ in consumePendingQuery() }
+        } // NavigationStack
     }
 
     private func runSearch() {

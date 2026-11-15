@@ -1,403 +1,291 @@
 //
 //  IPadnTabHomes.swift
-//  English Downloads / Purchased / Account tab roots modeled on mengangs/ipadn
-//  DownloadsView, PurchasedView, AccountsView (GPL-2.0).
+//  English Purchased + Account tab roots modeled on mengangs/ipadn
+//  PurchasedView / AccountsView (GPL-2.0). Downloads live in IPadnDownloadsView.
 //
 
 import SwiftUI
-import UniformTypeIdentifiers
-
-// MARK: - Downloads
-
-struct DownloadsHomeView: View {
-    @ObservedObject private var decrypt = DecryptClient.shared
-    @ObservedObject private var device = DeviceDecryptService.shared
-    @ObservedObject private var signed = SignedStore.shared
-    @State private var filter: DownloadFilterChip = .all
-    @State private var term = ""
-    @State private var pickingIPA = false
-
-    private enum DownloadFilterChip: String, CaseIterable, Identifiable {
-        case all, active, done, failed
-        var id: String { rawValue }
-        var title: String {
-            switch self {
-            case .all: return "All"
-            case .active: return "Active"
-            case .done: return "Completed"
-            case .failed: return "Failed"
-            }
-        }
-        var symbol: String {
-            switch self {
-            case .all: return "line.3.horizontal.decrease.circle"
-            case .active: return "arrow.down.circle"
-            case .done: return "checkmark.circle"
-            case .failed: return "exclamationmark.triangle"
-            }
-        }
-    }
-
-    var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16) {
-                IPadnPageHeader(title: "Downloads") {
-                    Button {
-                        pickingIPA = true
-                    } label: {
-                        Image(systemName: "plus")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 36, height: 36)
-                            .background(Color.white.opacity(0.12), in: Circle())
-                    }
-                    .accessibilityLabel("Add IPA")
-                }
-
-                IPadnCapsuleSearch(
-                    text: $term,
-                    placeholder: "Filter downloads",
-                    onSubmit: {}
-                )
-
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(DownloadFilterChip.allCases) { chip in
-                            Button {
-                                filter = chip
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: chip.symbol).font(.caption.weight(.semibold))
-                                    Text(chip.title).font(.subheadline.weight(.medium))
-                                }
-                                .foregroundStyle(filter == chip ? .white : .white.opacity(0.7))
-                                .padding(.horizontal, 12)
-                                .frame(minHeight: 32)
-                                .background(
-                                    filter == chip ? TetherlessPalette.accent.opacity(0.9) : Color.white.opacity(0.10),
-                                    in: Capsule()
-                                )
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-
-                if showsActive {
-                    activeJobCard
-                }
-
-                if !decrypt.history.isEmpty, filter == .all || filter == .done {
-                    Text("Recent decrypts")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.white)
-                    ForEach(filteredHistory) { item in
-                        historyRow(item)
-                        Divider().overlay(.white.opacity(0.08))
-                    }
-                }
-
-                if !signed.entries.isEmpty, filter == .all || filter == .done {
-                    Text("Signed installs")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.white)
-                        .padding(.top, 8)
-                    ForEach(filteredSigned.prefix(20)) { entry in
-                        signedRow(entry)
-                        Divider().overlay(.white.opacity(0.08))
-                    }
-                }
-
-                if !showsActive && filteredHistory.isEmpty && filteredSigned.isEmpty {
-                    emptyDownloads
-                }
-
-                Button {
-                    AppNav.shared.goFiles()
-                } label: {
-                    Label("Open Files", systemImage: "folder.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(TetherlessPalette.accent)
-                }
-                .buttonStyle(.plain)
-                .padding(.top, 8)
-            }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 120)
-        }
-        .background(Theme.bg.ignoresSafeArea())
-        .sheet(isPresented: $pickingIPA) {
-            DocPicker(types: [UTType(filenameExtension: "ipa") ?? .data]) { urls in
-                guard let url = urls.first else { return }
-                AppNav.shared.goSearch()
-                DecryptClient.shared.pendingQuery = url.deletingPathExtension().lastPathComponent
-            }
-        }
-    }
-
-    private var showsActive: Bool {
-        guard filter == .all || filter == .active || filter == .failed else { return false }
-        if filter == .failed { return decrypt.phase == .failed }
-        return decrypt.phase != .idle || decrypt.busy || device.busy
-    }
-
-    private var filteredHistory: [DecryptHistoryItem] {
-        let q = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        return decrypt.history.filter {
-            q.isEmpty
-                || $0.name.localizedCaseInsensitiveContains(q)
-                || $0.bundle.localizedCaseInsensitiveContains(q)
-                || $0.version.localizedCaseInsensitiveContains(q)
-        }
-    }
-
-    private var filteredSigned: [SignedEntry] {
-        let q = term.trimmingCharacters(in: .whitespacesAndNewlines)
-        return signed.entries.filter {
-            q.isEmpty
-                || $0.name.localizedCaseInsensitiveContains(q)
-                || $0.bundleID.localizedCaseInsensitiveContains(q)
-        }
-    }
-
-    @ViewBuilder private var activeJobCard: some View {
-        GlassCard(corner: 22) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(decrypt.phase == .failed ? "Failed" : "In progress")
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Spacer()
-                    if decrypt.phase != .failed, decrypt.phase != .done, decrypt.phase != .handedOff {
-                        ProgressView().tint(TetherlessPalette.accent)
-                    }
-                }
-                Text(decrypt.finishedName.isEmpty ? (decrypt.selected?.name ?? "Decrypt job") : decrypt.finishedName)
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.75))
-                Text(decrypt.message.isEmpty ? (decrypt.error ?? phaseLabel(decrypt.phase)) : decrypt.message)
-                    .font(.caption)
-                    .foregroundStyle(decrypt.phase == .failed ? .orange : .white.opacity(0.45))
-                    .fixedSize(horizontal: false, vertical: true)
-                if decrypt.phase == .failed || decrypt.phase == .done || decrypt.phase == .handedOff {
-                    Button("Dismiss") { decrypt.reset() }
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.55))
-                }
-            }
-        }
-    }
-
-    private func historyRow(_ item: DecryptHistoryItem) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: "lock.open.fill")
-                .foregroundStyle(TetherlessPalette.accent)
-                .frame(width: 44, height: 44)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(item.name).font(.body.weight(.medium)).foregroundStyle(.white).lineLimit(1)
-                Text([item.version.isEmpty ? nil : "v\(item.version)", item.bundle]
-                    .compactMap { $0 }.joined(separator: " · "))
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.4))
-                    .lineLimit(1)
-            }
-            Spacer()
-            IPadnGetCapsule(title: "Retry") {
-                DecryptClient.shared.pendingQuery = item.name
-                AppNav.shared.goSearch()
-            }
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func signedRow(_ entry: SignedEntry) -> some View {
-        HStack(spacing: 14) {
-            Image(systemName: "checkmark.seal.fill")
-                .foregroundStyle(TetherlessPalette.success)
-                .frame(width: 44, height: 44)
-                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.name).font(.body.weight(.medium)).foregroundStyle(.white).lineLimit(1)
-                Text(entry.bundleID)
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.4))
-                    .lineLimit(1)
-            }
-            Spacer()
-            Text("Signed")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.white.opacity(0.45))
-        }
-        .padding(.vertical, 4)
-    }
-
-    private func phaseLabel(_ phase: DecryptClient.Phase) -> String {
-        switch phase {
-        case .idle: return "Idle"
-        case .queued: return "Queued"
-        case .running: return "Running"
-        case .downloading: return "Downloading"
-        case .done: return "Done"
-        case .failed: return "Failed"
-        case .handedOff: return "Handed off"
-        }
-    }
-
-    private var emptyDownloads: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "arrow.down.circle")
-                .font(.system(size: 44))
-                .foregroundStyle(.white.opacity(0.35))
-            Text("No downloads yet")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.white)
-            Text("Search for a free or purchased app, or import an IPA. Progress and history show up here.")
-                .font(.subheadline)
-                .foregroundStyle(.white.opacity(0.5))
-                .multilineTextAlignment(.center)
-            Button {
-                AppNav.shared.goSearch()
-            } label: {
-                Text("Open Search")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 10)
-                    .background(TetherlessPalette.accent, in: Capsule())
-            }
-            .buttonStyle(.plain)
-        }
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 28)
-    }
-}
 
 // MARK: - Purchased
 
 struct PurchasedHomeView: View {
     @ObservedObject private var store = AppleIDStore.shared
-    @ObservedObject private var decrypting = DeviceDecryptService.shared
+    @ObservedObject private var manager = IPadnDownloadManager.shared
     @State private var owned: [OwnedStoreApp] = []
     @State private var loading = false
     @State private var loadError: String?
     @State private var term = ""
+    @State private var query = ""
     @State private var months = 0
+    @State private var selecting = false
+    @State private var selection = Set<Int>()
+    @State private var batchProgress: (done: Int, total: Int)?
+    @State private var path = NavigationPath()
 
     private var filtered: [OwnedStoreApp] {
-        let q = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cutoff = Calendar.current.date(byAdding: .month, value: -months, to: Date()) ?? .distantPast
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return owned.filter {
-            q.isEmpty
-                || $0.name.localizedCaseInsensitiveContains(q)
-                || $0.bundleId.localizedCaseInsensitiveContains(q)
-                || "\($0.adamId)".contains(q)
+            (months == 0 || ($0.purchaseDate ?? .distantPast) >= cutoff)
+                && (q.isEmpty
+                    || $0.name.localizedCaseInsensitiveContains(q)
+                    || $0.bundleId.localizedCaseInsensitiveContains(q)
+                    || "\($0.adamId)".contains(q))
         }
     }
 
+    private var downloadBadges: [Int: (text: String, tint: Color)] {
+        var badges: [Int: (text: String, tint: Color)] = [:]
+        for job in manager.jobs where job.status == .completed {
+            guard let adam = job.adamId else { continue }
+            if badges[adam] == nil {
+                badges[adam] = (
+                    job.version.isEmpty ? "Downloaded" : "Downloaded \(job.version)",
+                    TetherlessPalette.success
+                )
+            }
+        }
+        return badges
+    }
+
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 16) {
-                IPadnPageHeader(title: "Purchased") {
-                    Menu {
-                        Button {
-                            Task { await refresh() }
+        NavigationStack(path: $path) {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    IPadnPageHeader(title: "Purchased") {
+                        Menu {
+                            Button {
+                                Task { await refresh() }
+                            } label: {
+                                Label("Refresh", systemImage: "arrow.clockwise")
+                            }
+                            Button {
+                                AppNav.shared.goSettings()
+                            } label: {
+                                Label("Store Access", systemImage: "gearshape")
+                            }
                         } label: {
-                            Label("Refresh", systemImage: "arrow.clockwise")
+                            Image(systemName: "ellipsis")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 36, height: 36)
+                                .background(Color.white.opacity(0.12), in: Circle())
                         }
+                        .accessibilityLabel("More")
+                    }
+
+                    if store.isSignedIn {
+                        IPadnCapsuleSearch(
+                            text: $term,
+                            placeholder: "Search purchases or App ID",
+                            onSubmit: {}
+                        )
+
+                        Picker("Purchase window", selection: $months) {
+                            Text("All").tag(0)
+                            Text("1 mo").tag(1)
+                            Text("6 mo").tag(6)
+                            Text("1 yr").tag(12)
+                        }
+                        .pickerStyle(.segmented)
+
+                        Text("Account: \(store.email)")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.4))
+
+                        if loading && owned.isEmpty {
+                            HStack {
+                                ProgressView().tint(TetherlessPalette.accent)
+                                Text("Syncing purchase history…")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.55))
+                            }
+                        } else if let loadError, !loadError.isEmpty {
+                            Text(loadError)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                            Button("Retry") { Task { await refresh() } }
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(TetherlessPalette.accent)
+                        } else if filtered.isEmpty {
+                            emptyPurchased
+                        } else {
+                            let badges = downloadBadges
+                            HStack {
+                                Text("\(filtered.count) item\(filtered.count == 1 ? "" : "s")")
+                                    .font(.title3.weight(.bold))
+                                    .foregroundStyle(.white)
+                                Spacer()
+                                Button(selecting ? "Done" : "Select") {
+                                    withAnimation {
+                                        selecting.toggle()
+                                        selection.removeAll()
+                                    }
+                                }
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(TetherlessPalette.accent)
+                                .disabled(batchProgress != nil)
+                            }
+
+                            ForEach(filtered) { app in
+                                purchasedRow(app, badge: badges[app.adamId])
+                                Divider().overlay(.white.opacity(0.08))
+                            }
+                        }
+                    } else {
+                        Text("Sign in under Store Access to sync purchases and download apps you own.")
+                            .font(.callout)
+                            .foregroundStyle(.white.opacity(0.65))
                         Button {
                             AppNav.shared.goSettings()
                         } label: {
-                            Label("Store Access", systemImage: "gearshape")
+                            Text("Sign In")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 12)
+                                .background(TetherlessPalette.accent, in: Capsule())
                         }
-                    } label: {
-                        Image(systemName: "ellipsis")
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 36, height: 36)
-                            .background(Color.white.opacity(0.12), in: Circle())
+                        .buttonStyle(.plain)
                     }
-                    .accessibilityLabel("More")
                 }
-
-                if store.isSignedIn {
-                    IPadnCapsuleSearch(
-                        text: $term,
-                        placeholder: "Search purchases or App ID",
-                        onSubmit: {}
-                    )
-
-                    Picker("Purchase window", selection: $months) {
-                        Text("All").tag(0)
-                        Text("1 mo").tag(1)
-                        Text("6 mo").tag(6)
-                        Text("1 yr").tag(12)
-                    }
-                    .pickerStyle(.segmented)
-
-                    Text("Account: \(store.email)")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.4))
-
-                    if loading {
-                        HStack {
-                            ProgressView().tint(TetherlessPalette.accent)
-                            Text("Loading purchase history…")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.55))
-                        }
-                    } else if let loadError, !loadError.isEmpty {
-                        Text(loadError)
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button("Retry") { Task { await refresh() } }
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(TetherlessPalette.accent)
-                    } else if filtered.isEmpty {
-                        emptyPurchased
-                    } else {
-                        Text("\(filtered.count) item\(filtered.count == 1 ? "" : "s")")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.white)
-                        ForEach(filtered) { app in
-                            IPadnDecryptAppRow(
-                                app: app.asDecryptApp,
-                                onGet: {
-                                    DeviceDecryptService.shared.decryptFromSearch(app.asDecryptApp)
-                                },
-                                onVersions: {
-                                    DecryptClient.shared.select(app.asDecryptApp)
-                                    AppNav.shared.goSearch()
-                                }
-                            )
-                            Divider().overlay(.white.opacity(0.08))
-                        }
-                    }
-                } else {
-                    Text("Sign in under Store Access to sync purchases and download apps you own.")
-                        .font(.callout)
-                        .foregroundStyle(.white.opacity(0.65))
-                    Button {
-                        AppNav.shared.goSettings()
-                    } label: {
-                        Text("Open Store Access")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 12)
-                            .background(TetherlessPalette.accent, in: Capsule())
-                    }
-                    .buttonStyle(.plain)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 120)
+            }
+            .background(Theme.bg.ignoresSafeArea())
+            .navigationDestination(for: IPadnStoreApp.self) { app in
+                IPadnAppDetailView(app: app)
+            }
+            .task { await refresh() }
+            .refreshable { await refresh() }
+            .task(id: term) {
+                if !term.isEmpty { try? await Task.sleep(nanoseconds: 250_000_000) }
+                guard !Task.isCancelled else { return }
+                query = term
+            }
+            .safeAreaInset(edge: .bottom) {
+                if selecting {
+                    selectBar
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 120)
         }
-        .background(Theme.bg.ignoresSafeArea())
-        .task { await refresh() }
-        .refreshable { await refresh() }
+    }
+
+    @ViewBuilder private func purchasedRow(_ app: OwnedStoreApp, badge: (text: String, tint: Color)?) -> some View {
+        let subtitle = app.purchaseDate.map {
+            "Purchased on \($0.formatted(.dateTime.year().month(.defaultDigits).day()))"
+        }
+        if selecting {
+            Button {
+                if selection.contains(app.adamId) { selection.remove(app.adamId) }
+                else { selection.insert(app.adamId) }
+            } label: {
+                HStack(spacing: 12) {
+                    Image(systemName: selection.contains(app.adamId) ? "checkmark.circle.fill" : "circle")
+                        .font(.title2)
+                        .foregroundStyle(selection.contains(app.adamId) ? TetherlessPalette.accent : .white.opacity(0.35))
+                    purchasedContent(app, subtitle: subtitle, badge: badge, showCloud: false)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } else {
+            Button {
+                path.append(app.asIPadnStoreApp)
+            } label: {
+                purchasedContent(app, subtitle: subtitle, badge: badge, showCloud: true)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func purchasedContent(
+        _ app: OwnedStoreApp,
+        subtitle: String?,
+        badge: (text: String, tint: Color)?,
+        showCloud: Bool
+    ) -> some View {
+        HStack(spacing: 14) {
+            AsyncImage(url: app.iconURL) { phase in
+                switch phase {
+                case .success(let img):
+                    img.resizable().scaledToFill()
+                default:
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Color.white.opacity(0.08))
+                        .overlay { Image(systemName: "app.fill").foregroundStyle(.white.opacity(0.35)) }
+                }
+            }
+            .frame(width: 56, height: 56)
+            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(app.name)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+                if let badge {
+                    Text(badge.text)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(badge.tint)
+                }
+            }
+            Spacer(minLength: 0)
+            if showCloud {
+                Button {
+                    try? manager.enqueueStore(owned: app)
+                    AppNav.shared.goDownloads()
+                } label: {
+                    Image(systemName: "arrow.down.circle")
+                        .font(.title2)
+                        .foregroundStyle(TetherlessPalette.accent)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Download \(app.name)")
+                Image(systemName: "chevron.forward")
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.3))
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private var selectBar: some View {
+        HStack(spacing: 12) {
+            let visible = filtered
+            let allSelected = !visible.isEmpty && visible.allSatisfy { selection.contains($0.adamId) }
+            Button(allSelected ? "Deselect All" : "Select All") {
+                if allSelected { selection.subtract(visible.map(\.adamId)) }
+                else { selection.formUnion(visible.map(\.adamId)) }
+            }
+            .disabled(visible.isEmpty || batchProgress != nil)
+            Spacer()
+            if let batchProgress {
+                ProgressView()
+                Text("Adding \(batchProgress.done)/\(batchProgress.total)")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.7))
+            } else {
+                Button {
+                    downloadSelected()
+                } label: {
+                    Text(selection.isEmpty ? "Download Selected" : "Download Selected (\(selection.count))")
+                        .fontWeight(.semibold)
+                }
+                .disabled(selection.isEmpty)
+            }
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 14)
+        .background(.ultraThinMaterial)
+        .padding(.bottom, 56)
     }
 
     private var emptyPurchased: some View {
@@ -405,21 +293,48 @@ struct PurchasedHomeView: View {
             Image(systemName: "bag")
                 .font(.system(size: 44))
                 .foregroundStyle(.white.opacity(0.35))
-            Text("No purchases listed")
+            Text(term.isEmpty && months == 0 ? "No purchase history" : "No matching apps")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
-            Text("Apple didn’t return items for this session, or the list is empty. Search still works for free and owned apps.")
+            Text(term.isEmpty && months == 0
+                 ? "After sync you can find and download apps you’ve acquired."
+                 : "Try another keyword or purchase window.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.5))
                 .multilineTextAlignment(.center)
+            if !term.isEmpty || months != 0 {
+                Button("Clear Filters") { term = ""; query = ""; months = 0 }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            } else {
+                Button("Sync Now") { Task { await refresh() } }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 28)
     }
 
+    private func downloadSelected() {
+        let apps = owned.filter { selection.contains($0.adamId) }
+        guard !apps.isEmpty, batchProgress == nil else { return }
+        batchProgress = (0, apps.count)
+        Task {
+            var done = 0
+            for app in apps {
+                try? manager.enqueueStore(owned: app)
+                done += 1
+                batchProgress = (done, apps.count)
+            }
+            batchProgress = nil
+            selection.removeAll()
+            selecting = false
+            AppNav.shared.goDownloads()
+        }
+    }
+
     private func refresh() async {
-        // Purchase-window chips match iPadn UI; OwnedStoreApp has no date yet.
-        _ = months
         guard store.isSignedIn else {
             owned = []
             return
@@ -436,7 +351,7 @@ struct PurchasedHomeView: View {
     }
 }
 
-// MARK: - Account (iPadn AccountsView English)
+// MARK: - Account
 
 struct AccountHomeView: View {
     @ObservedObject private var store = AppleIDStore.shared
@@ -447,9 +362,7 @@ struct AccountHomeView: View {
         NavigationStack(path: $path) {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 18) {
-                    IPadnPageHeader(title: "Account") {
-                        EmptyView()
-                    }
+                    IPadnPageHeader(title: "Account") { EmptyView() }
 
                     profileCard
 
@@ -458,11 +371,12 @@ struct AccountHomeView: View {
 
                     sectionHeader("Library")
                     navRow(.purchasedTab, title: "Purchased", symbol: "bag.fill")
-                    navRow(.downloadsTab, title: "Downloads & install", symbol: "arrow.down.circle.fill")
-                    pushRow(.library, title: "Installed & sources", symbol: "square.stack.3d.up.fill")
+                    navRow(.downloadsTab, title: "Downloads & installation", symbol: "arrow.down.circle.fill")
+                    pushRow(.library, title: "Apps on this device", symbol: "iphone")
                     pushRow(.files, title: "Files", symbol: "folder.fill")
 
                     sectionHeader("Device")
+                    pushRow(.installation, title: "Installation settings", symbol: "wrench.and.screwdriver")
                     pushRow(.pair, title: "Pair (native install)", symbol: "iphone.radiowaves.left.and.right")
                     pushRow(.settings, title: "Settings", symbol: "gearshape.fill")
 
@@ -531,14 +445,14 @@ struct AccountHomeView: View {
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.white)
                         .lineLimit(1)
-                    Text("Store Access signed in")
+                    Text("Sync purchases and download apps you’re licensed to use")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.45))
                 } else {
-                    Text("Sign in with Apple ID")
+                    Text("Sign in to your Apple Account")
                         .font(.title3.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text("Sync purchases and download apps you own")
+                    Text("Sync purchases and download apps you’re licensed to use")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.45))
                 }
@@ -571,11 +485,9 @@ struct AccountHomeView: View {
                             .foregroundStyle(.white)
                             .frame(width: 36, height: 36)
                             .background(Color.white.opacity(0.12), in: Circle())
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(account.email)
-                                .foregroundStyle(.white)
-                                .lineLimit(1)
-                        }
+                        Text(account.email)
+                            .foregroundStyle(.white)
+                            .lineLimit(1)
                         Spacer()
                         if account.id == store.activeAccountID {
                             Image(systemName: "checkmark")
@@ -588,6 +500,9 @@ struct AccountHomeView: View {
                 }
                 .buttonStyle(.plain)
             }
+            Text("Tap to switch the download account.")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.35))
             Button {
                 path.append(AppAccountPush.settings)
             } label: {
@@ -656,12 +571,14 @@ struct AccountHomeView: View {
                 .navigationBarTitleDisplayMode(.inline)
         case .library:
             LibraryHomeView()
-                .navigationTitle("Library")
+                .navigationTitle("Apps on this device")
                 .navigationBarTitleDisplayMode(.inline)
         case .settings:
             SettingsView()
                 .navigationTitle("Settings")
                 .navigationBarTitleDisplayMode(.inline)
+        case .installation:
+            IPadnInstallationSettingsView()
         }
     }
 }

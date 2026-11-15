@@ -16,12 +16,15 @@ struct RootView: View {
     @ObservedObject private var signed = SignedStore.shared
     @ObservedObject private var decrypt = DecryptClient.shared
     @ObservedObject private var deviceDecrypt = DeviceDecryptService.shared
+    @ObservedObject private var downloads = IPadnDownloadManager.shared
     @State private var tab: AppTab = .search
     @State private var signItem: SignItem?
     @State private var signError: String?
 
     private var downloadBadge: Int {
-        (decrypt.busy || deviceDecrypt.busy
+        let live = downloads.activeCount
+        if live > 0 { return live }
+        return (decrypt.busy || deviceDecrypt.busy
             || decrypt.phase == .running || decrypt.phase == .downloading || decrypt.phase == .queued) ? 1 : 0
     }
 
