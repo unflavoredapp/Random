@@ -406,6 +406,7 @@ struct DecryptView: View {
                             DecryptChannelPicker()
                             if DecryptChannel.current == .device {
                                 DecryptAppStoreSignInHint()
+                                IPadnBrowserSection()
                                 DecryptOwnedStoreAppsSection()
                                 DecryptDeviceAppsSection()
                                 DecryptPickIPACard { pickingIPA = true }

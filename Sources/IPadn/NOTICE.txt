@@ -1,0 +1,5 @@
+Portions of this directory are derived from mengangs/ipadn
+https://github.com/mengangs/ipadn
+Licensed under the GNU General Public License v2.0.
+See ThirdParty/ipadn-LICENSE.txt.
+Types are prefixed with IPadn to coexist with TetherLess AppleServices.

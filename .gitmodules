@@ -1,0 +1,3 @@
+[submodule "ThirdParty/ipadn"]
+	path = ThirdParty/ipadn
+	url = https://github.com/mengangs/ipadn.git

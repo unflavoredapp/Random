@@ -54,6 +54,7 @@ struct SettingsView: View {
                     if !AppleIDStore.shared.hasAnyAccount {
                         AnisetteServerCard()
                     }
+                    IPadnOptionalCard()
                     SettingsSoftwareUpdateCard()
                     SettingsGlassNavRow(
                         systemImage: "key.fill",
@@ -705,6 +706,7 @@ private struct AboutScreen: View {
     private let credits: [Credit] = [
         Credit(name: "ᴍƦᴢᴇꜰΛ", blurb: "Built TetherLess. Sign anything, keep it local.", asset: "airshare_mark", symbol: "person.fill", url: "https://tetherless.dev"),
         Credit(name: "DELvEK", blurb: "Trusted partner. Respected, protected apps updated daily with screenshots.", asset: "delvek_logo", symbol: "pawprint.fill", url: "https://delvek.net"),
+        Credit(name: "iPadn", blurb: "Optional in-app search (multi-region / App ID / delisted). Vendored under Sources/IPadn (GPL-2.0); decrypt uses TetherLess FairPlay.", asset: "", symbol: "arrow.down.app.fill", url: "https://github.com/mengangs/ipadn"),
     ]
     private let sponsors: [(String, Color)] = [
         ("MYKALL", Color(red: 0.42, green: 0.85, blue: 0.45)),
