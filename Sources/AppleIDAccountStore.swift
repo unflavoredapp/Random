@@ -339,13 +339,102 @@ final class AppleIDStore: ObservableObject {
 
     // MARK: Auth — Settings / Decrypt API
 
+    /// Primary Store Access path — iPadn MZFinance login (bag.xml + WASM/Anisette proof).
+    /// Throws `AppStoreClientError.needsTwoFactor` so `IPadnLoginView` can show the code step.
+    func signInViaIPadnStore(email: String, password: String, code: String = "") async throws {
+        let e = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let p = password
+        let digits = code.filter(\.isNumber)
+        guard !e.isEmpty, !p.isEmpty else {
+            throw AppStoreClientError.message("Enter your Apple ID and password.")
+        }
+        // Phone Apple IDs are valid in iPadn; email still preferred but not required.
+        lastError = nil
+        statusMessage = digits.isEmpty ? "Signing in with Store login…" : "Verifying with Apple…"
+        draftEmail = e
+        authPhase = digits.isEmpty ? .authenticating : .verifying
+        _ = Keychain.setSessionSecret(Self.passwordPrefix + "pending", p)
+        do {
+            let storeSession = try await IPadnStoreLogin.authenticate(
+                email: e,
+                password: p,
+                authCode: digits
+            )
+            guard storeSession.isUsable else {
+                throw AppStoreClientError.message("Apple returned an incomplete Store session. Try again.")
+            }
+            await finishRealSignInWithStoreOnly(email: e, password: p, store: storeSession)
+            // Best-effort portal (signing) session — never undo a good Store login.
+            Task { await self.attemptPortalAfterIPadnStore(email: e, password: p) }
+        } catch AppStoreClientError.needsTwoFactor {
+            withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+            statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
+            lastError = nil
+            throw AppStoreClientError.needsTwoFactor
+        } catch let err as IPadnAppleLoginError {
+            switch err {
+            case .verificationRequired:
+                withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+                statusMessage = err.localizedDescription
+                lastError = nil
+                throw AppStoreClientError.needsTwoFactor
+            case .verificationRejected:
+                authPhase = .awaitingTwoFactor
+                lastError = err.localizedDescription
+                throw AppStoreClientError.message(err.localizedDescription)
+            }
+        } catch is CancellationError {
+            authPhase = verifyingOrAwaiting ? authPhase : .idle
+            throw CancellationError()
+        } catch {
+            authPhase = .idle
+            lastError = error.localizedDescription
+            throw error
+        }
+    }
+
+    private var verifyingOrAwaiting: Bool {
+        authPhase == .verifying || authPhase == .awaitingTwoFactor
+    }
+
+    /// Optional GrandSlam portal after Store is already green (signing certs / manage).
+    private func attemptPortalAfterIPadnStore(email: String, password: String) async {
+        do {
+            let portal = try await GSAAuthClient.shared.authenticate(email: email, password: password)
+            if let idx = accounts.firstIndex(where: { $0.email.caseInsensitiveCompare(email) == .orderedSame }) {
+                accounts[idx].portalSessionJSON = try? JSONEncoder().encode(portal)
+                accounts[idx].teamID = portal.teamID
+                accounts[idx].teamName = portal.teamName
+                save()
+            }
+        } catch AppleAuthError.needsTwoFactor {
+            // Store already works — don't bounce the user into a second 2FA for portal.
+            GSAAuthClient.shared.cancel()
+        } catch {
+            // Non-fatal.
+        }
+    }
+
     func signIn(email: String, password: String) async {
         let e = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let p = password
-        guard e.contains("@"), e.contains("."), !p.isEmpty else {
-            lastError = "Enter a valid Apple ID email and password."
+        guard !e.isEmpty, !p.isEmpty else {
+            lastError = "Enter a valid Apple ID and password."
             return
         }
+        // Prefer iPadn Store login (same as LoginView) so downloads don't fail after GSA-only trust.
+        do {
+            try await signInViaIPadnStore(email: e, password: p, code: "")
+            return
+        } catch AppStoreClientError.needsTwoFactor {
+            // Keep awaitingTwoFactor — Settings twoFactorBlock / IPadnLoginView continue.
+            return
+        } catch {
+            // Fall through to legacy GSA when MZFinance is unreachable.
+            lastError = nil
+            statusMessage = "Store login unavailable — trying Apple ID sign-in…"
+        }
+
         lastError = nil
         statusMessage = nil
         draftEmail = e
@@ -387,6 +476,26 @@ final class AppleIDStore: ObservableObject {
         authPhase = .verifying
         pendingStoreAuthCode = digits
         pendingStoreSession = nil
+
+        // Prefer finishing via iPadn MZFinance (password+code) when we still have the pending password.
+        let pendingPW = Keychain.getSessionSecret(Self.passwordPrefix + "pending")
+            ?? Keychain.getSecret(Self.passwordPrefix + "pending")
+            ?? ""
+        let pendingEmail = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if !pendingPW.isEmpty, !pendingEmail.isEmpty {
+            do {
+                try await signInViaIPadnStore(email: pendingEmail, password: pendingPW, code: digits)
+                return
+            } catch AppStoreClientError.needsTwoFactor {
+                // Wrong / burned code — stay on 2FA UI.
+                lastError = "That code didn’t unlock Store. Tap Resend or enter a fresh code."
+                authPhase = .awaitingTwoFactor
+                return
+            } catch {
+                // Fall through to GSA + Store piggyback.
+            }
+        }
+
 
         var pw = Keychain.getSessionSecret(Self.passwordPrefix + "pending")
             ?? Keychain.getSecret(Self.passwordPrefix + "pending")

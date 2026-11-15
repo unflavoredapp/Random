@@ -21,6 +21,8 @@ Included:
   Certificate / Proxy segments wired to TetherLess install stack
 - Download manager (IPadnDownloadManager) — pause / resume / Store IPA /
   URL import, modeled on DownloadManager
+- Login UI (IPadnLoginView) — English LoginView + VerificationStep;
+  Store Access signs in via IPadnStoreLogin (MZFinance) first
 - Store login (IPadnAppleAuthentication, IPadnHTTPClient, IPadnStoreLogin) —
   bag.xml authenticate, Configurator redirects, AMD proof loop
 - WASM SAPRuntime store-proof (IPadnWASMSPSigner, IPadnLoopbackServer,

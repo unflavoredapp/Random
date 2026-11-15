@@ -585,11 +585,11 @@ struct DecryptView: View {
                             }
                         }
                     } else {
-                        Text("Sign in under Store Access to search free or purchased apps — same flow as iPadn, FairPlay stays on this iPhone.")
+                        Text("Sign in with Apple Account to search free or purchased apps — iPadn Store login, FairPlay stays on this iPhone.")
                             .font(.callout)
                             .foregroundStyle(.white.opacity(0.65))
                             .fixedSize(horizontal: false, vertical: true)
-                        DecryptStoreGateCard { AppNav.shared.goSettings() }
+                        DecryptStoreGateCard { AppNav.shared.goStoreLogin() }
                         DecryptAppStoreSignInHint()
                     }
                 }

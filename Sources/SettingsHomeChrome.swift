@@ -12,6 +12,7 @@ struct SettingsAppleIDCard: View {
     @State private var showManageAccounts = false
     @State private var showPortalManage = false
     @State private var showAddAccount = false
+    @State private var showIPadnLogin = false
     @State private var accountPendingDelete: AppleIDAccount?
 
     private var isPreparing: Bool {
@@ -28,6 +29,7 @@ struct SettingsAppleIDCard: View {
                     signedInAppleBlock
                     storeAccessSection
                 } else if store.authPhase == .awaitingTwoFactor {
+                    // Legacy GSA fallback still needs the inline code field.
                     twoFactorBlock
                 } else if isPreparing {
                     HStack(spacing: 10) {
@@ -74,23 +76,16 @@ struct SettingsAppleIDCard: View {
             }
             .preferredColorScheme(.dark)
         }
-        .sheet(isPresented: $showAddAccount) {
-            NavigationStack {
-                addAccountForm
-                    .padding(20)
-                    .navigationTitle("Add Apple ID")
-                    .navigationBarTitleDisplayMode(.inline)
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Cancel") {
-                                showAddAccount = false
-                                store.cancelTwoFactor()
-                                email = ""; password = ""; twoFACode = ""
-                            }
-                        }
-                    }
+        .sheet(isPresented: $showIPadnLogin) {
+            IPadnLoginView {
+                showIPadnLogin = false
             }
-            .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showAddAccount) {
+            IPadnLoginView {
+                showAddAccount = false
+                email = ""; password = ""; twoFACode = ""
+            }
         }
         .confirmationDialog(
             "Remove Apple ID?",
@@ -381,29 +376,14 @@ struct SettingsAppleIDCard: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
             }
-            Text("One sign-in covers both app signing and Store downloads with the same session.")
+            Text("Uses iPadn’s Store login (MZFinance) so purchases and downloads unlock in one step — then optional Apple ID trust for signing.")
                 .font(.footnote)
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
 
-            glassField("Apple ID email", text: $email, secure: false)
-            HStack(spacing: 10) {
-                glassField("Password", text: $password, secure: !showPassword)
-                Button {
-                    showPassword.toggle()
-                } label: {
-                    Image(systemName: showPassword ? "eye.slash.fill" : "eye.fill")
-                        .foregroundStyle(.white.opacity(0.7))
-                        .frame(width: 44, height: 44)
-                        .background(Color.black.opacity(0.28), in: Circle())
-                }
-                .buttonStyle(.plain)
+            primaryButton("Sign In with Apple Account") {
+                showIPadnLogin = true
             }
-            primaryButton(store.isBusy ? "Signing In…" : "Sign In") {
-                Task { await store.signIn(email: email, password: password) }
-            }
-            .disabled(store.isBusy || email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || password.isEmpty)
-            .opacity(store.isBusy ? 0.7 : 1)
         }
     }
 

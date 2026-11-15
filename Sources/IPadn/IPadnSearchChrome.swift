@@ -258,8 +258,8 @@ struct IPadnAccountMenuButton: View {
                 Button("Account", systemImage: "person.crop.circle") {
                     AppNav.shared.goAccount()
                 }
-                Button("Sign in — Store Access", systemImage: "person.crop.circle.badge.plus") {
-                    AppNav.shared.goSettings()
+                Button("Sign in — Apple Account", systemImage: "person.crop.circle.badge.plus") {
+                    AppNav.shared.goStoreLogin()
                 }
             }
         } label: {

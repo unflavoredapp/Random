@@ -11,6 +11,8 @@ final class AppNav: ObservableObject {
     @Published var openAccountScreen = false
     /// Push target inside Account’s NavigationStack (Pair / Files / Library / Settings).
     @Published var accountPush: AppAccountPush?
+    /// Present iPadn Store login sheet (Account / Settings / Search).
+    @Published var presentIPadnLogin = false
     private init() {}
 
     func go(_ tab: Int) {
@@ -36,6 +38,12 @@ final class AppNav: ObservableObject {
     func goSearch() { go(.search) }
     func goDownloads() { go(.downloads) }
     func goPurchased() { go(.purchased) }
+
+    /// Open Account and show iPadn Apple Account login (MZFinance).
+    func goStoreLogin() {
+        presentIPadnLogin = true
+        go(.account)
+    }
 }
 
 struct AccountChip: View {
