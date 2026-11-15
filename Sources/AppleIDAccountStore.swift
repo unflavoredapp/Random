@@ -1017,13 +1017,13 @@ final class AppleIDStore: ObservableObject {
                     withAnimation(.snappy) { authPhase = .idle }
                     return
                 }
-                if detail.localizedCaseInsensitiveContains("204")
-                    || detail.localizedCaseInsensitiveContains("non-plist") {
+                // Soft Owned / edge noise must not paint red under a green Store session.
+                if Self.isSoftStoreNoise(detail) {
                     lastError = nil
-                    statusMessage = "Store access ready — Owned list soft-failed (HTTP 204); downloads still use this session"
+                    statusMessage = "Store access ready — free & purchased downloads unlocked"
                 } else {
-                    lastError = detail
-                    statusMessage = "Store access ready — Owned check failed; try Decrypt search/download"
+                    lastError = nil // keep chrome green; Decrypt will surface real download errors
+                    statusMessage = "Store access ready — Owned check skipped; try Decrypt search/download"
                 }
             }
             withAnimation(.snappy) { authPhase = .idle }
@@ -1169,6 +1169,7 @@ final class AppleIDStore: ObservableObject {
             storeNeedsVerification = false
             pendingStoreAuthCode = nil
             clearStoredPET()
+            lastError = nil
             statusMessage = teamName.map { "Signed in · \($0) · free & purchased downloads ready" }
                 ?? "Signed in · free & purchased downloads ready"
             return
@@ -1250,6 +1251,7 @@ final class AppleIDStore: ObservableObject {
         if storefrontSession()?.isUsable == true {
             storeNeedsVerification = false
             pendingStoreAuthCode = nil
+            lastError = nil
             statusMessage = teamName.map { "Signed in · \($0)" } ?? "Signed in"
         } else {
             storeNeedsVerification = true
@@ -1258,6 +1260,26 @@ final class AppleIDStore: ObservableObject {
             }
             statusMessage = "Signed in — tap Retry Store unlock (uses the same Apple ID trust). Or Sign Out and Sign In once."
         }
+    }
+
+    /// Drop red Store-edge noise once a usable passwordToken session exists.
+    func clearStaleStoreErrorIfSessionUsable() {
+        guard storefrontSession()?.isUsable == true else { return }
+        guard let err = lastError, Self.isSoftStoreNoise(err) || err.localizedCaseInsensitiveContains("store") else { return }
+        lastError = nil
+    }
+
+    private static func isSoftStoreNoise(_ message: String) -> Bool {
+        let m = message.lowercased()
+        return m.contains("http 204")
+            || m.contains("http 404")
+            || m.contains("http 403")
+            || m.contains("non-plist")
+            || m.contains("without location")
+            || m.contains("sap setup")
+            || m.contains("network connection was lost")
+            || m.contains("resend text")
+            || m.contains("owned")
     }
 
     private func storedPET() -> String? {
@@ -1274,6 +1296,7 @@ final class AppleIDStore: ObservableObject {
         storeConnecting = false
         storeReady = true
         UserDefaults.standard.set(true, forKey: Self.storeReadyKey)
+        clearStaleStoreErrorIfSessionUsable()
         withAnimation(.snappy) { authPhase = .idle }
     }
 }

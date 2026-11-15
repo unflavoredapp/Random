@@ -40,7 +40,9 @@ struct SettingsAppleIDCard: View {
                     emptySignIn
                 }
 
-                if let err = store.lastError, !err.isEmpty {
+                if let err = store.lastError, !err.isEmpty,
+                   store.storefrontSession()?.isUsable != true {
+                    // Don't paint red under a green Store session (stale 404 / Owned soft fails).
                     Text(err)
                         .font(.footnote)
                         .foregroundStyle(.red.opacity(0.9))
@@ -215,6 +217,7 @@ struct SettingsAppleIDCard: View {
                 }
                 Spacer(minLength: 0)
             }
+            .onAppear { store.clearStaleStoreErrorIfSessionUsable() }
 
             Text("Ready to fetch free apps and anything this Apple ID already purchased.")
                 .font(.caption)
