@@ -23,6 +23,7 @@ struct LibraryHomeView: View {
     @State private var importing = false
     @State private var installing: String?
     @State private var error: String?
+    @ObservedObject private var decrypting = DeviceDecryptService.shared
 
     var body: some View {
         VStack(spacing: 0) {
@@ -160,6 +161,23 @@ struct LibraryHomeView: View {
                           subtitle: "Pair the device, then refresh — apps installed on this iPhone show here.")
             }
         } else {
+            GlassCard {
+                StatusRow(
+                    kind: .info,
+                    title: "Decrypt from install (no Store login)",
+                    subtitle: "App Store titles use this iPhone’s FairPlay keys. Tap Decrypt — companion embed skips Store Access."
+                )
+            }
+            if !decrypting.status.isEmpty {
+                Text(decrypting.status)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+            }
+            if let err = decrypting.lastError, !err.isEmpty {
+                Text(err)
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
             ForEach(device.apps) { app in
                 GlassCard(corner: 22) {
                     HStack(spacing: 12) {
@@ -168,8 +186,28 @@ struct LibraryHomeView: View {
                             Text(app.name).font(.headline).foregroundStyle(.white)
                             Text(app.bundleID)
                                 .font(.caption).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
+                            if app.isAppStore {
+                                Text("FairPlay · on device")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(TetherlessPalette.accent.opacity(0.9))
+                            }
                         }
-                        Spacer()
+                        Spacer(minLength: 8)
+                        if app.isAppStore {
+                            Button {
+                                AppNav.shared.go(AppTab.decrypt.rawValue)
+                                Task { await DeviceDecryptService.shared.decryptInstalled(app) }
+                            } label: {
+                                if decrypting.busy {
+                                    ProgressView().tint(.white)
+                                } else {
+                                    Text("Decrypt")
+                                }
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .tint(TetherlessPalette.accent)
+                            .disabled(decrypting.busy || installing != nil)
+                        }
                     }
                 }
             }
