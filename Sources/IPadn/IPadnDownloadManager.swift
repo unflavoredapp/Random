@@ -254,11 +254,11 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
         let filename = "\(UUID().uuidString)_\(url.lastPathComponent)"
         let dest = IPadnDownloadStorage.packagesDir.appendingPathComponent(filename)
         try data.write(to: dest, options: .atomic)
-        var job = IPadnDownloadJob(
+        let job = IPadnDownloadJob(
             name: name.isEmpty ? "Imported IPA" : name,
             status: .completed,
-            expected: Int64(data.count),
             downloaded: Int64(data.count),
+            expected: Int64(data.count),
             localFilename: filename,
             kind: .importIPA
         )
