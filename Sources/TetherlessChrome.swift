@@ -158,13 +158,14 @@ enum AppTab: Int, CaseIterable, Identifiable {
     case pair, files, library, decrypt, settings
     var id: Int { rawValue }
 
+    /// Labels keep TetherLess roles; Decrypt tab mirrors iPadn’s Search entry.
     var label: String {
         switch self {
         case .pair: return "Pair"
         case .files: return "Files"
         case .library: return "Library"
-        case .decrypt: return "Decrypt"
-        case .settings: return "Settings"
+        case .decrypt: return "Search"
+        case .settings: return "Account"
         }
     }
 
@@ -173,8 +174,8 @@ enum AppTab: Int, CaseIterable, Identifiable {
         case .pair: return "iphone.radiowaves.left.and.right"
         case .files: return "folder.fill"
         case .library: return "square.stack.3d.up.fill"
-        case .decrypt: return "lock.open.fill"
-        case .settings: return "gearshape.fill"
+        case .decrypt: return "magnifyingglass"
+        case .settings: return "person.crop.circle.fill"
         }
     }
 }
@@ -183,32 +184,33 @@ struct FloatingTabBar: View {
     @Binding var selection: AppTab
 
     var body: some View {
+        // iPadn uses a system TabView + ultraThinMaterial bar; keep TetherLess’s
+        // floating capsule but match App Store–style selected accent + labels.
         HStack(spacing: 0) {
             ForEach(AppTab.allCases) { tab in
                 Button {
                     withAnimation(.snappy(duration: 0.25)) { selection = tab }
                     UISelectionFeedbackGenerator().selectionChanged()
                 } label: {
-                    VStack(spacing: 4) {
-                        Image(systemName: tab.symbol).font(.title3)
+                    VStack(spacing: 3) {
+                        Image(systemName: tab.symbol)
+                            .font(.system(size: 18, weight: selection == tab ? .semibold : .regular))
                         Text(tab.label).font(.caption2.weight(.semibold))
                     }
-                    .foregroundStyle(selection == tab ? Color.cyan : .white)
+                    .foregroundStyle(selection == tab ? TetherlessPalette.accent : .white.opacity(0.55))
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 10)
-                    .background {
-                        if selection == tab {
-                            Capsule().fill(.black.opacity(0.28))
-                        }
-                    }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(tab.label)
             }
         }
-        .padding(6)
+        .padding(.horizontal, 4)
+        .padding(.top, 4)
+        .padding(.bottom, 2)
         .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().strokeBorder(.white.opacity(0.22), lineWidth: 1))
-        .padding(.horizontal, 16)
+        .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+        .padding(.horizontal, 12)
         .padding(.bottom, 6)
     }
 }
