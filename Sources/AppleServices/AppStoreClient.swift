@@ -133,6 +133,8 @@ final class AppStoreClient: ObservableObject {
 
     private enum Paths {
         static let authenticate = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate"
+        /// Modern bag endpoint (trailing slash required — ipatool #507 / blacktop ipsw).
+        static let authenticateNativeFast = "https://auth.itunes.apple.com/auth/v1/native/fast/"
         static let purchase = "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/buyProduct"
         static let downloadHost = "https://p25-buy.itunes.apple.com"
         static let downloadPath = "/WebObjects/MZFinance.woa/wa/volumeStoreDownloadProduct"
@@ -162,8 +164,41 @@ final class AppStoreClient: ObservableObject {
 
         let anisette = try await AnisetteClient.shared.fetch()
         let guid = Self.deviceGUID(from: anisette)
-        // ipatool: start on buy.itunes with ?guid=, follow pod redirects without bumping attempt.
-        var endpoint = Self.authenticateURL(guid: guid)
+        // Try modern native/fast/ first, then legacy MZFinance (ipatool / blacktop).
+        let endpointCandidates = [
+            Self.authenticateNativeURL(guid: guid),
+            Self.authenticateURL(guid: guid)
+        ]
+        var lastError: Error = AppStoreClientError.message("App Store sign-in failed after retries.")
+
+        for startEndpoint in endpointCandidates {
+            do {
+                return try await authenticateOnce(
+                    email: e,
+                    passwordWithCode: password + code,
+                    guid: guid,
+                    anisette: anisette,
+                    startEndpoint: startEndpoint,
+                    hadAuthCode: !code.isEmpty
+                )
+            } catch {
+                lastError = error
+                // Try next endpoint when this one is empty/204/403/needs2FA without a code.
+                continue
+            }
+        }
+        throw lastError
+    }
+
+    private func authenticateOnce(
+        email: String,
+        passwordWithCode: String,
+        guid: String,
+        anisette: AnisetteHeaders,
+        startEndpoint: String,
+        hadAuthCode: Bool
+    ) async throws -> StorefrontSession {
+        var endpoint = startEndpoint
         var attempt = 1
         var redirects = 0
         var last: [String: Any] = [:]
@@ -175,12 +210,13 @@ final class AppStoreClient: ObservableObject {
                 let (dict, respHeaders, status) = try await postPlist(
                     url: endpoint,
                     body: [
-                        "appleId": e,
+                        "appleId": email,
                         "attempt": "\(attempt)",
                         "guid": guid,
-                        "password": password + code,
+                        "password": passwordWithCode,
                         "rmp": "0",
-                        "why": "signIn"
+                        "why": "signIn",
+                        "createSession": "true"
                     ],
                     anisette: anisette,
                     // Authenticate with a real-device UA + pristine Client-Info. Spoof /
@@ -211,13 +247,13 @@ final class AppStoreClient: ObservableObject {
 
                 let failure = string(dict["failureType"])
                 let customer = string(dict["customerMessage"])
-                if failure == "-5000", attempt == 1, code.isEmpty {
+                if failure == "-5000", attempt == 1, !hadAuthCode {
                     attempt += 1
                     continue // retry once like ipatool
                 }
                 if (failure.isEmpty && customer.contains("BadLogin"))
                     || customer.localizedCaseInsensitiveContains("incorrect verification") {
-                    if code.isEmpty { throw AppStoreClientError.needsTwoFactor }
+                    if !hadAuthCode { throw AppStoreClientError.needsTwoFactor }
                     throw AppStoreClientError.message("Incorrect App Store password or verification code.")
                 }
                 if !failure.isEmpty {
@@ -240,8 +276,7 @@ final class AppStoreClient: ObservableObject {
                 let pod = headers["pod"] ?? headers["Pod"]
 
                 guard !token.isEmpty, !dsid.isEmpty else {
-                    if code.isEmpty { throw AppStoreClientError.needsTwoFactor }
-                    // Burned / wrong OTP often comes back as an empty success-shaped plist.
+                    // Empty success-shaped plist — needs code or wrong PET/password.
                     throw AppStoreClientError.needsTwoFactor
                 }
                 guard !storeFront.isEmpty else {
@@ -249,7 +284,7 @@ final class AppStoreClient: ObservableObject {
                 }
 
                 return StorefrontSession(
-                    email: e,
+                    email: email,
                     passwordToken: token,
                     dsid: dsid,
                     storeFront: storeFront,
@@ -258,10 +293,10 @@ final class AppStoreClient: ObservableObject {
                     createdAt: Date()
                 )
             } catch let err as AppStoreClientError {
-                // Transient pod HTML 404/403/5xx — reset to buy.itunes and retry.
+                // Transient pod HTML 404/403/5xx — reset to start endpoint and retry.
                 if case .network(let msg) = err, Self.isTransientAuthenticateFailure(msg) {
                     lastTransient = err
-                    endpoint = Self.authenticateURL(guid: guid)
+                    endpoint = startEndpoint
                     attempt += 1
                     redirects = 0
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -278,6 +313,10 @@ final class AppStoreClient: ObservableObject {
 
     private static func authenticateURL(guid: String) -> String {
         "\(Paths.authenticate)?guid=\(guid)"
+    }
+
+    private static func authenticateNativeURL(guid: String) -> String {
+        "\(Paths.authenticateNativeFast)?guid=\(guid)"
     }
 
     private static func resolveAuthenticateRedirect(
