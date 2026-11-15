@@ -8,6 +8,9 @@ Included:
 - Store search (IPadnStoreClient) — keyword / App ID / multi-region / delisted stubs
 - Version history feeds (IPadnVersionHistory) — Timbrd / Bilin / iosdump
   (same VersionSource defaults as upstream Settings)
+- Search chrome (IPadnSearchChrome) — PageHeader, capsule SearchInput, filter
+  chips, AppRow + Get capsule, recent-search chips (from SearchView /
+  DesignSystem / SharedViews patterns)
 - Store login (IPadnAppleAuthentication, IPadnHTTPClient, IPadnStoreLogin) —
   bag.xml authenticate, Configurator redirects, AMD proof loop
 - WASM SAPRuntime store-proof (IPadnWASMSPSigner, IPadnLoopbackServer,

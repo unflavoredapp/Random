@@ -402,15 +402,19 @@ struct DecryptView: View {
     @ObservedObject private var liveTheme = AppTheme.shared
     @ObservedObject private var c = DecryptClient.shared
     @ObservedObject private var store = AppleIDStore.shared
+    @AppStorage(IPadnOptional.countryKey) private var country = "US"
+    @AppStorage(IPadnOptional.platformKey) private var platform = IPadnPlatform.iOS.rawValue
     @State private var query = ""
     @State private var versionsApp: DecryptApp?
     @State private var pickingIPA = false
     @State private var pickMessage: String?
-    @FocusState private var searchFocused: Bool
+    @State private var recentSearches: [String] = DecryptSearchHistory.load()
 
-    private var showingIdleHero: Bool {
+    /// Idle like iPadn SearchView: no query results yet — show suggestions / purchased.
+    private var showingIdleSuggestions: Bool {
         store.isSignedIn && c.results.isEmpty && c.selected == nil && c.phase == .idle
-            && query.trimmingCharacters(in: .whitespacesAndNewlines).count < 2
+            && query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !c.searching
     }
 
     var body: some View {
@@ -420,55 +424,142 @@ struct DecryptView: View {
                 if store.isSignedIn { await c.loadHistory() }
             }
             ScrollView(showsIndicators: false) {
-                VStack(spacing: 14) {
-                    // Hero stays visible while searching / decrypting (reference screenshots).
-                    DecryptHeroBlock()
+                VStack(alignment: .leading, spacing: 16) {
+                    // iPadn Search: large title + account avatar on one line.
+                    IPadnPageHeader(title: "Decrypt") {
+                        IPadnAccountMenuButton()
+                    }
 
                     if store.isSignedIn {
-                        DecryptSignedInCard(email: store.email, onSignOut: store.signOut)
-                        DecryptSearchBar(query: $query, focused: $searchFocused) {
-                            Task { await c.search(query) }
+                        // Capsule search (iPadn SearchInput).
+                        IPadnCapsuleSearch(
+                            text: $query,
+                            placeholder: "Name, App ID, or apps.apple.com link",
+                            onSubmit: { runSearch() },
+                            onClear: {
+                                c.results = []
+                                c.error = nil
+                            }
+                        )
+
+                        // Region / platform chips (iPadn filter row).
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                Menu {
+                                    Picker("Store region", selection: $country) {
+                                        ForEach(IPadnBrowserModel.countries, id: \.self) { Text($0).tag($0) }
+                                    }
+                                } label: {
+                                    IPadnFilterChip(title: country, symbol: "globe")
+                                }
+                                Menu {
+                                    Picker("Platform", selection: $platform) {
+                                        Text("iPhone").tag(IPadnPlatform.iOS.rawValue)
+                                        Text("iPad").tag(IPadnPlatform.iPadOS.rawValue)
+                                    }
+                                } label: {
+                                    IPadnFilterChip(
+                                        title: (IPadnPlatform(rawValue: platform) ?? .iOS).title,
+                                        symbol: platform == IPadnPlatform.iPadOS.rawValue ? "ipad" : "iphone"
+                                    )
+                                }
+                                if store.hasStoreDownloadSession {
+                                    IPadnFilterChip(title: "Store ready", symbol: "checkmark.seal.fill")
+                                        .allowsHitTesting(false)
+                                        .opacity(0.85)
+                                }
+                            }
                         }
-                        if showingIdleHero {
+
+                        if c.searching {
+                            HStack(spacing: 10) {
+                                ProgressView().tint(TetherlessPalette.accent)
+                                Text("Searching…")
+                                    .font(.subheadline)
+                                    .foregroundStyle(.white.opacity(0.55))
+                                Spacer()
+                            }
+                            .padding(.vertical, 4)
+                        }
+
+                        if let err = c.error, c.phase != .failed, c.results.isEmpty {
+                            Text(err)
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if let pickMessage {
+                            Text(pickMessage)
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.65))
+                        }
+
+                        // Active decrypt job (TetherLess-specific).
+                        if c.phase != .idle, let app = c.selected ?? c.results.first {
+                            decryptJobCard(for: app)
+                        }
+
+                        // Results — iPadn AppRow + Get capsule.
+                        if !c.results.isEmpty {
+                            Text("\(c.results.count) result\(c.results.count == 1 ? "" : "s")")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(.white)
+                            ForEach(c.results) { app in
+                                IPadnDecryptAppRow(
+                                    app: app,
+                                    onGet: {
+                                        DeviceDecryptService.shared.decryptFromSearch(app)
+                                    },
+                                    onVersions: {
+                                        versionsApp = app
+                                        c.select(app)
+                                        Task { await c.loadVersions(page: 1) }
+                                    }
+                                )
+                                Divider().overlay(.white.opacity(0.08))
+                            }
+                        } else if showingIdleSuggestions {
+                            if !recentSearches.isEmpty {
+                                IPadnRecentSearchChips(
+                                    terms: recentSearches,
+                                    onSelect: { term in
+                                        query = term
+                                        runSearch()
+                                    },
+                                    onDelete: { term in
+                                        DecryptSearchHistory.remove(term)
+                                        recentSearches = DecryptSearchHistory.load()
+                                    },
+                                    onClearAll: {
+                                        DecryptSearchHistory.clear()
+                                        recentSearches = []
+                                    }
+                                )
+                            }
+
                             DecryptChannelPicker()
                             if DecryptChannel.current == .device {
                                 DecryptAppStoreSignInHint()
-                                IPadnBrowserSection()
                                 DecryptOwnedStoreAppsSection()
                                 DecryptDeviceAppsSection()
                                 DecryptPickIPACard { pickingIPA = true }
                             }
+                            if !c.history.isEmpty {
+                                historySection
+                            }
                         }
                     } else {
+                        Text("Sign in under Store Access to search free or purchased apps — same flow as iPadn, FairPlay stays on this iPhone.")
+                            .font(.callout)
+                            .foregroundStyle(.white.opacity(0.65))
+                            .fixedSize(horizontal: false, vertical: true)
                         DecryptStoreGateCard { AppNav.shared.go(AppTab.settings.rawValue) }
                         DecryptAppStoreSignInHint()
                     }
-
-                    if c.searching {
-                        ProgressView().tint(TetherlessPalette.accent).frame(maxWidth: .infinity)
-                    }
-                    if let err = c.error, c.phase != .failed {
-                        GlassCard { Text(err).font(.caption).foregroundStyle(.orange) }
-                    }
-                    if let pickMessage {
-                        GlassCard { Text(pickMessage).font(.caption).foregroundStyle(.white.opacity(0.7)) }
-                    }
-
-                    if c.phase != .idle, let app = c.selected ?? c.results.first {
-                        decryptJobCard(for: app)
-                    } else if let app = c.selected {
-                        resultAppCard(app, downloading: false)
-                    }
-
-                    ForEach(c.results.filter { $0.id != c.selected?.id }) { app in
-                        resultAppCard(app, downloading: false)
-                    }
-
-                    if store.isSignedIn, !c.history.isEmpty, c.results.isEmpty, c.phase == .idle {
-                        historySection
-                    }
                 }
-                .padding(.horizontal, 20).padding(.top, 4).padding(.bottom, 120)
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 120)
             }
         }
         .sheet(item: $versionsApp) { app in
@@ -480,13 +571,21 @@ struct DecryptView: View {
                 handlePickedIPAs(urls)
             }
         }
-        // FairPlay console UI lives in the separate “Tetherless Decrypt” companion IPA —
-        // host stays on Decrypt status, then hands off after install.
         .onAppear {
+            recentSearches = DecryptSearchHistory.load()
+            IPadnOptional.registerDefaults()
             consumePendingQuery()
             Task { await warmStoreSessionForNiche() }
         }
         .onChange(of: c.pendingQuery) { _ in consumePendingQuery() }
+    }
+
+    private func runSearch() {
+        let q = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !q.isEmpty else { return }
+        DecryptSearchHistory.remember(q)
+        recentSearches = DecryptSearchHistory.load()
+        Task { await c.search(q) }
     }
 
     /// Soft-check + warm anisette/SAP so free/purchased fetch isn't a cold edge surprise.
@@ -502,8 +601,7 @@ struct DecryptView: View {
         c.pendingQuery = nil
         if !c.busy { c.clearSelection() }
         query = name
-        searchFocused = true
-        Task { await c.search(query) }
+        runSearch()
     }
 
     private func handlePickedIPAs(_ urls: [URL]) {
@@ -630,73 +728,6 @@ struct DecryptView: View {
     }
 
     // MARK: Cards
-
-    private func resultAppCard(_ app: DecryptApp, downloading: Bool) -> some View {
-        GlassCard(corner: 22) {
-            HStack(spacing: 12) {
-                iconView(app.icon, size: 52)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(app.name).font(.headline.weight(.semibold)).foregroundStyle(.white).lineLimit(2)
-                        if !app.countryLabel.isEmpty {
-                            Text(app.countryLabel)
-                                .font(.caption2.weight(.bold))
-                                .foregroundStyle(.white.opacity(0.85))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(.white.opacity(0.14), in: Capsule())
-                                .accessibilityLabel("Storefront \(app.countryLabel)")
-                        }
-                    }
-                    Text([app.dev, app.version.isEmpty ? "" : "v\(app.version)"].filter { !$0.isEmpty }.joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.55))
-                        .lineLimit(2)
-                }
-                Spacer(minLength: 8)
-                if downloading {
-                    SlimProgress(value: percent)
-                        .frame(width: 72)
-                } else {
-                    HStack(spacing: 8) {
-                        Button {
-                            versionsApp = app
-                            c.select(app)
-                            Task { await c.loadVersions(page: 1) }
-                        } label: {
-                            Image(systemName: "clock.arrow.circlepath")
-                                .foregroundStyle(.white)
-                                .frame(width: 40, height: 40)
-                                .background(.white.opacity(0.10), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(c.busy)
-                        Button {
-                            DeviceDecryptService.shared.decryptFromSearch(app)
-                        } label: {
-                            Image(systemName: "arrow.down.circle")
-                                .foregroundStyle(.white)
-                                .frame(width: 40, height: 40)
-                                .background(.white.opacity(0.10), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(c.busy || DeviceDecryptService.shared.busy)
-                        Button {
-                            DecryptPipeline.shared.run(app: app)
-                        } label: {
-                            Image(systemName: "bolt.circle.fill")
-                                .foregroundStyle(TetherlessPalette.accent)
-                                .frame(width: 40, height: 40)
-                                .background(.white.opacity(0.10), in: Circle())
-                        }
-                        .buttonStyle(.plain)
-                        .disabled(c.busy || DeviceDecryptService.shared.busy || DecryptPipeline.shared.busy)
-                        .accessibilityLabel("Decrypt, sign, and install")
-                    }
-                }
-            }
-        }
-    }
 
     private func decryptJobCard(for app: DecryptApp) -> some View {
         GlassCard(corner: 24) {

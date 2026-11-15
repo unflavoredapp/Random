@@ -37,10 +37,8 @@ struct RootView: View {
                 case .files: FilesHomeView()
                 case .library: LibraryHomeView()
                 case .decrypt:
-                    VStack(spacing: 0) {
-                        DecryptChromeHeader { AppNav.shared.go(AppTab.settings.rawValue) }
-                        DecryptView()
-                    }
+                    // Header lives inside DecryptView (iPadn Search: title + account avatar).
+                    DecryptView()
                 case .settings: SettingsView()
                 }
             }
