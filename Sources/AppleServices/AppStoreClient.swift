@@ -169,7 +169,7 @@ final class AppStoreClient: ObservableObject {
             sapSigner = try await SAPSigner.connect()
         } catch {
             throw AppStoreClientError.message(
-                "Store SAP setup failed (\(error.localizedDescription)). Check network and retry."
+                "Store SAP setup failed (\(error.localizedDescription)). Tap Retry Store unlock — or Sign Out and Sign In once."
             )
         }
 
@@ -1272,17 +1272,17 @@ final class AppStoreClient: ObservableObject {
             || raw.localizedCaseInsensitiveContains("<head>")
         if status == 403 {
             return looksHTML
-                ? "Store rejected this device identity (HTTP 403). In Settings › Store Access set spoof to This iPhone, then Resend text message."
-                : "Non-plist App Store response (HTTP 403). Turn spoof off or use This iPhone, then refresh under Store Access."
+                ? "Store rejected this device identity (HTTP 403). In Settings › Store Access set spoof to This iPhone, then Retry Store unlock."
+                : "Non-plist App Store response (HTTP 403). Turn spoof off or use This iPhone, then Retry Store unlock."
         }
         if status == 404 {
-            return "Store authenticate endpoint returned HTTP 404. Tap Resend text message and try a fresh code — stay signed in."
+            return "Store endpoint returned HTTP 404. Tap Retry Store unlock — or Sign Out and Sign In once. Stay signed in."
         }
         if status >= 500 {
-            return "Apple’s store servers returned HTTP \(status). Wait a moment, tap Resend text message, and enter a new code."
+            return "Apple’s store servers returned HTTP \(status). Wait a moment, then tap Retry Store unlock."
         }
         if looksHTML {
-            return "Store request failed (HTTP \(status)). Tap Resend text message or sign in again under Store Access if this keeps happening."
+            return "Store request failed (HTTP \(status)). Tap Retry Store unlock, or Sign Out and Sign In once if this keeps happening."
         }
         let snippet = raw
             .replacingOccurrences(of: "\n", with: " ")
