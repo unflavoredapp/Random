@@ -427,7 +427,7 @@ struct DecryptDeviceAppsSection: View {
                         .font(.footnote)
                         .foregroundStyle(.orange.opacity(0.9))
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Open Pair") { AppNav.shared.go(AppTab.pair.rawValue) }
+                    Button("Open Pair") { AppNav.shared.goPair() }
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(TetherlessPalette.accent)
                 } else if drm.isEmpty && !device.loading {

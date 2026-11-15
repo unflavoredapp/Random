@@ -195,7 +195,7 @@ struct LibraryHomeView: View {
                         Spacer(minLength: 8)
                         if app.isAppStore {
                             Button {
-                                AppNav.shared.go(AppTab.decrypt.rawValue)
+                                AppNav.shared.goSearch()
                                 Task { await DeviceDecryptService.shared.decryptInstalled(app) }
                             } label: {
                                 if decrypting.busy {

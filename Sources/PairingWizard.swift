@@ -49,7 +49,7 @@ struct PairingWizardCard: View {
 
                 HStack(spacing: 10) {
                     Button {
-                        AppNav.shared.go(AppTab.pair.rawValue)
+                        AppNav.shared.goPair()
                         PairingWizard.markSeen()
                     } label: {
                         Text(DevicePairingStore.hasSavedPairing ? "Open Pair" : "Start pairing")

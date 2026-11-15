@@ -11,6 +11,8 @@ Included:
 - Search chrome (IPadnSearchChrome) — PageHeader, capsule SearchInput, filter
   chips, AppRow + Get capsule, recent-search chips (from SearchView /
   DesignSystem / SharedViews patterns)
+- Tab homes (IPadnTabHomes) — English Downloads / Purchased / Account roots
+  modeled on DownloadsView, PurchasedView, AccountsView
 - Store login (IPadnAppleAuthentication, IPadnHTTPClient, IPadnStoreLogin) —
   bag.xml authenticate, Configurator redirects, AMD proof loop
 - WASM SAPRuntime store-proof (IPadnWASMSPSigner, IPadnLoopbackServer,

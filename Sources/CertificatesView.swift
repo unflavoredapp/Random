@@ -461,7 +461,7 @@ struct CertificatesScreen: View {
             }
             Button {
                 dismiss()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { AppNav.shared.go(2) }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { AppNav.shared.goSearch() }
             } label: {
                 panel {
                     HStack(spacing: 14) {

@@ -1074,7 +1074,7 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.message = "Decrypt All finished · \(lastReportSummary)"
             DecryptClient.shared.error = fail == 0 ? nil : lastError
             status = lastReportSummary
-            AppNav.shared.go(AppTab.library.rawValue)
+            AppNav.shared.goLibrary()
         } else {
             DecryptClient.shared.phase = .failed
             DecryptClient.shared.error = lastError ?? "Decrypt All failed."

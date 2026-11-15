@@ -36,7 +36,7 @@ struct DecryptStoreLinkIntent: AppIntent {
         guard trimmed.contains("apps.apple.com") || trimmed.contains("itunes.apple.com") else {
             return .result(dialog: IntentDialog("Paste a full apps.apple.com link."))
         }
-        AppNav.shared.go(AppTab.decrypt.rawValue)
+        AppNav.shared.goSearch()
         let app = DecryptApp(id: trimmed, name: "App Store link", bundle: "", icon: nil, dev: "", version: "", url: trimmed)
         DecryptPipeline.shared.run(app: app)
         return .result(dialog: IntentDialog("Decrypt pipeline started for that App Store link."))

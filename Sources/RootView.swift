@@ -1,8 +1,7 @@
 //
 //  RootView.swift
-//  TetherLess glass shell: Pair · Files · Library · Decrypt · Settings.
-//  Existing backends (pairing, inbox/signed stores, decrypt API, settings,
-//  SigningSheet, GitHub hub) stay wired underneath.
+//  TetherLess glass shell — iPadn tab IA (English): Search · Downloads ·
+//  Purchased · Account. Pair / Files / Library live under Account.
 //
 
 import SwiftUI
@@ -15,9 +14,16 @@ struct RootView: View {
     @ObservedObject private var account = ZefvAccount.shared
     @ObservedObject private var nav = AppNav.shared
     @ObservedObject private var signed = SignedStore.shared
-    @State private var tab: AppTab = .library
+    @ObservedObject private var decrypt = DecryptClient.shared
+    @ObservedObject private var deviceDecrypt = DeviceDecryptService.shared
+    @State private var tab: AppTab = .search
     @State private var signItem: SignItem?
     @State private var signError: String?
+
+    private var downloadBadge: Int {
+        (decrypt.busy || deviceDecrypt.busy
+            || decrypt.phase == .running || decrypt.phase == .downloading || decrypt.phase == .queued) ? 1 : 0
+    }
 
     /// An IPA handed to the shell for signing — goes straight into SigningSheet.
     private struct SignItem: Identifiable {
@@ -33,13 +39,14 @@ struct RootView: View {
 
             Group {
                 switch tab {
-                case .pair: PairHomeView()
-                case .files: FilesHomeView()
-                case .library: LibraryHomeView()
-                case .decrypt:
-                    // Header lives inside DecryptView (iPadn Search: title + account avatar).
+                case .search:
                     DecryptView()
-                case .settings: SettingsView()
+                case .downloads:
+                    DownloadsHomeView()
+                case .purchased:
+                    PurchasedHomeView()
+                case .account:
+                    AccountHomeView()
                 }
             }
             .id(theme.revision)
@@ -83,7 +90,7 @@ struct RootView: View {
             withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { tab = mapped }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            FloatingTabBar(selection: $tab)
+            FloatingTabBar(selection: $tab, downloadBadge: downloadBadge)
         }
         .tint(TetherlessPalette.accent)
         .preferredColorScheme(.dark)
@@ -152,26 +159,30 @@ struct RootView: View {
     private func handleAirShareDeepLink(_ url: URL) {
         let scheme = url.scheme?.lowercased() ?? ""
         // Companion console is a separate IPA (`tetherless-decrypt://`). Host only owns
-        // `tetherless://` — bounce decrypt-companion deep links to the Decrypt tab.
+        // `tetherless://` — bounce decrypt-companion deep links to Search.
         if scheme == "tetherless"
             && (url.host?.lowercased() == "decrypt-companion" || url.host?.lowercased() == "companion") {
-            nav.go(AppTab.decrypt.rawValue)
+            nav.goSearch()
             return
         }
         guard ["airshare", "msign", "tetherless", "sideloader"].contains(scheme) else { return }
         switch url.host?.lowercased() {
         case "activity", "signed":
-            nav.go(AppTab.library.rawValue)   // Signed segment lives under Library
+            nav.goDownloads()
         case "updates", "pair":
-            nav.go(AppTab.pair.rawValue)
+            nav.goPair()
         case "import", "turbo", "files":
-            nav.go(AppTab.files.rawValue)
+            nav.goFiles()
         case "library":
-            nav.go(AppTab.library.rawValue)
-        case "decrypt":
-            nav.go(AppTab.decrypt.rawValue)
-        case "settings":
-            nav.go(AppTab.settings.rawValue)
+            nav.goLibrary()
+        case "decrypt", "search":
+            nav.goSearch()
+        case "purchased":
+            nav.goPurchased()
+        case "downloads":
+            nav.goDownloads()
+        case "settings", "account":
+            nav.goSettings()
         case "install":
             guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
                   let id = components.queryItems?.first(where: { $0.name == "signedID" })?.value,

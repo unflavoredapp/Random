@@ -94,7 +94,7 @@ final class DecryptPipeline: ObservableObject {
                 DecryptClient.shared.message = statusText
                 DecryptClient.shared.finished = entry.ipaURL
                 DecryptClient.shared.finishedName = entry.name
-                AppNav.shared.go(AppTab.library.rawValue)
+                AppNav.shared.goLibrary()
             } catch {
                 let text = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 stage = .failed(text)
@@ -114,7 +114,7 @@ final class DecryptPipeline: ObservableObject {
                 _ = InstallAutopilot.apply()
                 let entry = try await signAndInstall(ipa: url, displayName: name)
                 stage = .done("Installed \(entry.name)")
-                AppNav.shared.go(AppTab.library.rawValue)
+                AppNav.shared.goLibrary()
             } catch {
                 stage = .failed((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             }

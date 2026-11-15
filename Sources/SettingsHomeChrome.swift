@@ -229,7 +229,7 @@ struct SettingsAppleIDCard: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             Button {
-                AppNav.shared.go(AppTab.decrypt.rawValue)
+                AppNav.shared.goSearch()
                 DeviceDecryptService.shared.runStoreConnectionSmokeTest()
             } label: {
                 Text("Test download → companion")

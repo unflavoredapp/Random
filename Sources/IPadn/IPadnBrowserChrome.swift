@@ -64,7 +64,7 @@ final class IPadnBrowserModel: ObservableObject {
 
     func decrypt(_ app: IPadnStoreApp) {
         let decryptApp = app.asDecryptApp()
-        AppNav.shared.go(AppTab.decrypt.rawValue)
+        AppNav.shared.goSearch()
         DeviceDecryptService.shared.decryptFromSearch(
             decryptApp,
             version: app.version.isEmpty ? nil : app.version,

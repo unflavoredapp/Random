@@ -173,7 +173,7 @@ struct LibraryView: View {
             // Encrypted (FairPlay) and no decrypted copy in the Library: hand it to the Decrypt tab by name.
             list.append(.init(title: "Decrypt", icon: "lock.open.fill", role: .normal) {
                 deviceSheet = nil
-                AppNav.shared.go(AppTab.decrypt.rawValue)
+                AppNav.shared.goSearch()
                 Task { await DeviceDecryptService.shared.decryptInstalled(app) }
             })
         }

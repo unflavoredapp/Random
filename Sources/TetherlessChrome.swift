@@ -1,7 +1,8 @@
 //
 //  TetherlessChrome.swift
 //  Visual shell matching the TetherLess glassmorphism UI (purple→teal gradient,
-//  glass cards, floating capsule tab bar). Backends stay in existing views.
+//  glass cards, floating capsule tab bar). Tab information architecture follows
+//  mengangs/ipadn: Search · Downloads · Purchased · Account (English labels).
 //
 
 import SwiftUI
@@ -152,20 +153,49 @@ struct StatusRow: View {
     }
 }
 
-// MARK: - Tabs
+// MARK: - Tabs (iPadn: Search · Downloads · Purchased · Account)
 
 enum AppTab: Int, CaseIterable, Identifiable {
-    case pair, files, library, decrypt, settings
+    case search, downloads, purchased, account
     var id: Int { rawValue }
 
-    /// Labels keep TetherLess roles; Decrypt tab mirrors iPadn’s Search entry.
     var label: String {
+        switch self {
+        case .search: return "Search"
+        case .downloads: return "Downloads"
+        case .purchased: return "Purchased"
+        case .account: return "Account"
+        }
+    }
+
+    var symbol: String {
+        switch self {
+        case .search: return "magnifyingglass"
+        case .downloads: return "arrow.down.circle.fill"
+        case .purchased: return "bag.fill"
+        case .account: return "person.crop.circle.fill"
+        }
+    }
+
+    // Compatibility aliases for older call sites / deep links.
+    static var decrypt: AppTab { .search }
+    static var settings: AppTab { .account }
+    static var pair: AppTab { .account }
+    static var files: AppTab { .account }
+    static var library: AppTab { .account }
+}
+
+/// Nested destinations under Account (TetherLess Pair / Files / Library / Settings).
+enum AppAccountPush: String, Identifiable, Hashable {
+    case pair, files, library, settings
+    var id: String { rawValue }
+
+    var title: String {
         switch self {
         case .pair: return "Pair"
         case .files: return "Files"
         case .library: return "Library"
-        case .decrypt: return "Search"
-        case .settings: return "Account"
+        case .settings: return "Settings"
         }
     }
 
@@ -174,18 +204,16 @@ enum AppTab: Int, CaseIterable, Identifiable {
         case .pair: return "iphone.radiowaves.left.and.right"
         case .files: return "folder.fill"
         case .library: return "square.stack.3d.up.fill"
-        case .decrypt: return "magnifyingglass"
-        case .settings: return "person.crop.circle.fill"
+        case .settings: return "gearshape.fill"
         }
     }
 }
 
 struct FloatingTabBar: View {
     @Binding var selection: AppTab
+    var downloadBadge: Int = 0
 
     var body: some View {
-        // iPadn uses a system TabView + ultraThinMaterial bar; keep TetherLess’s
-        // floating capsule but match App Store–style selected accent + labels.
         HStack(spacing: 0) {
             ForEach(AppTab.allCases) { tab in
                 Button {
@@ -193,8 +221,19 @@ struct FloatingTabBar: View {
                     UISelectionFeedbackGenerator().selectionChanged()
                 } label: {
                     VStack(spacing: 3) {
-                        Image(systemName: tab.symbol)
-                            .font(.system(size: 18, weight: selection == tab ? .semibold : .regular))
+                        ZStack(alignment: .topTrailing) {
+                            Image(systemName: tab.symbol)
+                                .font(.system(size: 18, weight: selection == tab ? .semibold : .regular))
+                            if tab == .downloads, downloadBadge > 0 {
+                                Text(downloadBadge > 9 ? "9+" : "\(downloadBadge)")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(TetherlessPalette.accent, in: Capsule())
+                                    .offset(x: 10, y: -6)
+                            }
+                        }
                         Text(tab.label).font(.caption2.weight(.semibold))
                     }
                     .foregroundStyle(selection == tab ? TetherlessPalette.accent : .white.opacity(0.55))
