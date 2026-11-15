@@ -269,7 +269,7 @@ struct SettingsAppleIDCard: View {
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
             }
-        } else if store.storeNeedsVerification {
+        } else if store.storeNeedsVerification || store.authPhase == .awaitingTwoFactor {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: "exclamationmark.triangle.fill")
                     .font(.title3)
@@ -280,13 +280,71 @@ struct SettingsAppleIDCard: View {
                         .foregroundStyle(.white)
                     Text(store.statusMessage?.isEmpty == false
                          ? store.statusMessage!
-                         : "Store piggybacks the Allow / verification code from Sign In — it should not ask for a second text. Sign Out, then Sign In once.")
+                         : "Watch for Apple’s Allow sheet, then enter the 6-digit code below. Or tap Text me a code.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.55))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
+
+            // Signed-in Store unlock used to omit this field — Allow sheet appeared with nowhere to type.
+            TextField("123456", text: $twoFACode)
+                .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+                .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(.white.opacity(0.10), lineWidth: 1)
+                )
+                .disabled(store.isBusy || store.storeConnecting)
+
+            primaryButton(store.isBusy ? "Unlocking Store…" : "Submit Code") {
+                Task {
+                    do {
+                        _ = try await store.submitStoreVerificationCode(twoFACode)
+                        twoFACode = ""
+                    } catch {
+                        // lastError / statusMessage already set on the store
+                    }
+                }
+            }
+            .disabled(store.isBusy || store.storeConnecting || twoFACode.filter(\.isNumber).count < 6)
+            .opacity(store.isBusy ? 0.7 : 1)
+
+            HStack(spacing: 16) {
+                Button {
+                    Task { await store.requestTrustedDevicePush() }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "iphone.radiowaves.left.and.right")
+                        Text("Send again to devices")
+                            .font(.footnote.weight(.semibold))
+                    }
+                    .foregroundStyle(TetherlessPalette.accent)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.isBusy || store.storeConnecting)
+
+                Button {
+                    Task { await store.requestSMSCode(forStoreUnlock: true) }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "message.fill")
+                        Text(store.isSMSTwoFactor ? "Resend text" : "Text me a code")
+                            .font(.footnote.weight(.semibold))
+                    }
+                    .foregroundStyle(TetherlessPalette.accent)
+                }
+                .buttonStyle(.plain)
+                .disabled(store.isBusy || store.storeConnecting)
+
+                Spacer(minLength: 0)
+            }
+
             Button {
                 Task { await store.requestStoreVerificationPrompt() }
             } label: {

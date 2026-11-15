@@ -385,10 +385,17 @@ final class AppleIDStore: ObservableObject {
         pendingStoreAuthCode = digits
         pendingStoreSession = nil
 
-        let pw = Keychain.getSessionSecret(Self.passwordPrefix + "pending")
+        var pw = Keychain.getSessionSecret(Self.passwordPrefix + "pending")
             ?? Keychain.getSecret(Self.passwordPrefix + "pending")
             ?? ""
-        let email = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        var email = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        // Already signed in (Store unlock after Allow sheet): use the active account secret.
+        if pw.isEmpty || !email.contains("@"),
+           let account = activeAccount,
+           let saved = passwordForAccount(id: account.id), !saved.isEmpty {
+            email = account.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            pw = saved
+        }
 
         guard !pw.isEmpty, email.contains("@") else {
             lastError = "Missing Apple ID password for Store unlock. Cancel, then Sign In again so Store can piggyback the first trust."
@@ -999,19 +1006,36 @@ final class AppleIDStore: ObservableObject {
         pendingStoreAuthCode = digits
         storefrontNeedsRefresh = true
         lastError = nil
+        authPhase = .verifying
         statusMessage = "Unlocking Store downloads…"
 
+        // Prefer PET + digits when we already have a GrandSlam trust token from Allow.
+        let pet = storedPET()?.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            // Hit MZFinance directly (not ensure→reuse stale flags) so password+code always go out.
-            let session = try await authenticateStoreWithRetries(
-                email: email,
-                password: password,
-                authCode: digits
-            )
+            var session: StorefrontSession?
+            if let pet, !pet.isEmpty {
+                session = try? await authenticateStoreWithRetries(
+                    email: email,
+                    password: pet,
+                    authCode: digits
+                )
+            }
+            if session?.isUsable != true {
+                // Hit MZFinance with password+code (not ensure→reuse stale flags).
+                session = try await authenticateStoreWithRetries(
+                    email: email,
+                    password: password,
+                    authCode: digits
+                )
+            }
+            guard let session, session.isUsable else {
+                throw AppStoreClientError.message("App Store sign-in failed after retries.")
+            }
             persistStoreSession(session)
             pendingStoreAuthCode = nil
             storefrontNeedsRefresh = false
             storeNeedsVerification = false
+            authPhase = .idle
             statusMessage = "Store access ready — free & purchased downloads unlocked"
             // Best-effort: finish / clear the GSA challenge that sent the SMS (code may already be spent).
             await finishOrClearPendingGSA(code: digits)
@@ -1020,14 +1044,16 @@ final class AppleIDStore: ObservableObject {
             // Store rejected the code — drop GSA pending so the next Resend starts clean.
             pendingStoreAuthCode = nil
             storeNeedsVerification = true
+            authPhase = .awaitingTwoFactor
             GSAAuthClient.shared.cancel()
             twoFactorUsesSMS = false
             twoFactorPhoneHint = nil
-            throw AppStoreClientError.message(
-                "That code didn’t unlock Store downloads (often burned by a second Apple prompt). Tap Resend text message for a fresh code, then Submit — stay signed in."
-            )
+            lastError = "That code didn’t unlock Store downloads (often burned by a second Apple prompt). Tap Resend text for a fresh code, then Submit — stay signed in."
+            throw AppStoreClientError.message(lastError ?? "Store needs a fresh code.")
         } catch {
             storeNeedsVerification = true
+            authPhase = .awaitingTwoFactor
+            lastError = error.localizedDescription
             throw error
         }
     }
