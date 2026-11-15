@@ -361,6 +361,10 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
     res->remap_off = remap_off;
     res->remap_len = remap_len;
 
+    // buddy3 [M] exact path: when crypt range is already native-page aligned, map only
+    // that range (file offset = slice_off+cryptoff) instead of a padded slice window.
+    const bool exact = fp_crypt_range_is_exact(s->cryptoff, s->cryptsize, s->slice_size, pg);
+
     uint32_t cid = 0;
     int prot = PROT_READ;
     mode_params(mode, s, &cid, &prot);
@@ -374,10 +378,20 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
         if (fcntl(fd, F_ADDFILESIGS_RETURN, &fs) == -1) res->sig_errno = errno;
     }
 
-    // Map enough of the slice to cover the aligned remap window.
-    uint64_t map_len = fp_align_up(remap_off + remap_len, pg);
+    const off_t map_file_off = exact
+        ? (off_t)(s->slice_off + s->cryptoff)
+        : (off_t)s->slice_off;
+    uint64_t map_len = exact
+        ? (uint64_t)s->cryptsize
+        : fp_align_up(remap_off + remap_len, pg);
     if (map_len == 0) map_len = pg;
-    uint8_t *base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, (off_t)s->slice_off);
+    // Exact remap args are the crypt range itself; padded path remaps [remap_off, +len).
+    const uint64_t mremap_bias = exact ? 0 : remap_off;
+    const size_t mremap_len = exact ? (size_t)s->cryptsize : (size_t)remap_len;
+    // Page reads: exact mapping starts at cryptoff==0 in the map; padded uses cryptoff.
+    const uint64_t read_bias = exact ? 0 : s->cryptoff;
+
+    uint8_t *base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, map_file_off);
     if (base == MAP_FAILED) { res->mmap_errno = errno; close(fd); res->ms = now_ms() - t0; return -1; }
 
     uint8_t *orig = malloc(s->cryptsize);
@@ -405,14 +419,21 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
         if (round > 0) {
             if (base != MAP_FAILED) munmap(base, (size_t)map_len);
             usleep((useconds_t)(35 * 1000 * round));
-            base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, (off_t)s->slice_off);
+            base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, map_file_off);
             if (base == MAP_FAILED) { res->mmap_errno = errno; break; }
         }
         errno = 0;
-        int mr = do_mremap_encrypted(base + remap_off, (size_t)remap_len, cid, s->cputype, s->cpusubtype);
+        int mr = do_mremap_encrypted(base + mremap_bias, mremap_len, cid, s->cputype, s->cpusubtype);
         res->mremap_ret = mr;
         res->mremap_errno = mr == 0 ? 0 : errno;
         if (mr != 0) continue;
+
+        // Prefault each crypt page (buddy3 “first protected userspace read”) before
+        // vm_read_overwrite so fairplayd has a chance to page-in.
+        for (uint64_t i = 0; i < total; i++) {
+            volatile uint8_t touch = base[read_bias + i * pg];
+            (void)touch;
+        }
 
         uint64_t pages_ok = 0;
         int first_kr = 0;
@@ -424,7 +445,7 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
             vm_size_t got = 0;
             // vm_read_overwrite reports decrypt page-in failures as kern_return_t (no SIGBUS).
             kern_return_t kr = vm_read_overwrite(mach_task_self(),
-                                                 (vm_address_t)(base + s->cryptoff + off),
+                                                 (vm_address_t)(base + read_bias + off),
                                                  (vm_size_t)n,
                                                  (vm_address_t)(dec + off), &got);
             if (kr == KERN_SUCCESS && got == n) {
@@ -432,7 +453,8 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
                 pages_ok++;
             } else {
                 if (!first_kr) { first_kr = kr ? (int)kr : -1; first_off = s->cryptoff + off; }
-                memset(dec + off, 0, (size_t)n);
+                // Keep ciphertext on failed pages so callers can merge by transform detection.
+                memcpy(dec + off, orig + off, (size_t)n);
             }
         }
         res->pages_ok = pages_ok;
@@ -444,7 +466,8 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
     }
 
     free(okmask);
-    if (res->mremap_ret == 0 && res->pages_ok == res->pages_total) {
+    if (res->mremap_ret == 0 && res->pages_ok > 0) {
+        // Score change/entropy even on partial page success so callers can merge pages.
         res->changed = memcmp(orig, dec, s->cryptsize) != 0;
         res->ret_after = code_words(dec, s->cryptsize);
         res->ent_after = entropy(dec, s->cryptsize);
@@ -596,12 +619,19 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         else logf_(log, ctx, "  mremap backend=%s", mremap_backend_name(backend));
     }
 
-    // Order: native LC cryptid first, then R/cryptid=2 (no PROT_EXEC), then dyld RX/cid1.
+    // Default order: native LC cryptid first, then R/cryptid=2 (no PROT_EXEC), then dyld RX/cid1.
+    // Exact-geometry slices prefer R/cid2 first (buddy3 [M] exact dispatch).
     // Each mode is tried with and without F_ADDFILESIGS_RETURN.
     // Kept in sync with tests/fpcore/test_fp_page.c (kExpectedDecryptOrder).
-    const int order[][2] = {
+    const int order_default[][2] = {
         {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
         {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
+        {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
+        {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1}
+    };
+    const int order_exact[][2] = {
+        {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
+        {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
         {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
         {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1}
     };
@@ -623,40 +653,104 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                   i, s->cryptoff, s->cryptsize, (unsigned long long)pg, (unsigned long long)s->slice_size);
             rc = -1; break;
         }
-        if (s->cryptoff % pg) {
+        const bool exact = fp_crypt_range_is_exact(s->cryptoff, s->cryptsize, s->slice_size, pg);
+        if (exact) {
+            logf_(log, ctx, "  slice[%d] exact native-page geometry [M] — mapping crypt range directly", i);
+        } else if (s->cryptoff % pg) {
             logf_(log, ctx, "  slice[%d] cryptoff 0x%x not page-aligned (page=%llu) — aligning remap to 0x%llx+0x%llx",
                   i, s->cryptoff, (unsigned long long)pg,
                   (unsigned long long)remap_off, (unsigned long long)remap_len);
         }
+
+        const int (*order)[2] = exact ? order_exact : order_default;
+        const size_t order_n = exact
+            ? (sizeof order_exact / sizeof order_exact[0])
+            : (sizeof order_default / sizeof order_default[0]);
+
         uint8_t *dec = malloc(s->cryptsize);
-        if (!dec) { rc = -1; break; }
+        uint8_t *cipher = malloc(s->cryptsize);
+        uint8_t *merged = malloc(s->cryptsize);
+        uint64_t page_total = (s->cryptsize + pg - 1) / pg;
+        if (page_total == 0) page_total = 1;
+        uint8_t *merged_ok = calloc((size_t)page_total, 1);
+        int cin = open(in_path, O_RDONLY);
+        bool cipher_ok = cin >= 0 && cipher &&
+            pread_full(cin, cipher, s->cryptsize, (off_t)(s->slice_off + s->cryptoff));
+        if (cin >= 0) close(cin);
+        if (!dec || !cipher || !merged || !merged_ok || !cipher_ok) {
+            free(dec); free(cipher); free(merged); free(merged_ok);
+            rc = -1; break;
+        }
+        memcpy(merged, cipher, s->cryptsize);
+
         bool done = false;
         fp_attempt_t best; memset(&best, 0, sizeof best); best.mremap_ret = -1;
-        for (size_t k = 0; k < sizeof order / sizeof order[0] && !done; k++) {
+        uint64_t merged_pages = 0;
+
+        for (size_t k = 0; k < order_n && !done; k++) {
             fp_attempt_t a; char d[512];
             // Extra tries per mode — guarded remapping inside fp_attempt plus outer backoff.
             for (int attempt = 0; attempt < 2 && !done; attempt++) {
                 if (attempt) usleep((useconds_t)(40 * 1000 * attempt));
+                memcpy(dec, cipher, s->cryptsize);
                 fp_attempt(in_path, s, order[k][0], order[k][1], dec, &a);
                 if (a.pages_ok > best.pages_ok || (a.pages_ok == best.pages_ok && a.changed && !best.changed))
                     best = a;
+                // Merge pages that transformed vs ciphertext (buddy-style chunk recovery).
+                if (a.mremap_ret == 0 && a.pages_ok > 0) {
+                    for (uint64_t p = 0; p < page_total; p++) {
+                        if (merged_ok[p]) continue;
+                        uint64_t off = p * pg;
+                        uint64_t nbytes = (off + pg <= s->cryptsize) ? pg : (s->cryptsize - off);
+                        if (memcmp(dec + off, cipher + off, (size_t)nbytes) == 0) continue;
+                        memcpy(merged + off, dec + off, (size_t)nbytes);
+                        merged_ok[p] = 1;
+                    }
+                    merged_pages = 0;
+                    for (uint64_t p = 0; p < page_total; p++) if (merged_ok[p]) merged_pages++;
+                }
                 fp_attempt_describe(&a, d, sizeof d);
                 done = attempt_looks_decrypted(&a);
-                logf_(log, ctx, "  slice[%d] try%zu.%d %s %s", i, k, attempt, done ? "[DECRYPTED]" : "[--]", d);
+                if (!done && merged_pages == page_total) {
+                    memcpy(dec, merged, s->cryptsize);
+                    a.pages_ok = page_total;
+                    a.pages_total = page_total;
+                    a.changed = 1;
+                    a.ret_after = code_words(dec, s->cryptsize);
+                    a.ent_after = entropy(dec, s->cryptsize);
+                    a.ret_before = code_words(cipher, s->cryptsize);
+                    a.ent_before = entropy(cipher, s->cryptsize);
+                    done = attempt_looks_decrypted(&a);
+                    if (done) best = a;
+                }
+                logf_(log, ctx, "  slice[%d] try%zu.%d %s %s (merged %llu/%llu%s)",
+                      i, k, attempt, done ? "[DECRYPTED]" : "[--]", d,
+                      (unsigned long long)merged_pages, (unsigned long long)page_total,
+                      exact ? ", exact" : "");
             }
+        }
+        if (!done && merged_pages == page_total) {
+            memcpy(dec, merged, s->cryptsize);
+            done = true;
+            logf_(log, ctx, "  slice[%d] recovered via merged pages across modes", i);
         }
         if (!done) {
             char d[512];
             fp_attempt_describe(&best, d, sizeof d);
-            logf_(log, ctx, "  slice[%d] FAILED after all modes; best: %s", i, d);
-            rc = -1; free(dec); break;
+            logf_(log, ctx, "  slice[%d] FAILED after all modes; best: %s (merged %llu/%llu)",
+                  i, d, (unsigned long long)merged_pages, (unsigned long long)page_total);
+            rc = -1; free(dec); free(cipher); free(merged); free(merged_ok); break;
         }
+        if (merged_pages == page_total) memcpy(dec, merged, s->cryptsize);
         uint32_t zero = 0;
         if (!pwrite_full(out, dec, s->cryptsize, (off_t)(s->slice_off + s->cryptoff)) ||
             !pwrite_full(out, &zero, 4, (off_t)(s->enc_lc_off + offsetof(struct encryption_info_command, cryptid)))) {
             logf_(log, ctx, "  write failed: %s", strerror(errno)); rc = -1;
         }
-        free(dec);
+        free(dec); free(cipher); free(merged); free(merged_ok);
+    }
+    if (rc == 0) {
+        fsync(out);
     }
     close(out);
     if (rc == 0) {
