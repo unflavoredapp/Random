@@ -236,26 +236,69 @@ bool fp_is_macho(const char *path) {
 #pragma mark - parsing
 
 static int parse_thin(int fd, uint64_t off, uint64_t size, fp_slice_t *s, char *err, size_t errlen) {
+    // Bound every read to this fat slice (or the whole thin file). 32-bit Mach-O is
+    // intentionally unsupported — modern App Store IPAs ship MH_MAGIC_64 only.
+    if (size < sizeof(struct mach_header_64)) {
+        snprintf(err, errlen, "slice too small for mach_header_64");
+        return -1;
+    }
     struct mach_header_64 mh;
     if (!pread_full(fd, &mh, sizeof mh, off)) { snprintf(err, errlen, "short read (header)"); return -1; }
-    if (mh.magic != MH_MAGIC_64) { snprintf(err, errlen, "unsupported magic 0x%x", mh.magic); return -1; }
+    if (mh.magic != MH_MAGIC_64) { snprintf(err, errlen, "unsupported magic 0x%x (64-bit only)", mh.magic); return -1; }
     memset(s, 0, sizeof *s);
     s->slice_off = off; s->slice_size = size;
     s->cputype = mh.cputype; s->cpusubtype = mh.cpusubtype; s->filetype = mh.filetype;
     if (mh.sizeofcmds > 16 * 1024 * 1024) { snprintf(err, errlen, "sizeofcmds too large"); return -1; }
+    // Header + load-command blob must fit inside this slice — never read past arch bounds.
+    if ((uint64_t)sizeof mh + (uint64_t)mh.sizeofcmds > size) {
+        snprintf(err, errlen, "sizeofcmds overflows slice (%u + %u > %llu)",
+                 (unsigned)sizeof mh, mh.sizeofcmds, (unsigned long long)size);
+        return -1;
+    }
     uint8_t *cmds = malloc(mh.sizeofcmds);
     if (!cmds || !pread_full(fd, cmds, mh.sizeofcmds, off + sizeof mh)) { free(cmds); snprintf(err, errlen, "short read (cmds)"); return -1; }
     uint32_t pos = 0;
     for (uint32_t i = 0; i < mh.ncmds && pos + 8 <= mh.sizeofcmds; i++) {
         struct load_command *lc = (struct load_command *)(cmds + pos);
-        if (lc->cmdsize < 8 || pos + lc->cmdsize > mh.sizeofcmds) break;
+        if (lc->cmdsize < 8 || pos + lc->cmdsize > mh.sizeofcmds) {
+            free(cmds);
+            snprintf(err, errlen, "load command %u overflows sizeofcmds", i);
+            return -1;
+        }
         if (lc->cmd == LC_ENCRYPTION_INFO_64 || lc->cmd == LC_ENCRYPTION_INFO) {
+            const uint32_t need = (lc->cmd == LC_ENCRYPTION_INFO_64)
+                ? (uint32_t)sizeof(struct encryption_info_command_64)
+                : (uint32_t)sizeof(struct encryption_info_command);
+            if (lc->cmdsize < need) {
+                free(cmds);
+                snprintf(err, errlen, "encryption LC too small (%u < %u)", lc->cmdsize, need);
+                return -1;
+            }
             struct encryption_info_command *e = (void *)lc;
+            // crypt range is relative to the thin slice start.
+            if ((uint64_t)e->cryptoff > size ||
+                (uint64_t)e->cryptsize > size - (uint64_t)e->cryptoff) {
+                free(cmds);
+                snprintf(err, errlen, "encryption range overflows slice (off=0x%x size=0x%x slice=%llu)",
+                         e->cryptoff, e->cryptsize, (unsigned long long)size);
+                return -1;
+            }
             s->has_enc = true;
             s->enc_lc_off = off + sizeof mh + pos;
             s->cryptoff = e->cryptoff; s->cryptsize = e->cryptsize; s->cryptid = e->cryptid;
         } else if (lc->cmd == LC_CODE_SIGNATURE) {
+            if (lc->cmdsize < sizeof(struct linkedit_data_command)) {
+                free(cmds);
+                snprintf(err, errlen, "code signature LC too small");
+                return -1;
+            }
             struct linkedit_data_command *l = (void *)lc;
+            if ((uint64_t)l->dataoff > size ||
+                (uint64_t)l->datasize > size - (uint64_t)l->dataoff) {
+                free(cmds);
+                snprintf(err, errlen, "code signature range overflows slice");
+                return -1;
+            }
             s->cs_off = l->dataoff; s->cs_size = l->datasize;
         }
         pos += lc->cmdsize;

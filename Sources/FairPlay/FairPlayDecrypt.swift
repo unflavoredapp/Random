@@ -30,11 +30,13 @@ enum FairPlayDecryptError: LocalizedError {
 struct FairPlayCryptidEntry: Sendable, Identifiable {
     var id: String { path }
     var path: String
-    /// Highest cryptid across slices; `-1` parse error, `0` clear / no LC, `>0` still encrypted.
+    /// Highest cryptid across slices; `<0` unknown (parse/timeout/skip), `0` clear / no LC, `>0` still encrypted.
     var cryptid: Int
     var detail: String
 
     var isEncrypted: Bool { cryptid > 0 }
+    /// Parse failure, probe timeout, or intentionally skipped live-install probe — never treat as clear.
+    var isUnknown: Bool { cryptid < 0 }
 }
 
 struct FairPlayVerifyReport: Sendable {
@@ -42,10 +44,19 @@ struct FairPlayVerifyReport: Sendable {
     var encrypted = 0
     var clear = 0
     var plain = 0
+    /// Binaries that could not be inspected (timeout, parse error, skipped live probe).
+    var unknown = 0
 
-    var isFullyClear: Bool { encrypted == 0 && !entries.isEmpty }
+    /// True only when every Mach-O was inspected and none remain encrypted.
+    var isFullyClear: Bool { encrypted == 0 && unknown == 0 && !entries.isEmpty }
     var summary: String {
-        "\(clear) cryptid=0 · \(encrypted) encrypted · \(plain) no LC_ENCRYPTION"
+        var parts = [
+            "\(clear) cryptid=0",
+            "\(encrypted) encrypted",
+            "\(plain) no LC_ENCRYPTION",
+        ]
+        if unknown > 0 { parts.append("\(unknown) unknown") }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -679,10 +690,17 @@ enum FairPlayDecrypt {
         guard let bins = try? collectMachOs(under: app) else { return [] }
         var out: [String] = []
         for url in bins {
+            // Timeout / parse failure must not drop a binary from the retry set.
             let enc = withTimeout(seconds: 3, work: {
                 Int(url.path.withCString { fp_has_encrypted_slice($0) })
-            }) ?? 0
-            guard enc == 1 else { continue }
+            })
+            let stillHot: Bool
+            if let enc {
+                stillHot = enc == 1 || enc < 0
+            } else {
+                stillHot = true
+            }
+            guard stillHot else { continue }
             let rel = relativePath(url, under: app)
             let r = role(of: url, under: app, app: app)
             if report.isPartial {
@@ -697,15 +715,16 @@ enum FairPlayDecrypt {
 
     /// Report cryptid of every Mach-O under an `.app` (FairPlayed `verify_ipa.sh`).
     /// Cryptid probes are bounded — live App Store installs can hang forever on `fp_*`.
+    /// Timeouts and parser failures are counted as **unknown**, never as clear.
     static func verifyApp(at app: URL) throws -> FairPlayVerifyReport {
         if isLiveAppStoreInstall(app) {
             // Never cryptid-probe live containers. Enumerate with timeout-safe collectMachOs
-            // and mark entries unknown/plain so callers can still slim-embed.
+            // and mark entries unknown so callers cannot green-wash skipped probes.
             var report = FairPlayVerifyReport()
             for url in try collectMachOs(under: app) {
                 let rel = relativePath(url, under: app)
                 report.entries.append(FairPlayCryptidEntry(path: rel, cryptid: -1, detail: "live-install:skipped-cryptid-probe"))
-                report.plain += 1
+                report.unknown += 1
             }
             return report
         }
@@ -721,23 +740,27 @@ enum FairPlayDecrypt {
                 }
                 let cryptid = url.path.withCString { fp_max_cryptid($0) }
                 return (cryptid, sliceCount, String(cString: detailBuf))
-            }) ?? (0, 0, "cryptid-probe-timed-out")
-            let cryptid = probed.cryptid
+            }) ?? (-1, 0, "cryptid-probe-timed-out")
+            let cryptid = Int(probed.cryptid)
             let detail = probed.detail
-            let entry = FairPlayCryptidEntry(path: rel, cryptid: Int(cryptid), detail: detail)
+            let entry = FairPlayCryptidEntry(path: rel, cryptid: cryptid, detail: detail)
             report.entries.append(entry)
             if cryptid > 0 {
                 report.encrypted += 1
-            } else if cryptid == 0 && probed.sliceCount > 0 && detail.contains("cryptid=0") {
+            } else if cryptid < 0 {
+                // fp_max_cryptid / fp_describe parse failure (-1), or probe timeout (-1).
+                report.unknown += 1
+            } else if probed.sliceCount > 0 && detail.contains("cryptid=0") {
                 report.clear += 1
-            } else if cryptid == 0 {
-                if detail.contains("plain") && !detail.contains("cryptid=") {
-                    report.plain += 1
-                } else {
-                    report.clear += 1
-                }
-            } else {
+            } else if detail.contains("plain") && !detail.contains("cryptid=") {
                 report.plain += 1
+            } else {
+                // cryptid == 0 with no LC detail — treat as clear only when describe succeeded.
+                if probed.sliceCount > 0 {
+                    report.clear += 1
+                } else {
+                    report.unknown += 1
+                }
             }
         }
         return report
@@ -865,10 +888,28 @@ enum FairPlayDecrypt {
         let verify = try verifyApp(at: app)
         report.verify = verify
 
+        // Never green-wash failed inspections — unknown ≠ clear.
+        if verify.unknown > 0 && !report.isPartial {
+            let names = verify.entries.filter(\.isUnknown).prefix(4).map(\.path).joined(separator: ", ")
+            throw FairPlayDecryptError.failed(
+                "Post-decrypt verify could not inspect \(verify.unknown) Mach-O(s): \(names)\(verify.unknown > 4 ? "…" : ""). Refusing to treat as clear."
+            )
+        }
+
         let softSet = Set(report.softFailed)
         let failedSet = Set(report.failed)
         let remaining = try collectMachOs(under: app).filter { url in
-            guard url.path.withCString({ fp_has_encrypted_slice($0) }) == 1 else { return false }
+            let enc = withTimeout(seconds: 3, work: {
+                Int(url.path.withCString { fp_has_encrypted_slice($0) })
+            })
+            // Timeout / parse error → fail closed (treat as still encrypted).
+            let stillHot: Bool
+            if let enc {
+                stillHot = enc == 1 || enc < 0
+            } else {
+                stillHot = true
+            }
+            guard stillHot else { return false }
             let rel = relativePath(url, under: app)
             // Soft-failed Watch / widget / App Clip, and known PARTIAL leftovers, may stay encrypted.
             if softSet.contains(rel) || failedSet.contains(rel) { return false }
@@ -1153,6 +1194,8 @@ enum FairPlayDecrypt {
         case timedOut
     }
 
+    /// Runs `decryptOne` against an isolated staging `.app` so a timed-out worker cannot
+    /// keep writing into `destApp` (or leave a half-moved `.fpdec`) after the caller moves on.
     private static func decryptOneWithTimeout(
         file: URL,
         sourceApp: URL,
@@ -1162,31 +1205,95 @@ enum FairPlayDecrypt {
         role: FairPlayBinaryRole,
         timeout: TimeInterval
     ) -> DecryptOneOutcome {
-        final class Box: @unchecked Sendable {
+        final class Job: @unchecked Sendable {
+            let lock = NSLock()
+            /// Caller gave up — worker must not promote into `destApp`.
+            var abandoned = false
+            /// Worker finished promote / error publish under the lock.
+            var finished = false
             var report = FairPlayDecryptReport()
             var error: Error?
-            var done = false
         }
-        let box = Box()
+        let job = Job()
+        let fm = FileManager.default
+        let stagingRoot = fm.temporaryDirectory.appendingPathComponent(
+            "fpdec-job-\(UUID().uuidString)", isDirectory: true
+        )
+        let stagingApp = stagingRoot.appendingPathComponent("Staging.app", isDirectory: true)
+        let rel = relativePath(file, under: sourceApp)
+        let finalURL = destApp.appendingPathComponent(rel)
         let sem = DispatchSemaphore(value: 0)
+
         DispatchQueue.global(qos: .userInitiated).async {
-            do {
-                try decryptOne(
-                    file: file, sourceApp: sourceApp, destApp: destApp,
-                    index: index, total: total, progress: nil,
-                    report: &box.report, role: role
-                )
-            } catch {
-                box.error = error
+            defer {
+                try? fm.removeItem(at: stagingRoot)
+                sem.signal()
             }
-            box.done = true
-            sem.signal()
+            do {
+                try fm.createDirectory(at: stagingApp, withIntermediateDirectories: true)
+                var localReport = FairPlayDecryptReport()
+                try decryptOne(
+                    file: file, sourceApp: sourceApp, destApp: stagingApp,
+                    index: index, total: total, progress: nil,
+                    report: &localReport, role: role
+                )
+
+                job.lock.lock()
+                let abandonedBeforePromote = job.abandoned
+                job.lock.unlock()
+                if abandonedBeforePromote { return }
+
+                let staged = stagingApp.appendingPathComponent(rel)
+                var didPromote = false
+                if fm.fileExists(atPath: staged.path) {
+                    try fm.createDirectory(
+                        at: finalURL.deletingLastPathComponent(),
+                        withIntermediateDirectories: true
+                    )
+                    try? fm.removeItem(at: finalURL)
+                    try fm.moveItem(at: staged, to: finalURL)
+                    didPromote = true
+                }
+
+                job.lock.lock()
+                if job.abandoned {
+                    // Timed out during promote — roll back so the caller’s dest stays untouched.
+                    if didPromote { try? fm.removeItem(at: finalURL) }
+                    job.lock.unlock()
+                    return
+                }
+                job.report = localReport
+                job.finished = true
+                job.lock.unlock()
+            } catch {
+                job.lock.lock()
+                if !job.abandoned {
+                    job.error = error
+                    job.finished = true
+                }
+                job.lock.unlock()
+            }
         }
+
         if sem.wait(timeout: .now() + timeout) == .timedOut {
+            job.lock.lock()
+            if job.finished {
+                let error = job.error
+                let report = job.report
+                job.lock.unlock()
+                if let error { return .threw(error) }
+                return .ok(report)
+            }
+            job.abandoned = true
+            job.lock.unlock()
             return .timedOut
         }
-        if let error = box.error { return .threw(error) }
-        return .ok(box.report)
+        job.lock.lock()
+        let error = job.error
+        let report = job.report
+        job.lock.unlock()
+        if let error { return .threw(error) }
+        return .ok(report)
     }
 
     private static func withTimeout<T>(seconds: TimeInterval, work: @escaping () -> T) -> T? {
