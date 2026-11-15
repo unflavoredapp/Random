@@ -808,7 +808,7 @@ struct AnisetteServerCard: View {
                 Text("Anisette server")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
-                Text("Store Access uses a remote v3 anisette host (SideStore / jkcoxson pattern). Rotate after HTTP 403, or point at your site’s `/anisette` if you host one.")
+                Text("Sign In and Store Access need a reachable v3 anisette host (SideStore / jkcoxson). If Sign In fails with a TLS error, pick another server here first — you don’t need to be signed in.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.45))
                     .fixedSize(horizontal: false, vertical: true)
@@ -884,15 +884,23 @@ struct AnisetteServerCard: View {
         guard let url = URL(string: server) else { return }
         await AnisetteClient.shared.setServerURL(url)
         current = url.absoluteString
-        status = "Using \(url.host ?? server) — tap Retry Store unlock."
-        await AppleIDStore.shared.requestStoreVerificationPrompt()
+        status = AppleIDStore.shared.hasAnyAccount
+            ? "Using \(url.host ?? server) — tap Retry Store unlock."
+            : "Using \(url.host ?? server) — try Sign In again."
+        if AppleIDStore.shared.hasAnyAccount {
+            await AppleIDStore.shared.requestStoreVerificationPrompt()
+        }
     }
 
     private func rotate() async {
         let next = await AnisetteClient.shared.rotateServer()
         current = next.absoluteString
-        status = "Rotated to \(next.host ?? next.absoluteString) — reminting Store…"
-        await AppleIDStore.shared.requestStoreVerificationPrompt()
+        status = AppleIDStore.shared.hasAnyAccount
+            ? "Rotated to \(next.host ?? next.absoluteString) — reminting Store…"
+            : "Rotated to \(next.host ?? next.absoluteString) — try Sign In again."
+        if AppleIDStore.shared.hasAnyAccount {
+            await AppleIDStore.shared.requestStoreVerificationPrompt()
+        }
         await reload()
     }
 }

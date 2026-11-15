@@ -49,6 +49,11 @@ struct SettingsView: View {
             ScrollView(showsIndicators: false) {
                 VStack(alignment: .leading, spacing: 14) {
                     SettingsAppleIDCard()
+                    // Anisette must be reachable before Sign In — don't bury the picker
+                    // under Manage Store Accounts (only visible after a successful login).
+                    if !AppleIDStore.shared.hasAnyAccount {
+                        AnisetteServerCard()
+                    }
                     SettingsSoftwareUpdateCard()
                     SettingsGlassNavRow(
                         systemImage: "key.fill",
