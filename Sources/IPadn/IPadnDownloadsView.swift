@@ -138,54 +138,61 @@ struct DownloadsHomeView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 10) {
-            Button(editMode ? "Done" : "Edit") {
-                withAnimation {
-                    editMode.toggle()
-                    selection.removeAll()
-                }
-            }
-            .font(.body.weight(.semibold))
-            .foregroundStyle(.white)
-            .disabled(manager.jobs.isEmpty)
-
-            if !manager.jobs.isEmpty {
-                Menu {
-                    ForEach(IPadnDownloadFilter.allCases) { item in
-                        Button {
-                            filter = item
-                        } label: {
-                            Label(item.title, systemImage: item.symbol)
-                        }
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Button(editMode ? "Done" : "Edit") {
+                    withAnimation {
+                        editMode.toggle()
+                        selection.removeAll()
                     }
+                }
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .disabled(manager.jobs.isEmpty)
+
+                if editMode {
+                    Button {
+                        confirmingDelete = true
+                    } label: {
+                        Image(systemName: "trash")
+                            .foregroundStyle(selection.isEmpty ? .white.opacity(0.25) : .red.opacity(0.9))
+                    }
+                    .disabled(selection.isEmpty)
+                    .accessibilityLabel("Delete selected")
+                } else if !manager.jobs.isEmpty {
+                    Menu {
+                        ForEach(IPadnDownloadFilter.allCases) { item in
+                            Button {
+                                filter = item
+                            } label: {
+                                Label(item.title, systemImage: item.symbol)
+                            }
+                        }
+                    } label: {
+                        Image(systemName: filter.symbol)
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .accessibilityLabel("Filter downloads, currently \(filter.title)")
+                }
+
+                Spacer(minLength: 0)
+
+                Button {
+                    showingActions = true
                 } label: {
-                    Image(systemName: filter.symbol)
+                    Image(systemName: "plus")
                         .font(.body.weight(.semibold))
                         .foregroundStyle(.white)
                         .frame(width: 36, height: 36)
                         .background(Color.white.opacity(0.12), in: Circle())
                 }
-                .accessibilityLabel("Filter downloads, currently \(filter.title)")
+                .accessibilityLabel("Add Download")
             }
-
-            Spacer(minLength: 0)
 
             Text("Downloads")
                 .font(.system(size: 34, weight: .bold))
                 .foregroundStyle(.white)
-
-            Spacer(minLength: 0)
-
-            Button {
-                showingActions = true
-            } label: {
-                Image(systemName: "plus")
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 36, height: 36)
-                    .background(Color.white.opacity(0.12), in: Circle())
-            }
-            .accessibilityLabel("Add Download")
         }
     }
 

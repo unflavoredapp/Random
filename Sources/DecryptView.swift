@@ -23,6 +23,17 @@ struct DecryptApp: Identifiable, Hashable {
     var countryCode: String = ""
     /// Short badge label (e.g. `US`, `JP`).
     var countryLabel: String = ""
+    /// Primary genre from iTunes lookup (Search row subtitle).
+    var category: String = ""
+    /// IPA byte size when known from the store listing.
+    var sizeBytes: Int64 = 0
+    /// MZFinance external version id when pinning a specific build.
+    var externalVersionId: String = ""
+
+    var sizeLabel: String {
+        guard sizeBytes > 0 else { return "" }
+        return ByteCountFormatter.string(fromByteCount: sizeBytes, countStyle: .file)
+    }
 
     var asIPadnStoreApp: IPadnStoreApp {
         let adam = id.split(separator: "-").last.map(String.init) ?? id.filter(\.isNumber)
@@ -32,6 +43,9 @@ struct DecryptApp: Identifiable, Hashable {
             bundleID: bundle,
             version: version,
             iconURL: icon,
+            category: category,
+            size: sizeBytes,
+            externalVersionID: externalVersionId.isEmpty ? nil : externalVersionId,
             developer: dev,
             storeURL: url,
             country: countryCode.isEmpty ? "US" : countryCode.uppercased()

@@ -76,6 +76,8 @@ struct IPadnDownloadJob: Codable, Identifiable, Equatable {
     var error: String?
     var createdAt = Date()
     var kind: Kind = .store
+    /// Pin a specific store build when set.
+    var externalVersionId: String? = nil
 
     enum Kind: String, Codable { case store, url, importIPA }
 
@@ -193,11 +195,13 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
 
     // MARK: Enqueue
 
-    func enqueueStore(app: DecryptApp) throws {
+    func enqueueStore(app: DecryptApp, externalVersionId: String? = nil) throws {
+        let pin = (externalVersionId ?? app.externalVersionId).trimmingCharacters(in: .whitespacesAndNewlines)
         if jobs.contains(where: {
-            ($0.adamId.map { "\($0)" } == app.id.components(separatedBy: "-").last
+            let sameApp = ($0.adamId.map { "\($0)" } == app.id.components(separatedBy: "-").last
                 || (!$0.bundleID.isEmpty && $0.bundleID == app.bundle))
-                && ![.completed, .failed].contains($0.status)
+            let samePin = ($0.externalVersionId ?? "") == pin
+            return sameApp && samePin && ![.completed, .failed].contains($0.status)
         }) {
             throw IPadnDownloadError.message("This version already has a download task.")
         }
@@ -211,7 +215,9 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             iconURL: app.icon,
             storeURL: app.url,
             status: .queued,
-            kind: .store
+            expected: app.sizeBytes,
+            kind: .store,
+            externalVersionId: pin.isEmpty ? nil : pin
         )
         jobs.insert(job, at: 0)
         persist()
@@ -391,8 +397,10 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                     name: job.name,
                     bundle: job.bundleID,
                     icon: job.iconURL,
+                    dev: "",
                     version: job.version,
-                    url: job.storeURL
+                    url: job.storeURL,
+                    externalVersionId: job.externalVersionId ?? ""
                 )
                 // Prefer store purchase/download; fall back to decrypt pipeline destination.
                 let dest = IPadnDownloadStorage.packagesDir
@@ -403,7 +411,7 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                         adamId: adam,
                         account: account,
                         destination: dest,
-                        externalVersionId: nil,
+                        externalVersionId: job.externalVersionId,
                         version: job.version.isEmpty ? nil : job.version,
                         onProgress: { [weak self] msg in
                             Task { @MainActor in

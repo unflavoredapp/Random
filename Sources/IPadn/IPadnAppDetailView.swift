@@ -341,7 +341,6 @@ struct IPadnAppDetailView: View {
     private func enqueueDownload(versionID: String?) {
         do {
             var decrypt = app.asDecryptApp()
-            // Prefer adam id for store download.
             if let adam = app.adamId {
                 decrypt = DecryptApp(
                     id: "owned-\(adam)",
@@ -350,12 +349,13 @@ struct IPadnAppDetailView: View {
                     icon: app.iconURL,
                     dev: app.developer,
                     version: app.version,
-                    url: app.storeURL
+                    url: app.storeURL,
+                    category: app.category,
+                    sizeBytes: app.size,
+                    externalVersionId: versionID ?? app.externalVersionID ?? ""
                 )
             }
-            try manager.enqueueStore(app: decrypt)
-            // If a specific external version was requested, tip the user — pin happens inside purchaseAndDownload when possible.
-            _ = versionID
+            try manager.enqueueStore(app: decrypt, externalVersionId: versionID ?? app.externalVersionID)
             AppNav.shared.goDownloads()
         } catch {
             enqueueError = error.localizedDescription

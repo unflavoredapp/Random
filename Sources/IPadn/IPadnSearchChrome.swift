@@ -150,6 +150,8 @@ struct IPadnDecryptAppRow: View {
     let app: DecryptApp
     var onGet: () -> Void
     var onVersions: (() -> Void)? = nil
+    /// Show disclosure chevron (iPadn Search → App Detail).
+    var showsChevron: Bool = true
 
     var body: some View {
         HStack(spacing: 14) {
@@ -183,15 +185,17 @@ struct IPadnDecryptAppRow: View {
                             .background(Color.white.opacity(0.12), in: Capsule())
                     }
                 }
-                if !app.dev.isEmpty {
-                    Text(app.dev)
+                // iPadn Search rows: category, then vX · size.
+                let subtitle = app.category.isEmpty ? app.dev : app.category
+                if !subtitle.isEmpty {
+                    Text(subtitle)
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.45))
                         .lineLimit(1)
                 }
                 let facts = [
                     app.version.isEmpty ? nil : "v\(app.version)",
-                    app.bundle.isEmpty ? nil : app.bundle
+                    app.sizeLabel.isEmpty ? nil : app.sizeLabel
                 ].compactMap { $0 }.joined(separator: " · ")
                 if !facts.isEmpty {
                     Text(facts)
@@ -201,14 +205,19 @@ struct IPadnDecryptAppRow: View {
                 }
             }
             Spacer(minLength: 8)
-            VStack(spacing: 8) {
-                IPadnGetCapsule(title: "Get", filled: false, action: onGet)
-                if let onVersions {
-                    Button("Versions", action: onVersions)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.45))
-                        .buttonStyle(.plain)
+            IPadnGetCapsule(title: "Get", filled: false, action: onGet)
+            if showsChevron {
+                Button {
+                    onVersions?()
+                } label: {
+                    Image(systemName: "chevron.forward")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.3))
+                        .frame(minWidth: 28, minHeight: 44)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Details")
             }
         }
         .padding(.vertical, 6)

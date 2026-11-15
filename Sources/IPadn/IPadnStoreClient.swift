@@ -86,7 +86,10 @@ struct IPadnStoreApp: Identifiable, Hashable, Sendable {
                 ? "https://apps.apple.com/\(code)/app/id\(id)"
                 : storeURL,
             countryCode: code,
-            countryLabel: country.uppercased()
+            countryLabel: country.uppercased(),
+            category: category,
+            sizeBytes: size,
+            externalVersionId: externalVersionID ?? ""
         )
     }
 }
