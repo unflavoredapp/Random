@@ -164,8 +164,8 @@ struct LibraryHomeView: View {
             GlassCard {
                 StatusRow(
                     kind: .info,
-                    title: "Decrypt from install (no Store login)",
-                    subtitle: "App Store titles use this iPhone’s FairPlay keys. Tap Decrypt — companion embed skips Store Access."
+                    title: "Decrypt via Store package → companion",
+                    subtitle: "When Store Access is ready, TetherLess fetches the IPA and pushes FairPlay to Tetherless Decrypt. Install embed is only a fallback."
                 )
             }
             if !decrypting.status.isEmpty {

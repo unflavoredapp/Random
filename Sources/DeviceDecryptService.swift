@@ -390,7 +390,9 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     /// Decrypt an app already on this iPhone via companion FairPlay.
-    /// Prefers the live install path so Store Access / silent download is optional.
+    /// Prefers Store download → companion when Store Access is ready (avoids hanging
+    /// host-side FairPlay audits on live install paths). Falls back to install embed
+    /// only when Store isn’t usable or the package fetch fails.
     func decryptInstalled(_ app: DeviceApp, version: String? = nil) async {
         guard !busy else { return }
         busy = true
@@ -411,17 +413,10 @@ final class DeviceDecryptService: ObservableObject {
             )
             DecryptClient.shared.phase = .running
 
-            // 1) Live install → companion (no Store session required — FairPlay keys are
-            //    already on-device from the App Store install of this title).
-            if let installed = await resolveInstalledAppURL(bundleID: app.bundleID) {
-                publishDecryptProgress("Using installed \(app.name) — Store login not required…")
-                try await decryptFromInstalledPath(installed, displayName: app.name, bundleID: app.bundleID)
-                return
-            }
-
-            // 2) Optional Store download only when install path is missing and Store is green.
+            // 1) Store package → companion when Store is green. Companion verifies DRM
+            //    and decrypts; host must not stall on “Auditing FairPlay DRM on install path…”.
             if AppleIDStore.shared.storefrontSession()?.isUsable == true {
-                publishDecryptProgress("Install path missing — trying Store package…")
+                publishDecryptProgress("Fetching Store package for \(app.name)…")
                 do {
                     let storeURL = try await storeURL(forBundleID: app.bundleID)
                     try await silentPurchaseDownloadDecrypt(
@@ -432,8 +427,15 @@ final class DeviceDecryptService: ObservableObject {
                     )
                     return
                 } catch {
-                    publishDecryptProgress(error.localizedDescription)
+                    publishDecryptProgress("Store package failed — \(error.localizedDescription)")
                 }
+            }
+
+            // 2) Live install embed only when Store isn’t available / package fetch failed.
+            if let installed = await resolveInstalledAppURL(bundleID: app.bundleID) {
+                publishDecryptProgress("Embedding installed \(app.name) into companion…")
+                try await decryptFromInstalledPath(installed, displayName: app.name, bundleID: app.bundleID)
+                return
             }
 
             throw FairPlayDecryptError.noInstalledApp(
@@ -509,8 +511,8 @@ final class DeviceDecryptService: ObservableObject {
         }
     }
 
-    /// Device-channel path for a Store listing: silent purchase/download (or live-install
-    /// embed), then hand FairPlay to the companion IPA (never opens the App Store UI).
+    /// Device-channel path for a Store listing: silent purchase/download, then hand
+    /// FairPlay to the companion IPA (never opens the App Store UI; no install-path embed).
     func decryptOwnedStoreApp(
         _ app: DeviceApp,
         storeURL: String,
@@ -539,30 +541,16 @@ final class DeviceDecryptService: ObservableObject {
             guard !bid.isEmpty || hasAdam else {
                 throw DecryptError("Missing bundle ID — search again or paste an App Store link.")
             }
-            // Always hand FairPlay to the separate “Tetherless Decrypt” companion IPA
-            // (store package preferred; live install embed if download fails).
-            do {
-                try await silentPurchaseDownloadDecrypt(
-                    bundleID: bid,
-                    displayName: app.name,
-                    storeURL: link,
-                    version: version,
-                    externalVersionId: externalVersionId
-                )
-                return
-            } catch {
-                guard !bid.isEmpty, let installed = await resolveInstalledAppURL(bundleID: bid) else { throw error }
-                publishDecryptProgress("Store package failed — embedding installed \(app.name) into companion…")
-                publishDecryptProgress(error.localizedDescription)
-                try FairPlayKeyGate.requireReady()
-                _ = try await DecryptCompanionInstaller.installAndOpen(
-                    embeddingInstalledApp: installed,
-                    displayName: app.name
-                ) { [weak self] msg in
-                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                }
-                markCompanionHandoff(displayName: app.name)
-            }
+            // Always fetch the Store download link / IPA and hand FairPlay to the
+            // companion IPA. Do not fall back to live install-path embed here — that
+            // path hangs the host on DRM audit; companion verifies + decrypts the package.
+            try await silentPurchaseDownloadDecrypt(
+                bundleID: bid,
+                displayName: app.name,
+                storeURL: link,
+                version: version,
+                externalVersionId: externalVersionId
+            )
         } catch {
             let text = error.localizedDescription
             lastError = text
