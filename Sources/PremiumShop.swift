@@ -104,7 +104,7 @@ enum CheckoutPhase: Equatable {
     var isBusy: Bool { self == .creating }
 }
 
-/// Talks to the AirShare backend (/app/v1/shop, /app/v1/checkout). Payment is in Litecoin: the server gives each order its own
+/// Talks to the TetherLess backend (/app/v1/shop, /app/v1/checkout on tetherless.dev). Payment is in Litecoin: the server gives each order its own
 /// address and amount, watches the blockchain, and adds the days after enough confirmations. No browser, no account with any
 /// payment company; the app only shows the request and asks the server how it is going.
 @MainActor
