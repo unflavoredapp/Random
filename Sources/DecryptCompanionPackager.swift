@@ -340,9 +340,13 @@ enum DecryptCompanionPackager {
         // FairPlayed: remove Watch — not decryptable on iPhone.
         try? fm.removeItem(at: dest.appendingPathComponent("Watch"))
 
-        let staged = FairPlayDecrypt.replicateSinfs(in: dest)
+        // FairPlayed embed_ipa.sh: Manifest SinfReplicationPaths + buddy3 per-binary SINFs.
+        var staged = FairPlayDecrypt.replicateSinfs(in: dest)
+        if let bins = try? FairPlayDecrypt.collectMachOsForCompanion(under: dest) {
+            staged += FairPlayDecrypt.stageSinfsForEncryptedBinaries(bins, in: dest)
+        }
         if staged > 0 {
-            progress?("Replicated \(staged) nested SINF license(s)…")
+            progress?("Staged \(staged) SINF license(s) on EmbeddedPayload…")
         }
 
         // Audit the copied EmbeddedPayload (safe — not the live install container).
