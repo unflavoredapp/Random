@@ -165,7 +165,7 @@ struct LibraryHomeView: View {
                 StatusRow(
                     kind: .info,
                     title: "Decrypt via Store package → companion",
-                    subtitle: "When Store Access is ready, TetherLess fetches the IPA and pushes FairPlay to Tetherless Decrypt. Install embed is only a fallback."
+                    subtitle: "When Account is signed in, TetherLess fetches the IPA and pushes FairPlay to Tetherless Decrypt. Install embed is only a fallback."
                 )
             }
             if !decrypting.status.isEmpty {

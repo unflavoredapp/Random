@@ -361,7 +361,7 @@ final class SignQueue: ObservableObject {
             do {
                 _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
             } catch {
-                // Signing sheet still opens; user can Create cert from Manage Apple ID if ensure failed.
+                // Signing sheet still opens; user can sign in again under Account if ensure failed.
             }
         }
     }

@@ -408,14 +408,14 @@ final class AppleIDStore: ObservableObject {
                 save()
             }
         } catch AppleAuthError.needsTwoFactor {
-            // Keep the GSA challenge alive and surface the code sheet — Manage Apple ID
-            // needs GrandSlam. Cancelling here left users with store login but no portal UI.
+            // Keep the GSA challenge alive so IPadnLoginView can finish portal tokens
+            // for free signing. Cancelling here left store login without portal session.
             refreshTwoFactorChannelFromGSA()
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
-            statusMessage = "Store ready — enter the 6-digit code to unlock Developer Portal (signing)."
+            statusMessage = "Store ready — enter the 6-digit code if prompted (signing)."
             lastError = nil
         } catch {
-            // Non-fatal for downloads — portal can unlock later from Manage Apple ID.
+            // Non-fatal for downloads — portal tokens can finish on the next Account sign-in.
         }
     }
 
