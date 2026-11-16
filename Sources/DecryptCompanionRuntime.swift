@@ -135,14 +135,40 @@ enum DecryptCompanionRuntime {
         log("Copying app bundle…")
         try copyTree(from: src, to: destApp)
 
-        // 2) Decrypt FROM embedded (fairplayd reads SC_Info beside binaries) INTO writable copy.
+        // 2) Decrypt INTO writable copy. Prefer the live App Store install as mremap
+        // input when readable — fairplayd often EPERMs on EmbeddedPayload IPA copies
+        // (Roblox: mremap errno 1) even when SC_Info is staged.
         DecryptCompanionController.shared.statusTitle = "2/5 · Decrypting…"
-        let report = try FairPlayDecrypt.decryptMachOs(
-            readingFrom: src,
-            writingTo: destApp
-        ) { msg in
+        let progressBridge: (String) -> Void = { msg in
             progress?(msg)
             Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
+        }
+        let liveRead = Self.preferredLiveInstallURL(embeddedApp: src, manifest: man)
+        let report: FairPlayDecryptReport
+        if let live = liveRead {
+            log("Using live App Store install for FairPlay input…")
+            log(live.path)
+            do {
+                report = try FairPlayDecrypt.decryptMachOs(
+                    readingFrom: live,
+                    writingTo: destApp,
+                    progress: progressBridge
+                )
+            } catch {
+                log("Live-install decrypt failed (\(error.localizedDescription)) — retrying from EmbeddedPayload…")
+                report = try FairPlayDecrypt.decryptMachOs(
+                    readingFrom: src,
+                    writingTo: destApp,
+                    progress: progressBridge
+                )
+            }
+        } else {
+            log("No readable live install — decrypting from EmbeddedPayload…")
+            report = try FairPlayDecrypt.decryptMachOs(
+                readingFrom: src,
+                writingTo: destApp,
+                progress: progressBridge
+            )
         }
         let decN = report.decrypted.count
         let plainN = report.plain.count
@@ -207,6 +233,40 @@ enum DecryptCompanionRuntime {
     }
 
     // MARK: - Embedded metadata
+
+    /// Resolve a live App Store install for fairplayd input when the same app is on-device.
+    private static func preferredLiveInstallURL(
+        embeddedApp: URL,
+        manifest: [String: Any]?
+    ) -> URL? {
+        var candidates: [String] = []
+        if let fromMan = (manifest?["bundleID"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !fromMan.isEmpty {
+            candidates.append(fromMan)
+        }
+        let info = NSDictionary(contentsOf: embeddedApp.appendingPathComponent("Info.plist")) as? [String: Any]
+        if let fromPlist = (info?["CFBundleIdentifier"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !fromPlist.isEmpty {
+            candidates.append(fromPlist)
+        }
+        let seen = NSMutableSet()
+        for bid in candidates where seen.add(bid) {
+            guard let live = FairPlayDecrypt.installedAppURL(bundleID: bid) else { continue }
+            // Must be a real live container — not our own EmbeddedPayload.
+            guard FairPlayDecrypt.isLiveAppStoreInstall(live) else { continue }
+            guard let main = FairPlayDecrypt.mainExecutableForEmbed(in: live) else { continue }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: main.path, isDirectory: &isDir),
+                  !isDir.boolValue,
+                  FileManager.default.isReadableFile(atPath: main.path) else {
+                continue
+            }
+            return live
+        }
+        return nil
+    }
 
     private static func embeddedAppVersion(at app: URL) -> String? {
         let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist"))
