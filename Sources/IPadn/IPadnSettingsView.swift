@@ -86,11 +86,7 @@ struct IPadnSettingsView: View {
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack(alignment: .center, spacing: 14) {
-                            Image(systemName: "app.fill")
-                                .font(.system(size: 28, weight: .semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 52, height: 52)
-                                .background(TetherlessPalette.accent.opacity(0.85), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            TetherlessAppIconView(size: 52)
                             VStack(alignment: .leading, spacing: 3) {
                                 HStack(alignment: .firstTextBaseline, spacing: 6) {
                                     Text(TetherlessBrand.name).font(.headline)
@@ -106,6 +102,7 @@ struct IPadnSettingsView: View {
                             .font(.system(size: 6.5, weight: .medium, design: .monospaced))
                             .foregroundStyle(TetherlessPalette.accent)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
                         Link(TetherlessBrand.siteDisplay, destination: TetherlessBrand.siteURL)
                             .font(.caption.weight(.semibold))
                     }
@@ -124,6 +121,7 @@ struct IPadnSettingsView: View {
                         Link("iPadn source (GPL-2.0)", destination: url)
                     }
                 }
+
             }
 
             if page == .downloads {
@@ -277,6 +275,10 @@ struct IPadnSettingsView: View {
         }
         .navigationTitle(page.title)
         .navigationBarTitleDisplayMode(.inline)
+        // Keep Form rows (About card, links) above the floating tab bar.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: 100)
+        }
         .onAppear { applyDownloadPrefs() }
         .onChange(of: maxConcurrentDownloads) { _ in applyDownloadPrefs() }
         .onChange(of: wifiOnlyDownloads) { _ in applyDownloadPrefs() }

@@ -244,6 +244,28 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
         jobs.insert(job, at: 0)
         persist()
         schedule()
+        if job.iconURL == nil {
+            Task { await backfillIcon(for: job.id) }
+        }
+    }
+
+    /// Fill missing store artwork so Downloads rows don't stay on the generic app placeholder.
+    func backfillIcon(for id: UUID) async {
+        guard let idx = jobs.firstIndex(where: { $0.id == id }),
+              jobs[idx].iconURL == nil else { return }
+        let job = jobs[idx]
+        if let icon = await DeviceDecryptService.artworkURL(bundleID: job.bundleID, storeURL: job.storeURL) {
+            guard let i = jobs.firstIndex(where: { $0.id == id }), jobs[i].iconURL == nil else { return }
+            jobs[i].iconURL = icon
+            persist()
+            return
+        }
+        if let adam = job.adamId, adam > 0,
+           let icon = await DeviceDecryptService.artworkURL(bundleID: nil, storeURL: "https://apps.apple.com/app/id\(adam)") {
+            guard let i = jobs.firstIndex(where: { $0.id == id }), jobs[i].iconURL == nil else { return }
+            jobs[i].iconURL = icon
+            persist()
+        }
     }
 
     func enqueueStore(owned: OwnedStoreApp) throws {

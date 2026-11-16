@@ -110,6 +110,8 @@ final class DecryptClient: ObservableObject {
     @Published var history: [DecryptHistoryItem] = []
     @Published var finished: URL?
     @Published var finishedName = ""
+    /// Artwork for the active job when `selected.icon` is nil (installed / stub paths).
+    @Published var finishedIcon: URL?
     /// Set by other tabs (Library's DRM apps) to prefill the search box; the view consumes it.
     @Published var pendingQuery: String?
     /// Today's decrypt allowance, as the server counts it.
@@ -217,6 +219,7 @@ final class DecryptClient: ObservableObject {
 
     func select(_ app: DecryptApp) {
         selected = app
+        if let icon = app.icon { finishedIcon = icon }
         results = []
         versions = []; versionPage = 1; versionPages = 1; versionTotal = 0
         error = nil
@@ -350,7 +353,14 @@ final class DecryptClient: ObservableObject {
         phase = .idle; message = ""; queue = 0
     }
 
-    func reset() { phase = .idle; message = ""; finished = nil; finishedName = ""; error = nil }
+    func reset() {
+        phase = .idle
+        message = ""
+        finished = nil
+        finishedName = ""
+        finishedIcon = nil
+        error = nil
+    }
 
     private func download(up: String, name: String, version: String) async throws -> URL {
         let r = try makeRequest("api/ipa/file/\(up)", timeout: 180)
@@ -767,7 +777,7 @@ struct DecryptView: View {
         GlassCard(corner: 24) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(spacing: 12) {
-                    iconView(app.icon, size: 52)
+                    iconView(jobIcon(for: app), size: 52, name: app.name.isEmpty ? c.finishedName : app.name)
                     VStack(alignment: .leading, spacing: 3) {
                         Text(app.name.isEmpty ? c.finishedName : app.name)
                             .font(.headline.weight(.semibold)).foregroundStyle(.white)
@@ -865,7 +875,20 @@ struct DecryptView: View {
                         .foregroundStyle(.white.opacity(0.55))
                 }
             }
+            .padding(.bottom, 2)
         }
+    }
+
+    /// Prefer selected artwork, then cached job icon, then a matching search hit.
+    private func jobIcon(for app: DecryptApp) -> URL? {
+        if let icon = app.icon { return icon }
+        if let icon = c.finishedIcon { return icon }
+        let name = (app.name.isEmpty ? c.finishedName : app.name).lowercased()
+        let bundle = app.bundle
+        return c.results.first(where: {
+            (!bundle.isEmpty && !$0.bundle.isEmpty && $0.bundle.caseInsensitiveCompare(bundle) == .orderedSame)
+                || (!$0.name.isEmpty && $0.name.lowercased() == name)
+        })?.icon
     }
 
     private var historySection: some View {
@@ -906,15 +929,8 @@ struct DecryptView: View {
         .padding(.top, 4)
     }
 
-    private func iconView(_ url: URL?, size: CGFloat) -> some View {
-        AsyncImage(url: url) { phase in
-            switch phase {
-            case .success(let img): img.resizable().scaledToFill()
-            default: Color.white.opacity(0.08).overlay(Image(systemName: "app.fill").foregroundStyle(.white.opacity(0.45)))
-            }
-        }
-        .frame(width: size, height: size)
-        .clipShape(RoundedRectangle(cornerRadius: size * 0.225, style: .continuous))
+    private func iconView(_ url: URL?, size: CGFloat, name: String = "") -> some View {
+        CachedIcon(url: url, side: size, fallback: name)
     }
 }
 
