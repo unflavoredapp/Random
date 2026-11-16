@@ -295,15 +295,10 @@ struct IPadnInstallationSettingsView: View {
             let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
             certStatus = "Ready: \(cert.name)"
         } catch {
-            let text = error.localizedDescription
-            // Portal 1200 / free-tier blocks — point at custom import instead of a dead end.
-            if text.contains("1200") || text.localizedCaseInsensitiveContains("not allowed to perform") {
-                issue = text + "\n\nUse Import custom .p12 + mobileprovision below — companion signing will fall back to that cert."
-                certStatus = "Free Apple ID cert blocked — import a custom certificate."
-            } else {
-                issue = text
-                certStatus = nil
-            }
+            // SideSign-style create already tried portal session refresh + revoke/recreate.
+            // Surface the portal error; custom import remains an optional fallback below.
+            issue = error.localizedDescription
+            certStatus = nil
         }
     }
 

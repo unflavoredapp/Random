@@ -87,10 +87,29 @@ final class DeveloperPortalClient: ObservableObject {
     }
 
     func revokeCertificate(_ cert: DevCertificate, auth: AppleAuthSession, team: Team) async throws {
-        let url = URL(string: "\(servicesV1Base)/certificates/\(cert.id)")!
-        var req = URLRequest(url: url)
-        req.httpMethod = "DELETE"
-        try await sendServicesJSON(req, session: auth, team: team, allowEmpty: true)
+        // SideSign/sideload: free teams revoke via QH65B2 plist (serialNumber). Paid can use v1 DELETE.
+        func revokePlist() async throws {
+            _ = try await sendPlist(
+                path: "/ios/revokeDevelopmentCert.action",
+                parameters: [
+                    "serialNumber": cert.serialNumber,
+                    "certificateId": cert.id
+                ],
+                session: auth,
+                teamId: team.id
+            )
+        }
+        func revokeV1() async throws {
+            let url = URL(string: "\(servicesV1Base)/certificates/\(cert.id)")!
+            var req = URLRequest(url: url)
+            req.httpMethod = "DELETE"
+            try await sendServicesJSON(req, session: auth, team: team, allowEmpty: true)
+        }
+        if team.isFree {
+            do { try await revokePlist() } catch { try await revokeV1() }
+        } else {
+            do { try await revokeV1() } catch { try await revokePlist() }
+        }
     }
 
     func createDevelopmentCertificate(
@@ -322,6 +341,13 @@ final class DeveloperPortalClient: ObservableObject {
 
     // MARK: - Plist dispatcher
 
+    /// SideSign/SideStore: refresh anisette OTP on every portal call (stored session OTP goes stale fast).
+    private func withFreshAnisette(_ auth: AppleAuthSession) async throws -> AppleAuthSession {
+        var copy = auth
+        copy.anisette = try await AnisetteClient.shared.fetch()
+        return copy
+    }
+
     @discardableResult
     private func sendPlist(
         path: String,
@@ -330,6 +356,7 @@ final class DeveloperPortalClient: ObservableObject {
         teamId: String?,
         resultCodeHandler: ((Int, String) -> Error?)? = nil
     ) async throws -> [String: Any] {
+        let auth = try await withFreshAnisette(auth)
         var params: [String: Any] = [
             "clientId": clientID,
             "protocolVersion": protocolVersion,
@@ -441,6 +468,7 @@ final class DeveloperPortalClient: ObservableObject {
         team: Team,
         allowEmpty: Bool = false
     ) async throws -> [String: Any] {
+        let auth = try await withFreshAnisette(auth)
         var req = original
         var comps = URLComponents()
         comps.queryItems = [URLQueryItem(name: "teamId", value: team.id)]
