@@ -32,50 +32,45 @@ struct DownloadsHomeView: View {
     }
 
     var body: some View {
-        ScrollView(showsIndicators: false) {
-            VStack(alignment: .leading, spacing: 14) {
-                header
+        IPadnBlurNavScroll(title: "Downloads") {
+            downloadsTrailing
+        } content: {
+            if !manager.jobs.isEmpty {
+                IPadnCapsuleSearch(
+                    text: $term,
+                    placeholder: "Search name, version, or Bundle ID",
+                    onSubmit: {}
+                )
+            }
 
-                if !manager.jobs.isEmpty {
-                    IPadnCapsuleSearch(
-                        text: $term,
-                        placeholder: "Search name, version, or Bundle ID",
-                        onSubmit: {}
-                    )
-                }
+            if manager.waitingForWiFi {
+                wifiBanner
+            }
 
-                if manager.waitingForWiFi {
-                    wifiBanner
-                }
+            if let storageError = manager.storageError, !storageError.isEmpty {
+                Text(storageError).font(.footnote).foregroundStyle(.orange)
+            }
 
-                if let storageError = manager.storageError, !storageError.isEmpty {
-                    Text(storageError).font(.footnote).foregroundStyle(.orange)
-                }
-
-                let visible = filtered
-                if visible.isEmpty {
-                    emptyState
-                } else {
-                    HStack {
-                        Text("\(visible.count) item\(visible.count == 1 ? "" : "s")")
-                            .font(.title3.weight(.bold))
-                            .foregroundStyle(.white)
-                        Spacer()
-                        if editMode {
-                            Text("\(selection.count) selected")
-                                .font(.subheadline)
-                                .foregroundStyle(.white.opacity(0.45))
-                        }
+            let visible = filtered
+            if visible.isEmpty {
+                emptyState
+            } else {
+                HStack {
+                    Text("\(visible.count) item\(visible.count == 1 ? "" : "s")")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    if editMode {
+                        Text("\(selection.count) selected")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.45))
                     }
-                    ForEach(visible) { job in
-                        jobRow(job)
-                        Divider().overlay(.white.opacity(0.08))
-                    }
+                }
+                ForEach(visible) { job in
+                    jobRow(job)
+                    Divider().overlay(.white.opacity(0.08))
                 }
             }
-            .padding(.horizontal, 20)
-            .padding(.top, 8)
-            .padding(.bottom, 120)
         }
         .background(Theme.bg.ignoresSafeArea())
         .confirmationDialog("Add Download", isPresented: $showingActions, titleVisibility: .visible) {
@@ -138,62 +133,58 @@ struct DownloadsHomeView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                Button(editMode ? "Done" : "Edit") {
-                    withAnimation {
-                        editMode.toggle()
-                        selection.removeAll()
-                    }
+    private var downloadsTrailing: some View {
+        HStack(spacing: 8) {
+            Button(editMode ? "Done" : "Edit") {
+                withAnimation {
+                    editMode.toggle()
+                    selection.removeAll()
                 }
-                .font(.body.weight(.semibold))
-                .foregroundStyle(.white)
-                .disabled(manager.jobs.isEmpty)
+            }
+            .font(.body.weight(.semibold))
+            .foregroundStyle(.white)
+            .disabled(manager.jobs.isEmpty)
 
-                if editMode {
-                    Button {
-                        confirmingDelete = true
-                    } label: {
-                        Image(systemName: "trash")
-                            .foregroundStyle(selection.isEmpty ? .white.opacity(0.25) : .red.opacity(0.9))
-                    }
-                    .disabled(selection.isEmpty)
-                    .accessibilityLabel("Delete selected")
-                } else if !manager.jobs.isEmpty {
-                    Menu {
-                        ForEach(IPadnDownloadFilter.allCases) { item in
-                            Button {
-                                filter = item
-                            } label: {
-                                Label(item.title, systemImage: item.symbol)
-                            }
-                        }
-                    } label: {
-                        Image(systemName: filter.symbol)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                    .accessibilityLabel("Filter downloads, currently \(filter.title)")
-                }
-
-                Spacer(minLength: 0)
-
+            if editMode {
                 Button {
-                    showingActions = true
+                    confirmingDelete = true
                 } label: {
-                    Image(systemName: "plus")
+                    Image(systemName: "trash")
                         .font(.body.weight(.semibold))
-                        .foregroundStyle(.white)
+                        .foregroundStyle(selection.isEmpty ? .white.opacity(0.25) : .red.opacity(0.9))
+                        .frame(width: 36, height: 36)
+                }
+                .disabled(selection.isEmpty)
+                .accessibilityLabel("Delete selected")
+            } else if !manager.jobs.isEmpty {
+                Menu {
+                    ForEach(IPadnDownloadFilter.allCases) { item in
+                        Button {
+                            filter = item
+                        } label: {
+                            Label(item.title, systemImage: item.symbol)
+                        }
+                    }
+                } label: {
+                    Image(systemName: filter.symbol)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
                         .frame(width: 36, height: 36)
                         .background(Color.white.opacity(0.12), in: Circle())
                 }
-                .accessibilityLabel("Add Download")
+                .accessibilityLabel("Filter downloads, currently \(filter.title)")
             }
 
-            Text("Downloads")
-                .font(.system(size: 34, weight: .bold))
-                .foregroundStyle(.white)
+            Button {
+                showingActions = true
+            } label: {
+                Image(systemName: "plus")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.12), in: Circle())
+            }
+            .accessibilityLabel("Add Download")
         }
     }
 

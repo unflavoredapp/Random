@@ -460,149 +460,140 @@ struct DecryptView: View {
 
     var body: some View {
         NavigationStack(path: $detailPath) {
-        ZStack {
-            Theme.bg.ignoresSafeArea().task {
-                await c.refreshQuota()
-                if store.isSignedIn { await c.loadHistory() }
-            }
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                    // iPadn Search: large title + account avatar on one line.
-                    IPadnPageHeader(title: "Search") {
-                        IPadnAccountMenuButton()
+        IPadnBlurNavScroll(title: "Search") {
+            IPadnAccountMenuButton()
+        } content: {
+            if store.isSignedIn {
+                // Capsule search (iPadn SearchInput).
+                IPadnCapsuleSearch(
+                    text: $query,
+                    placeholder: "Name, App ID, or apps.apple.com link",
+                    onSubmit: { runSearch() },
+                    onClear: {
+                        c.results = []
+                        c.error = nil
                     }
+                )
 
-                    if store.isSignedIn {
-                        // Capsule search (iPadn SearchInput).
-                        IPadnCapsuleSearch(
-                            text: $query,
-                            placeholder: "Name, App ID, or apps.apple.com link",
-                            onSubmit: { runSearch() },
-                            onClear: {
-                                c.results = []
-                                c.error = nil
+                // Region / platform chips (iPadn filter row).
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        Menu {
+                            Picker("Store region", selection: $country) {
+                                ForEach(IPadnBrowserModel.countries, id: \.self) { Text($0).tag($0) }
                             }
-                        )
-
-                        // Region / platform chips (iPadn filter row).
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                Menu {
-                                    Picker("Store region", selection: $country) {
-                                        ForEach(IPadnBrowserModel.countries, id: \.self) { Text($0).tag($0) }
-                                    }
-                                } label: {
-                                    IPadnFilterChip(title: country, symbol: "globe")
-                                }
-                                Menu {
-                                    Picker("Platform", selection: $platform) {
-                                        Text("iPhone").tag(IPadnPlatform.iOS.rawValue)
-                                        Text("iPad").tag(IPadnPlatform.iPadOS.rawValue)
-                                    }
-                                } label: {
-                                    IPadnFilterChip(
-                                        title: (IPadnPlatform(rawValue: platform) ?? .iOS).title,
-                                        symbol: platform == IPadnPlatform.iPadOS.rawValue ? "ipad" : "iphone"
-                                    )
-                                }
-                                if store.hasStoreDownloadSession {
-                                    IPadnFilterChip(title: "Store ready", symbol: "checkmark.seal.fill")
-                                        .allowsHitTesting(false)
-                                        .opacity(0.85)
-                                }
-                            }
+                        } label: {
+                            IPadnFilterChip(title: country, symbol: "globe")
                         }
-
-                        if c.searching {
-                            HStack(spacing: 10) {
-                                ProgressView().tint(TetherlessPalette.accent)
-                                Text("Searching…")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.white.opacity(0.55))
-                                Spacer()
+                        Menu {
+                            Picker("Platform", selection: $platform) {
+                                Text("iPhone").tag(IPadnPlatform.iOS.rawValue)
+                                Text("iPad").tag(IPadnPlatform.iPadOS.rawValue)
                             }
-                            .padding(.vertical, 4)
+                        } label: {
+                            IPadnFilterChip(
+                                title: (IPadnPlatform(rawValue: platform) ?? .iOS).title,
+                                symbol: platform == IPadnPlatform.iPadOS.rawValue ? "ipad" : "iphone"
+                            )
                         }
-
-                        if let err = c.error, c.phase != .failed, c.results.isEmpty {
-                            Text(err)
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
+                        if store.hasStoreDownloadSession {
+                            IPadnFilterChip(title: "Store ready", symbol: "checkmark.seal.fill")
+                                .allowsHitTesting(false)
+                                .opacity(0.85)
                         }
-                        if let pickMessage {
-                            Text(pickMessage)
-                                .font(.caption)
-                                .foregroundStyle(.white.opacity(0.65))
-                        }
-
-                        // Active decrypt job (TetherLess-specific).
-                        if c.phase != .idle, let app = c.selected ?? c.results.first {
-                            decryptJobCard(for: app)
-                        }
-
-                        // Results — iPadn AppRow + Get capsule.
-                        if !c.results.isEmpty {
-                            Text("\(c.results.count) result\(c.results.count == 1 ? "" : "s")")
-                                .font(.title3.weight(.bold))
-                                .foregroundStyle(.white)
-                            ForEach(c.results) { app in
-                                IPadnDecryptAppRow(
-                                    app: app,
-                                    onGet: {
-                                        IPadnDecryptPipeline.get(app)
-                                    },
-                                    onVersions: {
-                                        detailPath.append(app.asIPadnStoreApp)
-                                    }
-                                )
-                                .contentShape(Rectangle())
-                                .onTapGesture { detailPath.append(app.asIPadnStoreApp) }
-                                Divider().overlay(.white.opacity(0.08))
-                            }
-                        } else if showingIdleSuggestions {
-                            if !recentSearches.isEmpty {
-                                IPadnRecentSearchChips(
-                                    terms: recentSearches,
-                                    onSelect: { term in
-                                        query = term
-                                        runSearch()
-                                    },
-                                    onDelete: { term in
-                                        DecryptSearchHistory.remove(term)
-                                        recentSearches = DecryptSearchHistory.load()
-                                    },
-                                    onClearAll: {
-                                        DecryptSearchHistory.clear()
-                                        recentSearches = []
-                                    }
-                                )
-                            }
-
-                            DecryptChannelPicker()
-                            if DecryptChannel.current == .device {
-                                DecryptAppStoreSignInHint()
-                                DecryptOwnedStoreAppsSection()
-                                DecryptDeviceAppsSection()
-                                DecryptPickIPACard { pickingIPA = true }
-                            }
-                            if !c.history.isEmpty {
-                                historySection
-                            }
-                        }
-                    } else {
-                        Text("Sign in with Apple Account to search free or purchased apps — FairPlay stays on this iPhone.")
-                            .font(.callout)
-                            .foregroundStyle(.white.opacity(0.65))
-                            .fixedSize(horizontal: false, vertical: true)
-                        DecryptStoreGateCard { AppNav.shared.goStoreLogin() }
-                        DecryptAppStoreSignInHint()
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 120)
+
+                if c.searching {
+                    HStack(spacing: 10) {
+                        ProgressView().tint(TetherlessPalette.accent)
+                        Text("Searching…")
+                            .font(.subheadline)
+                            .foregroundStyle(.white.opacity(0.55))
+                        Spacer()
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                if let err = c.error, c.phase != .failed, c.results.isEmpty {
+                    Text(err)
+                        .font(.footnote)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if let pickMessage {
+                    Text(pickMessage)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+
+                // Active decrypt job (TetherLess-specific).
+                if c.phase != .idle, let app = c.selected ?? c.results.first {
+                    decryptJobCard(for: app)
+                }
+
+                // Results — iPadn AppRow + Get capsule.
+                if !c.results.isEmpty {
+                    Text("\(c.results.count) result\(c.results.count == 1 ? "" : "s")")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    ForEach(c.results) { app in
+                        IPadnDecryptAppRow(
+                            app: app,
+                            onGet: {
+                                IPadnDecryptPipeline.get(app)
+                            },
+                            onVersions: {
+                                detailPath.append(app.asIPadnStoreApp)
+                            }
+                        )
+                        .contentShape(Rectangle())
+                        .onTapGesture { detailPath.append(app.asIPadnStoreApp) }
+                        Divider().overlay(.white.opacity(0.08))
+                    }
+                } else if showingIdleSuggestions {
+                    if !recentSearches.isEmpty {
+                        IPadnRecentSearchChips(
+                            terms: recentSearches,
+                            onSelect: { term in
+                                query = term
+                                runSearch()
+                            },
+                            onDelete: { term in
+                                DecryptSearchHistory.remove(term)
+                                recentSearches = DecryptSearchHistory.load()
+                            },
+                            onClearAll: {
+                                DecryptSearchHistory.clear()
+                                recentSearches = []
+                            }
+                        )
+                    }
+
+                    DecryptChannelPicker()
+                    if DecryptChannel.current == .device {
+                        DecryptAppStoreSignInHint()
+                        DecryptOwnedStoreAppsSection()
+                        DecryptDeviceAppsSection()
+                        DecryptPickIPACard { pickingIPA = true }
+                    }
+                    if !c.history.isEmpty {
+                        historySection
+                    }
+                }
+            } else {
+                Text("Sign in with Apple Account to search free or purchased apps — FairPlay stays on this iPhone.")
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.65))
+                    .fixedSize(horizontal: false, vertical: true)
+                DecryptStoreGateCard { AppNav.shared.goStoreLogin() }
+                DecryptAppStoreSignInHint()
             }
+        }
+        .background(Theme.bg.ignoresSafeArea())
+        .task {
+            await c.refreshQuota()
+            if store.isSignedIn { await c.loadHistory() }
         }
         .navigationDestination(for: IPadnStoreApp.self) { app in
             IPadnAppDetailView(app: app)

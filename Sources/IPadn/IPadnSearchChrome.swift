@@ -53,6 +53,103 @@ struct IPadnPageHeader<Trailing: View>: View {
     }
 }
 
+// MARK: - Collapsing blur nav (large title → centered material overlay)
+
+private struct IPadnScrollMinYKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
+/// Scroll chrome shared by Search / Downloads / Purchased / Account.
+/// Large title rides in the scroll; after a short drag a centered title sits on
+/// an `ultraThinMaterial` overlay (reference: compact Decrypt top bar).
+struct IPadnBlurNavScroll<Trailing: View, Content: View>: View {
+    let title: String
+    var collapseDistance: CGFloat = 56
+    @ViewBuilder var trailing: () -> Trailing
+    @ViewBuilder var content: () -> Content
+
+    @State private var minY: CGFloat = 0
+
+    private var progress: CGFloat {
+        min(1, max(0, -minY) / collapseDistance)
+    }
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 16) {
+                    IPadnPageHeader(title: title) {
+                        trailing()
+                            .opacity(1 - progress)
+                            .allowsHitTesting(progress < 0.55)
+                    }
+                    .opacity(1 - min(1, progress * 1.25))
+                    .accessibilityHidden(progress > 0.85)
+                    .background(
+                        GeometryReader { geo in
+                            Color.clear.preference(
+                                key: IPadnScrollMinYKey.self,
+                                value: geo.frame(in: .named("ipadnBlurScroll")).minY
+                            )
+                        }
+                    )
+
+                    content()
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 8)
+                .padding(.bottom, 120)
+            }
+            .coordinateSpace(name: "ipadnBlurScroll")
+            .onPreferenceChange(IPadnScrollMinYKey.self) { minY = $0 }
+
+            VStack(spacing: 0) {
+                ZStack {
+                    Text(title)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .padding(.horizontal, 72)
+
+                    HStack(spacing: 0) {
+                        Spacer(minLength: 0)
+                        trailing()
+                    }
+                }
+                .padding(.horizontal, 16)
+                .frame(height: 44)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.14 * progress))
+                    .frame(height: 0.5)
+            }
+            .background {
+                Rectangle()
+                    .fill(.ultraThinMaterial)
+                    .opacity(progress)
+                    .ignoresSafeArea(edges: .top)
+            }
+            .opacity(progress > 0.02 ? 1 : 0)
+            .allowsHitTesting(progress > 0.45)
+            .accessibilityHidden(progress < 0.45)
+            .animation(.easeOut(duration: 0.16), value: progress > 0.45)
+        }
+    }
+}
+
+extension IPadnBlurNavScroll where Trailing == EmptyView {
+    init(title: String, collapseDistance: CGFloat = 56, @ViewBuilder content: @escaping () -> Content) {
+        self.title = title
+        self.collapseDistance = collapseDistance
+        self.trailing = { EmptyView() }
+        self.content = content
+    }
+}
+
 // MARK: - Capsule search (iPadn SearchInput)
 
 struct IPadnCapsuleSearch: View {

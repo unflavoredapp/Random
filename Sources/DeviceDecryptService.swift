@@ -143,12 +143,59 @@ final class DeviceDecryptService: ObservableObject {
         // Prefer any persisted store session. Never clear/remint Store Access just to list
         // Owned — Purchase DAAP failures are not proof the MZFinance passwordToken is dead
         // (wiping here flipped Settings from green → HTTP 404 after Retry).
+        let apps: [OwnedStoreApp]
         if let existing = AppleIDStore.shared.storefrontSession(), existing.isUsable {
-            return try await history(existing)
+            apps = try await history(existing)
+        } else {
+            let account = try await AppleIDStore.shared.ensureStorefrontSession()
+            apps = try await history(account)
         }
+        // DAAP purchase rows omit artwork — hydrate from public iTunes lookup.
+        return await Self.hydrateOwnedArtwork(apps)
+    }
 
-        let account = try await AppleIDStore.shared.ensureStorefrontSession()
-        return try await history(account)
+    /// Batch-fill `iconURL` via `itunes.apple.com/lookup` (comma-separated adam IDs).
+    private static func hydrateOwnedArtwork(_ apps: [OwnedStoreApp]) async -> [OwnedStoreApp] {
+        var out = apps
+        let missing = out.enumerated().compactMap { idx, app -> (Int, Int)? in
+            app.iconURL == nil && app.adamId != 0 ? (idx, app.adamId) : nil
+        }
+        guard !missing.isEmpty else { return out }
+
+        let chunkSize = 40
+        var cursor = 0
+        while cursor < missing.count {
+            let end = min(cursor + chunkSize, missing.count)
+            let chunk = Array(missing[cursor..<end])
+            cursor = end
+            let idList = chunk.map { String($0.1) }.joined(separator: ",")
+            guard var comps = URLComponents(string: "https://itunes.apple.com/lookup") else { continue }
+            comps.queryItems = [URLQueryItem(name: "id", value: idList)]
+            guard let url = comps.url,
+                  let (data, resp) = try? await URLSession.shared.data(from: url),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let rows = json["results"] as? [[String: Any]] else { continue }
+
+            var byAdam: [Int: URL] = [:]
+            for row in rows {
+                let adam: Int?
+                if let n = row["trackId"] as? Int { adam = n }
+                else if let n = row["trackId"] as? Int64 { adam = Int(n) }
+                else if let s = row["trackId"] as? String { adam = Int(s) }
+                else { adam = nil }
+                guard let adam else { continue }
+                let icon = (row["artworkUrl512"] as? String).flatMap(URL.init(string:))
+                    ?? (row["artworkUrl100"] as? String)
+                        .map { $0.replacingOccurrences(of: "100x100", with: "200x200") }
+                        .flatMap(URL.init(string:))
+                if let icon { byAdam[adam] = icon }
+            }
+            for (idx, adam) in chunk {
+                if let icon = byAdam[adam] { out[idx].iconURL = icon }
+            }
+        }
+        return out
     }
 
     /// iPadn DownloadDispatch fetch (no remint / anisette rotate / backend IPA).
