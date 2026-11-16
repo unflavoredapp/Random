@@ -1155,7 +1155,7 @@ final class AppStoreClient: ObservableObject {
         // Prefer owned volumeStore/redownload first — free Apple apps (TestFlight) and already-
         // purchased titles often 403 on buyProduct while redownload still works.
         do {
-            var result = try await downloadIPA(
+            let result = try await downloadIPA(
                 adamId: adamId,
                 account: account,
                 destination: destination,

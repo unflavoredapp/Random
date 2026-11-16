@@ -82,6 +82,19 @@
 		B5A9C0DE0000000000000003 /* Exceptions for "Sources" folder in "Tetherless" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
+				Capstone/arch/AArch64/AArch64GenAsmWriter.inc,
+				Capstone/arch/AArch64/AArch64GenCSAliasMnemMap.inc,
+				Capstone/arch/AArch64/AArch64GenCSFeatureName.inc,
+				Capstone/arch/AArch64/AArch64GenCSMappingInsn.inc,
+				Capstone/arch/AArch64/AArch64GenCSMappingInsnName.inc,
+				Capstone/arch/AArch64/AArch64GenCSMappingInsnOp.inc,
+				Capstone/arch/AArch64/AArch64GenCSOpGroup.inc,
+				Capstone/arch/AArch64/AArch64GenDisassemblerTables.inc,
+				Capstone/arch/AArch64/AArch64GenInstrInfo.inc,
+				Capstone/arch/AArch64/AArch64GenRegisterInfo.inc,
+				Capstone/arch/AArch64/AArch64GenSubtargetInfo.inc,
+				Capstone/arch/AArch64/AArch64GenSystemOperands.inc,
+				Capstone/arch/AArch64/AArch64GenSystemRegister.inc,
 				IPadn/Resources/SAPRuntime,
 			);
 			target = 7161E63E34B4EFFA56B6844D /* Tetherless */;
