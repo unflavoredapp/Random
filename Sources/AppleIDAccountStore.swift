@@ -420,6 +420,21 @@ final class AppleIDStore: ObservableObject {
         }
     }
 
+    /// Password held for the in-flight Store / portal 2FA (or the active account secret).
+    /// Used when `IPadnLoginView` is re-presented after Allow and local `@State` was wiped.
+    func pendingSignInPassword() -> String? {
+        if let pending = Keychain.getSessionSecret(Self.passwordPrefix + "pending"), !pending.isEmpty {
+            return pending
+        }
+        if let pending = Keychain.getSecret(Self.passwordPrefix + "pending"), !pending.isEmpty {
+            return pending
+        }
+        if let account = activeAccount, let saved = passwordForAccount(id: account.id), !saved.isEmpty {
+            return saved
+        }
+        return nil
+    }
+
     /// Explicit Cancel on the login sheet — drop pending 2FA UI without wiping the account.
     func clearPendingTwoFactorUI() {
         if authPhase == .awaitingTwoFactor || authPhase == .verifying {
@@ -516,15 +531,16 @@ final class AppleIDStore: ObservableObject {
             ?? Keychain.getSecret(Self.passwordPrefix + "pending")
             ?? ""
         var email = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        // Already signed in (Store unlock after Allow sheet): use the active account secret.
-        if pw.isEmpty || !email.contains("@"),
+        // Already signed in (Store unlock / portal after Allow): use the active account secret.
+        // Phone Apple IDs are valid — do not require `@`.
+        if pw.isEmpty || email.isEmpty,
            let account = activeAccount,
            let saved = passwordForAccount(id: account.id), !saved.isEmpty {
             email = account.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
             pw = saved
         }
 
-        guard !pw.isEmpty, email.contains("@") else {
+        guard !pw.isEmpty, !email.isEmpty else {
             lastError = "Missing Apple ID password for Store unlock. Cancel, then Sign In again so Store can piggyback the first trust."
             statusMessage = twoFactorPromptMessage()
             authPhase = .awaitingTwoFactor

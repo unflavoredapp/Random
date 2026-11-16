@@ -259,7 +259,35 @@ struct DownloadsHomeView: View {
                 }
 
                 if let err = job.error, job.status == .failed {
-                    Text(err).font(.caption2).foregroundStyle(.orange).lineLimit(2)
+                    Text(err).font(.caption2).foregroundStyle(.orange).lineLimit(3)
+                    if let play = FailurePlaybook.match(errorText: err) {
+                        HStack(spacing: 8) {
+                            Button(play.actionTitle) {
+                                Task {
+                                    await FailurePlaybook.run(play)
+                                    if play.action == .acknowledgeFairPlay {
+                                        manager.retry(job.id)
+                                    }
+                                }
+                            }
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(TetherlessPalette.accent.opacity(0.9), in: Capsule())
+                            .buttonStyle(.plain)
+
+                            if play.action == .acknowledgeFairPlay {
+                                Button("Open App Store") {
+                                    AppStoreDecryptGuide.openAppStore()
+                                }
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.white.opacity(0.85))
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.top, 2)
+                    }
                 }
             }
 

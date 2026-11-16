@@ -74,6 +74,12 @@ struct IPadnVerificationStep: View {
     @State private var showingHelp = false
     @State private var resendAvailableAt = Date().addingTimeInterval(30)
 
+    /// Avoid `for ""` when the sheet was re-presented without local email state.
+    private var accountLabel: String {
+        let trimmed = account.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "your Apple Account" : trimmed
+    }
+
     var body: some View {
         VStack(spacing: 18) {
             Image(systemName: "lock.shield.fill")
@@ -85,8 +91,8 @@ struct IPadnVerificationStep: View {
                 .font(.title.weight(.bold))
                 .foregroundStyle(.white)
             Text(sent
-                 ? "Apple sent a sign-in request to trusted devices for “\(account)”. Tap Allow, then enter the 6-digit code."
-                 : "Asking Apple to send a verification code to trusted devices for “\(account)”…")
+                 ? "Apple sent a sign-in request to trusted devices for “\(accountLabel)”. Tap Allow, then enter the 6-digit code."
+                 : "Asking Apple to send a verification code to trusted devices for “\(accountLabel)”…")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.55))
                 .multilineTextAlignment(.center)
@@ -179,10 +185,15 @@ struct IPadnLoginView: View {
     private enum Field { case email, password }
 
     private var canSubmit: Bool {
-        !busy
-            && !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            && !password.isEmpty
-            && (!verifying || code.count == 6)
+        let hasEmail = !email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !store.draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !store.email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasPassword = !password.isEmpty || store.pendingSignInPassword() != nil
+        if verifying {
+            // Code step can use Keychain / active-account secret when @State was wiped.
+            return !busy && hasEmail && hasPassword && code.count == 6
+        }
+        return !busy && hasEmail && !password.isEmpty
     }
 
     var body: some View {
@@ -257,16 +268,36 @@ struct IPadnLoginView: View {
             }
         }
         .onAppear {
+            restorePendingIdentityIfNeeded()
             if store.authPhase == .awaitingTwoFactor {
                 verifying = true
             }
         }
         .onChange(of: store.authPhase) { phase in
             if phase == .awaitingTwoFactor {
+                restorePendingIdentityIfNeeded()
                 verifying = true
             }
         }
         .preferredColorScheme(.dark)
+    }
+
+    /// Sheet re-presentation after Allow / portal 2FA starts with empty `@State` — pull
+    /// email (and password when still pending) from the store so Verify & Sign In works.
+    private func restorePendingIdentityIfNeeded() {
+        if email.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let restored = [
+                store.draftEmail,
+                store.email,
+                UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache") ?? ""
+            ]
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty } ?? ""
+            if !restored.isEmpty { email = restored }
+        }
+        if password.isEmpty, let pending = store.pendingSignInPassword(), !pending.isEmpty {
+            password = pending
+        }
     }
 
     private var credentials: some View {
@@ -348,6 +379,14 @@ struct IPadnLoginView: View {
     /// Sign in again without a code so Apple sends a fresh one (iPadn resend).
     private func resendCode() {
         guard !busy else { return }
+        restorePendingIdentityIfNeeded()
+        let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let p = password.isEmpty ? (store.pendingSignInPassword() ?? "") : password
+        guard !e.isEmpty, !p.isEmpty else {
+            failure = "Missing Apple ID for resend. Tap Change account or password, then sign in again."
+            return
+        }
+        if password.isEmpty { password = p }
         busy = true
         failure = nil
         code = ""
@@ -355,8 +394,8 @@ struct IPadnLoginView: View {
             defer { busy = false; loginTask = nil }
             do {
                 try await store.signInViaIPadnStore(
-                    email: email,
-                    password: password,
+                    email: e,
+                    password: p,
                     code: ""
                 )
                 password = ""
@@ -381,11 +420,31 @@ struct IPadnLoginView: View {
         failure = nil
         loginTask = Task {
             defer { busy = false; loginTask = nil }
+            // Code step: use store.submitTwoFactor so re-presented sheets still have
+            // draftEmail + Keychain / account password (local @State may be empty).
+            if verifying {
+                restorePendingIdentityIfNeeded()
+                await store.submitTwoFactor(code: code)
+                if store.authPhase == .idle, store.isSignedIn, store.lastError == nil {
+                    password = ""
+                    code = ""
+                    onSignedIn?()
+                    dismiss()
+                } else if store.authPhase == .awaitingTwoFactor {
+                    verifying = true
+                    failure = store.lastError
+                    code = ""
+                } else if let err = store.lastError, !err.isEmpty {
+                    failure = err
+                    code = ""
+                }
+                return
+            }
             do {
                 try await store.signInViaIPadnStore(
                     email: email,
                     password: password,
-                    code: verifying ? code : ""
+                    code: ""
                 )
                 password = ""
                 code = ""

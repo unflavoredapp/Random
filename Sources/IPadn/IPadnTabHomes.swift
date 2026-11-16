@@ -413,7 +413,12 @@ struct AccountHomeView: View {
                 accountDestination(dest)
             }
             .sheet(isPresented: $showIPadnLogin) {
-                IPadnLoginView {
+                // Only seed email when resuming 2FA — “Add account” must stay blank.
+                IPadnLoginView(
+                    initialAccountID: store.authPhase == .awaitingTwoFactor
+                        ? loginSeedAccountID
+                        : nil
+                ) {
                     showIPadnLogin = false
                     nav.presentIPadnLogin = false
                 }
@@ -433,6 +438,14 @@ struct AccountHomeView: View {
                 }
             }
         }
+    }
+
+    /// Prefer draft / active email so a re-opened 2FA sheet is not blank (`for ""`).
+    private var loginSeedAccountID: String? {
+        let candidates = [store.draftEmail, store.email]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        return candidates.first
     }
 
     /// Re-open the login sheet at the code step when Allow/2FA is pending but the sheet was dismissed.
