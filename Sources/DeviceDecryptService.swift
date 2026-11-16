@@ -769,6 +769,12 @@ final class DeviceDecryptService: ObservableObject {
                 markCompanionHandoff(displayName: displayName)
                 return
             }
+            let lower = detail.lowercased()
+            if lower.contains("timed out") || lower.contains("timeout") || lower.contains("network connection was lost") {
+                throw DecryptError(
+                    "App Store download timed out. Check Wi‑Fi and retry Get — you usually don’t need to sign in again."
+                )
+            }
             throw DecryptError(
                 "App Store download failed (\(detail)). Sign in again under Account if needed."
             )

@@ -85,7 +85,7 @@ struct MultiDeviceUDIDCard: View {
                 auth = try await store.refreshPortalSession()
             }
             guard let auth else {
-                status = "Sign in under Store Access first."
+                status = "Sign in under Account first."
                 return
             }
             let teams = try await DeveloperPortalClient.shared.listTeams(auth: auth)

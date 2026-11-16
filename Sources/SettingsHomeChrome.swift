@@ -25,11 +25,12 @@ struct SettingsAppleIDCard: View {
                 // Apple ID signing only — store login is on Account (iPadn).
                 appleIDHeader
 
-                if store.hasAnyAccount {
-                    signedInAppleBlock
-                                    } else if store.authPhase == .awaitingTwoFactor {
-                    // Legacy GSA fallback still needs the inline code field.
+                if store.authPhase == .awaitingTwoFactor {
+                    // Always show the code step — including when an account already exists
+                    // (portal unlock after iPadn Store login).
                     twoFactorBlock
+                } else if store.hasAnyAccount {
+                    signedInAppleBlock
                 } else if isPreparing {
                     HStack(spacing: 10) {
                         ProgressView().tint(TetherlessPalette.accent)

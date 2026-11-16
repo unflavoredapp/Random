@@ -31,9 +31,7 @@ struct AppleIDManageView: View {
                 if let account {
                     header(account)
                     if auth == nil {
-                        Text("This Apple ID isn’t signed in with a live GrandSlam session. Sign out and sign in again under Store Access.")
-                            .font(.footnote)
-                            .foregroundStyle(.orange)
+                        portalUnlockCard(account)
                     } else {
                         refreshRow
                         certificatesSection
@@ -42,7 +40,7 @@ struct AppleIDManageView: View {
                         freeSigningHint
                     }
                 } else {
-                    Text("Add an Apple ID under Store Access first.")
+                    Text("Sign in under Account first.")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.55))
                         .padding(.top, 24)
@@ -107,6 +105,82 @@ struct AppleIDManageView: View {
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
         .tetherlessGlassCard(cornerRadius: 18)
+    }
+
+    /// Store login alone isn’t enough for Manage — unlock GrandSlam portal (may need a code).
+    @ViewBuilder
+    private func portalUnlockCard(_ account: AppleIDAccount) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Developer Portal isn’t unlocked yet")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+            Text("Account Store login can download apps. Unlock the Developer Portal once to manage certificates, App IDs, and devices for free signing.")
+                .font(.footnote)
+                .foregroundStyle(.white.opacity(0.55))
+                .fixedSize(horizontal: false, vertical: true)
+            if store.authPhase == .awaitingTwoFactor {
+                Text(store.statusMessage ?? "Enter the 6-digit code Apple sent to your trusted devices.")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    AppNav.shared.goStoreLogin()
+                } label: {
+                    Text("Enter verification code")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(TetherlessPalette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Button {
+                    Task { await unlockPortal() }
+                } label: {
+                    HStack {
+                        if busy { ProgressView().tint(.white) }
+                        Text(busy ? "Unlocking…" : "Unlock Developer Portal")
+                            .font(.subheadline.weight(.semibold))
+                    }
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(TetherlessPalette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(busy)
+            }
+            if let error {
+                Text(error).font(.caption).foregroundStyle(.orange)
+            }
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .tetherlessGlassCard(cornerRadius: 18)
+        .onAppear {
+            // Prefer account email in header context.
+            _ = account.email
+        }
+    }
+
+    private func unlockPortal() async {
+        busy = true
+        error = nil
+        status = "Contacting Apple…"
+        defer { busy = false }
+        do {
+            _ = try await store.refreshPortalSession()
+            status = "Developer Portal unlocked."
+            await reloadPortal()
+        } catch AppleAuthError.needsTwoFactor {
+            status = nil
+            error = "Apple sent a verification request — enter the 6-digit code."
+            AppNav.shared.goStoreLogin()
+        } catch {
+            status = nil
+            self.error = error.localizedDescription
+        }
     }
 
     private var certificatesSection: some View {
@@ -221,7 +295,7 @@ struct AppleIDManageView: View {
 
     private func reloadPortal() async {
         guard let auth = store.portalSession() else {
-            error = "Sign in under Store Access first."
+            error = nil
             return
         }
         busy = true; error = nil
@@ -236,7 +310,8 @@ struct AppleIDManageView: View {
                     try await loadPortal(using: fresh)
                     return
                 } catch AppleAuthError.needsTwoFactor {
-                    self.error = "Session expired — enter the verification code under Store Access, then tap Refresh."
+                    self.error = "Session expired — enter the verification code under Account, then tap Refresh."
+                    AppNav.shared.goStoreLogin()
                     return
                 } catch {
                     self.error = error.localizedDescription
