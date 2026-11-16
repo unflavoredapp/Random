@@ -56,7 +56,7 @@ enum DecryptCompanionInstaller {
         CertificateStore.shared.activatePreferredCertificate(forSigningMethod: "appleid")
         guard let material = try? CertificateStore.shared.activeMaterial() else {
             throw DecryptError(
-                "No signing certificate for the companion app. Sign in under Account, then Create a development certificate in Settings › Apple ID."
+                "No signing certificate for the companion app. Sign in under Account, then retry — a free development certificate is created automatically when possible."
             )
         }
 

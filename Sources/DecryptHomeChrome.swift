@@ -195,7 +195,7 @@ struct DecryptOwnedStoreAppsSection: View {
                         }
                     }
 
-                    Text("Purchase history from Store Access — tap Decrypt to silent-download and FairPlay without opening the App Store.")
+                    Text("Purchase history from Account — tap Decrypt to silent-download and FairPlay without opening the App Store.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)
@@ -210,7 +210,7 @@ struct DecryptOwnedStoreAppsSection: View {
                             || loadError.localizedCaseInsensitiveContains("search still works")
                             || loadError.localizedCaseInsensitiveContains("search works")
                         Text(soft
-                             ? "Owned list couldn’t load from Apple right now. Search still works for free & purchased apps — Store Access can stay signed in."
+                             ? "Owned list couldn’t load from Apple right now. Search still works for free & purchased apps — Account can stay signed in."
                              : loadError)
                             .font(.caption)
                             .foregroundStyle(.orange)
@@ -288,7 +288,7 @@ struct DecryptOwnedStoreAppsSection: View {
             owned = []
             let detail = error.localizedDescription
             if AppleIDStore.shared.storefrontSession()?.isUsable == true {
-                loadError = "Owned list couldn’t load right now. Store Access is still signed in — Search works for free & purchased apps."
+                loadError = "Owned list couldn’t load right now. Account is still signed in — Search works for free & purchased apps."
             } else if detail.localizedCaseInsensitiveContains("token expired")
                         || detail.localizedCaseInsensitiveContains("session expired") {
                 loadError = "Store session needs a refresh — Sign Out → Sign In once under Account."
@@ -370,7 +370,7 @@ struct DecryptDeviceAppsSection: View {
                     }
                 }
 
-                Text("Decrypts from the live install with this iPhone’s FairPlay keys — Store Access login is not required. Watch + App Clips skipped. Pair with Native if the list is empty.")
+                Text("Decrypts from the live install with this iPhone’s FairPlay keys — Account login is not required. Watch + App Clips skipped. Pair with Native if the list is empty.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)

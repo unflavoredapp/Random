@@ -169,7 +169,7 @@ enum AppStoreClientError: LocalizedError {
         switch self {
         case .message(let m): return m
         case .needsTwoFactor: return "App Store sign-in needs a verification code."
-        case .tokenExpired: return "App Store session expired — TetherLess will refresh it automatically; open Store Access only if refresh fails."
+        case .tokenExpired: return "App Store session expired — TetherLess will refresh it automatically; sign in again under Account only if refresh fails."
         case .licenseRequired: return "This Apple ID doesn’t own a license for that app."
         case .paidApp: return "Silent purchase only supports free apps. Buy it once in the App Store, then decrypt."
         case .network(let m): return m
@@ -969,7 +969,7 @@ final class AppStoreClient: ObservableObject {
                 onProgress?("Embedded \(item.sinfs.count) FairPlay license(s)…")
             } catch {
                 throw AppStoreClientError.message(
-                    "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Remint Store Access and retry."
+                    "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Sign in again under Account and retry."
                 )
             }
         }
@@ -1096,7 +1096,7 @@ final class AppStoreClient: ObservableObject {
                 onProgress?("Embedded \(item.sinfs.count) FairPlay license(s)…")
             } catch {
                 throw AppStoreClientError.message(
-                    "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Remint Store Access and retry."
+                    "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Sign in again under Account and retry."
                 )
             }
         }
@@ -1849,7 +1849,7 @@ final class AppStoreClient: ObservableObject {
                 )
             }
             throw AppStoreClientError.network(
-                "Non-plist App Store response (HTTP 204). Tap Retry Store unlock under Settings › Store Access (Client-Info rewrite is cleared automatically) — stay signed in."
+                "Non-plist App Store response (HTTP 204). Sign in again under Account if needed (Client-Info rewrite is cleared automatically) — stay signed in."
             )
         }
         if data.isEmpty, status == 500 {
@@ -1916,8 +1916,8 @@ final class AppStoreClient: ObservableObject {
             || raw.localizedCaseInsensitiveContains("<head>")
         if status == 403 {
             return looksHTML
-                ? "Store rejected this device identity (HTTP 403). Tap Retry Store unlock under Settings › Store Access."
-                : "Non-plist App Store response (HTTP 403). Tap Retry Store unlock under Settings › Store Access."
+                ? "Store rejected this device identity (HTTP 403). Sign in again under Account."
+                : "Non-plist App Store response (HTTP 403). Sign in again under Account."
         }
         if status == 404 {
             return "Store endpoint returned HTTP 404. Tap Retry Store unlock — or Sign Out and Sign In once. Stay signed in."
@@ -1932,7 +1932,7 @@ final class AppStoreClient: ObservableObject {
             .replacingOccurrences(of: "\n", with: " ")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if snippet.isEmpty {
-            return "Store request failed (HTTP \(status)). Sign in again under Store Access if this keeps happening."
+            return "Store request failed (HTTP \(status)). Sign in again under Account if this keeps happening."
         }
         return "Store request failed (HTTP \(status)). \(snippet.prefix(80))"
     }

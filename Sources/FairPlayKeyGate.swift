@@ -11,7 +11,7 @@ enum FairPlayKeyGateError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .notAcknowledged(let email):
-            let who = email.isEmpty ? "your Store Access Apple ID" : email
+            let who = email.isEmpty ? "your Apple Account" : email
             return "Before silent download, sign in once to the App Store (Media & Purchases) with \(who) on this iPhone, then tap “I’ve signed in on this iPhone” under Decrypt. That stores FairPlay keys iOS needs."
         }
     }

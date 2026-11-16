@@ -123,7 +123,7 @@ struct VaultBackupCard: View {
                 Text("Encrypted vault backup")
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.white)
-                Text("Export Store Access passwords + free signing certs to a device-locked vault file. Restore after reinstall.")
+                Text("Export Apple Account passwords + free signing certs to a device-locked vault file. Restore after reinstall.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)

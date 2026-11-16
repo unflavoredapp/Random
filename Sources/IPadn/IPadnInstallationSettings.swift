@@ -104,25 +104,17 @@ struct IPadnInstallationSettingsView: View {
             case .certificate:
                 Section {
                     Label("Use your own signing certificate for OTA installs", systemImage: "lock.shield")
-                    NavigationLink {
-                        SettingsView()
-                    } label: {
-                        Label("Open certificate settings", systemImage: "doc.badge.gearshape")
-                    }
+                    Label("Import a .p12 + mobileprovision via Custom Certificate when available", systemImage: "doc.badge.gearshape")
                 } header: {
                     Text("Local certificate")
                 } footer: {
-                    Text("Create or import a certificate in Settings, install the profile, then trust it under Settings › General › About › Certificate Trust Settings.")
+                    Text("Create or import a certificate, install the profile, then trust it under Settings › General › About › Certificate Trust Settings.")
                 }
 
             case .proxy:
                 Section {
                     Label("Custom OTA / TrustCore domain", systemImage: "network")
-                    NavigationLink {
-                        SettingsView()
-                    } label: {
-                        Label("Open domain settings", systemImage: "link")
-                    }
+                    Label("Point install manifests at your proxy host when using Surge, Loon, or a custom domain", systemImage: "link")
                 } header: {
                     Text("Proxy service")
                 } footer: {
