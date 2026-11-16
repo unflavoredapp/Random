@@ -44,7 +44,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Sign in under Store Access (add each country’s Apple ID you use). Search shows listings from every linked storefront — free apps or anything those IDs already purchased. Tetherless downloads and decrypts on-device. No Mac. No jailbreak.")
+            Text("Sign in under Account (add each country’s Apple ID you use). Search shows listings from every linked storefront — free apps or anything those IDs already purchased. Tetherless downloads and decrypts on-device. No Mac. No jailbreak.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
@@ -652,7 +652,7 @@ struct DecryptStoreGateCard: View {
                         .font(.title2)
                         .foregroundStyle(TetherlessPalette.accent)
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("Store Access needed")
+                        Text("Apple Account needed")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.white)
                         Text("Sign in under Account, and make sure that same Apple ID has signed in to this iPhone’s App Store at least once (App Store app, or Settings → your name → Media & Purchases). That’s how iOS stores the decryption keys — a one-time step per Apple ID.")

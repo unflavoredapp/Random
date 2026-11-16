@@ -408,11 +408,25 @@ final class AppleIDStore: ObservableObject {
                 save()
             }
         } catch AppleAuthError.needsTwoFactor {
-            // Store already works — don't bounce the user into a second 2FA for portal.
-            GSAAuthClient.shared.cancel()
+            // Keep the GSA challenge alive and surface the code sheet — Manage Apple ID
+            // needs GrandSlam. Cancelling here left users with store login but no portal UI.
+            refreshTwoFactorChannelFromGSA()
+            withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+            statusMessage = "Store ready — enter the 6-digit code to unlock Developer Portal (signing)."
+            lastError = nil
         } catch {
-            // Non-fatal.
+            // Non-fatal for downloads — portal can unlock later from Manage Apple ID.
         }
+    }
+
+    /// Explicit Cancel on the login sheet — drop pending 2FA UI without wiping the account.
+    func clearPendingTwoFactorUI() {
+        if authPhase == .awaitingTwoFactor || authPhase == .verifying {
+            authPhase = .idle
+        }
+        storeNeedsVerification = false
+        statusMessage = nil
+        GSAAuthClient.shared.cancel()
     }
 
     func signIn(email: String, password: String) async {

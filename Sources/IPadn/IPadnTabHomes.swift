@@ -419,13 +419,28 @@ struct AccountHomeView: View {
                     nav.presentIPadnLogin = false
                 }
             }
-            .onAppear { consumePendingAccountNav() }
+            .onAppear {
+                consumePendingAccountNav()
+                presentLoginIfAwaitingCode()
+            }
             .onChange(of: nav.accountPush) { _ in consumePendingAccountNav() }
             .onChange(of: nav.openAccountScreen) { _ in consumePendingAccountNav() }
             .onChange(of: nav.presentIPadnLogin) { open in
                 if open { showIPadnLogin = true }
             }
+            .onChange(of: store.authPhase) { phase in
+                if phase == .awaitingTwoFactor {
+                    presentLoginIfAwaitingCode()
+                }
+            }
         }
+    }
+
+    /// Re-open the login sheet at the code step when Allow/2FA is pending but the sheet was dismissed.
+    private func presentLoginIfAwaitingCode() {
+        guard store.authPhase == .awaitingTwoFactor else { return }
+        showIPadnLogin = true
+        nav.presentIPadnLogin = true
     }
 
     private func consumePendingAccountNav() {

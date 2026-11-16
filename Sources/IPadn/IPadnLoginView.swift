@@ -234,6 +234,10 @@ struct IPadnLoginView: View {
             ToolbarItem(placement: .cancellationAction) {
                 Button("Cancel") {
                     loginTask?.cancel()
+                    if store.authPhase == .awaitingTwoFactor {
+                        // Explicit cancel leaves 2FA — clear so Account can reopen cleanly.
+                        store.clearPendingTwoFactorUI()
+                    }
                     dismiss()
                 }
                 .disabled(busy && !verifying)
@@ -244,7 +248,23 @@ struct IPadnLoginView: View {
                 }
             }
         }
-        .onDisappear { loginTask?.cancel() }
+        // Do NOT cancel on disappear while awaiting a code — leaving for Allow used to
+        // wipe the sheet and leave the user stuck with no place to type digits.
+        .onDisappear {
+            if !verifying && store.authPhase != .awaitingTwoFactor {
+                loginTask?.cancel()
+            }
+        }
+        .onAppear {
+            if store.authPhase == .awaitingTwoFactor {
+                verifying = true
+            }
+        }
+        .onChange(of: store.authPhase) { phase in
+            if phase == .awaitingTwoFactor {
+                verifying = true
+            }
+        }
         .preferredColorScheme(.dark)
     }
 
@@ -342,8 +362,11 @@ struct IPadnLoginView: View {
                 onSignedIn?()
                 dismiss()
             } catch AppStoreClientError.needsTwoFactor {
+                verifying = true
                 failure = nil
             } catch is CancellationError {
+                // Resend cancelled (e.g. app backgrounded) — keep the code sheet.
+                verifying = true
             } catch {
                 failure = error.localizedDescription
             }
@@ -370,8 +393,15 @@ struct IPadnLoginView: View {
             } catch AppStoreClientError.needsTwoFactor {
                 verifying = true
                 code = ""
+                failure = nil
             } catch is CancellationError {
-                failure = "Sign-in cancelled — try again."
+                // Leaving the app to tap Allow cancels the network task — keep the sheet.
+                if verifying || store.authPhase == .awaitingTwoFactor {
+                    verifying = true
+                    failure = nil
+                } else {
+                    failure = "Sign-in cancelled — try again."
+                }
             } catch {
                 failure = error.localizedDescription
                 code = ""

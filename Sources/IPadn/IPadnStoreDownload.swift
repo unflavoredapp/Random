@@ -527,10 +527,9 @@ enum IPadnStoreDownload {
         guard merged != current else { return }
         liveCookies[account.dsid] = merged
         account.cookieHeader = merged
-        if Date().timeIntervalSince(cookiesSavedAt) > 60 {
-            cookiesSavedAt = Date()
-            AppleIDStore.shared.mergeLiveStoreCookies(merged)
-        }
+        // Persist immediately so leaving the app doesn’t drop the jar.
+        cookiesSavedAt = Date()
+        AppleIDStore.shared.mergeLiveStoreCookies(merged)
     }
 
     /// Upstream AppleService.mergedCookie — new values replace by name; expired/empty drop.
