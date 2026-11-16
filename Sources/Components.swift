@@ -72,7 +72,7 @@ struct AirShareRow: View {
     @ObservedObject private var liveTheme = AppTheme.shared   // re-read the accent live (auto-cycle) without rebuilding
     let icon: Data?
     let title: String
-    let subtitle: String        // "1.0 • com.mrzefv.unzipdrop"
+    let subtitle: String        // "1.0 • dev.tetherless.app"
     let badge: String           // "Signed 2h ago" / "Downloaded"
     var badgeAccented: Bool = false      // tinted pill (AirShare uses it for TrollStore)
     var badgeSymbol: String? = nil       // SF Symbol shown before the badge text (e.g. lock.fill)
@@ -163,7 +163,7 @@ struct AirShareAppRow: View {
     @ObservedObject private var liveTheme = AppTheme.shared   // re-read the accent live (auto-cycle) without rebuilding
     let iconURL: URL?
     let title: String
-    let subtitle: String        // "1.0 • com.mrzefv.unzipdrop"
+    let subtitle: String        // "1.0 • dev.tetherless.app"
     let pill: String            // "Downloaded" / "Signed 2h ago"
     var pillAccented: Bool = false
     var busy: Bool = false

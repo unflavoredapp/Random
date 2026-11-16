@@ -262,7 +262,7 @@ nonisolated enum ZefvCert {
         req.timeoutInterval = 20
         let token = ServerConfig.certSourceToken
         if !token.isEmpty { req.setValue(token, forHTTPHeaderField: "X-OTA-Token") }
-        req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        req.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code < 400, !data.isEmpty else {
@@ -340,7 +340,7 @@ nonisolated enum ZefvCert {
             req.cachePolicy = .reloadIgnoringLocalCacheData
             req.setValue("application/vnd.github.raw+json", forHTTPHeaderField: "Accept")
             req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-            req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+            req.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
             if let token, !token.isEmpty { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
             let (d, resp) = try await URLSession.shared.data(for: req)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
@@ -587,7 +587,7 @@ nonisolated enum CertSourceLinker {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue(accept, forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        req.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         req.cachePolicy = .reloadIgnoringLocalCacheData
         if let body { req.setValue("application/json", forHTTPHeaderField: "Content-Type"); req.httpBody = try JSONSerialization.data(withJSONObject: body) }
         let (d, r) = try await URLSession.shared.data(for: req)
@@ -698,7 +698,7 @@ extension ZefvCert {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("application/vnd.github.raw+json", forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        req.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         if let token, !token.isEmpty { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         guard let (d, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode ?? 0 < 400 else { return nil }
@@ -715,7 +715,7 @@ extension ZefvCert {
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        req.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         let (d, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let meta = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
@@ -780,7 +780,7 @@ extension ZefvCert {
         req.cachePolicy = .reloadIgnoringLocalCacheData
         req.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        req.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         if let token, !token.isEmpty { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         guard let (d, resp) = try? await URLSession.shared.data(for: req) else { return p }
         p.httpCode = (resp as? HTTPURLResponse)?.statusCode ?? 0
@@ -993,7 +993,7 @@ nonisolated enum ZefvVPS {
         var r = URLRequest(url: url); r.httpMethod = method; r.timeoutInterval = 15
         r.cachePolicy = .reloadIgnoringLocalCacheData
         r.setValue(ServerConfig.certSourceToken, forHTTPHeaderField: "X-OTA-Token")
-        r.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        r.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         if let body { r.httpBody = body; r.setValue("application/json", forHTTPHeaderField: "Content-Type") }
         return r
     }

@@ -157,7 +157,7 @@ final class BackupManager: ObservableObject {
         let fileName = "backup-\(metadata.id).uzd"
         let fileURL = backupDir.appendingPathComponent(fileName)
         let timestamp = metadata.createdAt.formatted(date: .abbreviated, time: .omitted).replacingOccurrences(of: "/", with: "-")
-        let exportName = "unzip-drop-backup-\(timestamp).uzd"
+        let exportName = "tetherless-backup-\(timestamp).uzd"
         let exportURL = destination.appendingPathComponent(exportName)
         
         try FileManager.default.copyItem(at: fileURL, to: exportURL)

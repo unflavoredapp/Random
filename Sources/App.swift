@@ -1,12 +1,12 @@
 //
 //  App.swift
-//  unzip-drop — drop a zip, extract on-device, push it to a repo.
+//  Tetherless — on-device sign, decrypt, and install.
 //
 
 import SwiftUI
 
 @main
-struct UnzipDropApp: App {
+struct TetherlessApp: App {
     @StateObject private var session = Session()
     @StateObject private var config = Config()
     @StateObject private var notifications = NotificationManager.shared

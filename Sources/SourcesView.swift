@@ -381,7 +381,7 @@ final class SourceStore: ObservableObject {
     private nonisolated static func requestParsedRepo(for source: RepoSource) async throws -> RepoParser.ParsedRepo {
         let url = source.url
         var req = URLRequest(url: url); req.cachePolicy = .reloadIgnoringLocalCacheData
-        req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        req.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode ?? 0 < 400 else {
             throw GitHubError.badConfig("Source returned HTTP \((resp as? HTTPURLResponse)?.statusCode ?? 0)")

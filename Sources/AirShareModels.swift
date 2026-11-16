@@ -1,10 +1,10 @@
 //
 //  AirShareModels.swift
-//  Layer 2 — AirShare data models ported into unzip-drop.
+//  Layer 2 — AirShare data models ported into Tetherless.
 //
 //  `LocalAppEntry` and `SignedApp` are AirShare's canonical library/signed models.
-//  They're bridged onto unzip-drop's existing on-disk types (LibraryItem / SignedEntry)
-//  so AirShare's row UI and, later, SigningSheet can consume real unzip-drop data without
+//  They're bridged onto Tetherless's existing on-disk types (LibraryItem / SignedEntry)
+//  so AirShare's row UI and, later, SigningSheet can consume real Tetherless data without
 //  pulling in AirShare's server/account/downgrade stack. Trimmed to the fields the ported
 //  UI uses; server-only fields (job IDs, manifest URLs) are kept optional for layer 4.
 //
@@ -134,7 +134,7 @@ struct SignedApp: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
-// MARK: - Bridges from unzip-drop's on-disk types
+// MARK: - Bridges from Tetherless's on-disk types
 
 extension LibraryItem {
     /// AirShare's library model view of an inbox IPA.

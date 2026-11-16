@@ -3,7 +3,7 @@
 //  Ported from AirShare (Layer 1). Adaptive light/dark theme + orange tint default.
 //
 //  NOTE: AirShare's original file also declared `Color(hex:)` / `hexString()`.
-//  unzip-drop already ships a non-failable `Color(hex:)` in ThemeExtended.swift,
+//  Tetherless already ships a non-failable `Color(hex:)` in ThemeExtended.swift,
 //  so those are provided by the adapter at the bottom instead of redeclared here.
 //
 
@@ -84,7 +84,7 @@ struct AdaptiveTheme {
 // MARK: - Adapter: AirShare expects a failable Color(hex:) returning Color?
 
 extension Color {
-    /// AirShare code calls `Color(hex: x) ?? fallback`. unzip-drop's `Color(hex:)`
+    /// AirShare code calls `Color(hex: x) ?? fallback`. Tetherless's `Color(hex:)`
     /// is non-failable, so this bridges the optional call sites without a redeclare clash.
     static func msHex(_ hex: String) -> Color? {
         let h = hex.trimmingCharacters(in: CharacterSet(charactersIn: "#"))

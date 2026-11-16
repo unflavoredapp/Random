@@ -321,7 +321,7 @@ nonisolated enum OTAFiles {
         if let host = LocalCAManager.meta?.host { put("leaf-\(host).crt", try? Data(contentsOf: LocalCAManager.leafCertURL)) }
         put("TetherLess-Trust.mobileconfig", LocalCAManager.mobileConfig())
         put("README.txt", Data("""
-        TetherLess Certs — exported by unzip-drop
+        TetherLess Certs — exported by Tetherless
 
         TetherLess-Root-CA.crt / .cer     your on-device root CA (PEM / DER). Public — safe to share.
         leaf-<host>.crt              the leaf + chain the on-device HTTPS server presents.

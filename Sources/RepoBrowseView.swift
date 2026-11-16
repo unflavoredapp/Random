@@ -60,7 +60,7 @@ nonisolated struct RepoBrowseClient {
         var r = URLRequest(url: url)
         r.setValue(accept, forHTTPHeaderField: "Accept")
         r.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        r.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        r.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         r.cachePolicy = .reloadIgnoringLocalCacheData
         if !token.isEmpty { r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         return r

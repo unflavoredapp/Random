@@ -4,7 +4,7 @@
 //  (url / size / cornerRadius / inset) so AirShare's Library/Signed rows drop in unchanged.
 //
 //  AirShare's original used SDWebImageSwiftUI (AnimatedImage) + an AVQueuePlayer looping
-//  view for video icons. unzip-drop builds phone-only via GitHub Actions with no SPM
+//  view for video icons. Tetherless builds phone-only via GitHub Actions with no SPM
 //  packages, and these tabs only ever show local-file / static-PNG icons, so this uses
 //  a native AsyncImage backend. GIF/video icons fall back to their first frame.
 //

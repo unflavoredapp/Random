@@ -6,9 +6,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "7161E63E34B4EFFA56B6844D"
-               BuildableName = "unzip-drop.app"
-               BlueprintName = "unzip-drop"
-               ReferencedContainer = "container:unzip-drop.xcodeproj">
+               BuildableName = "Tetherless.app"
+               BlueprintName = "Tetherless"
+               ReferencedContainer = "container:Tetherless.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -21,9 +21,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "7161E63E34B4EFFA56B6844D"
-            BuildableName = "unzip-drop.app"
-            BlueprintName = "unzip-drop"
-            ReferencedContainer = "container:unzip-drop.xcodeproj">
+            BuildableName = "Tetherless.app"
+            BlueprintName = "Tetherless"
+            ReferencedContainer = "container:Tetherless.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
@@ -32,9 +32,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "7161E63E34B4EFFA56B6844D"
-            BuildableName = "unzip-drop.app"
-            BlueprintName = "unzip-drop"
-            ReferencedContainer = "container:unzip-drop.xcodeproj">
+            BuildableName = "Tetherless.app"
+            BlueprintName = "Tetherless"
+            ReferencedContainer = "container:Tetherless.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>

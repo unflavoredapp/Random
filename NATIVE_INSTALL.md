@@ -11,7 +11,7 @@ through idevice — no domain, TLS cert or install prompt).
 - `Native/Device/*` + `.github/scripts/*` — pinned idevice Rust source, pairing bridge, IDeviceKit overlays.
   `build.sh` fetches IDeviceKit (`fetch_devicekit.py`), patches it, builds `IDevice.xcframework`, then archives.
 - Project: `AirShareDeviceTunnel` target embedded in the app, local `IDeviceKit` package (IDeviceSwift + IDevice).
-- `unzip-drop.entitlements` / extension entitlements: `packet-tunnel-provider`.
+- `Tetherless.entitlements` / extension entitlements: `packet-tunnel-provider`.
 
 ## Requirements
 - Sign the app AND the appex with a profile that authorizes Network Extensions → packet-tunnel-provider
