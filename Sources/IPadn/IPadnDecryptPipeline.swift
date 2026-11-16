@@ -9,7 +9,8 @@ import Foundation
 @MainActor
 enum IPadnDecryptPipeline {
     /// Search Get, App Detail Download, Purchased — enqueue a Downloads job.
-    /// Jobs stack: Store downloads run up to maxConcurrent; companion pushes serialize.
+    /// Unlimited stack: download + companion decrypt only (no signing). Store fetches
+    /// run up to maxConcurrent; companion pushes serialize.
     static func get(
         _ app: DecryptApp,
         externalVersionId: String? = nil,
