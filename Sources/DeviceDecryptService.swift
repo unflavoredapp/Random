@@ -877,6 +877,9 @@ final class DeviceDecryptService: ObservableObject {
         let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
         publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
         try FairPlayKeyGate.requireReady()
+        // Refresh install inventory so the packager can stamp hostLiveInstallPath —
+        // companion FairPlay needs the live Store path when the app is already on-device.
+        _ = await DeviceLibrary.shared.refreshAwaiting()
         do {
             _ = try await DecryptCompanionInstaller.installAndOpen(
                 embedding: ipa,

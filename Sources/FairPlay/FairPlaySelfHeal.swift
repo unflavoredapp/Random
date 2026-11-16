@@ -148,7 +148,12 @@ enum FairPlaySelfHeal {
                         applied.append(.restageSinfs)
                         continue
                     }
-                    // Exhausted heal paths — surface Media & Purchases guidance.
+                    // Exhausted heal paths — distinguish missing live install vs missing keys.
+                    if context.liveInstall == nil {
+                        throw FairPlayDecryptError.mainExecutableFailed(
+                            "Couldn't decrypt after self-heal (licenseOrKeys): no live App Store install of this app was readable on this iPhone. Install the app from the App Store with the same Apple ID (so FairPlay can use the live install path), keep Media & Purchases signed in, then open Tetherless Decrypt again. EmbeddedPayload alone often returns mremap EPERM."
+                        )
+                    }
                     throw FairPlayDecryptError.mainExecutableFailed(
                         "Couldn't decrypt after self-heal (\(klass.rawValue)). \(FairPlayFailureClass.licenseOrKeys.userMessage)"
                     )
