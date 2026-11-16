@@ -1,6 +1,6 @@
 //
 //  StoreOwnedAppsClient.swift
-//  Purchase DAAP owned-apps list (ipatool list-purchases), SAP-signed.
+//  Purchase DAAP owned-apps list — iPadn WASM ActionSignature + Cookie + login GUID.
 //
 
 import Foundation
@@ -12,24 +12,24 @@ enum StoreOwnedAppsClient {
     private static let mediaKindApps: UInt32 = 131_072
     private static let mediaKindArcade: UInt32 = 262_144
     private static let mediaKindMac: UInt32 = 67_108_864
-    private static let configuratorUA =
-        "Configurator/2.15 (Macintosh; OS X 11.0.0; 16A5288f) AppleWebKit/0605.2.7.5"
 
     static func fetch(account: StorefrontSession) async throws -> [OwnedStoreApp] {
-        let guid = account.guid.isEmpty ? UUID().uuidString.replacingOccurrences(of: "-", with: "") : account.guid
-        let signer = try await SAPSigner.connect()
-        let now = Date()
+        var account = account.normalizedForCommerce()
+        guard account.isUsable else {
+            throw AppStoreClientError.message("Sign in under Account first.")
+        }
+        let guid = IPadnStoreDownload.resolvedGUID(account)
+        let signer = IPadnWASMSPSigner.shared
 
-        // 1) Login — opens a DAAP purchase session (unsigned login is OK).
-        let loginData = try await postRaw(
-            url: "\(base)/login",
+        // 1) Login — Cookie + token from iPadn session (unsigned login is OK).
+        let (loginBody, loginStatus) = try await post(
+            path: "/login",
             body: Data(),
-            headers: daapHeaders(account: account, guid: guid, now: now),
-            contentType: nil,
-            signature: nil
+            headers: IPadnStoreDownload.purchaseHeaders(account),
+            account: &account
         )
-        try throwIfHTTPOrDAAPFailed(loginData.status, body: loginData.body, label: "Owned login")
-        guard let sessionID = firstDMAPUint(loginData.body, tag: "mlid"), sessionID <= UInt64(UInt32.max) else {
+        try throwIfHTTPOrDAAPFailed(loginStatus, body: loginBody, label: "Owned login")
+        guard let sessionID = firstDMAPUint(loginBody, tag: "mlid"), sessionID <= UInt64(UInt32.max) else {
             throw AppStoreClientError.message("Owned list login missing session id.")
         }
 
@@ -38,112 +38,83 @@ enum StoreOwnedAppsClient {
             "'com.apple.itunes.extended\\-media\\-kind:\(mediaKindArcade)'," +
             "'com.apple.itunes.extended\\-media\\-kind:\(mediaKindMac)')"
 
-        // 2) Update — SAP-signed form body.
+        // 2) Update — WASM ActionSignature with the same login GUID.
         let updateBody = Data(
             "session-id=\(sessionID)&revision-number=(null)&query=\(query)".utf8
         )
-        let updateSig = try await signer.sign(updateBody)
-        var updateHeaders = daapHeaders(account: account, guid: guid, now: Date())
+        let updateSig = try await signer.sign(updateBody, guid: guid, useCache: true)
+        var updateHeaders = IPadnStoreDownload.purchaseHeaders(account)
         updateHeaders["Content-Type"] = "application/x-www-form-urlencoded"
-        updateHeaders["X-Apple-ActionSignature"] = updateSig.base64EncodedString()
-        let updateData = try await postRaw(
-            url: "\(base)/update",
+        updateHeaders["X-Apple-ActionSignature"] = updateSig
+        let (updateData, updateStatus) = try await post(
+            path: "/update",
             body: updateBody,
             headers: updateHeaders,
-            contentType: "application/x-www-form-urlencoded",
-            signature: nil // already in headers
+            account: &account
         )
-        try throwIfHTTPOrDAAPFailed(updateData.status, body: updateData.body, label: "Owned update")
-        guard let revision = firstDMAPUint(updateData.body, tag: "musr"), revision <= UInt64(UInt32.max) else {
+        try throwIfHTTPOrDAAPFailed(updateStatus, body: updateData, label: "Owned update")
+        guard let revision = firstDMAPUint(updateData, tag: "musr"), revision <= UInt64(UInt32.max) else {
             throw AppStoreClientError.message("Owned list update missing revision.")
         }
 
-        // 3) Items — SAP-signed DMAP body.
+        // 3) Items — WASM-signed DMAP body.
         let itemsBody = ownedAppsItemsBody(
             sessionID: UInt32(sessionID),
             latestVersion: UInt32(revision),
             query: query,
             now: Date()
         )
-        let itemsSig = try await signer.sign(itemsBody)
-        var itemsHeaders = daapHeaders(account: account, guid: guid, now: Date())
+        let itemsSig = try await signer.sign(itemsBody, guid: guid, useCache: true)
+        var itemsHeaders = IPadnStoreDownload.purchaseHeaders(account)
         itemsHeaders["Content-Type"] = "application/x-dmap-tagged"
-        itemsHeaders["X-Apple-ActionSignature"] = itemsSig.base64EncodedString()
-        let itemsData = try await postRaw(
-            url: "\(base)/databases/\(revision)/items",
+        itemsHeaders["X-Apple-ActionSignature"] = itemsSig
+        let (itemsData, itemsStatus) = try await post(
+            path: "/databases/\(revision)/items",
             body: itemsBody,
             headers: itemsHeaders,
-            contentType: "application/x-dmap-tagged",
-            signature: nil
+            account: &account
         )
-        try throwIfHTTPOrDAAPFailed(itemsData.status, body: itemsData.body, label: "Owned items")
-        return parseOwnedApps(itemsData.body)
+        try throwIfHTTPOrDAAPFailed(itemsStatus, body: itemsData, label: "Owned items")
+        return parseOwnedApps(itemsData)
     }
 
     // MARK: - HTTP
 
-    private static func daapHeaders(account: StorefrontSession, guid: String, now: Date) -> [String: String] {
-        let utc = ISO8601DateFormatter()
-        utc.formatOptions = [.withInternetDateTime]
-        let tzSeconds = TimeZone.current.secondsFromGMT()
-        return [
-            "Accept": "*/*",
-            "Accept-Language": "en-us",
-            "Client-Cloud-DAAP-Request-Reason": "5",
-            "Client-Cloud-Purchase-Daap-Version": "1.1/Configurator-2.0",
-            "Client-DAAP-Version": "3.12",
-            "User-Agent": configuratorUA,
-            "iCloud-DSID": account.dsid,
-            "X-Apple-I-Client-Time": utc.string(from: now),
-            "X-Apple-I-Locale": "en_US",
-            "X-Apple-I-TimeZone": TimeZone.current.identifier,
-            "X-Apple-Store-Front": account.storeFront,
-            "X-Apple-TZ": "\(tzSeconds / 60)",
-            "X-Dsid": account.dsid,
-            "X-Guid": guid,
-            "X-Token": account.passwordToken
-        ]
-    }
-
-    private static func postRaw(
-        url: String,
+    private static func post(
+        path: String,
         body: Data,
         headers: [String: String],
-        contentType: String?,
-        signature: Data?
-    ) async throws -> (status: Int, body: Data) {
-        guard let endpoint = URL(string: url) else {
+        account: inout StorefrontSession
+    ) async throws -> (Data, Int) {
+        guard let endpoint = URL(string: base + path) else {
             throw AppStoreClientError.message("Bad Owned list URL.")
         }
-        var req = URLRequest(url: endpoint)
-        req.httpMethod = "POST"
-        req.httpBody = body
-        req.timeoutInterval = 45
-        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-        if let contentType { req.setValue(contentType, forHTTPHeaderField: "Content-Type") }
-        if let signature {
-            req.setValue(signature.base64EncodedString(), forHTTPHeaderField: "X-Apple-ActionSignature")
-        }
-        let (data, resp) = try await URLSession.shared.data(for: req)
-        let status = (resp as? HTTPURLResponse)?.statusCode ?? 0
-        return (status, data)
+        let (data, response) = try await IPadnHTTPClient.shared.request(
+            endpoint,
+            method: "POST",
+            body: body,
+            headers: headers,
+            appleRedirects: true
+        )
+        IPadnStoreDownload.absorbCookies(from: response, account: &account)
+        return (data, response.statusCode)
     }
 
     private static func throwIfHTTPOrDAAPFailed(_ status: Int, body: Data, label: String) throws {
-        // DAAP 401/403 often means this Purchase-DAAP path rejected the token — not that
-        // MZFinance passwordToken is dead for downloads. Soft-fail Owned; keep Store Access.
+        // DAAP 401/403 often means Purchase-DAAP rejected the request — not that
+        // downloads are dead. Soft-fail Owned; keep Account signed in.
         if status == 401 || status == 403 {
             throw AppStoreClientError.message(
-                "Owned list unavailable (HTTP \(status)). Search still works — Store Access can stay signed in."
+                "Owned list unavailable (HTTP \(status)). Search still works — sign in again under Account if needed."
             )
         }
-        if status != 200 {
+        if !(200..<300).contains(status) {
             throw AppStoreClientError.network("\(label) returned HTTP \(status).")
         }
         if let daap = firstDMAPUint(body, tag: "mstt") {
             if daap == 401 || daap == 403 {
                 throw AppStoreClientError.message(
-                    "Owned list unavailable (DAAP \(daap)). Search still works — Store Access can stay signed in."
+                    "Owned list unavailable (DAAP \(daap)). Search still works — sign in again under Account if needed."
                 )
             }
             if daap != 200 {

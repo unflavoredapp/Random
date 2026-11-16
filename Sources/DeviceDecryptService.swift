@@ -177,8 +177,11 @@ final class DeviceDecryptService: ObservableObject {
                 lastVersionError = "Couldn't resolve an App Store id for \(app.name)."
                 return nil
             }
-            let account = try await AppleIDStore.shared.ensureStorefrontSession()
-            let versions = try await AppStoreClient.shared.resolveVersionHistory(
+            let account = AppleIDStore.shared.storefrontSession()?.isUsable == true
+                ? AppleIDStore.shared.storefrontSession()!
+                : try await AppleIDStore.shared.ensureStorefrontSession()
+            // DownloadDispatch tickets (same path as Get/Download) — not volumeStore.
+            let versions = try await IPadnStoreDownload.resolveVersionHistory(
                 adamId: adam,
                 account: account,
                 limit: 40
