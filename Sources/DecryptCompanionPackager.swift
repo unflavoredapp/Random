@@ -364,6 +364,12 @@ enum DecryptCompanionPackager {
             )
         }
 
+        let embeddedBundleID: String? = {
+            let info = NSDictionary(contentsOf: dest.appendingPathComponent("Info.plist")) as? [String: Any]
+            let raw = (info?["CFBundleIdentifier"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return (raw?.isEmpty == false) ? raw : nil
+        }()
         var meta: [String: Any] = [
             "name": name,
             "embeddedAt": ISO8601DateFormatter().string(from: Date()),
@@ -378,6 +384,9 @@ enum DecryptCompanionPackager {
             "hostSkippedLiveAudit": liveInstall,
             "slimEmbed": true,
         ]
+        if let embeddedBundleID, !embeddedBundleID.isEmpty {
+            meta["bundleID"] = embeddedBundleID
+        }
         // Host readiness only — never passwords / PET / store session JSON.
         for (k, v) in DecryptCompanionHandoff.hostSnapshot() {
             meta[k] = v

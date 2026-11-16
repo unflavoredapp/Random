@@ -47,7 +47,10 @@ enum FairPlayFailureClass: String {
             || blob.contains("low memory") || blob.contains("out-of-memory") {
             return .outOfMemory
         }
-        if blob.contains("eperm") || blob.contains("-42004") || blob.contains("-42110")
+        if blob.contains("eperm")
+            || blob.contains("operation not permitted")
+            || blob.contains("errno 1")
+            || blob.contains("-42004") || blob.contains("-42110")
             || blob.contains("license") || blob.contains("media & purchases") {
             return .licenseOrKeys
         }
@@ -937,6 +940,12 @@ enum FairPlayDecrypt {
                     let klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
                     if klass == .outOfMemory {
                         throw FairPlayDecryptError.outOfMemory(
+                            "Couldn't decrypt the main executable (\(rel)). \(klass.userMessage)"
+                        )
+                    }
+                    // Prefer actionable license/keys guidance over raw mremap dumps (Roblox EPERM).
+                    if klass == .licenseOrKeys {
+                        throw FairPlayDecryptError.mainExecutableFailed(
                             "Couldn't decrypt the main executable (\(rel)). \(klass.userMessage)"
                         )
                     }
