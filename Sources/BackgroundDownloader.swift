@@ -11,6 +11,7 @@
 //
 
 import Foundation
+import os
 import UIKit
 import UserNotifications
 
@@ -41,8 +42,15 @@ nonisolated final class IPADownloader: NSObject, URLSessionDownloadDelegate, @un
     }
     typealias Handler = (progress: @Sendable (Double) -> Void, done: @Sendable (Result<URL, Error>) -> Void)
 
+    /// Prefer os_unfair_lock over NSLock — Swift 6 forbids NSLock inside `async` functions.
+    private final class UnfairLock: @unchecked Sendable {
+        private var unfair = os_unfair_lock_s()
+        func lock() { os_unfair_lock_lock(&unfair) }
+        func unlock() { os_unfair_lock_unlock(&unfair) }
+    }
+
     private var session: URLSession!
-    private let lock = NSLock()
+    private let lock = UnfairLock()
     private var jobs: [String: Job] = [:]
     private var handlers: [String: [Handler]] = [:]
     private var received: [String: [Int: Int64]] = [:]
@@ -123,15 +131,27 @@ nonisolated final class IPADownloader: NSObject, URLSessionDownloadDelegate, @un
 
     struct RangeProbe { let size: Int64; let etag: String? }
 
-    private static let probeLock = NSLock()
-    nonisolated(unsafe) private static var probeCache: [URL: (probe: RangeProbe?, at: Date)] = [:]
+    /// Async-safe probe cache (NSLock is illegal inside `async` functions).
+    private actor ProbeCacheStore {
+        private var cache: [URL: (probe: RangeProbe?, at: Date)] = [:]
+        func lookup(_ src: URL, maxAge: TimeInterval) -> (hit: Bool, probe: RangeProbe?) {
+            guard let hit = cache[src], Date().timeIntervalSince(hit.at) < maxAge else {
+                return (false, nil)
+            }
+            return (true, hit.probe)
+        }
+        func store(_ src: URL, probe: RangeProbe?) {
+            cache[src] = (probe, Date())
+        }
+    }
+    private static let probeStore = ProbeCacheStore()
 
     /// Probe with a 10-minute memory: opening an app's page warms it, so tapping Download starts right away.
     static func cachedProbe(_ src: URL) async -> RangeProbe? {
-        probeLock.lock(); let hit = probeCache[src]; probeLock.unlock()
-        if let hit, Date().timeIntervalSince(hit.at) < 600 { return hit.probe }
+        let cached = await probeStore.lookup(src, maxAge: 600)
+        if cached.hit { return cached.probe }
         let p = await probeRanges(src)
-        probeLock.lock(); probeCache[src] = (p, Date()); probeLock.unlock()
+        await probeStore.store(src, probe: p)
         return p
     }
 

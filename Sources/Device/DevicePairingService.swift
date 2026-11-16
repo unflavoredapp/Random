@@ -150,9 +150,12 @@ final class DevicePairingService: NSObject, ObservableObject, NetServiceDelegate
         }
     }
 
-    func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
-        advertisementError = DeviceSetupError("TetherLess could not advertise for pairing. Allow Local Network access in Settings, connect to Wi-Fi, and try again.")
-        cancel()
+    /// NetServiceDelegate callbacks are nonisolated; hop to MainActor for ObservableObject state.
+    nonisolated func netService(_ sender: NetService, didNotPublish errorDict: [String: NSNumber]) {
+        Task { @MainActor in
+            self.advertisementError = DeviceSetupError("TetherLess could not advertise for pairing. Allow Local Network access in Settings, connect to Wi-Fi, and try again.")
+            self.cancel()
+        }
     }
 
     private func beginBackgroundTime() {

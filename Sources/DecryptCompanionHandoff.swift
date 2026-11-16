@@ -9,6 +9,8 @@ import UIKit
 
 /// Safe cross-process hints for the Tetherless Decrypt companion.
 /// Never store Apple ID passwords, PETs, or store session JSON here.
+/// Entire type is MainActor so FairPlay-ack reads stay isolation-safe under Swift 6.
+@MainActor
 enum DecryptCompanionHandoff {
     static let suiteName = "group.dev.tetherless.app"
     static let pendingBundleKey = "tetherless.decrypt.pendingCompanionBundle"
@@ -19,8 +21,7 @@ enum DecryptCompanionHandoff {
     private static var local: UserDefaults { .standard }
 
     /// Snapshot the host Apple ID / FairPlay gate state into a plist-safe dictionary.
-    /// MainActor — calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
-    @MainActor
+    /// Calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
     static func hostSnapshot() -> [String: Any] {
         let email = (UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -48,7 +49,6 @@ enum DecryptCompanionHandoff {
     }
 
     /// Publish snapshot to App Group when the free/paid provision still has the group.
-    @MainActor
     static func publishHostSnapshot() {
         let snap = hostSnapshot()
         suite?.set(snap, forKey: "companion.hostSnapshot")
@@ -100,7 +100,6 @@ enum DecryptCompanionHandoff {
     }
 
     /// Best public entry for “Trust this developer” after a companion install.
-    @MainActor
     static func openTrustSettings() {
         // General → VPN & Device Management isn’t a stable public URL; Settings root is.
         if let url = URL(string: UIApplication.openSettingsURLString) {
@@ -109,7 +108,6 @@ enum DecryptCompanionHandoff {
     }
 
     /// On host foreground: retry opening a companion that needed Trust.
-    @MainActor
     @discardableResult
     static func resumePendingOpenIfNeeded() async -> Bool {
         guard let pending = pendingOpen() else { return false }
