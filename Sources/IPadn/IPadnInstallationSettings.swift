@@ -292,11 +292,14 @@ struct IPadnInstallationSettingsView: View {
         ensuringAppleIDCert = true
         defer { ensuringAppleIDCert = false }
         do {
-            let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
+            // Remint when the linked free cert is expired; otherwise ensure/create as needed.
+            let force = linkedAppleIDCert.map {
+                certStore.cachedProfileInfo(for: $0).isExpired
+            } ?? false
+            let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate(forceRefresh: force)
             certStatus = "Ready: \(cert.name)"
         } catch {
             // SideSign-style create already tried portal session refresh + revoke/recreate.
-            // Surface the portal error; custom import remains an optional fallback below.
             issue = error.localizedDescription
             certStatus = nil
         }

@@ -895,14 +895,24 @@ final class AppleIDStore: ObservableObject {
     func linkCertificate(_ certID: String, toAccountID accountID: String? = nil) {
         let aid = accountID ?? activeAccountID
         guard let aid, let idx = accounts.firstIndex(where: { $0.id == aid }) else { return }
+        // Renew replaces: drop expired/stale linked IDs so preference never sticks on the old cert.
+        let store = CertificateStore.shared
+        accounts[idx].linkedCertificateIDs.removeAll { id in
+            guard let c = store.certificates.first(where: { $0.id == id }) else { return true }
+            return store.cachedProfileInfo(for: c).isExpired
+        }
         if !accounts[idx].linkedCertificateIDs.contains(certID) {
-            accounts[idx].linkedCertificateIDs.append(certID)
+            accounts[idx].linkedCertificateIDs.insert(certID, at: 0)
+        } else if let at = accounts[idx].linkedCertificateIDs.firstIndex(of: certID), at != 0 {
+            accounts[idx].linkedCertificateIDs.remove(at: at)
+            accounts[idx].linkedCertificateIDs.insert(certID, at: 0)
         }
         accounts[idx].revokedCertificateIDs.removeAll { $0 == certID }
-        if let cert = CertificateStore.shared.certificates.first(where: { $0.id == certID }) {
-            let info = CertificateStore.shared.cachedProfileInfo(for: cert)
+        if let cert = store.certificates.first(where: { $0.id == certID }) {
+            let info = store.cachedProfileInfo(for: cert)
             mergeProfileInfo(info, into: idx)
         }
+        store.activeID = certID
         save()
         UserDefaults.standard.set("appleid", forKey: "uzd_signing_method")
         statusMessage = "Linked certificate for free Apple ID signing."
@@ -968,17 +978,23 @@ final class AppleIDStore: ObservableObject {
         save()
     }
 
-    /// Prefer a certificate linked to the active Store account; else the active cert if it looks like a free/dev profile.
+    /// Prefer a non-expired certificate linked to the active Store account.
+    /// Does not fall back to arbitrary custom/enterprise certs (those use their own signing method).
     func preferredSigningCertificateID() -> String? {
-        if let linked = activeAccount?.linkedCertificateIDs.first,
-           CertificateStore.shared.certificates.contains(where: { $0.id == linked }) {
-            return linked
+        let store = CertificateStore.shared
+        let linked = activeAccount?.linkedCertificateIDs ?? []
+        // Newest-first: linkCertificate inserts at 0; skip expired / deleted.
+        for id in linked {
+            guard let cert = store.certificates.first(where: { $0.id == id }) else { continue }
+            if store.cachedProfileInfo(for: cert).isExpired { continue }
+            return cert.id
         }
-        if let active = CertificateStore.shared.active {
-            let info = CertificateStore.shared.cachedProfileInfo(for: active)
-            if !info.udids.isEmpty { return active.id }
-        }
-        return CertificateStore.shared.activeID
+        return nil
+    }
+
+    /// True when `cert` is linked to the active Apple ID (free 7-day path).
+    func isLinkedAppleIDCertificate(_ cert: Certificate) -> Bool {
+        activeAccount?.linkedCertificateIDs.contains(cert.id) == true
     }
 
     func portalSession() -> AppleAuthSession? {

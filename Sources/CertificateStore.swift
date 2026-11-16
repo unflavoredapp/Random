@@ -19,6 +19,10 @@ struct Certificate: Codable, Identifiable, Equatable, Sendable {
     /// Admin-provided account certificate: kept out of the Files-visible Documents folder,
     /// excluded from backups, and not removable / exportable from the app.
     var locked: Bool? = nil
+    /// Apple Developer Portal development-certificate serial (SideSign orphan matching).
+    var portalSerialNumber: String? = nil
+    /// Portal certificate id when known (v1 certificates API / certRequestId).
+    var portalCertificateID: String? = nil
 
     var isLocked: Bool { locked == true }
     private var baseDir: URL { isLocked ? AppPaths.lockedCerts : AppPaths.documents }
@@ -144,7 +148,16 @@ final class CertificateStore: ObservableObject {
     }
 
     @discardableResult
-    func importPair(name: String, p12: Data, password: String, provision: Data, makeActive: Bool = true, locked: Bool = false) throws -> Certificate {
+    func importPair(
+        name: String,
+        p12: Data,
+        password: String,
+        provision: Data,
+        makeActive: Bool = true,
+        locked: Bool = false,
+        portalSerialNumber: String? = nil,
+        portalCertificateID: String? = nil
+    ) throws -> Certificate {
         guard Self.p12IsValid(p12, password: password) else { throw CertError.badPassword }
         let id = UUID().uuidString
         let p12Rel  = "certs/\(id).p12"
@@ -156,9 +169,16 @@ final class CertificateStore: ObservableObject {
             try provision.write(to: base.appendingPathComponent(provRel))
         } catch { throw CertError.importFailed }
         Keychain.set("cert-" + id, password)
-        let cert = Certificate(id: id, name: name.isEmpty ? "Certificate" : name,
-                               p12RelPath: p12Rel, provisionRelPath: provRel, addedAt: Date(),
-                               locked: locked ? true : nil)
+        let cert = Certificate(
+            id: id,
+            name: name.isEmpty ? "Certificate" : name,
+            p12RelPath: p12Rel,
+            provisionRelPath: provRel,
+            addedAt: Date(),
+            locked: locked ? true : nil,
+            portalSerialNumber: Self.nonEmpty(portalSerialNumber),
+            portalCertificateID: Self.nonEmpty(portalCertificateID)
+        )
         certificates.append(cert)
         profileInfoCache[id] = Self.profileInfo(provision)
         save()
@@ -185,6 +205,7 @@ final class CertificateStore: ObservableObject {
         profileInfoCache.removeValue(forKey: cert.id)
         if activeID == cert.id { activeID = certificates.first?.id }
         save()
+        AppleIDStore.shared.unlinkCertificate(cert.id)
     }
 
     var active: Certificate? { certificates.first { $0.id == activeID } }
@@ -249,6 +270,12 @@ final class CertificateStore: ObservableObject {
 
     /// The device UDID we know about: a saved value, else a cert name that looks like one
     /// (registration-service certs are named after the UDID, e.g. 00008110-000209003C60E01E).
+    private static func nonEmpty(_ value: String?) -> String? {
+        guard let value else { return nil }
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
     nonisolated static func knownUDID(certName: String? = nil) -> String? {
         if let saved = UserDefaults.standard.string(forKey: "uzd_device_udid"), !saved.isEmpty { return saved }
         if let n = certName, n.range(of: #"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16}$"#, options: .regularExpression) != nil { return n.uppercased() }

@@ -410,6 +410,8 @@ enum DecryptCompanionPackager {
         // Timeout-safe Mach-O discovery only — never verifyApp on live installs
         // (cryptid probes hang). Companion audits the EmbeddedPayload copy.
         var machos = try FairPlayDecrypt.collectMachOsForCompanion(under: src)
+        // Drop known non-binaries that extensionless-root trust may have pulled in (PkgInfo).
+        machos = machos.filter { !Self.nonMachOEmbedBasenames.contains($0.lastPathComponent) }
         // Unity / odd shells (e.g. factory.app → executable `factory`) — never leave
         // EmbeddedPayload without the main binary even if magic probing missed it.
         if let main = FairPlayDecrypt.mainExecutableForEmbed(in: src),
@@ -425,15 +427,28 @@ enum DecryptCompanionPackager {
         var skipped: [String] = []
         for file in machos {
             let rel = relative(file, under: src)
-            guard let out = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) else {
-                skipped.append(rel.isEmpty ? file.lastPathComponent : rel)
-                progress?("Skipped unsafe Mach-O path: \(rel)")
+            let safeRel = rel.isEmpty ? file.lastPathComponent : rel
+            let out: URL
+            if let secured = FairPlayDecrypt.secureChildURL(root: dest, relative: safeRel) {
+                out = secured
+            } else if isSafeRelativeEmbedPath(safeRel) {
+                // Fallback when symlink-canonicalization disagrees — still refuse `..`.
+                out = FairPlayDecrypt.appendingRelativePath(root: dest, relative: safeRel)
+                progress?("Embed path fallback for \(safeRel)")
+            } else {
+                skipped.append(safeRel)
+                progress?("Skipped unsafe Mach-O path: \(safeRel)")
                 continue
             }
             try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? fm.removeItem(at: out)
-            try fm.copyItem(at: file, to: out)
-            copied += 1
+            do {
+                try fm.copyItem(at: file, to: out)
+                copied += 1
+            } catch {
+                skipped.append(safeRel)
+                progress?("Embed copy failed for \(safeRel): \(error.localizedDescription)")
+            }
         }
         if copied == 0 {
             let sample = skipped.prefix(4).joined(separator: ", ")
@@ -499,15 +514,32 @@ enum DecryptCompanionPackager {
         }
     }
 
+    /// Basenames that live at the .app root without an extension but are not Mach-O.
+    private static let nonMachOEmbedBasenames: Set<String> = [
+        "PkgInfo", "iTunesMetadata", "embedded", "CodeResources"
+    ]
+
+    private static func isSafeRelativeEmbedPath(_ rel: String) -> Bool {
+        let trimmed = rel.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed.hasPrefix("/") || trimmed.contains("\0") { return false }
+        let parts = trimmed.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        return !parts.isEmpty && !parts.contains("..") && !parts.contains(".")
+    }
+
     private static func relative(_ file: URL, under root: URL) -> String {
-        let rootPath = root.standardizedFileURL.path
+        // Resolve symlinks so live `/var/containers` vs `/private/var/containers` still yields a relative path.
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
         let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
-        let path = file.standardizedFileURL.path
+        let path = file.resolvingSymlinksInPath().standardizedFileURL.path
         if path.hasPrefix(prefix) {
             let rel = String(path.dropFirst(prefix.count))
             // Refuse escapes — never stage files outside the source .app.
             if rel.contains("..") { return file.lastPathComponent }
             return rel
+        }
+        // Last resort: rebuild relative path from lastPathComponent chain when prefixes disagree.
+        if path.hasSuffix("/" + file.lastPathComponent) || path.hasSuffix(file.lastPathComponent) {
+            return file.lastPathComponent
         }
         return file.lastPathComponent
     }
