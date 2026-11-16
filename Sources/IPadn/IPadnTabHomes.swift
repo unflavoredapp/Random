@@ -22,6 +22,7 @@ struct PurchasedHomeView: View {
     @State private var selection = Set<Int>()
     @State private var batchProgress: (done: Int, total: Int)?
     @State private var path = NavigationPath()
+    @State private var showSearch = false
 
     private var filtered: [OwnedStoreApp] {
         let cutoff = Calendar.current.date(byAdding: .month, value: -months, to: Date()) ?? .distantPast
@@ -61,108 +62,86 @@ struct PurchasedHomeView: View {
 
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 16) {
-                    IPadnPageHeader(title: "Purchased") {
-                        Menu {
-                            Button {
-                                Task { await refresh() }
-                            } label: {
-                                Label("Refresh", systemImage: "arrow.clockwise")
-                            }
-                            Button {
-                                AppNav.shared.goAccount()
-                            } label: {
-                                Label("Account", systemImage: "person.crop.circle")
-                            }
-                        } label: {
-                            Image(systemName: "ellipsis")
-                                .font(.body.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .background(Color.white.opacity(0.12), in: Circle())
-                        }
-                        .accessibilityLabel("More")
-                    }
-
-                    if store.isSignedIn {
+            IPadnBlurNavScroll(title: "Purchased") {
+                purchasedTrailing
+            } content: {
+                if store.isSignedIn {
+                    if showSearch {
                         IPadnCapsuleSearch(
                             text: $term,
                             placeholder: "Search purchases or App ID",
-                            onSubmit: {}
+                            onSubmit: {},
+                            onClear: {
+                                term = ""
+                                query = ""
+                            }
                         )
-
-                        Picker("Purchase window", selection: $months) {
-                            Text("All").tag(0)
-                            Text("1 mo").tag(1)
-                            Text("6 mo").tag(6)
-                            Text("1 yr").tag(12)
-                        }
-                        .pickerStyle(.segmented)
-
-                        Text("Account: \(store.email)")
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.4))
-
-                        if loading && owned.isEmpty {
-                            HStack {
-                                ProgressView().tint(TetherlessPalette.accent)
-                                Text("Syncing purchase history…")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.white.opacity(0.55))
-                            }
-                        } else if let loadError, !loadError.isEmpty {
-                            Text(loadError)
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                            Button("Retry") { Task { await refresh() } }
-                                .font(.footnote.weight(.semibold))
-                                .foregroundStyle(TetherlessPalette.accent)
-                        } else if filtered.isEmpty {
-                            emptyPurchased
-                        } else {
-                            let badges = downloadBadges
-                            HStack {
-                                Text("\(filtered.count) item\(filtered.count == 1 ? "" : "s")")
-                                    .font(.title3.weight(.bold))
-                                    .foregroundStyle(.white)
-                                Spacer()
-                                Button(selecting ? "Done" : "Select") {
-                                    withAnimation {
-                                        selecting.toggle()
-                                        selection.removeAll()
-                                    }
-                                }
-                                .font(.body.weight(.semibold))
-                                .foregroundStyle(TetherlessPalette.accent)
-                                .disabled(batchProgress != nil)
-                            }
-
-                            ForEach(filtered) { app in
-                                purchasedRow(app, badge: badges[app.adamId])
-                                Divider().overlay(.white.opacity(0.08))
-                            }
-                        }
-                    } else {
-                        Text("Sign in with Apple Account to sync purchases and download apps you own.")
-                            .font(.callout)
-                            .foregroundStyle(.white.opacity(0.65))
-                        Button {
-                            AppNav.shared.goStoreLogin()
-                        } label: {
-                            Text("Sign In")
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundStyle(.white)
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 12)
-                                .background(TetherlessPalette.accent, in: Capsule())
-                        }
-                        .buttonStyle(.plain)
+                        .transition(.move(edge: .top).combined(with: .opacity))
                     }
+
+                    Picker("Purchase window", selection: $months) {
+                        Text("All").tag(0)
+                        Text("1 mo").tag(1)
+                        Text("6 mo").tag(6)
+                        Text("1 yr").tag(12)
+                    }
+                    .pickerStyle(.segmented)
+
+                    if loading && owned.isEmpty {
+                        HStack {
+                            ProgressView().tint(TetherlessPalette.accent)
+                            Text("Syncing purchase history…")
+                                .font(.subheadline)
+                                .foregroundStyle(.white.opacity(0.55))
+                        }
+                    } else if let loadError, !loadError.isEmpty {
+                        Text(loadError)
+                            .font(.footnote)
+                            .foregroundStyle(.orange)
+                        Button("Retry") { Task { await refresh() } }
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(TetherlessPalette.accent)
+                    } else if filtered.isEmpty {
+                        emptyPurchased
+                    } else {
+                        let badges = downloadBadges
+                        HStack {
+                            Text("\(filtered.count) item\(filtered.count == 1 ? "" : "s")")
+                                .font(.title3.weight(.bold))
+                                .foregroundStyle(.white)
+                            Spacer()
+                            Button(selecting ? "Done" : "Select") {
+                                withAnimation {
+                                    selecting.toggle()
+                                    selection.removeAll()
+                                }
+                            }
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(TetherlessPalette.accent)
+                            .disabled(batchProgress != nil)
+                        }
+
+                        ForEach(filtered) { app in
+                            purchasedRow(app, badge: badges[app.adamId])
+                            Divider().overlay(.white.opacity(0.08))
+                        }
+                    }
+                } else {
+                    Text("Sign in with Apple Account to sync purchases and download apps you own.")
+                        .font(.callout)
+                        .foregroundStyle(.white.opacity(0.65))
+                    Button {
+                        AppNav.shared.goStoreLogin()
+                    } label: {
+                        Text("Sign In")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(TetherlessPalette.accent, in: Capsule())
+                    }
+                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 120)
             }
             .background(Theme.bg.ignoresSafeArea())
             .navigationDestination(for: IPadnStoreApp.self) { app in
@@ -180,6 +159,50 @@ struct PurchasedHomeView: View {
                     selectBar
                 }
             }
+        }
+    }
+
+    private var purchasedTrailing: some View {
+        HStack(spacing: 8) {
+            if store.isSignedIn {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        showSearch.toggle()
+                        if !showSearch {
+                            term = ""
+                            query = ""
+                        }
+                    }
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(showSearch ? TetherlessPalette.accent : .white)
+                        .frame(width: 36, height: 36)
+                        .background(Color.white.opacity(showSearch ? 0.18 : 0.12), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(showSearch ? "Hide search" : "Search purchases")
+            }
+
+            Menu {
+                Button {
+                    Task { await refresh() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                Button {
+                    AppNav.shared.goAccount()
+                } label: {
+                    Label("Account", systemImage: "person.crop.circle")
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(width: 36, height: 36)
+                    .background(Color.white.opacity(0.12), in: Circle())
+            }
+            .accessibilityLabel("More")
         }
     }
 
@@ -218,18 +241,7 @@ struct PurchasedHomeView: View {
         showCloud: Bool
     ) -> some View {
         HStack(spacing: 14) {
-            AsyncImage(url: app.iconURL) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().scaledToFill()
-                default:
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                        .overlay { Image(systemName: "app.fill").foregroundStyle(.white.opacity(0.35)) }
-                }
-            }
-            .frame(width: 56, height: 56)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            CachedIcon(url: app.iconURL, side: 56, fallback: app.name)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(app.name)
@@ -368,45 +380,66 @@ struct AccountHomeView: View {
     @ObservedObject private var nav = AppNav.shared
     @State private var path = NavigationPath()
     @State private var showIPadnLogin = false
+    @State private var appleIDExpanded = true
 
     var body: some View {
         NavigationStack(path: $path) {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    IPadnPageHeader(title: "Account") { EmptyView() }
+            IPadnBlurNavScroll(title: "Account") {
+                EmptyView()
+            } content: {
+                profileCard
 
-                    profileCard
-
-                    sectionHeader("Apple ID")
+                DisclosureGroup(isExpanded: $appleIDExpanded) {
                     accountRows
-
-                    sectionHeader("Library")
-                    navRow(.purchasedTab, title: "Purchased", symbol: "bag.fill")
-                    navRow(.downloadsTab, title: "Downloads & installation", symbol: "arrow.down.circle.fill")
-                    pushRow(.library, title: "Apps on this device", symbol: "iphone")
-                    pushRow(.files, title: "Files", symbol: "folder.fill")
-
-                    sectionHeader("Device")
-                    pushRow(.settings, title: "Settings", symbol: "gearshape.fill")
-
-                    if store.isSignedIn {
-                        Button(role: .destructive) {
-                            store.signOut()
-                        } label: {
-                            Text("Sign Out")
-                                .font(.body.weight(.semibold))
-                                .frame(maxWidth: .infinity)
-                                .padding(.vertical, 14)
-                                .foregroundStyle(.red)
-                                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        }
-                        .buttonStyle(.plain)
                         .padding(.top, 8)
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: "person.crop.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(TetherlessPalette.accent)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Apple ID")
+                                .font(.body.weight(.semibold))
+                                .foregroundStyle(.white)
+                            if store.isSignedIn {
+                                Text(store.email)
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.45))
+                                    .lineLimit(1)
+                            } else {
+                                Text("Sign in to sync purchases")
+                                    .font(.caption)
+                                    .foregroundStyle(.white.opacity(0.45))
+                            }
+                        }
                     }
                 }
-                .padding(.horizontal, 20)
-                .padding(.top, 8)
-                .padding(.bottom, 120)
+                .tint(.white.opacity(0.55))
+                .padding(.vertical, 4)
+
+                sectionHeader("Library")
+                navRow(.purchasedTab, title: "Purchased", symbol: "bag.fill")
+                navRow(.downloadsTab, title: "Downloads & installation", symbol: "arrow.down.circle.fill")
+                pushRow(.library, title: "Apps on this device", symbol: "iphone")
+                pushRow(.files, title: "Files", symbol: "folder.fill")
+
+                sectionHeader("Device")
+                pushRow(.settings, title: "Settings", symbol: "gearshape.fill")
+
+                if store.isSignedIn {
+                    Button(role: .destructive) {
+                        store.signOut()
+                    } label: {
+                        Text("Sign Out")
+                            .font(.body.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 14)
+                            .foregroundStyle(.red)
+                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 8)
+                }
             }
             .background(Theme.bg.ignoresSafeArea())
             .navigationDestination(for: AppAccountPush.self) { dest in
@@ -489,22 +522,12 @@ struct AccountHomeView: View {
             .frame(width: 60, height: 60)
 
             VStack(alignment: .leading, spacing: 3) {
-                if store.isSignedIn {
-                    Text(store.email)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
-                        .lineLimit(1)
-                    Text("Sync purchases and download apps you’re licensed to use")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.45))
-                } else {
-                    Text("Sign in to your Apple Account")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Text("Sync purchases and download apps you’re licensed to use")
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.45))
-                }
+                Text(store.isSignedIn ? "Apple Account" : "Sign in to your Apple Account")
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(.white)
+                Text("Sync purchases and download apps you’re licensed to use")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.45))
             }
             Spacer(minLength: 0)
         }
