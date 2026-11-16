@@ -86,33 +86,16 @@ enum DecryptCompanionRuntime {
             iconImage: icon,
             clearLog: true
         )
-        DecryptCompanionController.shared.statusTitle = "1/5 · Auditing DRM…"
+        DecryptCompanionController.shared.statusTitle = "Decrypting…"
         log("Found embedded app: \(name)")
         let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
-        let host = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
-        if let hint = host["hostEmailHint"] as? String, !hint.isEmpty {
-            log("Host account: \(hint)")
-        }
-        if host["hostFairPlayAck"] as? Bool == false {
-            log("Note: host has not acknowledged Media & Purchases yet — FairPlay keys may be missing.")
-        }
-        if host["hostStoreReady"] as? Bool == true {
-            log("Host Store session was ready when this companion was built.")
-        }
-        if host["hostFairPlayAck"] as? Bool == false {
-            log("Self-heal note: Media & Purchases may not be signed in — FairPlayed needs that Apple ID’s keys on this iPhone.")
-        }
+        _ = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
 
-        // 1) Pre-decrypt audit — prove FairPlay DRM is present on the embedded IPA tree.
-        // EmbeddedPayload is inside our sideloaded .app under /var/containers — that is NOT
-        // a live App Store install; verifyApp must cryptid-probe (not skip as live-install).
-        log("DRM audit (before): scanning EmbeddedPayload Mach-Os…")
+        // Fail-closed DRM checks stay silent in the console (TetherlessiOS-style log).
         let before = try FairPlayDecrypt.verifyApp(at: src)
-        logAudit(before, prefix: "BEFORE", log: log)
         if before.entries.isEmpty {
             throw DecryptError("EmbeddedPayload has no Mach-Os — companion package is incomplete. Re-run decrypt from TetherLess.")
         }
-        // Unknown-only results mean probes were skipped/failed — don't treat as "missing DRM".
         if before.encrypted == 0 && before.unknown > 0 && before.clear == 0 && before.plain == 0 {
             throw DecryptError(
                 "Couldn't inspect FairPlay cryptids on EmbeddedPayload (\(before.unknown) unknown). Re-run Get from TetherLess after updating, then open Tetherless Decrypt again."
@@ -122,11 +105,6 @@ enum DecryptCompanionRuntime {
             throw DecryptError(
                 "EmbeddedPayload is missing FairPlay binaries (\(before.encrypted) encrypted vs \(expected) in the full IPA). Re-run decrypt so the companion embeds every DRM Mach-O."
             )
-        }
-        if before.encrypted == 0 {
-            log("WARNING: no cryptid≠0 Mach-Os in EmbeddedPayload — IPA may already be clear, or embed missed DRM binaries.")
-        } else {
-            log("DRM confirmed: \(before.encrypted) encrypted Mach-O(s) to clear.")
         }
 
         let work = fm.temporaryDirectory.appendingPathComponent("tl-export-\(UUID().uuidString)", isDirectory: true)
@@ -138,21 +116,12 @@ enum DecryptCompanionRuntime {
         log("Copying app bundle…")
         try copyTree(from: src, to: destApp)
 
-        // 2) FairPlayed modern path: decrypt FROM EmbeddedPayload (+ SINF restage) into the
-        // writable Payload copy. Live App Store install is an optional self-heal only.
-        DecryptCompanionController.shared.statusTitle = "2/5 · Decrypting…"
+        // FairPlayed path: EmbeddedPayload first; live install is a silent optional heal.
         let progressBridge: @Sendable (String) -> Void = { msg in
             progress?(msg)
             Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
         }
-        log("FairPlayed path: decrypting from EmbeddedPayload (+ SINF restage)…")
         let liveRead = Self.preferredLiveInstallURL(embeddedApp: src, manifest: man)
-        if let live = liveRead {
-            log("Live App Store install kept as optional self-heal if embed EPERMs:")
-            log(live.path)
-        } else {
-            log("No live install on device — embed-only (FairPlayed happy path). Keys come from Media & Purchases.")
-        }
         let outcome = try FairPlaySelfHeal.healAndDecrypt(
             context: FairPlaySelfHeal.Context(
                 readingFrom: src,
@@ -160,18 +129,15 @@ enum DecryptCompanionRuntime {
                 liveInstall: liveRead,
                 embeddedOrIPA: src,
                 maxRounds: 4,
+                quietConsole: true,
                 progress: progressBridge
             )
         )
         let report = outcome.report
-        if !outcome.strategiesApplied.isEmpty {
-            log("Self-heal strategies: \(outcome.strategiesApplied.map(\.rawValue).joined(separator: ", "))")
-        }
         let decN = report.decrypted.count
         let plainN = report.plain.count
         log("Done: \(decN) decrypted, \(plainN) already plain.")
 
-        // Companion refuses PARTIAL success — “real DRM” means required Mach-Os cleared.
         if report.isPartial || !report.failed.isEmpty {
             let names = report.failed.prefix(6).joined(separator: ", ")
             throw FairPlayDecryptError.stillEncrypted(
@@ -184,15 +150,10 @@ enum DecryptCompanionRuntime {
             )
         }
 
-        // 3) Post-decrypt audit on the writable Payload tree (before packaging).
-        DecryptCompanionController.shared.statusTitle = "3/5 · Verifying…"
-        log("DRM audit (after decrypt): verifying copied Payload…")
+        DecryptCompanionController.shared.statusTitle = "Done — saving automatically…"
         let afterCopy = try FairPlayDecrypt.verifyApp(at: destApp)
-        logAudit(afterCopy, prefix: "AFTER", log: log)
         try assertFullyClear(afterCopy, stage: "copied Payload")
 
-        // 4) Strip SC_Info / license crumbs, zip clear IPA.
-        DecryptCompanionController.shared.statusTitle = "4/5 · Packaging…"
         log("Packaging \(name)-decrypted.ipa…")
         try stripLicenseArtifacts(in: destApp)
 
@@ -209,25 +170,14 @@ enum DecryptCompanionRuntime {
         try fm.zipItem(at: payload, to: tmpZip, shouldKeepParent: true, compressionMethod: .deflate)
         try fm.moveItem(at: tmpZip, to: outIPA)
 
-        // 5) Double-check the packaged IPA itself (FairPlayed verify_ipa.sh).
-        DecryptCompanionController.shared.statusTitle = "5/5 · Verifying IPA…"
-        log("DRM audit (packaged IPA): unpacking and verifying every Mach-O…")
         let ipaVerify = try FairPlayDecrypt.verifyIPA(at: outIPA)
-        logAudit(ipaVerify, prefix: "IPA", log: log)
         try assertFullyClear(ipaVerify, stage: "packaged IPA")
-
-        if before.encrypted > 0 {
-            log("VERIFY OK: cleared \(before.encrypted) FairPlay Mach-O(s) · \(ipaVerify.summary)")
-        } else {
-            log("VERIFY OK: IPA already clear · \(ipaVerify.summary)")
-        }
 
         DecryptCompanionController.shared.verifySummary = ipaVerify.summary
         DecryptCompanionController.shared.markFinished(url: outIPA, name: name)
         DecryptCompanionController.shared.statusTitle = "Done"
-        log("IPA is in this companion’s Documents/Decrypted.")
+        log("Wrote \(safeName)-decrypted.ipa.")
 
-        // Hand the clear IPA back to the host (App Group → tetherless://decrypt-export).
         let info = NSDictionary(contentsOf: src.appendingPathComponent("Info.plist")) as? [String: Any]
         let bundleID = (info?["CFBundleIdentifier"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -240,10 +190,7 @@ enum DecryptCompanionRuntime {
         )
         DecryptCompanionController.shared.exportSentToHost = published
         if published {
-            log("Sent clear IPA to TetherLess via App Group — opening host…")
             DecryptCompanionHandoff.openHostForClearIPAImport()
-        } else {
-            log("App Group unavailable — use Share to send the IPA to TetherLess (Open in TetherLess).")
         }
         return outIPA
     }
@@ -373,26 +320,6 @@ enum DecryptCompanionRuntime {
     }
 
     // MARK: - Audit helpers
-
-    private static func logAudit(_ report: FairPlayVerifyReport, prefix: String, log: (String) -> Void) {
-        log("[\(prefix)] \(report.summary) · \(report.entries.count) Mach-O(s)")
-        for e in report.entries where e.isEncrypted {
-            let detail = e.detail.isEmpty ? "cryptid=\(e.cryptid)" : e.detail
-            log("[\(prefix) DRM] \(e.path) · \(detail)")
-        }
-        for e in report.entries where e.isUnknown {
-            let detail = e.detail.isEmpty ? "unknown" : e.detail
-            log("[\(prefix) UNKNOWN] \(e.path) · \(detail)")
-        }
-        if prefix == "AFTER" || prefix == "IPA" {
-            for e in report.entries where !e.isEncrypted && !e.isUnknown && e.cryptid == 0 {
-                // Keep the log readable — only first wave of clears when many.
-                if report.clear + report.plain <= 40 || e.path.split(separator: "/").count <= 2 {
-                    log("[\(prefix) CLEAR] \(e.path) · cryptid=0")
-                }
-            }
-        }
-    }
 
     private static func assertFullyClear(_ report: FairPlayVerifyReport, stage: String) throws {
         guard !report.entries.isEmpty else {

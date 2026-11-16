@@ -427,9 +427,11 @@ enum FairPlayDecrypt {
     static func decryptMachOs(
         readingFrom sourceApp: URL,
         writingTo destApp: URL,
+        quietConsole: Bool = false,
         progress: ((String) -> Void)? = nil
     ) throws -> FairPlayDecryptReport {
         var report = FairPlayDecryptReport()
+        let detail: ((String) -> Void)? = quietConsole ? nil : progress
         // Never write decrypted binaries (or SINF staging) into a live App Store container.
         if isLiveAppStoreInstall(destApp) {
             throw FairPlayDecryptError.failed(
@@ -440,15 +442,15 @@ enum FairPlayDecrypt {
         // SinfReplicationPaths entry. Never write into a live App Store install container —
         // SC_Info reads/writes there hung decrypt on “Decrypting Mach-Os…”.
         if isLiveAppStoreInstall(sourceApp) {
-            progress?("Using live install licenses (no SINF staging)…")
+            detail?("Using live install licenses (no SINF staging)…")
         } else {
             let staged = replicateSinfs(in: sourceApp)
             report.sinfsReplicated = staged
-            if staged > 0 { progress?("Staged \(staged) Manifest SINF license(s)…") }
+            if staged > 0 { detail?("Staged \(staged) Manifest SINF license(s)…") }
         }
 
-        progress?("Locating Mach-Os under \(isLiveAppStoreInstall(sourceApp) ? "install path" : "app bundle")…")
-        let binaries = try collectMachOs(under: sourceApp, progress: progress)
+        detail?("Locating Mach-Os under \(isLiveAppStoreInstall(sourceApp) ? "install path" : "app bundle")…")
+        let binaries = try collectMachOs(under: sourceApp, progress: detail)
         guard !binaries.isEmpty else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(sourceApp.lastPathComponent).")
         }
@@ -473,13 +475,13 @@ enum FairPlayDecrypt {
             let perBinary = stageSinfsForEncryptedBinaries(encryptedBins, in: sourceApp)
             report.sinfsReplicated += perBinary
             if perBinary > 0 {
-                progress?("Staged \(perBinary) per-binary SINF license(s)…")
+                detail?("Staged \(perBinary) per-binary SINF license(s)…")
             }
         }
 
         progress?("Decrypting \(binaries.count) Mach-O file(s)…")
         if encCount > 0 {
-            progress?("(\(encCount) encrypted slice(s) to clear)")
+            detail?("(\(encCount) encrypted slice(s) to clear)")
         }
 
         let ordered = prioritizeBinaries(binaries, app: sourceApp)
@@ -487,9 +489,9 @@ enum FairPlayDecrypt {
             throw FairPlayDecryptError.failed("No Mach-O binaries found.")
         }
 
-        // Serial decrypt with live FairPlayed-style console lines (competition companion).
+        // Serial decrypt — companion quiet console keeps only result tags.
         for (index, file) in ordered.enumerated() {
-            pauseIfMemoryPressure(progress: progress)
+            pauseIfMemoryPressure(progress: detail)
             let r = role(of: file, under: sourceApp, app: sourceApp)
             let rel = relativePath(file, under: sourceApp)
             let budget: TimeInterval = (r == .main) ? 180 : 90
@@ -544,7 +546,7 @@ enum FairPlayDecrypt {
             sourceApp: sourceApp,
             destApp: destApp,
             report: &report,
-            progress: progress
+            progress: detail
         )
 
         // FairPlayed-style -PARTIAL.ipa: if the main executable is clear, keep going even when
@@ -554,7 +556,7 @@ enum FairPlayDecrypt {
                 || report.plain.contains { isMainExecutable($0, app: sourceApp) }
             if mainClear {
                 report.isPartial = true
-                progress?("Main clear — packaging PARTIAL (\(report.failed.count) required leftover)…")
+                detail?("Main clear — packaging PARTIAL (\(report.failed.count) required leftover)…")
             } else {
                 throw FairPlayDecryptError.stillEncrypted(
                     "FairPlay left \(report.failed.count) required binary(ies) encrypted: \(report.failed.prefix(4).joined(separator: ", "))\(report.failed.count > 4 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
