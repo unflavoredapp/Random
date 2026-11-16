@@ -117,29 +117,39 @@ final class DeveloperPortalClient: ObservableObject {
         session auth: AppleAuthSession,
         team: Team
     ) async throws -> (certificate: DevCertificate, privateKeyPEM: String) {
-        let created = try await createDevelopmentCertificate(machineName: machineName, auth: auth, team: team)
+        let created = try await createDevelopmentCertificate(
+            machineName: machineName,
+            machineId: nil,
+            auth: auth,
+            team: team
+        )
         return (created.certificate, String(data: created.privateKeyPEM, encoding: .utf8) ?? created.csr.privateKeyPEM)
     }
 
     /// Create a new iOS Development certificate via CSR.
     func createDevelopmentCertificate(
         machineName: String,
+        machineId: String? = nil,
         auth: AppleAuthSession,
         team: Team
     ) async throws -> (certPEM: Data, privateKeyPEM: Data, certificate: DevCertificate, csr: CSRBuilder.Result) {
         let csr = try CSRBuilder.generate(commonName: machineName)
+        let mid = (machineId?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
+            ?? auth.anisette.deviceID
         let dict = try await sendPlist(
             path: "/ios/submitDevelopmentCSR.action",
             parameters: [
                 "csrContent": csr.csrPEM,
                 "machineName": machineName,
-                "machineId": UUID().uuidString.uppercased()
+                "machineId": mid.isEmpty ? UUID().uuidString.uppercased() : mid.uppercased()
             ],
             session: auth,
             teamId: team.id,
             resultCodeHandler: { code, message in
                 if code == 3250 { return AppleAuthError.csrFailed(message) }
-                if code == 35 || code == 7460 { return AppleAuthError.portal(code, message) }
+                if code == 35 || code == 7460 || code == 1200 {
+                    return AppleAuthError.portal(code, message)
+                }
                 return nil
             }
         )
@@ -407,6 +417,12 @@ final class DeveloperPortalClient: ObservableObject {
             let id = (item["id"] as? String) ?? ""
             guard !id.isEmpty else { return nil }
             let attrs = item["attributes"] as? [String: Any] ?? [:]
+            // Prefer iOS Development certs; skip distribution when the type is present.
+            if let type = (attrs["certificateType"] as? String)?.uppercased(),
+               !type.contains("DEVELOPMENT"),
+               type.contains("DISTRIBUTION") || type.contains("IOS_DISTRIBUTION") {
+                return nil
+            }
             let name = (attrs["displayName"] as? String)
                 ?? (attrs["name"] as? String)
                 ?? id

@@ -864,21 +864,38 @@ enum FairPlayDecrypt {
         // fairplayd would look for SC_Info next to the writable copy and fail.
         // Prefer reconstructing from sourceApp+rel so /var vs /private/var aliases can't
         // accidentally point mremap at the writable Payload copy.
-        let inFile = sourceApp.appendingPathComponent(rel)
+        let inFile = appendingRelativePath(root: sourceApp, relative: rel)
         var isDir: ObjCBool = false
         let readable = FileManager.default.fileExists(atPath: inFile.path, isDirectory: &isDir) && !isDir.boolValue
         let decryptInput = readable ? inFile : file
         progress?("Decrypting \(rel) (\(index + 1)/\(total))…")
 
-        let outFile = destApp.appendingPathComponent(rel)
+        let outFile = appendingRelativePath(root: destApp, relative: rel)
         try? fm.createDirectory(at: outFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         let tmp = outFile.appendingPathExtension("fpdec")
         try? fm.removeItem(at: tmp)
 
+        pauseIfMemoryPressure(progress: progress)
         let logBuf = FairPlayLogBuffer()
-        let rc = decryptInput.path.withCString { inPath in
+        var rc = decryptInput.path.withCString { inPath in
             tmp.path.withCString { outPath in
                 fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
+            }
+        }
+        // Main-binary ENOMEM: brief memory pause + one retry before failing the IPA.
+        if rc != 0 && rc != 1 && role == .main {
+            let klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
+            if klass == .outOfMemory {
+                progress?("Main executable hit mremap ENOMEM — freeing memory and retrying once…")
+                try? fm.removeItem(at: tmp)
+                Thread.sleep(forTimeInterval: 1.2)
+                pauseIfMemoryPressure(progress: progress)
+                logBuf.clear()
+                rc = decryptInput.path.withCString { inPath in
+                    tmp.path.withCString { outPath in
+                        fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
+                    }
+                }
             }
         }
 
@@ -1477,14 +1494,14 @@ enum FairPlayDecrypt {
     }
 
     private static func relativePath(_ file: URL, under root: URL) -> String {
-        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        let path = file.standardizedFileURL.path
-        let rootPath = root.standardizedFileURL.path.hasSuffix("/")
-            ? root.standardizedFileURL.path
-            : root.standardizedFileURL.path + "/"
-        if path.hasPrefix(rootPath) {
-            return String(path.dropFirst(rootPath.count))
+        let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let rootPrefix = resolvedRoot.hasSuffix("/") ? resolvedRoot : resolvedRoot + "/"
+        let path = file.resolvingSymlinksInPath().standardizedFileURL.path
+        if path.hasPrefix(rootPrefix) {
+            let rel = String(path.dropFirst(rootPrefix.count))
+            return rel.contains("..") ? file.lastPathComponent : rel
         }
+        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
         if file.path.hasPrefix(prefix) {
             return String(file.path.dropFirst(prefix.count))
         }
@@ -1492,24 +1509,41 @@ enum FairPlayDecrypt {
     }
 
     /// Reject `..`, absolute paths, and escapes outside `root` (SINF / embed staging).
+    /// Builds the child URL component-by-component — `appendingPathComponent` with embedded
+    /// `/` is unreliable across Foundation versions and caused TestFlight slim-embed to skip
+    /// every Mach-O (`Frameworks/…`, `PlugIns/…`) even when the relative path was safe.
     static func secureChildURL(root: URL, relative: String) -> URL? {
         let rel = relative.trimmingCharacters(in: .whitespacesAndNewlines)
         if rel.isEmpty || rel.hasPrefix("/") || rel.contains("\0") { return nil }
-        if rel.contains("..") { return nil }
-        let parts = rel.split(separator: "/").map(String.init)
-        if parts.contains("..") || parts.contains("") { return nil }
-        let url = root.appendingPathComponent(rel).standardizedFileURL
-        let rootPath = root.standardizedFileURL.path
-        let child = url.path
-        guard child == rootPath || child.hasPrefix(rootPath.hasSuffix("/") ? rootPath : rootPath + "/") else {
+        let parts = rel.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        if parts.isEmpty || parts.contains("..") || parts.contains(".") { return nil }
+        var url = root
+        for part in parts {
+            if part.isEmpty || part == ".." || part == "." { return nil }
+            url = url.appendingPathComponent(part, isDirectory: false)
+        }
+        // Compare with symlink resolution so `/var` vs `/private/var` aliases don't false-reject.
+        let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+        let child = url.resolvingSymlinksInPath().standardizedFileURL.path
+        let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        guard child == rootPath || child.hasPrefix(rootPrefix) else {
             return nil
         }
         return url
     }
 
+    /// Join `root` + relative path components without `appendingPathComponent("a/b")` pitfalls.
+    static func appendingRelativePath(root: URL, relative: String) -> URL {
+        let parts = relative.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        return parts.reduce(root) { $0.appendingPathComponent($1, isDirectory: false) }
+    }
+
     /// Brief pause when fpcore reports tight memory so Jetsam is less likely mid-decrypt.
     private static func pauseIfMemoryPressure(progress: ((String) -> Void)?) {
-        if fp_memory_tight_for(48 * 1024 * 1024) != 0 {
+        if fp_memory_tight_for(64 * 1024 * 1024) != 0 {
+            progress?("Low memory — pausing before next Mach-O…")
+            Thread.sleep(forTimeInterval: 0.8)
+        } else if fp_memory_tight_for(48 * 1024 * 1024) != 0 {
             progress?("Low memory — pausing before next Mach-O…")
             Thread.sleep(forTimeInterval: 0.4)
         }
@@ -1641,6 +1675,12 @@ enum FairPlayDecrypt {
 private final class FairPlayLogBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private(set) var lines: [String] = []
+
+    func clear() {
+        lock.lock()
+        lines.removeAll(keepingCapacity: true)
+        lock.unlock()
+    }
 
     func append(_ line: String) {
         lock.lock()

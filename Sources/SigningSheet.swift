@@ -1353,19 +1353,17 @@ struct SigningSheet: View {
             certs.activeID = c.id
         }
         if method == "appleid" {
-            appleIDs.activatePreferredSigningCertificate()
             if appleIDs.activeAccount == nil {
                 error = "Sign in with an Apple ID under Account first."
                 return
             }
-            if appleIDs.preferredSigningCertificateID() == nil {
-                do {
-                    log.append(">>> Creating free Apple ID development certificate…")
-                    _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
-                } catch {
-                    self.error = "Couldn't prepare a free Apple ID certificate: \(error.localizedDescription). Sign in again under Account and retry."
-                    return
-                }
+            // Always ensure — preferred ID may exist but be expired / unlinked / wrong cert.
+            do {
+                log.append(">>> Ensuring free Apple ID development certificate…")
+                _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
+            } catch {
+                self.error = "Couldn't prepare a free Apple ID certificate: \(error.localizedDescription). Sign in again under Account and retry."
+                return
             }
             appleIDs.activatePreferredSigningCertificate()
         }
