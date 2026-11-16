@@ -556,6 +556,8 @@ enum IPadnStoreDownload {
         return names.compactMap { name in values[name].map { "\(name)=\($0)" } }.joined(separator: "; ")
     }
 
+    /// Native `URLSessionDownloadTask` (same as upstream iPadn) — not AsyncBytes-per-byte,
+    /// which crawls on multi-hundred-MB IPAs.
     private static func downloadFile(
         from url: URL,
         to destination: URL,
@@ -564,43 +566,31 @@ enum IPadnStoreDownload {
         var req = URLRequest(url: url)
         req.setValue(IPadnHTTPClient.userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
-        let (bytes, response) = try await URLSession.shared.bytes(for: req)
-        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else {
-            throw IPadnToolError.message("IPA download failed (HTTP \(status)).")
-        }
-        let expected = (response as? HTTPURLResponse)
-            .flatMap { $0.value(forHTTPHeaderField: "Content-Length") }
-            .flatMap(Int64.init) ?? 0
-        try? FileManager.default.removeItem(at: destination)
-        try FileManager.default.createDirectory(
-            at: destination.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        FileManager.default.createFile(atPath: destination.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: destination)
-        defer { try? handle.close() }
-        var written: Int64 = 0
-        var buffer = Data()
-        buffer.reserveCapacity(64 * 1024)
-        for try await byte in bytes {
-            buffer.append(byte)
-            if buffer.count >= 64 * 1024 {
-                try handle.write(contentsOf: buffer)
-                written += Int64(buffer.count)
-                buffer.removeAll(keepingCapacity: true)
-                if expected > 0 {
-                    let pct = Int((Double(written) / Double(expected)) * 100)
-                    onProgress?("Downloading… \(pct)% (\(Self.formatBytes(written)) / \(Self.formatBytes(expected)))")
-                }
+        let gate = ProgressGate()
+        try await IPadnCDNDownload.run(request: req, destination: destination) { written, expected in
+            guard gate.shouldReport(written: written) else { return }
+            if expected > 0 {
+                let pct = Int((Double(written) / Double(expected)) * 100)
+                onProgress?(
+                    "Downloading… \(pct)% (\(Self.formatBytes(written)) / \(Self.formatBytes(expected)))"
+                )
+            } else {
+                onProgress?("Downloading… \(Self.formatBytes(written))")
             }
         }
-        if !buffer.isEmpty {
-            try handle.write(contentsOf: buffer)
-            written += Int64(buffer.count)
-        }
-        guard written > 0 else {
-            throw IPadnToolError.message("IPA download produced an empty file.")
+    }
+
+    /// Throttle progress callbacks to ~1 MB so the main actor isn't flooded.
+    private final class ProgressGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var lastBucket: Int64 = -1
+        func shouldReport(written: Int64) -> Bool {
+            let bucket = written / (1024 * 1024)
+            lock.lock()
+            defer { lock.unlock() }
+            guard bucket != lastBucket else { return false }
+            lastBucket = bucket
+            return true
         }
     }
 
@@ -697,5 +687,108 @@ enum IPadnStoreDownload {
         let f = ByteCountFormatter()
         f.countStyle = .file
         return f.string(fromByteCount: n)
+    }
+}
+
+/// Foreground CDN download via `URLSessionDownloadTask` (kernel-buffered, not Swift AsyncBytes).
+private final class IPadnCDNDownload: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var onProgress: ((Int64, Int64) -> Void)?
+    private var destination: URL?
+    private var finished = false
+    private let lock = NSLock()
+
+    static func run(
+        request: URLRequest,
+        destination: URL,
+        onProgress: @escaping (Int64, Int64) -> Void
+    ) async throws {
+        let runner = IPadnCDNDownload()
+        try await runner.start(request: request, destination: destination, onProgress: onProgress)
+    }
+
+    private func start(
+        request: URLRequest,
+        destination: URL,
+        onProgress: @escaping (Int64, Int64) -> Void
+    ) async throws {
+        self.destination = destination
+        self.onProgress = onProgress
+        let config = URLSessionConfiguration.default
+        config.httpMaximumConnectionsPerHost = 4
+        config.timeoutIntervalForRequest = 60
+        config.timeoutIntervalForResource = 24 * 3600
+        config.waitsForConnectivity = true
+        let session = URLSession(configuration: config, delegate: self, delegateQueue: nil)
+        defer { session.finishTasksAndInvalidate() }
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
+                self.lock.lock()
+                self.continuation = cont
+                self.lock.unlock()
+                let task = session.downloadTask(with: request)
+                task.resume()
+            }
+        } onCancel: {
+            session.invalidateAndCancel()
+        }
+    }
+
+    private func resumeOnce(_ result: Result<Void, Error>) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard !finished, let cont = continuation else { return }
+        finished = true
+        continuation = nil
+        cont.resume(with: result)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        onProgress?(totalBytesWritten, totalBytesExpectedToWrite)
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        do {
+            let status = (downloadTask.response as? HTTPURLResponse)?.statusCode ?? 0
+            guard (200..<300).contains(status) else {
+                throw IPadnToolError.message("IPA download failed (HTTP \(status)).")
+            }
+            guard let destination else {
+                throw IPadnToolError.message("IPA download missing destination.")
+            }
+            let fm = FileManager.default
+            try fm.createDirectory(
+                at: destination.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? fm.removeItem(at: destination)
+            // Must move before this delegate returns — the temp file is deleted after.
+            try fm.moveItem(at: location, to: destination)
+            let size = (try? fm.attributesOfItem(atPath: destination.path)[.size] as? NSNumber)?
+                .int64Value ?? 0
+            guard size > 0 else {
+                throw IPadnToolError.message("IPA download produced an empty file.")
+            }
+            resumeOnce(.success(()))
+        } catch {
+            resumeOnce(.failure(error))
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error {
+            resumeOnce(.failure(error))
+        }
+        // Success path already resumed in didFinishDownloadingTo.
     }
 }
