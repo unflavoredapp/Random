@@ -357,7 +357,10 @@ enum IPadnStoreDownload {
             displayVersion: display,
             rawShortVersion: rawShort,
             buildVersion: rawBuild,
-            fileSize: (assetInfo?["file-size"] as? NSNumber)?.int64Value.flatMap { $0 > 0 ? $0 : nil },
+            fileSize: {
+                guard let size = (assetInfo?["file-size"] as? NSNumber)?.int64Value, size > 0 else { return nil }
+                return size
+            }(),
             minimumOS: minOS,
             externalVersionId: versionID
         )
