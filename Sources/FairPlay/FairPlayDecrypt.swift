@@ -1281,8 +1281,7 @@ enum FairPlayDecrypt {
             var error: Error?
         }
         let job = Job()
-        let fm = FileManager.default
-        let stagingRoot = fm.temporaryDirectory.appendingPathComponent(
+        let stagingRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
             "fpdec-job-\(UUID().uuidString)", isDirectory: true
         )
         let stagingApp = stagingRoot.appendingPathComponent("Staging.app", isDirectory: true)
@@ -1291,6 +1290,8 @@ enum FairPlayDecrypt {
         let sem = DispatchSemaphore(value: 0)
 
         DispatchQueue.global(qos: .userInitiated).async {
+            // Use FileManager.default inside the worker — don't capture a non-Sendable instance.
+            let fm = FileManager.default
             defer {
                 try? fm.removeItem(at: stagingRoot)
                 sem.signal()
@@ -1490,7 +1491,7 @@ enum FairPlayDecrypt {
 
     /// Reject `..`, absolute paths, and escapes outside `root` (SINF / embed staging).
     static func secureChildURL(root: URL, relative: String) -> URL? {
-        var rel = relative.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rel = relative.trimmingCharacters(in: .whitespacesAndNewlines)
         if rel.isEmpty || rel.hasPrefix("/") || rel.contains("\0") { return nil }
         if rel.contains("..") { return nil }
         let parts = rel.split(separator: "/").map(String.init)

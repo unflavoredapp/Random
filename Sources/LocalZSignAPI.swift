@@ -116,13 +116,20 @@ private actor LocalZSignJobStore {
                 }
                 jobs[j.id] = j
             }
-            persist()
+            // Actor `init` is nonisolated — persist via static helper, not `persist()`.
+            Self.writeJobs(Array(jobs.values), to: fileURL)
         }
     }
 
     private func persist() {
-        let newest = jobs.values.sorted { $0.createdAt > $1.createdAt }.prefix(100)
-        if let data = try? JSONEncoder().encode(Array(newest)) { try? data.write(to: fileURL, options: .atomic) }
+        Self.writeJobs(Array(jobs.values.sorted { $0.createdAt > $1.createdAt }.prefix(100)), to: fileURL)
+    }
+
+    /// Disk write is pure I/O — safe from actor init and from isolated `persist()`.
+    private nonisolated static func writeJobs(_ jobs: [LocalZSignJob], to fileURL: URL) {
+        if let data = try? JSONEncoder().encode(jobs) {
+            try? data.write(to: fileURL, options: .atomic)
+        }
     }
 
     private static let terminal: Set<String> = ["completed", "failed", "cancelled", "interrupted"]
