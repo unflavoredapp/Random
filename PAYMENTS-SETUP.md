@@ -1,3 +1,4 @@
+<!-- Brand: Tetherless · https://tetherless.dev -->
 # AirShare Premium: Litecoin payments
 
 Premium is paid in Litecoin (LTC), inside the app. There is no payment company: the server only holds your

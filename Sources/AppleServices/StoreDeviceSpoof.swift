@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  StoreDeviceSpoof.swift
 //  Optional App Store request identity (iOS version / device model) used by
 //  AppStoreClient so Apple can serve a compatible IPA variant.

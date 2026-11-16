@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SignedView.swift
 //  Signed tab — every IPA signed on this device: reinstall, share, delete.
 //
@@ -233,7 +234,7 @@ struct AppActionSheet: View {
             }
             .padding(.horizontal, 20)
 
-            Text("Made by ᴍƦᴢᴇꜰΛ").font(.system(size: 13, weight: .semibold))
+            Text("Made by Tetherless").font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Theme.subtle).padding(.top, 18).padding(.bottom, 8)
 
             Spacer(minLength: 0)

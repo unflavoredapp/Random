@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SignEngine.swift
 //  On-device signing: zsign wrapper, IPA sign pipeline, IPA metadata reader,
 //  stdout capture. Ported from AirShareLite. Everything here is `nonisolated`

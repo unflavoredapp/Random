@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Persists the staff-selected AVX512 dylib outside the public Documents area.

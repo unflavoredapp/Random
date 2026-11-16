@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionInstaller.swift
 //  Sign + install the companion “Tetherless Decrypt” app with the user’s Apple ID
 //  certificate (trust in Settings › General › VPN & Device Management on first run),

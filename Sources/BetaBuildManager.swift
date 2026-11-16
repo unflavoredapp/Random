@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  BetaBuildManager.swift
 //  Lets a beta-group member pick which detected beta builds actually get pinned/badged in Browse —
 //  without this, every third-party app whose name or bundle happens to contain "beta" floods the top

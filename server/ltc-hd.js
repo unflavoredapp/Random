@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Watch-only address derivation from an extended PUBLIC key (BIP32 public derivation + native segwit bech32 addresses).
 // No dependencies and no private keys: the server can make receive addresses but can never spend from them.

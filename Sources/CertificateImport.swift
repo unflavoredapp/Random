@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  CertificateImport.swift
 //  Helpers for the Certificates screen: sorting picked files (or a .zip) into certificate / profile /
 //  password, exporting a certificate as a re-importable .zip, and the certificate badge picture.

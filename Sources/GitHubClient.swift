@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  GitHubClient.swift
 //  Pushes an extracted file tree into a repo as a single commit using the
 //  Git Data API (blobs -> tree -> commit -> move ref).

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionPackager.swift
 //  Builds a real second app (“Tetherless Decrypt”) bundled from this process:
 //  clone our executable + Frameworks, embed the encrypted target under

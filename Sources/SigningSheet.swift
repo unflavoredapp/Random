@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SigningSheet.swift
 //  Full-screen signing sheet in the AirShare layout: signing method (active cert),
 //  app icon replace, name/bundle/version, build-option groups (General, Strip
@@ -1067,7 +1068,7 @@ struct SigningSheet: View {
             .disabled(repackageDisabled)
 
             VStack(spacing: 2) {
-                Text("Made by ᴍƦᴢᴇꜰΛ").font(.system(size: 14, weight: .bold)).foregroundStyle(.orange).lineLimit(1).minimumScaleFactor(0.7)
+                Text("Made by Tetherless").font(.system(size: 14, weight: .bold)).foregroundStyle(.orange).lineLimit(1).minimumScaleFactor(0.7)
                 Text("Powered by DELVEK.NET").font(.system(size: 9, weight: .semibold)).foregroundStyle(accent).lineLimit(1).minimumScaleFactor(0.6)
             }
             .frame(maxWidth: .infinity)
@@ -5349,7 +5350,7 @@ struct SigningTerminalView: View {
                 .disabled(result == nil)
 
                 VStack(spacing: 2) {
-                    Text("ᴍƦᴢᴇꜰΛ")
+                    Text("Tetherless")
                         .font(.system(size: 14, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.92))
                     Text("Powered by DELvEK.NET")
@@ -5474,7 +5475,7 @@ struct InstallPromptOverlay: View {
                             }
                             if appGroups.isEmpty && keychainGroups.isEmpty { Text("None").font(.caption).foregroundStyle(Theme.subtle) }
                         }
-                        Text("\(source) | ᴍƦᴢᴇꜰΛ").font(.system(size: 12, weight: .semibold)).foregroundStyle(blue).padding(.vertical, 12)
+                        Text("\(source) | tetherless.dev").font(.system(size: 12, weight: .semibold)).foregroundStyle(blue).padding(.vertical, 12)
                     }
                 }
                 .fixedSize(horizontal: false, vertical: true)

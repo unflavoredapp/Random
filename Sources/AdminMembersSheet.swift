@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AdminMembersSheet.swift
 //  Admin-only: put members in groups (Admin, Co-Admin, Staff, Sponsor, …) and set a sponsor.
 //  The server rejects these calls for anyone who isn't an admin.

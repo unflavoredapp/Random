@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnAppDetailView.swift
 //  English App Detail + Version History — mengangs/ipadn AppDetailView structure (GPL-2.0).
 //

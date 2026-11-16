@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IconCache.swift
 //  Memory (decoded UIImage) + disk (URLCache) icon cache with a prefetcher.
 //  SourceIcon reads the memory tier synchronously, so a prefetched icon never

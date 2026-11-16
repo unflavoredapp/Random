@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  PremiumCardPay.swift
 //  Pay for Premium by card with Stripe's PaymentSheet, inside the app (no Safari).
 //

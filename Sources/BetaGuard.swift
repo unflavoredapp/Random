@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  BetaGuard.swift
 //  Closed-beta builds of AirShare only. Every beta build asks the server whether this device's ADID still has beta
 //  access. If the account was banned or taken out of the beta group, the build locks itself and removes itself from

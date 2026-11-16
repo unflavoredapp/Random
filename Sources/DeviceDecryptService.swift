@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DeviceDecryptService.swift
 //  On-device decrypt: hardened FairPlay mremap on apps installed on this iPhone
 //  (App Store keys + SC_Info). When the app isn’t installed yet, Device mode opens

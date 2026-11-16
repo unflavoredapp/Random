@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  CertPipeline.swift
 //  The certbot pipeline files, embedded so the app can install them into any
 //  repo with one tap (Settings › AirShare Domain › Link repo / Update pipeline).

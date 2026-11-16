@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Finds dynamic-image enumeration and instrumentation-name indicators.

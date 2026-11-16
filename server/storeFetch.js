@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 /**
  * Backend encrypted-IPA fetch — device keeps FairPlay local.

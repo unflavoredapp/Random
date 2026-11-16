@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  StaffGate.swift
 //  Server-decided role gate. The list of staff device IDs lives on the VPS
 //  (tetherless.dev/app/v1/roles) — never in the IPA, so it can't be pulled out

@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Premium by card with Stripe PaymentSheet (the app shows Stripe's native sheet: card, Apple Pay, Link).
 // No stripe npm package: the server talks to Stripe's REST API with fetch and checks webhook signatures itself.

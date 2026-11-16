@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnIPAPackager.swift
 //  Write iTunesMetadata + FairPlay sinfs into a CDN IPA (mengangs/ipadn PackageService style).
 //

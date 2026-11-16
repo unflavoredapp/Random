@@ -1,3 +1,4 @@
+<!-- Brand: Tetherless · https://tetherless.dev -->
 # On-device OTA over tetherless.dev
 
 `tetherless.dev` is TetherLess’s replacement for the discontinued **backloop.dev** loopback-HTTPS trick:

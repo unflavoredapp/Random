@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SlugText.swift
 //  AirShare
 //
@@ -132,7 +133,7 @@ struct OnboardingView: View {
 
             Spacer()
 
-            Text("TetherLess · ᴍƦᴢᴇꜰΛ · DELvEK.net")
+            Text("Tetherless · tetherless.dev · DELvEK.net")
                 .font(.system(size: 12))
                 .foregroundStyle(.gray.opacity(0.55))
                 .padding(.bottom, 38)
@@ -519,7 +520,7 @@ struct OnboardingView: View {
                 VStack(spacing: 4) {
                     HStack(spacing: 4) {
                         Text("Made by").foregroundStyle(.white.opacity(0.5))
-                        Text("ᴍƦᴢᴇꜰΛ").foregroundStyle(.white)
+                        Text("Tetherless").foregroundStyle(.white)
                     }
                     .font(.system(size: 13))
 

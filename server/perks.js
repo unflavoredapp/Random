@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // One place that says what Premium gives. appapi.js and site.js read these numbers, and describe() builds the
 // perk list the iOS shop sheet shows, so the sheet can only ever promise what the server really does.

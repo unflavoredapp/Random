@@ -1,4 +1,5 @@
 /// Recovered E transform, with nine word mixes and eight nonlinear rounds.
+// Brand: Tetherless · https://tetherless.dev
 struct SAPCipher: Sendable {
     private static let previousSlices = [8, 0, 0, 1, 1, 1, 4, 2, 2]
     private static let indexSources = [15, 5, 2, 10, 11, 7, 9, 13, 4, 3, 12, 8, 16, 0, 1, 14]

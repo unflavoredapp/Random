@@ -1,4 +1,5 @@
 //===- llvm/Support/LEB128.h - [SU]LEB128 utility functions -----*- C++ -*-===//
+// Brand: Tetherless · https://tetherless.dev
 //
 //                     The LLVM Compiler Infrastructure
 //

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DecryptHomeChrome.swift
 //  TetherLess Decrypt tab chrome — centered header, DRM-free hero, signed-in
 //  store card, search field, and pick-encrypted-IPA card.

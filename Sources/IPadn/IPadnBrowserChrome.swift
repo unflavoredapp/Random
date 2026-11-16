@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnBrowserChrome.swift
 //  In-app iPadn region/platform controls + quick search (mengangs/ipadn).
 //  Main Decrypt search bar already uses IPadnStoreClient when enabled.

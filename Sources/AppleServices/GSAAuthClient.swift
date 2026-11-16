@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  GSAAuthClient.swift
 //  Real Apple GrandSlam SRP authentication + trusted-device / SMS 2FA.
 //  Pattern from SideSign Authentication.swift — no simulated delays or fake codes.

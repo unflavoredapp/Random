@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AnisetteClient.swift
 //  Remote anisette (v3) for GrandSlam — provision via WebSocket when adi_pb is missing.
 //  Default server: https://ani.jkcoxson.com

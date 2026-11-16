@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  NativeBatchUninstaller.swift
 //  Uninstalls several apps in one native session, the same way NativeBatchInstaller installs them:
 //  one VPN/tunnel for the whole batch, two apps in flight at a time, pause/resume, a background hold

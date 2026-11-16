@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnSettingsView.swift
 //  English Settings — structure from mengangs/ipadn SettingsView (GPL-2.0).
 //  Account › Settings uses this only; the legacy TetherLess Settings chrome is not shown.
@@ -83,22 +84,30 @@ struct IPadnSettingsView: View {
                 }
 
                 Section {
-                    HStack(alignment: .center, spacing: 14) {
-                        Image(systemName: "app.fill")
-                            .font(.system(size: 28, weight: .semibold))
-                            .foregroundStyle(.white)
-                            .frame(width: 52, height: 52)
-                            .background(TetherlessPalette.accent.opacity(0.85), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                        VStack(alignment: .leading, spacing: 3) {
-                            HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                Text("iPadn").font(.headline)
-                                Text(appVersion).font(.subheadline).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .center, spacing: 14) {
+                            Image(systemName: "app.fill")
+                                .font(.system(size: 28, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 52, height: 52)
+                                .background(TetherlessPalette.accent.opacity(0.85), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                    Text(TetherlessBrand.name).font(.headline)
+                                    Text(appVersion).font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                Text("Search, download, sign, and install — branded at tetherless.dev.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
-                            Text("Search, download, and manage app packages you’re licensed to use — iPhone, iPad, Apple TV, and Mac.")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
                         }
+                        Text(TetherlessBrand.ascii)
+                            .font(.system(size: 6.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(TetherlessPalette.accent)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Link(TetherlessBrand.siteDisplay, destination: TetherlessBrand.siteURL)
+                            .font(.caption.weight(.semibold))
                     }
                     .padding(.vertical, 2)
 
@@ -110,8 +119,9 @@ struct IPadnSettingsView: View {
 
                     Toggle("Check for updates automatically", isOn: $appUpdateCheck)
 
+                    Link("tetherless.dev", destination: TetherlessBrand.siteURL)
                     if let url = URL(string: "https://github.com/mengangs/ipadn") {
-                        Link("Project & updates", destination: url)
+                        Link("iPadn source (GPL-2.0)", destination: url)
                     }
                 }
             }

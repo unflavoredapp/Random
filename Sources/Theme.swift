@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  Theme.swift
 //  Adaptive palette. Every color is computed from AppTheme's persisted state
 //  (accent hex + dark/light) so a theme change re-skins the whole app.
@@ -10,7 +11,7 @@ nonisolated enum Theme {
     static let keyAccent     = "theme_accent_hex"
     static let keyDark       = "theme_dark"
     static let keyBackground = "theme_background"
-    /// TetherLess blue — matches the purple→teal glass UI.
+    /// Tetherless blue — matches the purple→teal glass UI.
     static let defaultAccent = "458FF7"
 
     static var isDark: Bool {
@@ -29,11 +30,12 @@ nonisolated enum Theme {
     static var subtle: Color { isDark ? Color.white.opacity(0.55) : Color(red: 0.42, green: 0.46, blue: 0.49) }
     static var accent: Color { Color(hex: accentHex) }
 
-    static let appName    = "TetherLess"
+    static let appName    = TetherlessBrand.name
     static let appVersion = "3.7"
     /// Version of the local signing engine, shown under the ADID in Settings.
     static let trustCoreVersion = "1.6"
-    static let owner      = "ᴍƦᴢᴇꜰΛ · mrzefv.com"
+    static let owner      = TetherlessBrand.siteHost
+    static let asciiMark  = TetherlessBrand.ascii
 }
 
 struct Card<Content: View>: View {

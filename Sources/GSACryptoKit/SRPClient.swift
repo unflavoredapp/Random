@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SRPClient.swift
 //  GSACryptoKit
 //

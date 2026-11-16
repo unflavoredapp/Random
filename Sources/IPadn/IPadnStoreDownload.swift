@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnStoreDownload.swift
 //  Derived from mengangs/ipadn AppleService.fetchAsset + acquireFreeApp + ownedApps (GPL-2.0).
 //  DownloadDispatch ent/download + WASM kbsync — not our volumeStore / remint / backend stack.

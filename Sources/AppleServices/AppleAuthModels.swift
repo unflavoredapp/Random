@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AppleAuthModels.swift
 //  Real GrandSlam / Developer Portal models (no mocks).
 //

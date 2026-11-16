@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnInstallationSettings.swift
 //  English Installation Settings — iPadn InstallationSettingsView structure (GPL-2.0),
 //  wired to TetherLess NativeInstaller / DeviceInstallationManager / OTA / certificates.

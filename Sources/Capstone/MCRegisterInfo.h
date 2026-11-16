@@ -1,4 +1,5 @@
 //=== MC/MCRegisterInfo.h - Target Register Description ---------*- C++ -*-===//
+// Brand: Tetherless · https://tetherless.dev
 //
 //                     The LLVM Compiler Infrastructure
 //

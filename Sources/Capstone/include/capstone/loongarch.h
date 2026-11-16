@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #ifndef CAPSTONE_LOONGARCH_H
 #define CAPSTONE_LOONGARCH_H
 

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AccountScreen.swift
 //  Settings › Account. Guest → sign in / register (ZefvAccountScreen inline).
 //  Signed in → local user settings (username · role · ADID · email), change password,

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AVX512Alert.h
 //  AVX512
 //

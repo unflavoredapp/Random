@@ -1,4 +1,5 @@
 /// The final 17-to-16-byte transform: lookup, projection and cache decoding.
+// Brand: Tetherless · https://tetherless.dev
 struct SAPTerminal: Sendable {
     private static let sources = [4, 10, -1, 7, 11, 2, 0, 1, 16, 9, 3, 6, 12, 5, 15, 14]
     private static let tableOrder = [13, 5, 10, 2, 14, 1, 11, 8, 6, 9, 0, 15, 4, 7, 3, 12]

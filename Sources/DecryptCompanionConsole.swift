@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionConsole.swift
 //  FairPlayed-style companion decrypt UI — shown only by the installed
 //  “Tetherless Decrypt” companion IPA (`DecryptCompanionRoot`), not as a

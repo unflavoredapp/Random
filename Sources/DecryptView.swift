@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DecryptView.swift
 //  Decrypt tab (lock icon). Two channels:
 //    • This Device — FairPlay mremap on installed apps (SC_Info + App Store keys)

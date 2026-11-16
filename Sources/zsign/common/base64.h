@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #pragma once
 
 #include <string>

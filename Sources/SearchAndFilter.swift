@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SearchAndFilter.swift
 //  Advanced search and filtering for certificates.
 //

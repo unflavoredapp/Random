@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  Config.swift
 //  GitHub target settings. Text fields persist to UserDefaults; the token
 //  lives in the Keychain.

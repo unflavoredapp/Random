@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #ifndef CAPSTONE_TRICORE_H
 #define CAPSTONE_TRICORE_H
 

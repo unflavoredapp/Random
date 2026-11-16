@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// A static-analysis profile. Matches are investigative leads, not a vulnerability verdict.

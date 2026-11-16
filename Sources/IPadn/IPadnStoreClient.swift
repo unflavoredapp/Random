@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnStoreClient.swift
 //  Derived from mengangs/ipadn StoreService + Models (GPL-2.0).
 //  https://github.com/mengangs/ipadn

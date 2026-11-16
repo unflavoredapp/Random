@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  ThemeExtended.swift
 //  Advanced theme system with gradients and multi-color support.
 //

@@ -1,3 +1,4 @@
+<!-- Brand: Tetherless · https://tetherless.dev -->
 # SideInstaller native pairing integration (initial build stage)
 
 AirCore now vendors the supplied Rust FFI core under `Native/SideInstallerFFI/` and builds it in GitHub Actions on a macOS runner as `build/native/SideInstallerFFI.xcframework` for iOS device and simulator architectures. The generated XCFramework is linked by `Tetherless.xcodeproj` and uploaded as a separate CI artifact for diagnostics/reuse.

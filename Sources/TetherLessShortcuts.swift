@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  TetherLessShortcuts.swift
 //  Shortcuts: Refresh All, decrypt App Store link, cert countdown.
 //

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnAppleAuthentication.swift
 //  Derived from mengangs/ipadn AppleAuthentication.swift (GPL-2.0).
 //  bag.xml endpoint discovery + AMD-Action store-proof loop + authenticate retry.

@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import SwiftUI
 
 /// Past premium purchases, plus a Restore button for "I paid but Premium isn't showing".

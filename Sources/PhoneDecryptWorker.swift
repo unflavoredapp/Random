@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  PhoneDecryptWorker.swift
 //  Polls the site for decrypt jobs (own TG bot / website queue), runs the same
 //  Store → FairPlay path on this iPhone, uploads the clear IPA. Replaces the

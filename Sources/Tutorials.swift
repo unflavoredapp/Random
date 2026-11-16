@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  Tutorials.swift
 //  Step-by-step guides shown from Settings › Tutorials. Content is static;
 //  code blocks are copyable.
@@ -86,7 +87,7 @@ enum TutorialLibrary {
                 body: "Settings › TetherLess Domain › Open local CA settings › enter the host › Create CA & issue leaf. Tap Check to confirm the host resolves to 127.0.0.1."),
             TutorialStep(
                 title: "Inspect, then install the trust profile",
-                body: "Tap View profile contents first — it's plain XML with one payload: your root cert. Then Install profile → Settings walks you through it. Finally: Settings › General › About › Certificate Trust Settings › toggle ᴍƦᴢᴇꜰΛ Local Root CA on.",
+                body: "Tap View profile contents first — it's plain XML with one payload: your root cert. Then Install profile → Settings walks you through it. Finally: Settings › General › About › Certificate Trust Settings › toggle Tetherless Local Root CA on.",
                 tip: "iOS shows a red 'Unmanaged Root Certificate' warning. That's correct — it's a root you made, granting trust only on this device."),
             TutorialStep(
                 title: "Sign & Install",
@@ -297,7 +298,7 @@ enum TutorialLibrary {
             TutorialStep(
                 title: "Verify at runtime before hooking",
                 body: "Classes get renamed between app versions. Resolve them by string at runtime and log if they're missing — a nil class must never crash the host app.",
-                code: "Class c = objc_getClass(\"AMSettingsViewController\");\nif (!c) { NSLog(@\"[ᴍƦᴢᴇꜰΛ] class not found\"); return; }\nNSLog(@\"[ᴍƦᴢᴇꜰΛ] found %@ (super %@)\", c, class_getSuperclass(c));",
+                code: "Class c = objc_getClass(\"AMSettingsViewController\");\nif (!c) { NSLog(@\"[Tetherless] class not found\"); return; }\nNSLog(@\"[Tetherless] found %@ (super %@)\", c, class_getSuperclass(c));",
                 codeTitle: "Tweak.xm"),
             TutorialStep(
                 title: "Dump everything (optional)",
@@ -332,7 +333,7 @@ enum TutorialLibrary {
             TutorialStep(
                 title: "Read private ivars",
                 body: "FLEX showed you _headerLabel. Pull it with the runtime instead of a header you don't have.",
-                code: "Ivar iv = class_getInstanceVariable([self class], \"_headerLabel\");\nUILabel *label = iv ? object_getIvar(self, iv) : nil;\nlabel.text = @\"ᴍƦᴢᴇꜰΛ Edition\";",
+                code: "Ivar iv = class_getInstanceVariable([self class], \"_headerLabel\");\nUILabel *label = iv ? object_getIvar(self, iv) : nil;\nlabel.text = @\"Tetherless Edition\";",
                 codeTitle: "Ivar access"),
             TutorialStep(
                 title: "Keep it idempotent",

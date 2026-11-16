@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AddCertificateView.swift
 //  Pushed from the Certificates screen: pick the .p12 + .mobileprovision together (or one .zip, with an
 //  optional password .txt), check what was found, then import.

@@ -1,4 +1,5 @@
 /// Fixed mathematical selections and permutations for F2; no executable instruction data.
+// Brand: Tetherless · https://tetherless.dev
 enum SAPF2Parameters {
     static let entryPositions = [3, 9, 6, 4, 13, 1, 11, 7, 5, 14, 0, 10, 8, 12, 15, 2]
     static let finalPositions = [0, 1, 4, 5, 8, 9, 12, 13, 2, 6, 10, 14, 3, 7, 11, 15]

@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 (function (root) {
   "use strict";
 

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  PairingWizard.swift
 //  First-run / recover pairing: verify path, save pairing, self-heal when it drops.
 //

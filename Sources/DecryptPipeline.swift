@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DecryptPipeline.swift
 //  One-tap Decrypt → free Apple ID Sign → Install (Native or OTA autopilot).
 //

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  InstallQueue.swift
 //  Tap "Queue" on as many apps as you like and walk away: each one is downloaded, signed (with the
 //  options it was signed with last time, else defaults) and installed, one after another. The keep-alive

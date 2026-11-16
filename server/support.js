@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Support tickets. Anyone signed in can write to support; Premium tickets are flagged "priority" and sorted first for staff.
 //

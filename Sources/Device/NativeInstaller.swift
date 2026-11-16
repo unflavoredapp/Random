@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  NativeInstaller.swift
 //  On-device installation through AirShare's built-in local VPN + pairing
 //  (iDevice). Same call shape as OTAInstaller so every install entry point can

@@ -1,4 +1,5 @@
 /// Two-input, ten-round substitution/permutation function used in the blob head.
+// Brand: Tetherless · https://tetherless.dev
 enum SAPF2 {
     private static let keyInputOffset = 0
     private static let keySubstitutionOffset = 4096

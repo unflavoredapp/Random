@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  Mcrypted512.swift
 //  "Inject Data" tool crypto — Mcrypted-512.
 //

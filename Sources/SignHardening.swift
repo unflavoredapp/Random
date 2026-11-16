@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SignHardening.swift
 //  Keeps TrustCore signing alive on very large IPAs (2–3 GB+):
 //    • SignGate        – heavy IPAs sign strictly one at a time, in order

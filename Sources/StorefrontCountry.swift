@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  StorefrontCountry.swift
 //  Map Apple Store Front ids (X-Apple-Store-Front) ↔ ISO country codes for
 //  multi-account / multi-region iTunes search.

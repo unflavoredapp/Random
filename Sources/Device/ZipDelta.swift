@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  ZipDelta.swift
 //  Builds a small signed IPA without recompressing the whole app.
 //

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AppAutoUpdater.swift
 //  Keeps the apps you installed through AirShare up to date. For every tracked
 //  app it checks your sources for a newer version, downloads the IPA, signs it

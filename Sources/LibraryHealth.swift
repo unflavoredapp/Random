@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LibraryHealth.swift
 //  Cert days left, installed vs signed version, last refresh, spoof/min-iOS fit.
 //

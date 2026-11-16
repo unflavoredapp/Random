@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import SwiftUI
 
 /// Two-step premium checkout. Step 1: pick a length of premium. Step 2: review and pay in Litecoin inside the app.

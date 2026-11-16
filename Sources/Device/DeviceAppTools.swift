@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DeviceAppTools.swift
 //  Undo after an uninstall, clean reinstall, and the signing-expiry radar for apps on this device.
 //  All of them lean on the signed IPAs AirShare keeps: an app can be put back only if you signed it here.

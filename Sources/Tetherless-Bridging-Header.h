@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  Tetherless-Bridging-Header.h
 //  zsign signing engine + on-device local CA, exposed to Swift.
 //

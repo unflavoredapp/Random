@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  StoreOwnedAppsClient.swift
 //  Purchase DAAP owned-apps list — iPadn WASM ActionSignature + Cookie + login GUID.
 //

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  Session.swift
 //  Holds the currently extracted archive shared across tabs. All file I/O runs
 //  off the main thread; failures surface via `errorMessage`.

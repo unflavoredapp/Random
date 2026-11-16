@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import SwiftUI
 
 /// Write to support and read replies. Premium tickets are flagged priority and shown to staff first.

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  McryptedWordlist.swift
 //  BIP-39 English wordlist (2048 words) used ONLY as an encoding alphabet for
 //  Mcrypted recovery keys. This is NOT a Bitcoin/BIP-39 wallet seed — Mcrypted

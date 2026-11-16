@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Surfaces App Store receipt and device/app-attestation code for inspection.
