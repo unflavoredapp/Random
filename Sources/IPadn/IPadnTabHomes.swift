@@ -386,8 +386,6 @@ struct AccountHomeView: View {
                     pushRow(.files, title: "Files", symbol: "folder.fill")
 
                     sectionHeader("Device")
-                    pushRow(.installation, title: "Installation settings", symbol: "wrench.and.screwdriver")
-                    pushRow(.pair, title: "Pair (native install)", symbol: "iphone.radiowaves.left.and.right")
                     pushRow(.settings, title: "Settings", symbol: "gearshape.fill")
 
                     if store.isSignedIn {
@@ -611,9 +609,7 @@ struct AccountHomeView: View {
                 .navigationTitle("Apps on this device")
                 .navigationBarTitleDisplayMode(.inline)
         case .settings:
-            SettingsView()
-                .navigationTitle("Settings")
-                .navigationBarTitleDisplayMode(.inline)
+            IPadnSettingsView()
         case .installation:
             IPadnInstallationSettingsView()
         }

@@ -159,9 +159,11 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
     private var decryptTail: Task<Void, Never>?
     private var session: URLSession!
     private var maxConcurrent = 3
+    private var maxQueued = 40
     private var pathMonitor: NWPathMonitor?
     private var onCellular = false
     private var wifiOnly = false
+    private var compatibleMode = false
 
     private override init() {
         super.init()
@@ -177,7 +179,23 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             return j
         }
         persist()
+        let defaults = UserDefaults.standard
+        applySettings(
+            maxConcurrent: defaults.object(forKey: "ipadn.settings.maxConcurrentDownloads") as? Int ?? 3,
+            wifiOnly: defaults.bool(forKey: "ipadn.settings.wifiOnlyDownloads"),
+            maxQueued: defaults.object(forKey: "ipadn.settings.maxQueuedDownloads") as? Int ?? 40,
+            compatibleMode: defaults.bool(forKey: "ipadn.settings.compatibleDownloadMode")
+        )
         startPathMonitor()
+        schedule()
+    }
+
+    /// Prefs from iPadn Settings (Downloads page).
+    func applySettings(maxConcurrent: Int, wifiOnly: Bool, maxQueued: Int, compatibleMode: Bool) {
+        self.maxConcurrent = min(6, max(1, maxConcurrent))
+        self.wifiOnly = wifiOnly
+        self.maxQueued = min(100, max(1, maxQueued))
+        self.compatibleMode = compatibleMode
         schedule()
     }
 
