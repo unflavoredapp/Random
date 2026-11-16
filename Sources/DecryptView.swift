@@ -660,7 +660,7 @@ struct DecryptView: View {
         c.message = "Building Tetherless Decrypt companion…"
         Task {
             do {
-                _ = try await DecryptCompanionInstaller.installAndOpen(
+                let companionID = try await DecryptCompanionInstaller.installAndOpen(
                     embedding: dest,
                     displayName: name
                 ) { msg in
@@ -674,7 +674,9 @@ struct DecryptView: View {
                     c.message =
                         "Open Tetherless Decrypt — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
                     c.error = nil
-                    pickMessage = "Companion installed — open Tetherless Decrypt."
+                    pickMessage = companionID.isEmpty
+                        ? "Companion installed — open Tetherless Decrypt."
+                        : "Companion installed (\(companionID)) — open Tetherless Decrypt."
                 }
             } catch {
                 await MainActor.run {

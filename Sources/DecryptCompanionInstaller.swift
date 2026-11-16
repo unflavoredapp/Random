@@ -147,10 +147,14 @@ enum DecryptCompanionInstaller {
 
         // Give installd a beat, then hand off.
         try? await Task.sleep(nanoseconds: 800_000_000)
-        let opened = await openCompanion(bundleID: entry.bundleID, embeddedName: package.embeddedAppName)
+        let installedID = try smokeVerifyCompanionBundleID(
+            provisionDerived: bundleID,
+            signedEntry: entry.bundleID
+        )
+        let opened = await openCompanion(bundleID: installedID, embeddedName: package.embeddedAppName)
         if !opened {
             DecryptCompanionHandoff.markPendingOpen(
-                bundleID: entry.bundleID,
+                bundleID: installedID,
                 embeddedName: package.embeddedAppName
             )
             progress?(
@@ -159,8 +163,37 @@ enum DecryptCompanionInstaller {
             DecryptCompanionHandoff.openTrustSettings()
         } else {
             DecryptCompanionHandoff.clearPendingOpen()
+            // Soft probe: scheme should resolve once Trust + install finished.
+            if let probe = URL(string: "\(DecryptCompanionPackager.companionURLScheme)://"),
+               !UIApplication.shared.canOpenURL(probe) {
+                progress?("Companion opened — if FairPlay doesn’t start, Trust the Apple ID under VPN & Device Management.")
+            }
         }
-        return entry.bundleID
+        return installedID
+    }
+
+    /// Post-install consistency check: provision ID, signed entry, and UserDefaults must agree.
+    private static func smokeVerifyCompanionBundleID(
+        provisionDerived: String,
+        signedEntry: String
+    ) throws -> String {
+        let provision = provisionDerived.trimmingCharacters(in: .whitespacesAndNewlines)
+        let signed = signedEntry.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !signed.isEmpty else {
+            throw DecryptError("Companion install finished without a bundle ID.")
+        }
+        if !provision.isEmpty, provision != signed {
+            throw DecryptError(
+                "Companion bundle ID mismatch (profile \(provision) vs signed \(signed)). Retry install."
+            )
+        }
+        UserDefaults.standard.set(signed, forKey: companionBundleIDKey)
+        let persisted = (UserDefaults.standard.string(forKey: companionBundleIDKey) ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard persisted == signed else {
+            throw DecryptError("Couldn't persist companion bundle ID for reopen.")
+        }
+        return signed
     }
 
     @discardableResult

@@ -17,11 +17,13 @@ struct BackupEntry: Codable {
     let provisionData: Data
     let password: String
     let timestamp: Date
-    let bundleVersion: String = "1.0"
+    /// Must be `var` so JSONDecoder can overwrite the default (immutable defaults are skipped).
+    var bundleVersion: String = "1.0"
 }
 
 struct BackupFile: Codable {
-    let version: String = "1.0"
+    /// Must be `var` so JSONDecoder can overwrite the default (immutable defaults are skipped).
+    var version: String = "1.0"
     let createdAt: Date
     let deviceName: String
     let entries: [BackupEntry]
