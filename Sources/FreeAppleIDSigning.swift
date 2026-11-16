@@ -82,6 +82,10 @@ enum FreeAppleIDSigning {
                 auth: auth,
                 team: team
             )
+        } catch let AppleAuthError.portal(code, message) where code == 1200 {
+            throw AppleAuthError.message(
+                "Apple blocked free certificate creation on this Apple ID (Developer Portal \(code)). Import a custom .p12 + mobileprovision under Account › Settings › Installation › Certificate, or use an Apple ID that can create development certificates. \(message)"
+            )
         } catch let AppleAuthError.portal(code, _) where code == 7460 || code == 35 {
             // Free Apple IDs only allow one iOS Development cert. Revoke the portal copy
             // we don't have a private key for, then create a fresh cert we can import.

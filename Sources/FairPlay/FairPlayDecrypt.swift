@@ -1192,14 +1192,16 @@ enum FairPlayDecrypt {
             consider(root.appendingPathComponent(rel), trustIfUnreadable: true)
         }
 
-        // Loose dylibs / binaries at app root (rare but cheap).
+        // Loose dylibs / binaries at app root (Unity `factory`, Flutter `Runner`, …).
+        // Always trust extensionless root binaries — FairPlay IPA copies are not "live
+        // installs", but `fp_is_macho` can still false-negative and empty EmbeddedPayload.
         if let top = try? fm.contentsOfDirectory(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
             for item in top {
                 let isDir = (try? item.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
                 if isDir { continue }
                 let ext = item.pathExtension.lowercased()
                 if ext.isEmpty || ext == "dylib" {
-                    consider(item, trustIfUnreadable: ext == "dylib" || liveInstall)
+                    consider(item, trustIfUnreadable: true)
                 }
             }
         }
@@ -1465,7 +1467,7 @@ enum FairPlayDecrypt {
         return nil
     }
 
-    private static func mainExecutableURL(in app: URL) -> URL? {
+    static func mainExecutableURL(in app: URL) -> URL? {
         bundleExecutableURL(in: app)
     }
 
