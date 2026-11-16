@@ -15,12 +15,13 @@ nonisolated enum TetherlessBrand {
     static let userAgent = "tetherless-ios"
 
     /// Figlet-style mark — keep this pure ASCII for logs, README, and About.
+    /// Spells T-e-t-h-e-r-l-e-s-s (the previous mark dropped the “r”).
     static let ascii: String = #"""
- _____     _   _           _
-|_   _|__ | |_| |__   ___ | | ___  ___ ___
-  | |/ _ \| __| '_ \ / _ \| |/ _ \/ __/ __|
-  | |  __/| |_| | | |  __/| |  __/\__ \__ \
-  |_|\___| \__|_| |_|\___||_|\___||___/___/
+ _____         _      _                    _
+|_   _|  ___  | |_   | |__    ___   _ __  | |      ___   ___    ___
+  | |   / _ \ | __|  | '_ \  / _ \ | '__| | |     / _ \ / __|  / __|
+  | |  |  __/ | |_   | | | ||  __/ | |    | |    |  __/ \__ \  \__ \
+  |_|   \___|  \__|  |_| |_| \___| |_|    |_|     \___| |___/  |___/
 """#
 
     static var asciiBanner: String {
