@@ -67,3 +67,17 @@ int  fp_max_cryptid(const char *path);
 int  fp_count_encrypted_slices(const char *path);
 // Per-slice cryptid dump into caller buffer (NUL-terminated). Returns slice count, -1 on parse error.
 int  fp_describe_cryptids(const char *path, char *buf, size_t buflen);
+
+/// Last decrypt/attempt failure class for Swift UX (not a FairPlay key id).
+enum {
+    FP_FAIL_NONE = 0,
+    FP_FAIL_NOMEM = 1,      // ENOMEM / Jetsam — close apps & retry
+    FP_FAIL_PERM = 2,       // EPERM / license / Media & Purchases keys
+    FP_FAIL_STILL_ENC = 3,  // remapped but cryptid still set / bytes unchanged
+    FP_FAIL_IO = 4,
+    FP_FAIL_OTHER = 5,
+};
+int  fp_last_fail_kind(void);
+const char *fp_fail_kind_name(int kind);
+/// Soft memory budget hint: 1 if available memory looks tight for a cryptsize remap.
+int  fp_memory_tight_for(uint64_t cryptsize);

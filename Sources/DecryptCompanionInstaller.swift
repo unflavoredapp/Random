@@ -51,7 +51,8 @@ enum DecryptCompanionInstaller {
         progress: ((String) -> Void)?,
         build: (_ bundleID: String, _ progress: ((String) -> Void)?) throws -> DecryptCompanionPackager.Package
     ) async throws -> String {
-        progress?("Preparing your signing certificate, device, and App ID…")
+        progress?("1/6 · Preparing Apple ID signing certificate…")
+        DecryptCompanionHandoff.publishHostSnapshot()
         FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
         _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
         CertificateStore.shared.activatePreferredCertificate(forSigningMethod: "appleid")
@@ -64,18 +65,19 @@ enum DecryptCompanionInstaller {
         let bundleID = DecryptCompanionPackager.companionBundleID(forProvision: material.provision)
         UserDefaults.standard.set(bundleID, forKey: companionBundleIDKey)
 
-        progress?("Building Tetherless Decrypt companion…")
+        progress?("2/6 · Embedding \(displayName) (slim Mach-Os + SC_Info)…")
         let package = try build(bundleID, progress)
         let sizeMB = Double(package.approximateBytes) / 1_048_576.0
         progress?(String(format: "Companion package · %.0f MB", sizeMB))
 
-        progress?("Signing Tetherless Decrypt with your Apple ID…")
+        progress?("3/6 · Signing Tetherless Decrypt with your Apple ID…")
         var options = SignOptions()
         options.name = DecryptCompanionPackager.companionDisplayName
         options.bundleID = bundleID
         options.surgicalMode = false
         options.parallelSigning = false
         options.autoFixEntitlements = true
+        // Keep App Group when the provision allows — host↔companion handoff (no secrets).
         options.disableAppGroups = false
         options.stripWatchApps = true
         options.stripExtensions = true // companion shell doesn't need host appexes
@@ -89,7 +91,7 @@ enum DecryptCompanionInstaller {
         )
         progress?("Signed \(DecryptCompanionPackager.companionDisplayName).")
 
-        progress?("Uploading to iPhone…")
+        progress?("4/6 · Installing on this iPhone…")
         let hold = "companion-\(UUID().uuidString)"
         if NativeInstaller.isSelected { BackgroundKeepAlive.shared.start(hold) }
         defer { BackgroundKeepAlive.shared.stop(hold) }
@@ -123,9 +125,8 @@ enum DecryptCompanionInstaller {
             }
         }
 
-        progress?("Verifying…")
-        progress?("Trust this Apple ID in Settings › General › VPN & Device Management if iOS asks.")
-        progress?("Opening Tetherless Decrypt companion…")
+        progress?("5/6 · Trust Apple ID under Settings › General › VPN & Device Management if asked…")
+        progress?("6/6 · Opening Tetherless Decrypt…")
 
         // Host must not keep a fake companion sheet — the console UI is the separate IPA.
         DecryptCompanionController.shared.dismiss()
@@ -134,9 +135,16 @@ enum DecryptCompanionInstaller {
         try? await Task.sleep(nanoseconds: 800_000_000)
         let opened = await openCompanion(bundleID: entry.bundleID, embeddedName: package.embeddedAppName)
         if !opened {
-            progress?(
-                "Installed — open “Tetherless Decrypt” from the Home Screen (Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks)."
+            DecryptCompanionHandoff.markPendingOpen(
+                bundleID: entry.bundleID,
+                embeddedName: package.embeddedAppName
             )
+            progress?(
+                "Installed — Trust your Apple ID under Settings › General › VPN & Device Management, then return here (we’ll reopen Tetherless Decrypt)."
+            )
+            DecryptCompanionHandoff.openTrustSettings()
+        } else {
+            DecryptCompanionHandoff.clearPendingOpen()
         }
         return entry.bundleID
     }

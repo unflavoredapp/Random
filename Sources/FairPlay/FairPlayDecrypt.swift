@@ -17,12 +17,58 @@ enum FairPlayDecryptError: LocalizedError {
     case noInstalledApp(String)
     case missingLicense(String)
     case mainExecutableFailed(String)
+    case outOfMemory(String)
 
     var errorDescription: String? {
         switch self {
         case .failed(let m), .stillEncrypted(let m), .noInstalledApp(let m),
-             .missingLicense(let m), .mainExecutableFailed(let m):
+             .missingLicense(let m), .mainExecutableFailed(let m), .outOfMemory(let m):
             return m
+        }
+    }
+}
+
+/// Map fpcore failure class + log text into a user-facing message (keys vs OOM vs still encrypted).
+enum FairPlayFailureClass: String {
+    case none, outOfMemory, licenseOrKeys, stillEncrypted, io, other
+
+    static func current(fromLogs lines: [String] = []) -> FairPlayFailureClass {
+        let kind = Int(fp_last_fail_kind())
+        switch kind {
+        case Int(FP_FAIL_NOMEM): return .outOfMemory
+        case Int(FP_FAIL_PERM): return .licenseOrKeys
+        case Int(FP_FAIL_STILL_ENC): return .stillEncrypted
+        case Int(FP_FAIL_IO): return .io
+        case Int(FP_FAIL_OTHER): break
+        default: break
+        }
+        let blob = lines.joined(separator: "\n").lowercased()
+        if blob.contains("errno 12") || blob.contains("cannot allocate") || blob.contains("enomem")
+            || blob.contains("low memory") || blob.contains("out-of-memory") {
+            return .outOfMemory
+        }
+        if blob.contains("eperm") || blob.contains("-42004") || blob.contains("-42110")
+            || blob.contains("license") || blob.contains("media & purchases") {
+            return .licenseOrKeys
+        }
+        if blob.contains("still encrypted") || blob.contains("cryptid") {
+            return .stillEncrypted
+        }
+        return kind == Int(FP_FAIL_NONE) ? .none : .other
+    }
+
+    var userMessage: String {
+        switch self {
+        case .outOfMemory:
+            return "Not enough memory to decrypt this binary (mremap ENOMEM). Close other apps, keep Tetherless in the foreground, and retry."
+        case .licenseOrKeys:
+            return AppStoreDecryptGuide.failureHint
+        case .stillEncrypted:
+            return "FairPlay still reports encryption after remap. \(AppStoreDecryptGuide.failureHint)"
+        case .io:
+            return "Couldn't read or write the encrypted binary. Re-download the IPA and retry."
+        case .other, .none:
+            return AppStoreDecryptGuide.failureHint
         }
     }
 }
@@ -252,8 +298,14 @@ enum FairPlayDecrypt {
     // MARK: - Public entry points
 
     /// Decrypt every Mach-O inside an .app directory in place.
+    /// Refuses live App Store installs — never mutate `/var/containers/Bundle/Application`.
     @discardableResult
     static func decryptAppBundle(at appURL: URL, progress: ((String) -> Void)? = nil) throws -> FairPlayDecryptReport {
+        if isLiveAppStoreInstall(appURL) {
+            throw FairPlayDecryptError.failed(
+                "Refusing in-place decrypt of a live App Store install. Use decryptInstalledApp (writes a Payload copy) or the companion."
+            )
+        }
         try decryptMachOs(readingFrom: appURL, writingTo: appURL, progress: progress)
     }
 
@@ -329,7 +381,7 @@ enum FairPlayDecrypt {
     static func decryptIPA(
         at ipaURL: URL,
         displayName: String,
-        preferIPAContentsOnly: Bool = false,
+        preferIPAContentsOnly: Bool = true,
         progress: ((String) -> Void)? = nil
     ) throws -> URL {
         let fm = FileManager.default
@@ -375,6 +427,12 @@ enum FairPlayDecrypt {
         progress: ((String) -> Void)? = nil
     ) throws -> FairPlayDecryptReport {
         var report = FairPlayDecryptReport()
+        // Never write decrypted binaries (or SINF staging) into a live App Store container.
+        if isLiveAppStoreInstall(destApp) {
+            throw FairPlayDecryptError.failed(
+                "Refusing to write into a live App Store install. Decrypt output must be a Payload/temp copy or companion EmbeddedPayload."
+            )
+        }
         // FairPlayed embed_ipa.sh: installd normally copies the main .sinf onto every
         // SinfReplicationPaths entry. Never write into a live App Store install container —
         // SC_Info reads/writes there hung decrypt on “Decrypting Mach-Os…”.
@@ -428,6 +486,7 @@ enum FairPlayDecrypt {
 
         // Serial decrypt with live FairPlayed-style console lines (competition companion).
         for (index, file) in ordered.enumerated() {
+            pauseIfMemoryPressure(progress: progress)
             let r = role(of: file, under: sourceApp, app: sourceApp)
             let rel = relativePath(file, under: sourceApp)
             let budget: TimeInterval = (r == .main) ? 180 : 90
@@ -525,8 +584,8 @@ enum FairPlayDecrypt {
         var count = 0
         let fm = FileManager.default
         for p in repPaths {
-            if p.hasPrefix("Watch/") || p.contains("..") { continue }
-            let dest = app.appendingPathComponent(p)
+            if p.hasPrefix("Watch/") { continue }
+            guard let dest = secureChildURL(root: app, relative: p) else { continue }
             if fm.fileExists(atPath: dest.path) { continue }
             try? fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
             do {
@@ -837,7 +896,7 @@ enum FairPlayDecrypt {
                     report.failed.append(rel)
                     if role == .main {
                         throw FairPlayDecryptError.mainExecutableFailed(
-                            "Main executable still encrypted after decrypt. \(AppStoreDecryptGuide.failureHint)"
+                            "Main executable still encrypted after decrypt. \(FairPlayFailureClass.stillEncrypted.userMessage)"
                         )
                     }
                 } else {
@@ -858,8 +917,14 @@ enum FairPlayDecrypt {
             if role.isRequired {
                 report.failed.append(rel)
                 if role == .main {
+                    let klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
+                    if klass == .outOfMemory {
+                        throw FairPlayDecryptError.outOfMemory(
+                            "Couldn't decrypt the main executable (\(rel)). \(klass.userMessage)"
+                        )
+                    }
                     throw FairPlayDecryptError.mainExecutableFailed(
-                        "Couldn't decrypt the main executable (\(rel)). \(detail.isEmpty ? AppStoreDecryptGuide.failureHint : detail)"
+                        "Couldn't decrypt the main executable (\(rel)). \(detail.isEmpty ? klass.userMessage : detail)"
                     )
                 }
             } else {
@@ -1410,10 +1475,41 @@ enum FairPlayDecrypt {
 
     private static func relativePath(_ file: URL, under root: URL) -> String {
         let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        let path = file.standardizedFileURL.path
+        let rootPath = root.standardizedFileURL.path.hasSuffix("/")
+            ? root.standardizedFileURL.path
+            : root.standardizedFileURL.path + "/"
+        if path.hasPrefix(rootPath) {
+            return String(path.dropFirst(rootPath.count))
+        }
         if file.path.hasPrefix(prefix) {
             return String(file.path.dropFirst(prefix.count))
         }
         return file.lastPathComponent
+    }
+
+    /// Reject `..`, absolute paths, and escapes outside `root` (SINF / embed staging).
+    static func secureChildURL(root: URL, relative: String) -> URL? {
+        var rel = relative.trimmingCharacters(in: .whitespacesAndNewlines)
+        if rel.isEmpty || rel.hasPrefix("/") || rel.contains("\0") { return nil }
+        if rel.contains("..") { return nil }
+        let parts = rel.split(separator: "/").map(String.init)
+        if parts.contains("..") || parts.contains("") { return nil }
+        let url = root.appendingPathComponent(rel).standardizedFileURL
+        let rootPath = root.standardizedFileURL.path
+        let child = url.path
+        guard child == rootPath || child.hasPrefix(rootPath.hasSuffix("/") ? rootPath : rootPath + "/") else {
+            return nil
+        }
+        return url
+    }
+
+    /// Brief pause when fpcore reports tight memory so Jetsam is less likely mid-decrypt.
+    private static func pauseIfMemoryPressure(progress: ((String) -> Void)?) {
+        if fp_memory_tight_for(48 * 1024 * 1024) != 0 {
+            progress?("Low memory — pausing before next Mach-O…")
+            Thread.sleep(forTimeInterval: 0.4)
+        }
     }
 
     private static func sanitizeFileName(_ name: String) -> String {
@@ -1545,9 +1641,26 @@ private final class FairPlayLogBuffer: @unchecked Sendable {
 
     func append(_ line: String) {
         lock.lock()
-        lines.append(line)
+        lines.append(Self.redact(line))
         if lines.count > 64 { lines.removeFirst(lines.count - 64) }
         lock.unlock()
+    }
+
+    /// Never surface passwords, PETs, or session tokens if a lower layer echoes them.
+    private static func redact(_ line: String) -> String {
+        var s = line
+        let patterns = [
+            #"(?i)(password|passwd|pwd)\s*[:=]\s*\S+"#,
+            #"(?i)(passwordToken|petToken|X-Token|myacinfo|Hs01)\s*[:=]\s*\S+"#,
+            #"(?i)(Bearer)\s+[A-Za-z0-9\-._~+/]+=*"#,
+        ]
+        for p in patterns {
+            if let re = try? NSRegularExpression(pattern: p) {
+                let range = NSRange(s.startIndex..<s.endIndex, in: s)
+                s = re.stringByReplacingMatches(in: s, range: range, withTemplate: "$1=[redacted]")
+            }
+        }
+        return s
     }
 
     static let trampoline: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> Void = { ctx, msg in

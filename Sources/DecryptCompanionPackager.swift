@@ -363,7 +363,7 @@ enum DecryptCompanionPackager {
             )
         }
 
-        let meta: [String: Any] = [
+        var meta: [String: Any] = [
             "name": name,
             "embeddedAt": ISO8601DateFormatter().string(from: Date()),
             "hostBundle": Bundle.main.bundleIdentifier ?? "",
@@ -375,7 +375,13 @@ enum DecryptCompanionPackager {
             "embeddedMachOs": slimAudit.entries.count,
             "embeddedEncryptedMachOs": slimAudit.encrypted,
             "hostSkippedLiveAudit": liveInstall,
+            "slimEmbed": true,
         ]
+        // Host readiness only — never passwords / PET / store session JSON.
+        for (k, v) in DecryptCompanionHandoff.hostSnapshot() {
+            meta[k] = v
+        }
+        DecryptCompanionHandoff.publishHostSnapshot()
         if let data = try? PropertyListSerialization.data(fromPropertyList: meta, format: .xml, options: 0) {
             try? data.write(to: embedRoot.appendingPathComponent("manifest.plist"))
         }
@@ -409,7 +415,10 @@ enum DecryptCompanionPackager {
         progress?("Embedding \(machos.count) Mach-O file(s)…")
         for file in machos {
             let rel = relative(file, under: src)
-            let out = dest.appendingPathComponent(rel)
+            guard let out = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) else {
+                progress?("Skipped unsafe Mach-O path: \(rel)")
+                continue
+            }
             try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? fm.removeItem(at: out)
             try fm.copyItem(at: file, to: out)
@@ -419,7 +428,7 @@ enum DecryptCompanionPackager {
         if let en = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
             for case let dir as URL in en where dir.lastPathComponent == "SC_Info" {
                 let rel = relative(dir, under: src)
-                let out = dest.appendingPathComponent(rel)
+                guard let out = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) else { continue }
                 try? fm.removeItem(at: out)
                 try? fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
                 try? fm.copyItem(at: dir, to: out)
@@ -473,8 +482,15 @@ enum DecryptCompanionPackager {
     }
 
     private static func relative(_ file: URL, under root: URL) -> String {
-        let prefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        if file.path.hasPrefix(prefix) { return String(file.path.dropFirst(prefix.count)) }
+        let rootPath = root.standardizedFileURL.path
+        let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+        let path = file.standardizedFileURL.path
+        if path.hasPrefix(prefix) {
+            let rel = String(path.dropFirst(prefix.count))
+            // Refuse escapes — never stage files outside the source .app.
+            if rel.contains("..") { return file.lastPathComponent }
+            return rel
+        }
         return file.lastPathComponent
     }
 

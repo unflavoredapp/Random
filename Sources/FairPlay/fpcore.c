@@ -33,6 +33,56 @@
 #include <mach/mach.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
+#if __has_include(<os/proc.h>)
+#include <os/proc.h>
+#endif
+
+#pragma mark - Failure class (for Swift UX)
+
+static int g_fp_last_fail = FP_FAIL_NONE;
+
+int fp_last_fail_kind(void) { return g_fp_last_fail; }
+
+const char *fp_fail_kind_name(int kind) {
+    switch (kind) {
+        case FP_FAIL_NONE: return "none";
+        case FP_FAIL_NOMEM: return "out-of-memory";
+        case FP_FAIL_PERM: return "license-or-keys";
+        case FP_FAIL_STILL_ENC: return "still-encrypted";
+        case FP_FAIL_IO: return "io";
+        default: return "other";
+    }
+}
+
+static void fp_set_fail(int kind) { g_fp_last_fail = kind; }
+
+static void fp_note_errno(int err) {
+    if (err == ENOMEM) fp_set_fail(FP_FAIL_NOMEM);
+    else if (err == EPERM || err == EACCES) fp_set_fail(FP_FAIL_PERM);
+    else if (err == EIO || err == ENOENT || err == EBADF) fp_set_fail(FP_FAIL_IO);
+    else if (err != 0) fp_set_fail(FP_FAIL_OTHER);
+}
+
+int fp_memory_tight_for(uint64_t cryptsize) {
+    // Three working buffers (dec/cipher/merged) ≈ 3× cryptsize, plus remap map.
+    uint64_t need = cryptsize * 3;
+    if (cryptsize > (64ull << 20)) need += cryptsize; // padded remap can be large
+#if defined(__APPLE__) && __has_include(<os/proc.h>)
+    // Weak-link style: symbol present on iOS 13+.
+    if (&os_proc_available_memory != NULL) {
+        size_t avail = os_proc_available_memory();
+        if (avail > 0 && (uint64_t)avail < need + (48ull << 20)) return 1;
+    }
+#endif
+    (void)need;
+    // Hard ceiling: refuse multi-hundred-MB triple buffers on phone.
+    if (cryptsize >= (180ull << 20)) return 1;
+    return 0;
+}
+
+#ifndef MAP_NOCACHE
+#define MAP_NOCACHE 0
+#endif
 
 #pragma mark - mremap_encrypted
 
@@ -435,13 +485,24 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
     // Page reads: exact mapping starts at cryptoff==0 in the map; padded uses cryptoff.
     const uint64_t read_bias = exact ? 0 : s->cryptoff;
 
-    uint8_t *base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, map_file_off);
-    if (base == MAP_FAILED) { res->mmap_errno = errno; close(fd); res->ms = now_ms() - t0; return -1; }
+    uint8_t *base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE | MAP_NOCACHE, fd, map_file_off);
+    if (base == MAP_FAILED) {
+        res->mmap_errno = errno;
+        fp_note_errno(errno);
+        close(fd);
+        res->ms = now_ms() - t0;
+        return -1;
+    }
 
     uint8_t *orig = malloc(s->cryptsize);
     uint8_t *dec = out ? out : malloc(s->cryptsize);
-    if (!orig || !dec || !pread_full(fd, orig, s->cryptsize, (off_t)(s->slice_off + s->cryptoff))) {
-        free(orig); if (!out) free(dec); munmap(base, (size_t)map_len); close(fd); res->mmap_errno = EIO; return -1;
+    if (!orig || !dec) {
+        free(orig); if (!out) free(dec); munmap(base, (size_t)map_len); close(fd);
+        res->mmap_errno = ENOMEM; fp_set_fail(FP_FAIL_NOMEM); res->ms = now_ms() - t0; return -1;
+    }
+    if (!pread_full(fd, orig, s->cryptsize, (off_t)(s->slice_off + s->cryptoff))) {
+        free(orig); if (!out) free(dec); munmap(base, (size_t)map_len); close(fd);
+        res->mmap_errno = EIO; fp_set_fail(FP_FAIL_IO); res->ms = now_ms() - t0; return -1;
     }
 
     // Page accounting covers the logical crypt range (not the padded remap).
@@ -454,7 +515,7 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
     uint8_t *okmask = calloc((size_t)total, 1);
     if (!okmask) {
         free(orig); if (!out) free(dec); munmap(base, (size_t)map_len); close(fd);
-        res->mmap_errno = ENOMEM; res->ms = now_ms() - t0; return -1;
+        res->mmap_errno = ENOMEM; fp_set_fail(FP_FAIL_NOMEM); res->ms = now_ms() - t0; return -1;
     }
 
     // Cap remount rounds — Swift wraps each binary in a wall-clock timeout; burning
@@ -463,14 +524,19 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
         if (round > 0) {
             if (base != MAP_FAILED) munmap(base, (size_t)map_len);
             usleep((useconds_t)(35 * 1000 * round));
-            base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE, fd, map_file_off);
-            if (base == MAP_FAILED) { res->mmap_errno = errno; break; }
+            base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE | MAP_NOCACHE, fd, map_file_off);
+            if (base == MAP_FAILED) { res->mmap_errno = errno; fp_note_errno(errno); break; }
         }
         errno = 0;
         int mr = do_mremap_encrypted(base + mremap_bias, mremap_len, cid, s->cputype, s->cpusubtype);
         res->mremap_ret = mr;
         res->mremap_errno = mr == 0 ? 0 : errno;
-        if (mr != 0) continue;
+        if (mr != 0) {
+            fp_note_errno(errno);
+            // errno 12 / ENOMEM — further rounds usually Jetsam; stop early.
+            if (errno == ENOMEM) break;
+            continue;
+        }
 
         // Prefault each crypt page (buddy3 “first protected userspace read”) before
         // vm_read_overwrite so fairplayd has a chance to page-in.
@@ -644,15 +710,28 @@ int fp_describe_cryptids(const char *path, char *buf, size_t buflen) {
 }
 
 int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, void *ctx) {
+    g_fp_last_fail = FP_FAIL_NONE;
     fp_slice_t sl[FP_MAX_SLICES]; int n = 0; char err[256] = {0};
-    if (fp_parse(in_path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) { logf_(log, ctx, "  parse failed: %s", err); return -1; }
+    if (fp_parse(in_path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) {
+        logf_(log, ctx, "  parse failed: %s", err);
+        fp_set_fail(FP_FAIL_IO);
+        return -1;
+    }
     bool any = false;
     for (int i = 0; i < n; i++) if (sl[i].has_enc && sl[i].cryptid) any = true;
-    if (strcmp(in_path, out_path) != 0 && copy_file(in_path, out_path) != 0) { logf_(log, ctx, "  copy failed: %s", strerror(errno)); return -1; }
+    if (strcmp(in_path, out_path) != 0 && copy_file(in_path, out_path) != 0) {
+        logf_(log, ctx, "  copy failed: %s", strerror(errno));
+        fp_note_errno(errno);
+        return -1;
+    }
     if (!any) return 1;
 
     int out = open(out_path, O_RDWR);
-    if (out < 0) { logf_(log, ctx, "  open out: %s", strerror(errno)); return -1; }
+    if (out < 0) {
+        logf_(log, ctx, "  open out: %s", strerror(errno));
+        fp_note_errno(errno);
+        return -1;
+    }
 
     // Resolve mremap backend once so logs show dlsym vs svc (not silent).
     {
@@ -711,9 +790,18 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             ? (sizeof order_exact / sizeof order_exact[0])
             : (sizeof order_default / sizeof order_default[0]);
 
-        uint8_t *dec = malloc(s->cryptsize);
+        if (fp_memory_tight_for(s->cryptsize)) {
+            logf_(log, ctx, "  slice[%d] low memory for %.1f MB crypt range — close apps and retry (errno 12 class)",
+                  i, (double)s->cryptsize / (1024.0 * 1024.0));
+            fp_set_fail(FP_FAIL_NOMEM);
+            rc = -1; break;
+        }
+
+        // Lean alloc: cipher (reference) + merged (accumulator) + one attempt buffer.
+        // Avoid holding four full cryptsize copies for Cake Wallet–class binaries.
         uint8_t *cipher = malloc(s->cryptsize);
         uint8_t *merged = malloc(s->cryptsize);
+        uint8_t *dec = malloc(s->cryptsize);
         uint64_t page_total = (s->cryptsize + pg - 1) / pg;
         if (page_total == 0) page_total = 1;
         uint8_t *merged_ok = calloc((size_t)page_total, 1);
@@ -722,7 +810,9 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             pread_full(cin, cipher, s->cryptsize, (off_t)(s->slice_off + s->cryptoff));
         if (cin >= 0) close(cin);
         if (!dec || !cipher || !merged || !merged_ok || !cipher_ok) {
+            logf_(log, ctx, "  slice[%d] buffer alloc/read failed (ENOMEM?)", i);
             free(dec); free(cipher); free(merged); free(merged_ok);
+            fp_set_fail(FP_FAIL_NOMEM);
             rc = -1; break;
         }
         memcpy(merged, cipher, s->cryptsize);
@@ -783,6 +873,9 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             fp_attempt_describe(&best, d, sizeof d);
             logf_(log, ctx, "  slice[%d] FAILED after all modes; best: %s (merged %llu/%llu)",
                   i, d, (unsigned long long)merged_pages, (unsigned long long)page_total);
+            if (best.mremap_errno == ENOMEM || best.mmap_errno == ENOMEM) fp_set_fail(FP_FAIL_NOMEM);
+            else if (best.mremap_errno == EPERM || best.mremap_errno == EACCES) fp_set_fail(FP_FAIL_PERM);
+            else if (g_fp_last_fail == FP_FAIL_NONE) fp_set_fail(FP_FAIL_STILL_ENC);
             rc = -1; free(dec); free(cipher); free(merged); free(merged_ok); break;
         }
         if (merged_pages == page_total) memcpy(dec, merged, s->cryptsize);
@@ -802,9 +895,11 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         int still = fp_has_encrypted_slice(out_path);
         if (still != 0) {
             logf_(log, ctx, "  verify failed: output still encrypted (status=%d)", still);
+            fp_set_fail(FP_FAIL_STILL_ENC);
             rc = -1;
         } else {
             logf_(log, ctx, "  verify ok: cryptid=0 on all slices");
+            g_fp_last_fail = FP_FAIL_NONE;
         }
     }
     return rc;
