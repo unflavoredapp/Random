@@ -1,5 +1,6 @@
 // Brand: Tetherless · https://tetherless.dev
 import Foundation
+import os
 
 extension SAPSigner {
     private static let setupUA =
@@ -7,9 +8,14 @@ extension SAPSigner {
 
     /// Reuse one SAP session across authenticate remints (handshake is expensive / flaky on cellular).
     private static let cacheTTL: TimeInterval = 20 * 60
-    private static var cached: SAPSigner?
-    private static var cachedAt: Date?
-    private static let cacheLock = NSLock()
+
+    private struct CacheState {
+        var cached: SAPSigner?
+        var cachedAt: Date?
+    }
+
+    /// Unchecked: `SAPSigner` is not `Sendable`; lock still serializes cache access.
+    private static let cache = OSAllocatedUnfairLock(uncheckedState: CacheState())
 
     /// Establish protocol-200 state using Apple's certificate and two-round setup service.
     /// Retries transient network drops (common on cellular / brief Wi‑Fi blips).
@@ -21,10 +27,10 @@ extension SAPSigner {
         for attempt in 1...3 {
             do {
                 let signer = try await connectOnce()
-                cacheLock.lock()
-                cached = signer
-                cachedAt = Date()
-                cacheLock.unlock()
+                cache.withLock {
+                    $0.cached = signer
+                    $0.cachedAt = Date()
+                }
                 return signer
             } catch {
                 lastError = error
@@ -38,10 +44,10 @@ extension SAPSigner {
 
     /// Drop cached SAP state (call after hard auth failures that look like a dead session).
     static func invalidateCache() {
-        cacheLock.lock()
-        cached = nil
-        cachedAt = nil
-        cacheLock.unlock()
+        cache.withLock {
+            $0.cached = nil
+            $0.cachedAt = nil
+        }
     }
 
     /// Prefetch SAP so Decrypt / Retry isn't blocked on the first handshake.
@@ -50,12 +56,14 @@ extension SAPSigner {
     }
 
     private static func cachedIfFresh() -> SAPSigner? {
-        cacheLock.lock()
-        defer { cacheLock.unlock() }
-        guard let cached, let cachedAt, Date().timeIntervalSince(cachedAt) < cacheTTL else {
-            return nil
+        cache.withLock { state in
+            guard let cached = state.cached,
+                  let cachedAt = state.cachedAt,
+                  Date().timeIntervalSince(cachedAt) < cacheTTL else {
+                return nil
+            }
+            return cached
         }
-        return cached
     }
 
     private static func isTransientSetupFailure(_ error: Error) -> Bool {

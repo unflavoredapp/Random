@@ -16,6 +16,7 @@ import UIKit
 import Darwin
 import Security
 import CryptoKit
+import os
 
 /// FIFO async mutex. `release()` hands the lane straight to the next waiter.
 actor SignGate {
@@ -40,14 +41,13 @@ nonisolated final class SignContext: @unchecked Sendable {
 
     @TaskLocal static var current: SignContext?
 
-    private let lock = NSLock()
-    private var cancelledFlag = false
+    private let cancelled = OSAllocatedUnfairLock(initialState: false)
     private let handler: Handler?
 
     init(handler: Handler? = nil) { self.handler = handler }
 
-    func cancel() { lock.lock(); cancelledFlag = true; lock.unlock() }
-    var isCancelled: Bool { lock.lock(); defer { lock.unlock() }; return cancelledFlag }
+    func cancel() { cancelled.withLock { $0 = true } }
+    var isCancelled: Bool { cancelled.withLock { $0 } }
 
     /// stage ∈ queued · preflight · extracting · signing · verifying · packaging · done
     static func report(_ stage: String, _ fraction: Double) {
@@ -71,9 +71,12 @@ nonisolated enum SignGuard {
     /// IPAs at or above this size are never copied into the sign cache (the copy costs more than it saves).
     static let cacheCeilingBytes: Int64 = 1_024 * 1_024 * 1_024
 
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var activeDirs = Set<String>()
-    nonisolated(unsafe) private static var liveJobs = 0
+    private struct GuardState {
+        var activeDirs = Set<String>()
+        var liveJobs = 0
+    }
+
+    private static let state = OSAllocatedUnfairLock(initialState: GuardState())
 
     // MARK: Sizes
 
@@ -116,15 +119,19 @@ nonisolated enum SignGuard {
 
     // MARK: Temp hygiene
 
-    static func registerWork(_ url: URL) { lock.lock(); activeDirs.insert(url.path); lock.unlock() }
-    static func unregisterWork(_ url: URL) { lock.lock(); activeDirs.remove(url.path); lock.unlock() }
+    static func registerWork(_ url: URL) {
+        state.withLock { $0.activeDirs.insert(url.path) }
+    }
+    static func unregisterWork(_ url: URL) {
+        state.withLock { $0.activeDirs.remove(url.path) }
+    }
 
     /// Removes leftovers of crashed / killed signing runs. Anything touched recently or owned by a live job stays.
     @discardableResult
     static func sweepStaleTemp(olderThan age: TimeInterval = 3_600) -> Int64 {
         let fm = FileManager.default
         let tmp = fm.temporaryDirectory
-        lock.lock(); let active = activeDirs; lock.unlock()
+        let active = state.withLock { $0.activeDirs }
         var freed: Int64 = 0
         let items = (try? fm.contentsOfDirectory(at: tmp, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey])) ?? []
         for u in items {
@@ -145,7 +152,7 @@ nonisolated enum SignGuard {
     static func begin(_ label: String) async -> SignJobToken {
         let t = SignJobToken()
         t.activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: label)
-        lock.lock(); liveJobs += 1; lock.unlock()
+        state.withLock { $0.liveJobs += 1 }
         await MainActor.run {
             UIApplication.shared.isIdleTimerDisabled = true      // auto-lock would suspend the app mid-sign
             t.background = UIApplication.shared.beginBackgroundTask(withName: label) {
@@ -158,7 +165,10 @@ nonisolated enum SignGuard {
 
     static func end(_ t: SignJobToken) async {
         if let a = t.activity { ProcessInfo.processInfo.endActivity(a); t.activity = nil }
-        lock.lock(); liveJobs = max(0, liveJobs - 1); let remaining = liveJobs; lock.unlock()
+        let remaining = state.withLock { s -> Int in
+            s.liveJobs = max(0, s.liveJobs - 1)
+            return s.liveJobs
+        }
         await MainActor.run {
             let id = t.background; t.background = .invalid
             if id != .invalid { UIApplication.shared.endBackgroundTask(id) }

@@ -29,7 +29,7 @@ enum IPadnExchangeRates {
     }
 
     static func convert(_ amount: Double, from: String, to: String, rates: [String: Double]) -> Double? {
-        guard let fromRate = rates[from], let toRate = rates[to], fromRate > 0 else { return nil }
+        guard rates[to] != nil, let fromRate = rates[from], fromRate > 0 else { return nil }
         // rates are relative to `to` base when loaded with from=base... Frankfurter returns rates for converting FROM base TO others.
         // If base is `to`, amount in `from` = amount / rates[from] when rates keyed as base→currency... 
         // We load with from=base(=to), so 1 base = rates[currency] of that currency.
