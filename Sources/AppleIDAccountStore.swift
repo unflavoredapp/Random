@@ -1240,7 +1240,7 @@ final class AppleIDStore: ObservableObject {
         guard session.isUsable else {
             throw AppStoreClientError.message("Apple returned an incomplete Store session. Try again.")
         }
-        statusMessage = "Store unlocked (iPadn login)…"
+        statusMessage = "Store unlocked…"
         return session
     }
 

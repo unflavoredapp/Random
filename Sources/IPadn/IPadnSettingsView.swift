@@ -118,7 +118,7 @@ struct IPadnSettingsView: View {
 
                     Link("tetherless.dev", destination: TetherlessBrand.siteURL)
                     if let url = URL(string: "https://github.com/mengangs/ipadn") {
-                        Link("iPadn source (GPL-2.0)", destination: url)
+                        Link("Open-source Store login (GPL-2.0)", destination: url)
                     }
                 }
 
@@ -240,17 +240,17 @@ struct IPadnSettingsView: View {
                 } header: {
                     Text("Version history sources")
                 } footer: {
-                    Text("Used to look up older versions (Timbrd, Bilin, iosdump). Sources match mengangs/ipadn defaults.")
+                    Text("Used to look up older versions (Timbrd, Bilin, iosdump). Public version feeds used by Tetherless Store search.")
                 }
             }
 
             if page == .maintenance {
                 Section {
                     Button("Export settings & following") {
-                        statusMessage = "Export uses the iPadn backup format when available on this build."
+                        statusMessage = "Export uses the Tetherless backup format when available on this build."
                     }
                     Button("Import settings & following") {
-                        statusMessage = "Import a JSON backup exported from iPadn / TetherLess Account settings."
+                        statusMessage = "Import a JSON backup exported from Tetherless Account settings."
                     }
                 } header: {
                     Text("Backup")
@@ -266,7 +266,7 @@ struct IPadnSettingsView: View {
                             }
                             Button("Cancel", role: .cancel) {}
                         }
-                    if let url = URL(string: "https://github.com/mengangs/ipadn/issues") {
+                    if let url = URL(string: "https://github.com/unflavoredapp/Random/issues") {
                         Link("Report an issue", destination: url)
                     }
                     Button("Reset to defaults", role: .destructive) { resetSettings = true }

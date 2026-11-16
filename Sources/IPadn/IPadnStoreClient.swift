@@ -429,7 +429,7 @@ enum IPadnStoreClient {
     private static func json(_ url: URL) async throws -> [String: Any] {
         var req = URLRequest(url: url)
         req.timeoutInterval = 30
-        req.setValue("TetherLess-iPadn/1", forHTTPHeaderField: "User-Agent")
+        req.setValue("Tetherless/1", forHTTPHeaderField: "User-Agent")
         let (data, resp) = try await URLSession.shared.data(for: req)
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(code) else {

@@ -103,7 +103,7 @@ enum IPadnAppleLoginResponse {
 /// iPadn-style MZFinance mint → `StorefrontSession`.
 @MainActor
 enum IPadnStoreLogin {
-    private(set) static var lastDiagnostic = "No iPadn login attempted."
+    private(set) static var lastDiagnostic = "No Store login attempted."
     private static let guidDefaultsKey = "tetherless.ipadn.store.guid"
 
     /// WASM runtime / store-proof infrastructure failed — eligible for Anisette fallback.

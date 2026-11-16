@@ -311,7 +311,7 @@ struct IPadnLoginView: View {
                     .font(.title.weight(.bold))
                     .foregroundStyle(.white)
                 Text(initialAccountID == nil
-                     ? "Sync purchases and download apps you’re licensed to use — same Store login as iPadn."
+                     ? "Sync purchases and download apps you’re licensed to use with your Apple Account."
                      : "This session expired. Enter the current password for this account.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.55))

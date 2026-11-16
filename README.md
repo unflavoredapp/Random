@@ -28,7 +28,7 @@ Tetherless ships a glassmorphism shell over the existing signing and install sta
 
 - **Purple → teal** full-bleed gradient background
 - **Glass cards** and capsule controls with soft material blur
-- **Floating tab bar** — Search · Downloads · Purchased · Account (iPadn tab IA, English). Pair / Files / Library live under Account.
+- **Floating tab bar** — Search · Downloads · Purchased · Account. Pair / Files / Library live under Account.
 - Gradient **app icon** (no-cable mark) matching the UI palette
 
 Backends (TrustCore signing, OTA, native install) are unchanged under the new chrome.
@@ -36,7 +36,7 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 ## Features
 
 - **Sign & install any IPA** — using your free Apple ID, or your own certificate.
-- **Get a clean copy of apps you own** — FairPlay decrypt on this iPhone (Installed or Store). Optional **iPadn** (Settings) vendors [mengangs/ipadn](https://github.com/mengangs/ipadn) search + Store login into Tetherless (GPL-2.0). Optional Telegram Phone Worker.
+- **Get a clean copy of apps you own** — FairPlay decrypt on this iPhone (Installed or Store). App Store search + login are built in (includes GPL-2.0 open-source Store login code). Optional Telegram Phone Worker.
 - **Multiple App Store accounts** — sign several Apple IDs in for downloads and switch between them from Search or Account.
 - **Tweak injection** — add `.deb` or `.dylib` tweaks while you sign.
 - **Keep apps alive** — resign in one tap, Refresh All at once, or automate it with a Shortcut so your apps (and Tetherless itself) never expire — even while your iPhone is locked.
@@ -46,12 +46,12 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 
 | Area | What you get |
 | --- | --- |
-| **Search** | iPadn-style Store search → App Detail / Get → Downloads (or FairPlay decrypt) |
+| **Search** | App Store search → App Detail / Get → Downloads (or FairPlay decrypt) |
 | **Downloads** | Real download manager — pause / resume / progress / Install / Retry / Edit |
 | **Purchased** | Purchase history with dates, Select, cloud redownload, App Detail |
 | **Account** | Apple ID, Installation settings (One-tap / Native / Certificate / Proxy), Pair, Files, Library, Settings |
 
-**Decrypt tip:** Prefer **Account › Installed & sources → Decrypt**, or **Purchased**. **iPadn Store search** is on by default (Settings) for name / App ID / store-link / multi-region / delisted lookup plus Timbrd·Bilin·iosdump version history (Sources/IPadn, GPL-2.0). **Telegram / Phone Worker** remains optional.
+**Decrypt tip:** Prefer **Account › Installed & sources → Decrypt**, or **Purchased**. **App Store search** is on by default (Settings) for name / App ID / store-link / multi-region / delisted lookup plus Timbrd·Bilin·iosdump version history. **Telegram / Phone Worker** remains optional.
 | **Sign & install** | TrustCore signing, OTA via `*.tetherless.dev`, or native idevice install |
 | **Analysis** | Local Analysis Center — disassembler, CFG, pseudocode, reversible patch proposals |
 | **Identity** | ADID (`AS-XXXXXX-XX`) minted on first launch, stored in Keychain |
