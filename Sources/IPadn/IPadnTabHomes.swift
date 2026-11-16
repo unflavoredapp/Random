@@ -44,7 +44,7 @@ struct PurchasedHomeView: View {
             case .queued, .running, .pausing:
                 badges[adam] = ("Downloading…", TetherlessPalette.accent)
             case .processing:
-                badges[adam] = ("Decrypting…", TetherlessPalette.accent)
+                badges[adam] = ("Companion…", TetherlessPalette.accent)
             case .completed:
                 badges[adam] = (
                     job.version.isEmpty ? "Decrypted" : "Decrypted \(job.version)",

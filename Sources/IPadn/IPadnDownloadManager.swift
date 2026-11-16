@@ -23,7 +23,7 @@ enum IPadnDownloadStatus: String, Codable, CaseIterable {
         case .running: return "Downloading"
         case .pausing: return "Pausing"
         case .paused: return "Paused"
-        case .processing: return "Decrypting"
+        case .processing: return "Companion"
         case .completed: return "Completed"
         case .failed: return "Download failed"
         }
@@ -225,7 +225,10 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             let samePin = ($0.externalVersionId ?? "") == pin
             return sameApp && samePin && ![.completed, .failed].contains($0.status)
         }) {
-            throw IPadnDownloadError.message("This version already has a download task.")
+            throw IPadnDownloadError.duplicate
+        }
+        if activeCount >= maxQueued {
+            throw IPadnDownloadError.queueFull(maxQueued)
         }
         let adam = Int(app.id.split(separator: "-").last.map(String.init) ?? "")
             ?? Int(app.id.filter(\.isNumber))
@@ -275,6 +278,9 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
     func enqueueURL(_ url: URL, name: String? = nil) throws {
         guard url.scheme?.lowercased() == "https", url.host != nil else {
             throw IPadnDownloadError.message("Enter a valid HTTPS download link.")
+        }
+        if activeCount >= maxQueued {
+            throw IPadnDownloadError.queueFull(maxQueued)
         }
         let label = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let job = IPadnDownloadJob(
@@ -404,13 +410,24 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             return
         }
         waitingForWiFi = false
-        let running = jobs.filter { $0.status == .running || $0.status == .processing }.count
+        // Only Store/URL fetches consume download slots. Companion (.processing) runs on
+        // its own FIFO so bulk Get can keep stacking downloads while pushes serialize.
+        let running = jobs.filter { $0.status == .running || $0.status == .pausing }.count
         let slots = max(0, maxConcurrent - running)
         guard slots > 0 else { return }
         let queued = jobs.filter { $0.status == .queued }.prefix(slots)
         for job in queued {
             start(job.id)
         }
+    }
+
+    /// 1-based position in the companion FIFO (processing jobs oldest-first).
+    func companionQueuePosition(for id: UUID) -> (index: Int, total: Int)? {
+        let pending = jobs
+            .filter { $0.status == .processing && $0.kind == .store }
+            .sorted { $0.createdAt < $1.createdAt }
+        guard let idx = pending.firstIndex(where: { $0.id == id }) else { return nil }
+        return (idx + 1, pending.count)
     }
 
     private func start(_ id: UUID) {
@@ -492,8 +509,11 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                     if self.jobs[i].version.isEmpty { self.jobs[i].version = result.item.displayVersion }
                     if self.jobs[i].bundleID.isEmpty { self.jobs[i].bundleID = result.item.bundleID }
                     self.persist()
-                    // iPadn IPA on disk → FairPlay companion / in-app decrypt.
-                    await self.enqueueSerialDecrypt(id: id, ipa: dest, name: job.name)
+                    // Free the download slot immediately — companion FIFO runs separately.
+                    self.storeTasks[id] = nil
+                    self.schedule()
+                    self.enqueueCompanionPush(id: id, ipa: dest, name: job.name)
+                    return
                 } else {
                     // No adam on the job — resolve via store URL / bundle, still iPadn fetch.
                     await self.runOwnedStoreDecrypt(id: id, app: app, job: job)
@@ -513,15 +533,16 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
         }
     }
 
-    private func enqueueSerialDecrypt(id: UUID, ipa: URL, name: String) async {
+    /// FIFO companion installs — one IPA → companion at a time, ordered by enqueue.
+    private func enqueueCompanionPush(id: UUID, ipa: URL, name: String) {
         let previous = decryptTail
         let done = Task { @MainActor in
             await previous?.value
             guard !Task.isCancelled else { return }
             await self.performStoreDecrypt(id: id, ipa: ipa, name: name)
+            self.schedule()
         }
         decryptTail = done
-        await done.value
     }
 
     private func performStoreDecrypt(id: UUID, ipa: URL, name: String) async {
@@ -574,6 +595,9 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
         guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
         jobs[i].status = .processing
         persist()
+        // Free download slot; companion FIFO will run this job in order.
+        storeTasks[id] = nil
+        schedule()
         let previous = decryptTail
         let done = Task { @MainActor in
             await previous?.value
@@ -622,7 +646,7 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             self.persist()
         }
         decryptTail = done
-        await done.value
+        // Do not await — download slots must stay free while companion FIFO drains.
     }
 
     private func startURL(_ id: UUID) {
@@ -732,11 +756,17 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
     }
 }
 
-enum IPadnDownloadError: LocalizedError {
+enum IPadnDownloadError: LocalizedError, Equatable {
     case message(String)
+    case duplicate
+    case queueFull(Int)
+
     var errorDescription: String? {
-        if case .message(let m) = self { return m }
-        return nil
+        switch self {
+        case .message(let m): return m
+        case .duplicate: return "Already in the Downloads queue."
+        case .queueFull(let n): return "Downloads queue is full (\(n) jobs). Wait for some to finish or remove failed ones."
+        }
     }
 }
 

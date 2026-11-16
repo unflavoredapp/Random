@@ -316,9 +316,17 @@ struct DownloadsHomeView: View {
                 .font(.caption)
                 .foregroundStyle(.white.opacity(0.55))
         case .processing:
-            Text("Decrypting…")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(TetherlessPalette.accent)
+            if let pos = manager.companionQueuePosition(for: job.id), pos.total > 1 {
+                Text(pos.index == 1
+                      ? "Pushing to companion · \(pos.index) of \(pos.total)"
+                      : "Queued for companion · \(pos.index) of \(pos.total)")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            } else {
+                Text("Pushing to companion…")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
         case .paused:
             Text("Paused · \(job.progressLabel)")
                 .font(.caption)
@@ -397,7 +405,7 @@ struct DownloadsHomeView: View {
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
             Text(manager.jobs.isEmpty
-                 ? "Search Get downloads the Store IPA here, then FairPlay decrypt runs automatically. Pause, resume, and Install show up after."
+                 ? "Tap Get on as many apps as you want — they stack here. Store downloads run in parallel; companion pushes go one at a time."
                  : "Try another filter or clear the search.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.5))
