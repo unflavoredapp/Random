@@ -99,6 +99,9 @@ enum DecryptCompanionRuntime {
         if host["hostStoreReady"] as? Bool == true {
             log("Host Store session was ready when this companion was built.")
         }
+        if host["hostFairPlayAck"] as? Bool == false {
+            log("Self-heal note: Media & Purchases may not be signed in — will auto-retry live install / SINFs if mremap EPERMs.")
+        }
 
         // 1) Pre-decrypt audit — prove FairPlay DRM is present on the embedded IPA tree.
         // EmbeddedPayload is inside our sideloaded .app under /var/containers — that is NOT
@@ -135,40 +138,33 @@ enum DecryptCompanionRuntime {
         log("Copying app bundle…")
         try copyTree(from: src, to: destApp)
 
-        // 2) Decrypt INTO writable copy. Prefer the live App Store install as mremap
-        // input when readable — fairplayd often EPERMs on EmbeddedPayload IPA copies
-        // (Roblox: mremap errno 1) even when SC_Info is staged.
+        // 2) Decrypt INTO writable copy with self-heal (detect EPERM/ENOMEM/still-encrypted
+        // and automatically switch live ↔ embed / restage SINFs / pause for memory).
         DecryptCompanionController.shared.statusTitle = "2/5 · Decrypting…"
-        let progressBridge: (String) -> Void = { msg in
+        let progressBridge: @Sendable (String) -> Void = { msg in
             progress?(msg)
             Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
         }
         let liveRead = Self.preferredLiveInstallURL(embeddedApp: src, manifest: man)
-        let report: FairPlayDecryptReport
         if let live = liveRead {
-            log("Using live App Store install for FairPlay input…")
+            log("Live App Store install available for FairPlay self-heal…")
             log(live.path)
-            do {
-                report = try FairPlayDecrypt.decryptMachOs(
-                    readingFrom: live,
-                    writingTo: destApp,
-                    progress: progressBridge
-                )
-            } catch {
-                log("Live-install decrypt failed (\(error.localizedDescription)) — retrying from EmbeddedPayload…")
-                report = try FairPlayDecrypt.decryptMachOs(
-                    readingFrom: src,
-                    writingTo: destApp,
-                    progress: progressBridge
-                )
-            }
         } else {
-            log("No readable live install — decrypting from EmbeddedPayload…")
-            report = try FairPlayDecrypt.decryptMachOs(
-                readingFrom: src,
+            log("No readable live install — self-heal will use EmbeddedPayload (+ SINF restage).")
+        }
+        let outcome = try FairPlaySelfHeal.healAndDecrypt(
+            context: FairPlaySelfHeal.Context(
+                readingFrom: liveRead ?? src,
                 writingTo: destApp,
+                liveInstall: liveRead,
+                embeddedOrIPA: src,
+                maxRounds: 3,
                 progress: progressBridge
             )
+        )
+        let report = outcome.report
+        if !outcome.strategiesApplied.isEmpty {
+            log("Self-heal strategies: \(outcome.strategiesApplied.map(\.rawValue).joined(separator: ", "))")
         }
         let decN = report.decrypted.count
         let plainN = report.plain.count
