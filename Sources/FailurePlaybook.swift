@@ -33,41 +33,31 @@ enum FailurePlaybook {
         FailurePlay(
             id: "204",
             title: "Empty store response (HTTP 204)",
-            summary: "Apple returned no package. Remint Store Access with a fresh anisette session — stay on real-device identity (no Store spoof).",
+            summary: "Apple returned no package. Sign in again under Account, then retry Get / Download.",
             matches: ["http 204", "204", "empty response"],
-            actionTitle: "Remint Store Access",
-            action: .turnOffClientInfoRewrite
-        ),
-        // TLS before 403 — combined “HTTP 403… TLS error…” messages should open Library,
-        // not remint again (remint does not fix a bad API host cert).
-        FailurePlay(
-            id: "tls-backend",
-            title: "Backend API TLS failed",
-            summary: "API host TLS failed. TetherLess uses tetherless.dev (same apex as OTA). Clear legacy as_site_base / as_api_base overrides, or Decrypt from Library if the app is installed.",
-            matches: ["tls error", "secure connection", "certificate does not match", "api host tls"],
-            actionTitle: "Open Library",
-            action: .openLibrary
+            actionTitle: "Open Account",
+            action: .openStoreAccess
         ),
         FailurePlay(
             id: "403",
-            title: "Store rejected client identity (HTTP 403)",
-            summary: "Apple blocked the silent store request. We remint + rotate anisette, retry with WASM ADI store-proof, then backend IPA fetch. If the app is already on this iPhone, Decrypt from Library / Installed (companion embed) — that path does not need a Store package.",
+            title: "Store rejected the download (HTTP 403)",
+            summary: "Apple blocked the download request. Sign in again under Account. If the app is already on this iPhone, Decrypt from Library / Installed.",
             matches: ["http 403", "403", "client identity"],
-            actionTitle: "Remint Store Access",
-            action: .turnOffClientInfoRewrite
+            actionTitle: "Open Account",
+            action: .openStoreAccess
         ),
         FailurePlay(
             id: "404",
             title: "Package not found (HTTP 404)",
-            summary: "CDN or version pin missed. Remint Store Access and retry the download.",
+            summary: "CDN or version pin missed. Sign in under Account and retry the download, or pick another build.",
             matches: ["http 404", "404", "not found"],
-            actionTitle: "Remint Store Access",
-            action: .turnOffClientInfoRewrite
+            actionTitle: "Open Account",
+            action: .openStoreAccess
         ),
         FailurePlay(
             id: "1100",
             title: "Developer Portal session expired (1100)",
-            summary: "GrandSlam cookie went stale. Re-auth Store Access so Create cert / Refresh Portal works again.",
+            summary: "GrandSlam cookie went stale. Refresh the Apple ID signing session so Create cert / Refresh Portal works again.",
             matches: ["1100", "session expired", "grandslam", "portal session"],
             actionTitle: "Refresh portal session",
             action: .refreshPortal
@@ -75,9 +65,9 @@ enum FailurePlaybook {
         FailurePlay(
             id: "9610",
             title: "Store auth rejected (9610)",
-            summary: "passwordToken / storefront session invalid. Sign in again under Store Access.",
+            summary: "passwordToken / storefront session invalid. Sign in again under Account.",
             matches: ["9610", "passwordtoken", "storefront"],
-            actionTitle: "Re-auth Store Access",
+            actionTitle: "Sign in under Account",
             action: .reauthStore
         ),
         FailurePlay(
@@ -114,14 +104,8 @@ enum FailurePlaybook {
         case .acknowledgeFairPlay:
             AppStoreDecryptGuide.setAcknowledged(true, email: AppleIDStore.shared.email)
         case .reauthStore:
-            AppNav.shared.goSettings()
-            do {
-                AppleIDStore.shared.clearPersistedStoreSession()
-                _ = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
-            } catch {
-                AppleIDStore.shared.lastError = error.localizedDescription
-                await AppleIDStore.shared.requestStoreVerificationPrompt()
-            }
+            AppleIDStore.shared.clearPersistedStoreSession()
+            AppNav.shared.goAccount()
         case .refreshPortal:
             do {
                 _ = try await AppleIDStore.shared.refreshPortalSession()
@@ -129,14 +113,13 @@ enum FailurePlaybook {
                 AppNav.shared.goSettings()
             }
         case .turnOffClientInfoRewrite:
-            StoreDeviceSpoof.clearPersistedSpoof()
-            await AppleIDStore.shared.requestStoreVerificationPrompt()
+            AppNav.shared.goAccount()
         case .openPair:
             AppNav.shared.goPair()
         case .openLibrary:
             AppNav.shared.goLibrary()
         case .openStoreAccess:
-            AppNav.shared.goSettings()
+            AppNav.shared.goAccount()
         case .refreshAll:
             SideloadSurvival.refreshAllWithKeepAlive()
         }

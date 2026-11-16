@@ -623,12 +623,10 @@ struct DecryptView: View {
         Task { await c.search(q) }
     }
 
-    /// Soft-check + warm anisette/SAP so free/purchased fetch isn't a cold edge surprise.
+    /// Soft-check that Account already has an iPadn store session (no remint).
     private func warmStoreSessionForNiche() async {
         guard store.isSignedIn else { return }
-        if await store.reinforceStoreConnection() == nil, store.storeNeedsVerification {
-            // reinforce already kept any usable prior token; only surface the wall when none.
-        }
+        _ = store.storefrontSession()?.isUsable
     }
 
     private func consumePendingQuery() {
@@ -930,7 +928,7 @@ private struct DecryptStoreTrustHint: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Store piggybacks the Allow / verification code from Sign In — it should not ask for a second text. Retry unlock, or Sign Out → Sign In once under Settings › Store Access.")
+            Text("Store piggybacks the Allow / verification code from Sign In — it should not ask for a second text. Retry unlock, or Sign Out → Sign In once under Account.")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)

@@ -29,7 +29,7 @@ enum FairPlayKeyGate {
     static func requireReady(email: String? = nil) throws {
         guard enforce else { return }
         guard AppleIDStore.shared.isSignedIn else {
-            throw DecryptError("Sign in under Settings › Store Access first.")
+            throw DecryptError("Sign in under Account first.")
         }
         let email = email ?? AppleIDStore.shared.email
         guard AppStoreDecryptGuide.isAcknowledged(email: email) else {

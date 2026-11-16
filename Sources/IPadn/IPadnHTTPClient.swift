@@ -194,6 +194,26 @@ final class IPadnHTTPClient: Sendable {
         try PropertyListSerialization.data(fromPropertyList: value, format: .xml, options: 0)
     }
 
+    /// POST a plist body and decode the Apple plist response (DownloadDispatch / buyProduct).
+    func plist(
+        _ url: URL,
+        body: Data,
+        headers: [String: String] = [:],
+        refreshHeaders: ((URL) async throws -> [String: String])? = nil
+    ) async throws -> ([String: Any], HTTPURLResponse) {
+        let (data, response) = try await request(
+            url,
+            method: "POST",
+            body: body,
+            headers: headers,
+            appleRedirects: true,
+            retryTransient: true,
+            refreshHeaders: refreshHeaders
+        )
+        let dict = try IPadnApplePropertyList.dictionary(data)
+        return (dict, response)
+    }
+
     static func appleFailure(_ response: [String: Any]) -> IPadnToolError? {
         let code = ipadnPlistString(response["failureType"])
         guard !code.isEmpty else { return nil }

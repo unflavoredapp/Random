@@ -232,7 +232,7 @@ struct IPadnAccountMenuButton: View {
     var body: some View {
         Menu {
             if store.isSignedIn {
-                Section("Store Access") {
+                Section("Apple Account") {
                     ForEach(store.accounts) { account in
                         Button {
                             store.selectAccount(id: account.id)
@@ -247,9 +247,6 @@ struct IPadnAccountMenuButton: View {
                 }
                 Button("Account", systemImage: "person.crop.circle") {
                     AppNav.shared.goAccount()
-                }
-                Button("Store Access settings", systemImage: "gearshape") {
-                    AppNav.shared.goSettings()
                 }
                 Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                     store.signOut()

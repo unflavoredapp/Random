@@ -3,7 +3,7 @@
 //  Derived from mengangs/ipadn AppleService.performLogin + AppleLoginResponse (GPL-2.0).
 //  Primary path: WASM SAPRuntime (IPadnWASMSPSigner) for ActionSignature + ADI store-proof.
 //  Fallback once: native StoreSAP + Anisette AMD if WASM fails.
-//  Bridges into StorefrontSession for Settings › Store Access.
+//  Bridges into StorefrontSession for Account (iPadn MZFinance).
 //
 
 import Foundation

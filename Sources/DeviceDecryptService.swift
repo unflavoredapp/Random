@@ -149,7 +149,7 @@ final class DeviceDecryptService: ObservableObject {
         return try await history(account)
     }
 
-    /// purchaseAndDownload with one automatic store-token remint on expiry (PET cascade; no sign-out).
+    /// iPadn DownloadDispatch fetch (no remint / anisette rotate / backend IPA).
     private func purchaseAndDownloadWithStoreRefresh(
         adamId: Int,
         account: inout StorefrontSession,
@@ -157,34 +157,16 @@ final class DeviceDecryptService: ObservableObject {
         externalVersionId: String?,
         version: String?
     ) async throws -> (url: URL, item: StoreDownloadItem) {
-        func run(_ session: StorefrontSession) async throws -> (url: URL, item: StoreDownloadItem) {
-            try await AppStoreClient.shared.purchaseAndDownload(
-                adamId: adamId,
-                account: session,
-                destination: destination,
-                externalVersionId: externalVersionId,
-                version: version,
-                onProgress: { [weak self] msg in
-                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                }
-            )
-        }
-        do {
-            return try await run(account)
-        } catch AppStoreClientError.tokenExpired {
-            publishDecryptProgress("Refreshing App Store download session…")
-            AppleIDStore.shared.invalidateStorefrontSession()
-            let refreshed = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
-            account = refreshed
-            return try await run(refreshed)
-        } catch AppStoreClientError.licenseRequired {
-            // Owned but license probe failed — remint once then retry buy+download.
-            publishDecryptProgress("Re-checking App Store license…")
-            AppleIDStore.shared.invalidateStorefrontSession()
-            let refreshed = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
-            account = refreshed
-            return try await run(refreshed)
-        }
+        _ = version
+        return try await IPadnStoreDownload.purchaseAndDownload(
+            adamId: adamId,
+            account: account,
+            destination: destination,
+            externalVersionId: externalVersionId,
+            onProgress: { [weak self] msg in
+                Task { @MainActor in self?.publishDecryptProgress(msg) }
+            }
+        )
     }
 
     private func storeVersionHistory(for app: DecryptApp) async -> (versions: [DecryptVersion], minOS: String?)? {
@@ -270,7 +252,7 @@ final class DeviceDecryptService: ObservableObject {
         let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
         let results = json["results"] as? [[String: Any]] ?? []
         guard let first = results.first else {
-            throw DecryptError("No App Store listing for \(id). Install it from the App Store with the Apple ID you use in Store Access, then try again.")
+            throw DecryptError("No App Store listing for \(id). Install it from the App Store with the Apple ID you use under Account, then try again.")
         }
         if let track = first["trackViewUrl"] as? String, !track.isEmpty { return track }
         if let trackId = first["trackId"] as? Int {
@@ -464,27 +446,17 @@ final class DeviceDecryptService: ObservableObject {
         progress: ((String) -> Void)? = nil
     ) async throws -> (url: URL, name: String, version: String) {
         guard AppleIDStore.shared.isSignedIn else {
-            throw DecryptError("Sign in under Settings › Store Access first.")
+            throw DecryptError("Sign in under Account first.")
         }
         try FairPlayKeyGate.requireReady()
         let adam = try await resolveAdamId(bundleID: "", storeURL: storeURL)
         guard let adam else {
             throw DecryptError("Couldn't resolve an App Store id from that link.")
         }
-        progress?("Reinforcing Store connection…")
-        guard let reinforced = await AppleIDStore.shared.reinforceStoreConnection() else {
-            throw DecryptError("Sign in under Settings › Store Access first.")
+        guard var account = AppleIDStore.shared.storefrontSession(), account.isUsable else {
+            throw DecryptError("Sign in under Account first.")
         }
-        var account = reinforced
-        var pinned = ""
-        if let version, !version.isEmpty {
-            pinned = (try? await AppStoreClient.shared.resolveDownloadVersionId(
-                adamId: adam,
-                account: account,
-                version: version,
-                externalVersionId: nil
-            )) ?? ""
-        }
+        let pinned = (version ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let tmpDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("tetherless-worker", isDirectory: true)
         try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
@@ -558,7 +530,7 @@ final class DeviceDecryptService: ObservableObject {
             }
 
             throw FairPlayDecryptError.noInstalledApp(
-                "Can’t find \(app.name) on disk (\(app.bundleID)). Pair Native and refresh Installed, or unlock Store Access to download."
+                "Can’t find \(app.name) on disk (\(app.bundleID)). Pair Native and refresh Installed, or sign in under Account to download."
             )
         } catch {
             lastError = error.localizedDescription
@@ -661,7 +633,7 @@ final class DeviceDecryptService: ObservableObject {
         defer { busy = false }
         do {
             guard AppleIDStore.shared.isSignedIn else {
-                throw DecryptError("Sign in under Settings › Store Access with the Apple ID that owns this app.")
+                throw DecryptError("Sign in under Account with the Apple ID that owns this app.")
             }
             let bid = app.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
             let link: String
@@ -735,7 +707,7 @@ final class DeviceDecryptService: ObservableObject {
         DecryptCompanionController.shared.dismiss()
     }
 
-    /// ipatool-style silent buy + CDN download, then companion IPA FairPlay. Never opens the App Store UI.
+    /// iPadn DownloadDispatch fetch + FairPlay handoff. No remint / anisette / backend IPA stack.
     private func silentPurchaseDownloadDecrypt(
         bundleID: String,
         displayName: String,
@@ -747,47 +719,12 @@ final class DeviceDecryptService: ObservableObject {
             throw DecryptError("Couldn't resolve an App Store id for \(displayName). Try another search result.")
         }
         publishDecryptProgress("Contacting Apple…")
-        StoreDeviceSpoof.clearPersistedSpoof()
-        publishDecryptProgress("Reinforcing Store connection…")
-        guard let reinforced = await AppleIDStore.shared.reinforceStoreConnection() else {
-            throw DecryptError("Sign in under Settings › Store Access with the Apple ID that owns this app.")
+        guard var account = AppleIDStore.shared.storefrontSession(), account.isUsable else {
+            throw DecryptError("Sign in under Account with the Apple ID that owns this app.")
         }
-        var account = reinforced
 
-        // Explicit pin from Versions sheet, else display-version resolve inside client.
-        let requestedVersion = (version ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        var pinned = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if pinned.isEmpty {
-            do {
-                pinned = try await AppStoreClient.shared.resolveDownloadVersionId(
-                    adamId: adam,
-                    account: account,
-                    version: version,
-                    externalVersionId: nil
-                ) ?? ""
-            } catch AppStoreClientError.tokenExpired {
-                AppleIDStore.shared.invalidateStorefrontSession()
-                account = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
-                pinned = try await AppStoreClient.shared.resolveDownloadVersionId(
-                    adamId: adam,
-                    account: account,
-                    version: version,
-                    externalVersionId: nil
-                ) ?? ""
-            } catch {
-                if !requestedVersion.isEmpty {
-                    throw DecryptError(
-                        "Couldn't pin version \(requestedVersion) (\(error.localizedDescription)). Retry or pick another build."
-                    )
-                }
-                pinned = ""
-            }
-        }
-        if !requestedVersion.isEmpty, pinned.isEmpty {
-            throw DecryptError(
-                "Couldn't pin version \(requestedVersion) for \(displayName). Pick another build or decrypt Latest."
-            )
-        } else if !pinned.isEmpty {
+        let pinned = (externalVersionId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !pinned.isEmpty {
             publishDecryptProgress("Pinning store build \(pinned)…")
         }
 
@@ -797,143 +734,42 @@ final class DeviceDecryptService: ObservableObject {
         let tag = pinned.isEmpty ? "\(adam)" : "\(adam)_\(pinned)"
         let dest = tmpDir.appendingPathComponent("\(bundleID.isEmpty ? "app" : bundleID)_\(tag).ipa")
 
-        let ipa: URL
-        let downloadedVersion: String
-        var identityRetryUsed = false
-        downloadAttempt: while true {
-            do {
-                let result = try await purchaseAndDownloadWithStoreRefresh(
-                    adamId: adam,
-                    account: &account,
-                    destination: dest,
-                    externalVersionId: pinned.isEmpty ? nil : pinned,
-                    version: version
+        do {
+            let result = try await purchaseAndDownloadWithStoreRefresh(
+                adamId: adam,
+                account: &account,
+                destination: dest,
+                externalVersionId: pinned.isEmpty ? nil : pinned,
+                version: version
+            )
+            try await handoffStoreIPAToFairPlay(
+                ipa: result.url,
+                displayName: displayName,
+                downloadedVersion: result.item.displayVersion
+            )
+        } catch {
+            let detail = error.localizedDescription
+            // Installed companion embed only — no remint / backend IPA fallback.
+            if !bundleID.isEmpty,
+               let installed = await resolveInstalledAppURL(bundleID: bundleID) {
+                publishDecryptProgress(
+                    "Store package unavailable — embedding installed \(displayName) into companion…"
                 )
-                ipa = result.url
-                downloadedVersion = result.item.displayVersion
-                pinned = result.item.externalVersionId.isEmpty ? pinned : result.item.externalVersionId
-                break downloadAttempt
-            } catch AppStoreClientError.paidApp {
-                throw DecryptError(
-                    "\(displayName) is paid — silent download only covers free/owned apps. Buy it once with this Apple ID, then decrypt again (still no App Store UI from TetherLess)."
-                )
-            } catch AppStoreClientError.licenseRequired {
-                throw DecryptError(
-                    "This Apple ID doesn’t own a license for \(displayName). Buy or redeem it once, then decrypt again."
-                )
-            } catch AppStoreClientError.needsTwoFactor {
-                AppleIDStore.shared.noteStoreNeedsVerification()
-                throw DecryptError(
-                    "Store needs the first Sign In trust. In Settings › Store Access, Sign Out then Sign In once — the Allow / verification code unlocks Store automatically (no second text)."
-                )
-            } catch AppStoreClientError.tokenExpired {
-                throw DecryptError(
-                    "App Store session couldn’t refresh automatically — open Settings › Store Access and tap refresh, then retry. You should still be signed in."
-                )
-            } catch AppStoreClientError.network(let detail) {
-                let lower = detail.lowercased()
-                if (lower.contains("403") || lower.contains("client identity")), !identityRetryUsed {
-                    identityRetryUsed = true
-                    StoreDeviceSpoof.clearPersistedSpoof()
-                    // SideStore-style: rotate anisette server, then remint passwordToken.
-                    // Poison the dead token so soft-restore can't recycle it.
-                    let nextAni = await AnisetteClient.shared.rotateServer()
-                    publishDecryptProgress(
-                        "Store HTTP 403 — rotated anisette to \(nextAni.host ?? "server"), reminting session…"
-                    )
-                    await AnisetteClient.shared.invalidate(resetProvisioning: true)
-                    SAPSigner.invalidateCache()
-                    AppleIDStore.shared.clearPersistedStoreSession()
-                    AppleIDStore.shared.invalidateStorefrontSession()
-                    guard let refreshed = await AppleIDStore.shared.reinforceStoreConnection(forceRemint: true),
-                          refreshed.isUsable else {
-                        throw DecryptError(
-                            "Store session remint failed after HTTP 403. Sign Out / Sign In under Settings › Store Access, then retry."
-                        )
-                    }
-                    account = refreshed
-                    continue downloadAttempt
+                publishDecryptProgress(detail)
+                try FairPlayKeyGate.requireReady()
+                _ = try await DecryptCompanionInstaller.installAndOpen(
+                    embeddingInstalledApp: installed,
+                    displayName: displayName
+                ) { [weak self] msg in
+                    Task { @MainActor in self?.publishDecryptProgress(msg) }
                 }
-                if lower.contains("403") || lower.contains("client identity") {
-                    // Prefer installed companion embed before backend when the app is on disk
-                    // (unblocks Cake Wallet / TestFlight without waiting on API fetch).
-                    if !bundleID.isEmpty,
-                       let installed = await resolveInstalledAppURL(bundleID: bundleID) {
-                        publishDecryptProgress(
-                            "Store HTTP 403 — embedding installed \(displayName) into companion…"
-                        )
-                        try FairPlayKeyGate.requireReady()
-                        _ = try await DecryptCompanionInstaller.installAndOpen(
-                            embeddingInstalledApp: installed,
-                            displayName: displayName
-                        ) { [weak self] msg in
-                            Task { @MainActor in self?.publishDecryptProgress(msg) }
-                        }
-                        markCompanionHandoff(displayName: displayName)
-                        return
-                    }
-                    // Option 2: phone keeps FairPlay; backend (tetherless.dev) runs volumeStore + CDN.
-                    // Skip when a legacy API host override still points at a broken TLS host.
-                    if LocalDecryptBridge.backendTLSLikelyBroken {
-                        throw DecryptError(
-                            "App Store download failed (\(detail)). Backend IPA fetch skipped — API host TLS is broken (\(DecryptClient.siteBase)). Clear as_api_base / as_site_base to use tetherless.dev, or Decrypt from Library if installed."
-                        )
-                    }
-                    publishDecryptProgress(
-                        "Phone Store still 403 — trying backend encrypted-IPA fetch…"
-                    )
-                    do {
-                        let result = try await AppStoreClient.shared.downloadIPAViaBackend(
-                            adamId: adam,
-                            account: account,
-                            destination: dest,
-                            externalVersionId: pinned.isEmpty ? nil : pinned
-                        ) { [weak self] msg in
-                            Task { @MainActor in self?.publishDecryptProgress(msg) }
-                        }
-                        ipa = result.url
-                        downloadedVersion = result.item.displayVersion
-                        pinned = result.item.externalVersionId.isEmpty ? pinned : result.item.externalVersionId
-                        break downloadAttempt
-                    } catch {
-                        let backend = error.localizedDescription
-                        let tlsHint = backend.localizedCaseInsensitiveContains("tls")
-                            || backend.localizedCaseInsensitiveContains("secure connection")
-                        // Last chance: installed embed after backend TLS failure.
-                        if tlsHint, !bundleID.isEmpty,
-                           let installed = await resolveInstalledAppURL(bundleID: bundleID) {
-                            publishDecryptProgress(
-                                "Backend TLS failed — embedding installed \(displayName) into companion…"
-                            )
-                            try FairPlayKeyGate.requireReady()
-                            _ = try await DecryptCompanionInstaller.installAndOpen(
-                                embeddingInstalledApp: installed,
-                                displayName: displayName
-                            ) { [weak self] msg in
-                                Task { @MainActor in self?.publishDecryptProgress(msg) }
-                            }
-                            markCompanionHandoff(displayName: displayName)
-                            return
-                        }
-                        throw DecryptError(
-                            "App Store download failed (\(detail)). Backend fetch also failed: \(backend)."
-                                + (tlsHint
-                                   ? " API host TLS is failing — if the app is installed, Decrypt from Library / Installed; otherwise remint Store Access and retry."
-                                   : " Remint Store Access and retry.")
-                        )
-                    }
-                }
-                throw DecryptError(
-                    "App Store download failed (\(detail)). Retry from Settings › Store Access if needed."
-                )
+                markCompanionHandoff(displayName: displayName)
+                return
             }
+            throw DecryptError(
+                "App Store download failed (\(detail)). Sign in again under Account if needed."
+            )
         }
-
-        try await handoffStoreIPAToFairPlay(
-            ipa: ipa,
-            displayName: displayName,
-            downloadedVersion: downloadedVersion
-        )
     }
 
     /// FairPlay a Store IPA already on disk (iPadn Downloads Get → purchaseAndDownload).
@@ -1023,7 +859,7 @@ final class DeviceDecryptService: ObservableObject {
             } catch let ipaError {
                 AppStoreDecryptGuide.setAcknowledged(false, email: AppleIDStore.shared.email)
                 throw DecryptError(
-                    "Companion failed (\(companionError)). In-app FairPlay on the Store package also failed (\(ipaError.localizedDescription)). Trust your Apple ID under Settings › General › VPN & Device Management if the companion installed, then open Tetherless Decrypt — or remint Store Access and retry. \(AppStoreDecryptGuide.failureHint)"
+                    "Companion failed (\(companionError)). In-app FairPlay on the Store package also failed (\(ipaError.localizedDescription)). Trust your Apple ID under Settings › General › VPN & Device Management if the companion installed, then open Tetherless Decrypt — or sign in again under Account and retry. \(AppStoreDecryptGuide.failureHint)"
                 )
             }
         }

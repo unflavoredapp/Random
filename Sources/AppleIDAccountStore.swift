@@ -1,7 +1,7 @@
 //
 //  AppleIDAccountStore.swift
 //  Multi-account Store Access + free-Apple-ID certificate linking.
-//  Used by Settings › Store Access, Decrypt, SigningSheet, and Apple ID Manage.
+//  Used by Account (iPadn store), Decrypt, SigningSheet, and Apple ID Manage.
 //
 
 import Foundation
@@ -663,10 +663,10 @@ final class AppleIDStore: ObservableObject {
     /// - Parameter forStoreSMS: Skip Mac trusted-device push so the texted code stays usable for MZFinance.
     private func openGSATwoFactorChallenge(forStoreSMS: Bool = false) async throws {
         guard let account = activeAccount else {
-            throw AppleAuthError.message("Sign in under Store Access first.")
+            throw AppleAuthError.message("Sign in under Account first.")
         }
         guard let password = passwordForAccount(id: account.id), !password.isEmpty else {
-            throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Store Access.")
+            throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Account.")
         }
         _ = try await GSAAuthClient.shared.authenticate(
             email: account.email,
@@ -959,10 +959,10 @@ final class AppleIDStore: ObservableObject {
     @discardableResult
     func refreshPortalSession() async throws -> AppleAuthSession {
         guard let account = activeAccount else {
-            throw AppleAuthError.message("Sign in under Store Access first.")
+            throw AppleAuthError.message("Sign in under Account first.")
         }
         guard let password = passwordForAccount(id: account.id), !password.isEmpty else {
-            throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Store Access.")
+            throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Account.")
         }
         authPhase = .authenticating
         lastError = nil
@@ -1019,11 +1019,11 @@ final class AppleIDStore: ObservableObject {
             return existing
         }
         guard let email = activeAccount?.email, !email.isEmpty else {
-            throw AppStoreClientError.message("Sign in under Store Access first.")
+            throw AppStoreClientError.message("Sign in under Account first.")
         }
         guard let aid = activeAccountID,
               let password = passwordForAccount(id: aid), !password.isEmpty else {
-            throw AppStoreClientError.message("Missing Apple ID password — sign in again under Store Access.")
+            throw AppStoreClientError.message("Missing Apple ID password — sign in again under Account.")
         }
 
         let code = (pendingStoreAuthCode ?? "").filter(\.isNumber)
@@ -1114,7 +1114,7 @@ final class AppleIDStore: ObservableObject {
             throw AppStoreClientError.message("Enter the 6-digit verification code.")
         }
         guard let email = activeAccount?.email, !email.isEmpty else {
-            throw AppStoreClientError.message("Sign in under Store Access first.")
+            throw AppStoreClientError.message("Sign in under Account first.")
         }
         guard let aid = activeAccountID,
               let password = passwordForAccount(id: aid), !password.isEmpty else {
@@ -1200,45 +1200,17 @@ final class AppleIDStore: ObservableObject {
         password: String,
         authCode: String
     ) async throws -> StorefrontSession {
-        // 1) iPadn-derived path (bag.xml endpoint, Configurator UA, AMD proof loop).
-        do {
-            let session = try await IPadnStoreLogin.authenticate(
-                email: email,
-                password: password,
-                authCode: authCode
-            )
-            if session.isUsable {
-                statusMessage = "Store unlocked (iPadn login)…"
-                return session
-            }
-        } catch AppStoreClientError.needsTwoFactor {
-            throw AppStoreClientError.needsTwoFactor
-        } catch {
-            // Fall through to legacy mint — keep last iPadn diagnostic for Settings.
-            lastError = "iPadn login: \(error.localizedDescription)"
+        // iPadn MZFinance only — no AppStoreClient authenticate fallback / remint stack.
+        let session = try await IPadnStoreLogin.authenticate(
+            email: email,
+            password: password,
+            authCode: authCode
+        )
+        guard session.isUsable else {
+            throw AppStoreClientError.message("Apple returned an incomplete Store session. Try again.")
         }
-
-        // 2) Existing AppStoreClient starters (legacy / native / pods).
-        do {
-            return try await AppStoreClient.shared.authenticate(
-                email: email,
-                password: password,
-                authCode: authCode
-            )
-        } catch AppStoreClientError.needsTwoFactor {
-            throw AppStoreClientError.needsTwoFactor
-        } catch {
-            // Brief pause + fresh anisette/SAP often clears HTTP 204 / 302-without-Location.
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
-            await AnisetteClient.shared.invalidate(resetProvisioning: false)
-            SAPSigner.invalidateCache()
-            await SAPSigner.warm()
-            return try await AppStoreClient.shared.authenticate(
-                email: email,
-                password: password,
-                authCode: authCode
-            )
-        }
+        statusMessage = "Store unlocked (iPadn login)…"
+        return session
     }
 
     /// After store verify, close out a pending GSA SMS challenge without blocking Store Access.
