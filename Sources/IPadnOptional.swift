@@ -52,10 +52,10 @@ struct IPadnOptionalCard: View {
             VStack(alignment: .leading, spacing: 12) {
                 Toggle(isOn: $enabled) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("iPadn Store search")
+                        Text("App Store search")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text("Decrypt search uses iPadn’s store lookup (name, App ID, store link, multi-region, delisted stubs) plus Timbrd/Bilin/iosdump version history. FairPlay still runs in TetherLess. Source: mengangs/ipadn (GPL-2.0).")
+                        Text("Decrypt search uses App Store lookup (name, App ID, store link, multi-region, delisted stubs) plus Timbrd/Bilin/iosdump version history. FairPlay still runs in Tetherless.")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.45))
                             .fixedSize(horizontal: false, vertical: true)
@@ -96,7 +96,7 @@ struct IPadnOptionalCard: View {
                         Button {
                             IPadnOptional.openRepo()
                         } label: {
-                            Text("Source")
+                            Text("Open source")
                                 .font(.footnote.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity)

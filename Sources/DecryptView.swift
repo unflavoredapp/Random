@@ -591,7 +591,7 @@ struct DecryptView: View {
                             }
                         }
                     } else {
-                        Text("Sign in with Apple Account to search free or purchased apps — iPadn Store login, FairPlay stays on this iPhone.")
+                        Text("Sign in with Apple Account to search free or purchased apps — FairPlay stays on this iPhone.")
                             .font(.callout)
                             .foregroundStyle(.white.opacity(0.65))
                             .fixedSize(horizontal: false, vertical: true)

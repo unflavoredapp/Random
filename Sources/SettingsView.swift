@@ -571,7 +571,7 @@ private struct AboutScreen: View {
     private let credits: [Credit] = [
         Credit(name: TetherlessBrand.name, blurb: "Built at tetherless.dev. Sign anything, keep it local.", asset: "airshare_mark", symbol: "person.fill", url: TetherlessBrand.siteDisplay),
         Credit(name: "DELvEK", blurb: "Trusted partner. Respected, protected apps updated daily with screenshots.", asset: "delvek_logo", symbol: "pawprint.fill", url: "https://delvek.net"),
-        Credit(name: "iPadn", blurb: "Store search + login + version history feeds (bag.xml / MZFinance / Timbrd·Bilin·iosdump). Vendored under Sources/IPadn (GPL-2.0); decrypt uses Tetherless FairPlay.", asset: "", symbol: "arrow.down.app.fill", url: "https://github.com/mengangs/ipadn"),
+        Credit(name: "Store login (open source)", blurb: "App Store search, login, and version history include code derived from mengangs/ipadn (GPL-2.0). FairPlay decrypt is Tetherless.", asset: "", symbol: "arrow.down.app.fill", url: "https://github.com/mengangs/ipadn"),
     ]
     private let sponsors: [(String, Color)] = [
         ("MYKALL", Color(red: 0.42, green: 0.85, blue: 0.45)),

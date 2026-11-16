@@ -124,9 +124,7 @@ struct IPadnInstallationSettingsView: View {
             }
 
             Section {
-                if let url = URL(string: "https://github.com/mengangs/ipadn") {
-                    Link("Installation help", destination: url)
-                }
+                Link("Installation help", destination: TetherlessBrand.siteURL)
             }
         }
         .navigationTitle("Installation settings")

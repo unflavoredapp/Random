@@ -21,7 +21,7 @@ struct SettingsAppleIDCard: View {
                         Text("Apple Account")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text("Sign in and manage accounts on the Account tab (iPadn Store login).")
+                        Text("Sign in and manage accounts on the Account tab.")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.55))
                             .fixedSize(horizontal: false, vertical: true)

@@ -84,7 +84,7 @@ struct IPadnBrowserSection: View {
             GlassCard(corner: 22) {
                 VStack(alignment: .leading, spacing: 12) {
                     HStack {
-                        Text("IPADN STORE")
+                        Text("APP STORE")
                             .font(.system(size: 12, weight: .semibold))
                             .kerning(1.1)
                             .foregroundStyle(.white.opacity(0.45))
@@ -94,7 +94,7 @@ struct IPadnBrowserSection: View {
                         }
                     }
 
-                    Text("Decrypt’s search bar uses iPadn lookup (App ID, store link, multi-region, delisted). Pick region / platform here — also used by the main search field.")
+                    Text("Decrypt’s search bar uses App Store lookup (App ID, store link, multi-region, delisted). Pick region / platform here — also used by the main search field.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)
