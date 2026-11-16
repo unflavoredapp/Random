@@ -23,12 +23,19 @@ struct IPadnInstallationSettingsView: View {
     }
 
     @AppStorage(NativeInstaller.methodKey) private var methodKey = "ota"
+    /// Persist the Installation settings segment (Certificate / Proxy are not install methods).
+    @AppStorage("tetherless.installation.settings.segment") private var segmentKey = "automatic"
     @ObservedObject private var manager = DeviceInstallationManager.shared
+    @ObservedObject private var certStore = CertificateStore.shared
+    @ObservedObject private var appleID = AppleIDStore.shared
     @State private var selected: Method = .automatic
     @State private var issue: String?
     @State private var busy = false
     @State private var importingPairing = false
     @State private var checkMessage: String?
+    @State private var ensuringAppleIDCert = false
+    @State private var showCertificatesManager = false
+    @State private var certStatus: String?
 
     var body: some View {
         Form {
@@ -103,14 +110,7 @@ struct IPadnInstallationSettingsView: View {
                 }
 
             case .certificate:
-                Section {
-                    Label("Use your own signing certificate for OTA installs", systemImage: "lock.shield")
-                    Label("Import a .p12 + mobileprovision via Custom Certificate when available", systemImage: "doc.badge.gearshape")
-                } header: {
-                    Text("Local certificate")
-                } footer: {
-                    Text("Create or import a certificate, install the profile, then trust it under Settings › General › About › Certificate Trust Settings.")
-                }
+                certificateSections
 
             case .proxy:
                 Section {
@@ -134,7 +134,9 @@ struct IPadnInstallationSettingsView: View {
             Color.clear.frame(height: 88)
         }
         .navigationBarTitleDisplayMode(.inline)
-        .onAppear { selected = currentMethod() }
+        .onAppear {
+            selected = Method(rawValue: segmentKey) ?? currentMethod()
+        }
         .fileImporter(
             isPresented: $importingPairing,
             allowedContentTypes: [.propertyList, .xml, .data, .item],
@@ -153,6 +155,9 @@ struct IPadnInstallationSettingsView: View {
                 issue = error.localizedDescription
             }
         }
+        .fullScreenCover(isPresented: $showCertificatesManager) {
+            CertificatesScreen()
+        }
         .alert("Installation settings", isPresented: Binding(
             get: { issue != nil },
             set: { if !$0 { issue = nil } }
@@ -163,17 +168,155 @@ struct IPadnInstallationSettingsView: View {
         }
     }
 
+    // MARK: - Certificate tab
+
+    @ViewBuilder
+    private var certificateSections: some View {
+        Section {
+            if appleID.isSignedIn {
+                LabeledContent("Apple ID", value: appleID.email)
+                Button {
+                    Task { await ensureAppleIDCert() }
+                } label: {
+                    HStack {
+                        Label(
+                            linkedAppleIDCert == nil
+                                ? "Create 7-day Apple ID certificate"
+                                : "Refresh Apple ID certificate",
+                            systemImage: "apple.logo"
+                        )
+                        if ensuringAppleIDCert { Spacer(); ProgressView() }
+                    }
+                }
+                .disabled(ensuringAppleIDCert)
+            } else {
+                Label("Sign in under Account to create a free 7-day development certificate", systemImage: "person.crop.circle.badge.exclamationmark")
+                Button {
+                    AppNav.shared.goStoreLogin()
+                } label: {
+                    Label("Sign In under Account", systemImage: "person.crop.circle")
+                }
+            }
+            if let certStatus {
+                Text(certStatus)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Apple ID (7-day)")
+        } footer: {
+            Text("Free development certificates last 7 days. Trust the Apple ID under Settings › General › VPN & Device Management after the first companion install.")
+        }
+
+        Section {
+            if certStore.certificates.isEmpty {
+                Text("No certificates yet. Create an Apple ID cert above or import a custom .p12 + .mobileprovision.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(certStore.certificates) { cert in
+                    certRow(cert)
+                }
+            }
+            NavigationLink {
+                AddCertificateScreen()
+            } label: {
+                Label("Import custom .p12 + mobileprovision", systemImage: "square.and.arrow.down")
+            }
+            Button {
+                showCertificatesManager = true
+            } label: {
+                Label("Manage all certificates", systemImage: "lock.shield")
+            }
+        } header: {
+            Text("Local certificates")
+        } footer: {
+            Text("Companion signing prefers the linked Apple ID 7-day cert, then falls back to your active custom certificate. After importing, install the profile and trust it under Settings › General › VPN & Device Management.")
+        }
+    }
+
+    private var linkedAppleIDCert: Certificate? {
+        let linked = appleID.activeAccount?.linkedCertificateIDs ?? []
+        return certStore.certificates.first { linked.contains($0.id) }
+    }
+
+    private func isLinkedAppleIDCert(_ cert: Certificate) -> Bool {
+        appleID.activeAccount?.linkedCertificateIDs.contains(cert.id) == true
+    }
+
+    @ViewBuilder
+    private func certRow(_ cert: Certificate) -> some View {
+        let info = certStore.cachedProfileInfo(for: cert)
+        let isActive = certStore.activeID == cert.id
+        let isAppleID = isLinkedAppleIDCert(cert)
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text(cert.name)
+                    .font(.body.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Spacer(minLength: 8)
+                if isActive {
+                    Text("ACTIVE")
+                        .font(.caption2.weight(.bold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Color.accentColor, in: Capsule())
+                }
+            }
+            HStack(spacing: 8) {
+                Text(isAppleID ? "Apple ID · 7-day" : (info.isEnterprise ? "Enterprise" : "Custom"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isAppleID ? Color.accentColor : .secondary)
+                if let days = info.daysUntilExpiry {
+                    Text(days >= 0 ? "\(days)d left" : "Expired")
+                        .font(.caption)
+                        .foregroundStyle(info.isExpired || info.isExpiringSoon ? Color.orange : .secondary)
+                }
+            }
+            if !isActive {
+                Button("Use for signing") {
+                    certStore.activeID = cert.id
+                    if isAppleID {
+                        FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
+                    } else {
+                        UserDefaults.standard.set("saved", forKey: "uzd_signing_method")
+                    }
+                    certStatus = "Using \(cert.name) for signing."
+                }
+                .font(.footnote.weight(.semibold))
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func ensureAppleIDCert() async {
+        ensuringAppleIDCert = true
+        defer { ensuringAppleIDCert = false }
+        do {
+            let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
+            certStatus = "Ready: \(cert.name)"
+        } catch {
+            issue = error.localizedDescription
+            certStatus = nil
+        }
+    }
+
     private func currentMethod() -> Method {
         if methodKey == "native" { return .native }
         return .automatic
     }
 
     private func apply(_ method: Method) {
+        segmentKey = method.rawValue
         switch method {
-        case .automatic, .certificate, .proxy:
-            methodKey = "ota"
         case .native:
             methodKey = "native"
+        case .automatic:
+            methodKey = "ota"
+        case .certificate, .proxy:
+            // Cert / Proxy manage signing or routing — leave current install transport alone.
+            break
         }
     }
 

@@ -116,11 +116,9 @@ enum DecryptCompanionPackager {
             let replaced = rest.replacingOccurrences(of: "*", with: "decrypt")
             return replaced.isEmpty ? hostDecrypt : replaced
         }
-        // Explicit App ID — .decrypt sibling under the same prefix.
-        if let lastDot = rest.lastIndex(of: ".") {
-            return String(rest[..<lastDot]) + ".decrypt"
-        }
-        return rest + ".decrypt"
+        // Explicit App ID — must use the profile’s exact bundle ID.
+        // Inventing a `.decrypt` sibling causes installd 0xe8008016 (invalid entitlements).
+        return rest
     }
 
     // MARK: - Host clone

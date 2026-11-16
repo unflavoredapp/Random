@@ -96,7 +96,9 @@ enum FreeAppleIDSigning {
             )
         }
         var appIDs = (try? await DeveloperPortalClient.shared.listAppIDs(auth: auth, team: team)) ?? []
-        var appID = appIDs.first
+        // Prefer a wildcard App ID that can cover the companion `.decrypt` bundle ID.
+        // Using an arbitrary explicit App ID invents a sibling ID installd rejects (0xe8008016).
+        var appID = preferredWildcardAppID(from: appIDs)
         if appID == nil {
             let bid = "com.tetherless.\(UUID().uuidString.prefix(8).lowercased()).*"
             appID = try await DeveloperPortalClient.shared.addAppID(
@@ -122,6 +124,19 @@ enum FreeAppleIDSigning {
         AppleIDStore.shared.linkCertificate(cert.id)
         preferAppleIDSigningMethodIfPossible()
         return cert
+    }
+
+    /// Prefer wildcard App IDs (`*` / `prefix.*`) so companion + host share one free profile.
+    private static func preferredWildcardAppID(from appIDs: [DevAppID]) -> DevAppID? {
+        let wildcards = appIDs.filter {
+            $0.bundleID == "*" || $0.bundleID.hasSuffix(".*")
+        }
+        if let tetherless = wildcards.first(where: {
+            $0.bundleID.localizedCaseInsensitiveContains("tetherless")
+        }) {
+            return tetherless
+        }
+        return wildcards.first
     }
 
     @discardableResult
