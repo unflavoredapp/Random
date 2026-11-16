@@ -409,20 +409,37 @@ enum DecryptCompanionPackager {
 
         // Timeout-safe Mach-O discovery only — never verifyApp on live installs
         // (cryptid probes hang). Companion audits the EmbeddedPayload copy.
-        let machos = try FairPlayDecrypt.collectMachOsForCompanion(under: src)
+        var machos = try FairPlayDecrypt.collectMachOsForCompanion(under: src)
+        // Unity / odd shells (e.g. factory.app → executable `factory`) — never leave
+        // EmbeddedPayload without the main binary even if magic probing missed it.
+        if let main = FairPlayDecrypt.mainExecutableForEmbed(in: src),
+           !machos.contains(where: { $0.standardizedFileURL.path == main.standardizedFileURL.path }) {
+            machos.insert(main, at: 0)
+            progress?("Force-including main executable \(main.lastPathComponent)…")
+        }
         guard !machos.isEmpty else {
             throw DecryptError("No Mach-Os found under \(src.lastPathComponent) for companion embed.")
         }
         progress?("Embedding \(machos.count) Mach-O file(s)…")
+        var copied = 0
+        var skipped: [String] = []
         for file in machos {
             let rel = relative(file, under: src)
             guard let out = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) else {
+                skipped.append(rel.isEmpty ? file.lastPathComponent : rel)
                 progress?("Skipped unsafe Mach-O path: \(rel)")
                 continue
             }
             try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
             try? fm.removeItem(at: out)
             try fm.copyItem(at: file, to: out)
+            copied += 1
+        }
+        if copied == 0 {
+            let sample = skipped.prefix(4).joined(separator: ", ")
+            throw DecryptError(
+                "Slim embed copied 0 Mach-Os from \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))"). Refusing empty EmbeddedPayload."
+            )
         }
 
         // Copy every SC_Info directory tree (main + nested).
@@ -510,5 +527,10 @@ enum DecryptCompanionPackager {
 extension FairPlayDecrypt {
     static func collectMachOsForCompanion(under root: URL) throws -> [URL] {
         try collectMachOs(under: root, progress: nil)
+    }
+
+    /// Public hook for slim-embed — CFBundleExecutable (Unity `factory`, Flutter `Runner`, …).
+    static func mainExecutableForEmbed(in app: URL) -> URL? {
+        mainExecutableURL(in: app)
     }
 }
