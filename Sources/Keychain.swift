@@ -6,37 +6,54 @@ import Foundation
 import Security
 
 nonisolated enum Keychain {
-    private static let service = "unzip-drop"
+    private static let service = "Tetherless"
+    /// Pre-rename service — still readable so upgrades keep sessions / certs.
+    private static let legacyService = "unzip-drop"
 
-    @discardableResult
-    static func set(_ key: String, _ value: String) -> Bool {
-        let q: [String: Any] = [
+    private static func deleteAccount(_ key: String, service: String, synchronizable: Bool = false) {
+        var q: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
         ]
+        if synchronizable { q[kSecAttrSynchronizable as String] = kCFBooleanTrue as Any }
         SecItemDelete(q as CFDictionary)
+    }
+
+    @discardableResult
+    static func set(_ key: String, _ value: String) -> Bool {
+        deleteAccount(key, service: service)
+        deleteAccount(key, service: legacyService)
         if value.isEmpty { return true }
-        var add = q
-        add[kSecValueData as String] = Data(value.utf8)
-        // Readable after the first unlock, so a launch while the phone is locked (background refresh,
-        // VPN) can still see the saved session instead of treating the user as signed out.
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+        var add: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: Data(value.utf8),
+            // Readable after the first unlock, so a launch while the phone is locked (background refresh,
+            // VPN) can still see the saved session instead of treating the user as signed out.
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+        ]
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
     static func get(_ key: String) -> String? {
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-              let d = out as? Data else { return nil }
-        return String(data: d, encoding: .utf8)
+        for svc in [service, legacyService] {
+            let q: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: svc,
+                kSecAttrAccount as String: key,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ]
+            var out: CFTypeRef?
+            if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+               let d = out as? Data,
+               let s = String(data: d, encoding: .utf8) {
+                return s
+            }
+        }
+        return nil
     }
 
     // MARK: - Non-exportable secrets (private keys)
@@ -48,17 +65,17 @@ nonisolated enum Keychain {
 
     @discardableResult
     static func setSecret(_ key: String, _ value: String) -> Bool {
-        let q: [String: Any] = [
+        deleteAccount(key, service: service)
+        deleteAccount(key, service: legacyService)
+        if value.isEmpty { return true }
+        let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
+            kSecValueData as String: Data(value.utf8),
+            // CA private keys stay device-local and unlock-gated.
+            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
         ]
-        SecItemDelete(q as CFDictionary)
-        if value.isEmpty { return true }
-        var add = q
-        add[kSecValueData as String] = Data(value.utf8)
-        // CA private keys stay device-local and unlock-gated.
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
@@ -71,16 +88,16 @@ nonisolated enum Keychain {
     /// so background refresh / cold launch don't treat the user as signed out.
     @discardableResult
     static func setSessionSecret(_ key: String, _ value: String) -> Bool {
-        let q: [String: Any] = [
+        deleteAccount(key, service: service)
+        deleteAccount(key, service: legacyService)
+        if value.isEmpty { return true }
+        let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
+            kSecValueData as String: Data(value.utf8),
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        SecItemDelete(q as CFDictionary)
-        if value.isEmpty { return true }
-        var add = q
-        add[kSecValueData as String] = Data(value.utf8)
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
@@ -88,30 +105,34 @@ nonisolated enum Keychain {
 
     @discardableResult
     static func setSessionData(_ key: String, _ data: Data) -> Bool {
-        let q: [String: Any] = [
+        deleteAccount(key, service: service)
+        deleteAccount(key, service: legacyService)
+        if data.isEmpty { return true }
+        let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
         ]
-        SecItemDelete(q as CFDictionary)
-        if data.isEmpty { return true }
-        var add = q
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
     static func getSessionData(_ key: String) -> Data? {
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return nil }
-        return out as? Data
+        for svc in [service, legacyService] {
+            let q: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: svc,
+                kSecAttrAccount as String: key,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ]
+            var out: CFTypeRef?
+            if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess {
+                return out as? Data
+            }
+        }
+        return nil
     }
 
     static func deleteSessionSecret(_ key: String) { _ = setSessionSecret(key, "") }
@@ -130,33 +151,37 @@ nonisolated enum Keychain {
 
     @discardableResult
     static func setPersistent(_ key: String, _ data: Data) -> Bool {
-        let q: [String: Any] = [
+        deleteAccount(key, service: service, synchronizable: true)
+        deleteAccount(key, service: legacyService, synchronizable: true)
+        if data.isEmpty { return true }
+        let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
             kSecAttrSynchronizable as String: kCFBooleanTrue as Any,
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
         ]
-        SecItemDelete(q as CFDictionary)
-        if data.isEmpty { return true }
-        var add = q
-        add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
         return SecItemAdd(add as CFDictionary, nil) == errSecSuccess
     }
 
     static func getPersistent(_ key: String) -> Data? {
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecAttrSynchronizable as String: kCFBooleanTrue as Any,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
-              let d = out as? Data else { return nil }
-        return d
+        for svc in [service, legacyService] {
+            let q: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: svc,
+                kSecAttrAccount as String: key,
+                kSecAttrSynchronizable as String: kCFBooleanTrue as Any,
+                kSecReturnData as String: true,
+                kSecMatchLimit as String: kSecMatchLimitOne,
+            ]
+            var out: CFTypeRef?
+            if SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess,
+               let d = out as? Data {
+                return d
+            }
+        }
+        return nil
     }
 
     /// String convenience over the persistent (iCloud-synced) storage.
@@ -173,18 +198,25 @@ nonisolated enum Keychain {
     /// CertificateStore can rehydrate the on-disk .p12 / .mobileprovision
     /// files after a fresh reinstall.
     static func allPersistentKeys() -> [String] {
-        let q: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrSynchronizable as String: kCFBooleanTrue as Any,
-            kSecReturnAttributes as String: true,
-            kSecMatchLimit as String: kSecMatchLimitAll,
-        ]
-        var out: CFTypeRef?
-        guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { return [] }
-        if let arr = out as? [[String: Any]] {
-            return arr.compactMap { $0[kSecAttrAccount as String] as? String }
+        var keys = Set<String>()
+        for svc in [service, legacyService] {
+            let q: [String: Any] = [
+                kSecClass as String: kSecClassGenericPassword,
+                kSecAttrService as String: svc,
+                kSecAttrSynchronizable as String: kCFBooleanTrue as Any,
+                kSecReturnAttributes as String: true,
+                kSecMatchLimit as String: kSecMatchLimitAll,
+            ]
+            var out: CFTypeRef?
+            guard SecItemCopyMatching(q as CFDictionary, &out) == errSecSuccess else { continue }
+            if let arr = out as? [[String: Any]] {
+                for item in arr {
+                    if let account = item[kSecAttrAccount as String] as? String {
+                        keys.insert(account)
+                    }
+                }
+            }
         }
-        return []
+        return Array(keys)
     }
 }

@@ -34,7 +34,7 @@ struct GitHubClient {
         r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         r.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         r.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        r.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        r.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         if let body {
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")
             r.httpBody = try JSONSerialization.data(withJSONObject: body)

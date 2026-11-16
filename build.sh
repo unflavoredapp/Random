@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build.sh — produce an UNSIGNED .ipa from the unzip-drop Xcode project.
+# build.sh — produce an UNSIGNED .ipa from the Tetherless Xcode project.
 # Runs on the GitHub Actions macOS runner (and any Mac). No signing identity,
 # no exportArchive: we archive with signing disabled, lift the .app out of the
 # archive, and zip it into Payload/ ourselves. On failure the real compiler
@@ -8,8 +8,8 @@
 #
 set -uo pipefail   # NOT -e: failures are caught and explained below
 
-APP_NAME="${APP_NAME:-unzip-drop}"
-SCHEME="${SCHEME:-unzip-drop}"
+APP_NAME="${APP_NAME:-Tetherless}"
+SCHEME="${SCHEME:-Tetherless}"
 CONFIG="${CONFIG:-Release}"
 
 # Repo root = the directory this script lives in (build.sh sits at the root).
@@ -23,7 +23,7 @@ if [ -z "$PROJECT" ]; then
   if [ -n "$FOUND" ]; then ROOT="$(cd "$(dirname "$FOUND")" && pwd)"; cd "$ROOT"; PROJECT="./$(basename "$FOUND")"; fi
 fi
 if [ -z "$PROJECT" ]; then
-  echo "ERROR: no .xcodeproj found under $ROOT. The repo is missing the Xcode project (unzip-drop.xcodeproj)."
+  echo "ERROR: no .xcodeproj found under $ROOT. The repo is missing the Xcode project (Tetherless.xcodeproj)."
   echo "Repo contents:"; ls -la "$ROOT"; find "$ROOT" -maxdepth 2 -not -path '*/.git/*' | head -80
   exit 1
 fi
@@ -139,7 +139,7 @@ if [ -n "$APPEX" ]; then
       codesign --force --sign - --timestamp=none "$b" 2>&1 | tee -a "$LOG" || true
     done < <(find "$APPDIR" -depth \( -name '*.framework' -o -name '*.dylib' \) -not -path "$APPEX/*" 2>/dev/null)
     codesign --force --sign - --timestamp=none --entitlements "$ROOT/AirShareDeviceTunnel/AirShareDeviceTunnel.entitlements" "$APPEX" 2>&1 | tee -a "$LOG" || true
-    codesign --force --sign - --timestamp=none --entitlements "$ROOT/unzip-drop.entitlements" "$APPDIR" 2>&1 | tee -a "$LOG" || true
+    codesign --force --sign - --timestamp=none --entitlements "$ROOT/Tetherless.entitlements" "$APPDIR" 2>&1 | tee -a "$LOG" || true
   fi
 else
   echo "WARN: AirShareDeviceTunnel.appex is not embedded — native install will report 'no VPN extension'."

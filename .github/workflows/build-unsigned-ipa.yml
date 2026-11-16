@@ -64,8 +64,8 @@ jobs:
       - name: Build unsigned IPA
         working-directory: ${{ env.ROOT }}
         env:
-          APP_NAME: unzip-drop
-          SCHEME: unzip-drop
+          APP_NAME: Tetherless
+          SCHEME: Tetherless
           CONFIG: Release
           ADHOC_ENTITLEMENTS: ${{ inputs.adhoc_entitlements == false && '0' || '1' }}
         run: ./build.sh

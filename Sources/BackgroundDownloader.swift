@@ -114,7 +114,7 @@ nonisolated final class IPADownloader: NSObject, URLSessionDownloadDelegate, @un
 
     static func request(for src: URL) -> URLRequest {
         var req = URLRequest(url: src)
-        req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        req.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         // Our own host counts the download per device; never send the device id to third-party hosts.
         if let h = src.host, h == URL(string: ZefvAccount.apiBase)?.host { req.setValue(MDID.current, forHTTPHeaderField: "X-AS-ADID") }
         return req

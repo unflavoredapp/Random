@@ -81,7 +81,7 @@ struct ActionsClient {
         r.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         r.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         r.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        r.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        r.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         r.cachePolicy = .reloadIgnoringLocalCacheData
         if let body {
             r.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -173,7 +173,7 @@ struct ActionsClient {
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         req.setValue("application/vnd.github.raw+json", forHTTPHeaderField: "Accept")
         req.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
-        req.setValue("unzip-drop-ios", forHTTPHeaderField: "User-Agent")
+        req.setValue("tetherless-ios", forHTTPHeaderField: "User-Agent")
         req.cachePolicy = .reloadIgnoringLocalCacheData
         guard let (d, resp) = try? await URLSession.shared.data(for: req),
               (resp as? HTTPURLResponse)?.statusCode ?? 0 < 400,
