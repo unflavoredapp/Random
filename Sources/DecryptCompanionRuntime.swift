@@ -147,10 +147,20 @@ enum DecryptCompanionRuntime {
         }
         let liveRead = Self.preferredLiveInstallURL(embeddedApp: src, manifest: man)
         if let live = liveRead {
-            log("Live App Store install available for FairPlay self-heal…")
+            let stamped = (man?["hostLiveInstallPath"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !stamped.isEmpty, live.path == URL(fileURLWithPath: stamped).resolvingSymlinksInPath().standardizedFileURL.path {
+                log("Using host-stamped live App Store install for FairPlay…")
+            } else {
+                log("Live App Store install available for FairPlay self-heal…")
+            }
             log(live.path)
         } else {
-            log("No readable live install — self-heal will use EmbeddedPayload (+ SINF restage).")
+            let stamped = (man?["hostLiveInstallPath"] as? String) ?? ""
+            if !stamped.isEmpty {
+                log("Host stamped live path was unusable (\(stamped)) — falling back to EmbeddedPayload.")
+            }
+            log("No readable live install — self-heal will use EmbeddedPayload (+ SINF restage). Install this app from the App Store first if decrypt EPERMs.")
         }
         let outcome = try FairPlaySelfHeal.healAndDecrypt(
             context: FairPlaySelfHeal.Context(
@@ -231,10 +241,19 @@ enum DecryptCompanionRuntime {
     // MARK: - Embedded metadata
 
     /// Resolve a live App Store install for fairplayd input when the same app is on-device.
+    /// Prefers `hostLiveInstallPath` stamped by the host packager — companion LS/MI
+    /// lookups often miss apps the host can see via Pair / DeviceLibrary.
     private static func preferredLiveInstallURL(
         embeddedApp: URL,
         manifest: [String: Any]?
     ) -> URL? {
+        if let stamped = (manifest?["hostLiveInstallPath"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !stamped.isEmpty,
+           let live = Self.usableLiveInstall(at: URL(fileURLWithPath: stamped)) {
+            return live
+        }
+
         var candidates: [String] = []
         if let fromMan = (manifest?["bundleID"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
@@ -249,19 +268,35 @@ enum DecryptCompanionRuntime {
         }
         var seen = Set<String>()
         for bid in candidates where seen.insert(bid).inserted {
-            guard let live = FairPlayDecrypt.installedAppURL(bundleID: bid) else { continue }
-            // Must be a real live container — not our own EmbeddedPayload.
-            guard FairPlayDecrypt.isLiveAppStoreInstall(live) else { continue }
-            guard let main = FairPlayDecrypt.mainExecutableForEmbed(in: live) else { continue }
-            var isDir: ObjCBool = false
-            guard FileManager.default.fileExists(atPath: main.path, isDirectory: &isDir),
-                  !isDir.boolValue,
-                  FileManager.default.isReadableFile(atPath: main.path) else {
-                continue
-            }
-            return live
+            guard let live = FairPlayDecrypt.installedAppURL(bundleID: bid),
+                  let usable = Self.usableLiveInstall(at: live) else { continue }
+            return usable
         }
         return nil
+    }
+
+    /// Live Store container with a main executable we can at least open (or fairplayd can).
+    private static func usableLiveInstall(at url: URL) -> URL? {
+        let live = url.resolvingSymlinksInPath().standardizedFileURL
+        guard FairPlayDecrypt.isLiveAppStoreInstall(live) else { return nil }
+        // Reject our own companion tree / EmbeddedPayload copies.
+        let own = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let p = live.path
+        if !own.isEmpty, p == own || p.hasPrefix(own.hasSuffix("/") ? own : own + "/") {
+            return nil
+        }
+        if p.contains("/EmbeddedPayload/") { return nil }
+        guard let main = FairPlayDecrypt.mainExecutableForEmbed(in: live) else { return nil }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: main.path, isDirectory: &isDir),
+              !isDir.boolValue else { return nil }
+        if FileManager.default.isReadableFile(atPath: main.path) { return live }
+        // Host-stamped paths may fail isReadableFile under the companion sandbox even
+        // when mremap_encrypted + fairplayd can still page the binary in.
+        if (try? FileHandle(forReadingFrom: main)) != nil { return live }
+        // Last resort: path exists as a live .app with a main binary — try it anyway.
+        // Self-heal falls back to EmbeddedPayload if mremap EPERMs.
+        return live
     }
 
     private static func embeddedAppVersion(at app: URL) -> String? {

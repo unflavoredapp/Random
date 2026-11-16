@@ -60,7 +60,10 @@ enum DecryptCompanionHandoff {
         if let snap = local.dictionary(forKey: "companion.hostSnapshot") { return snap }
         guard let manifest else { return [:] }
         var out: [String: Any] = [:]
-        for key in ["hostSignedIn", "hostStoreReady", "hostFairPlayAck", "hostEmailHint", "hostSnapshotAt"] {
+        for key in [
+            "hostSignedIn", "hostStoreReady", "hostFairPlayAck", "hostEmailHint",
+            "hostSnapshotAt", "hostLiveInstallPath", "bundleID"
+        ] {
             if let v = manifest[key] { out[key] = v }
         }
         return out

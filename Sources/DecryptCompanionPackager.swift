@@ -386,6 +386,17 @@ enum DecryptCompanionPackager {
         ]
         if let embeddedBundleID, !embeddedBundleID.isEmpty {
             meta["bundleID"] = embeddedBundleID
+            // Companion sandbox often cannot LS/MI-lookup other apps. Host resolves the
+            // live Store path (Pair / LaunchServices) and stamps it into the manifest so
+            // FairPlay mremap can read from a path fairplayd accepts (Roblox EPERM).
+            if let live = Self.resolveLiveInstallURL(bundleID: embeddedBundleID, preferring: liveInstall ? srcApp : nil) {
+                meta["hostLiveInstallPath"] = live.path
+                progress?("Stamped live install for FairPlay: \(live.path)")
+            } else {
+                progress?(
+                    "No live App Store install for \(embeddedBundleID) — install that app from the App Store on this iPhone before decrypt, or FairPlay may EPERM on EmbeddedPayload alone."
+                )
+            }
         }
         // Host readiness only — never passwords / PET / store session JSON.
         for (k, v) in DecryptCompanionHandoff.hostSnapshot() {
@@ -396,6 +407,32 @@ enum DecryptCompanionPackager {
             try? data.write(to: embedRoot.appendingPathComponent("manifest.plist"))
         }
         return name
+    }
+
+    /// Host-side live install resolution (DeviceLibrary + FairPlayDecrypt lookup).
+    private static func resolveLiveInstallURL(bundleID: String, preferring preferred: URL?) -> URL? {
+        if let preferred, isLiveAppStoreInstall(preferred),
+           Self.liveMainExecutableUsable(at: preferred) {
+            return preferred.resolvingSymlinksInPath().standardizedFileURL
+        }
+        let known = DeviceLibrary.shared.apps.first(where: { $0.bundleID == bundleID })?.installPath
+        guard let live = FairPlayDecrypt.installedAppURL(bundleID: bundleID, knownPath: known),
+              isLiveAppStoreInstall(live),
+              Self.liveMainExecutableUsable(at: live) else {
+            return nil
+        }
+        return live.resolvingSymlinksInPath().standardizedFileURL
+    }
+
+    private static func liveMainExecutableUsable(at app: URL) -> Bool {
+        guard let main = FairPlayDecrypt.mainExecutableForEmbed(in: app) else { return false }
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: main.path, isDirectory: &isDir),
+              !isDir.boolValue else { return false }
+        if FileManager.default.isReadableFile(atPath: main.path) { return true }
+        // isReadableFile is sometimes false for App Store binaries under a sideloaded
+        // host even when open(2) succeeds — don't drop a usable live path.
+        return (try? FileHandle(forReadingFrom: main)) != nil
     }
 
     /// True when `app` is still under the system App Store container (not a temp Payload
