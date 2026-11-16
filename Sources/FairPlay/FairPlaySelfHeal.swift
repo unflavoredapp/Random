@@ -1,8 +1,8 @@
 //
 // Brand: Tetherless · https://tetherless.dev
 //  FairPlaySelfHeal.swift
-//  Detect FairPlay failure class and automatically remediate (live install switch,
-//  SINF restage, memory pause) before surfacing Media & Purchases guidance.
+//  FairPlayed-style heal loop: EmbeddedPayload + SINF restage first (happy path),
+//  then optional live App Store install / memory pause before Media & Purchases UX.
 //
 
 import Foundation
@@ -11,22 +11,24 @@ import Foundation
 /// Keeps the decrypt engine pure; companion/host call this when they want auto-recovery.
 enum FairPlaySelfHeal {
     enum Strategy: String, Sendable {
-        case preferLiveInstall
-        case fallbackEmbedded
+        /// FairPlayed happy path: decrypt from EmbeddedPayload / IPA tree.
+        case preferEmbedded
+        /// Optional heal when embed mremap EPERMs — same app's live Store container.
+        case tryLiveInstall
         case restageSinfs
         case memoryPauseAndRetry
         case switchLiveAfterPartial
     }
 
     struct Context: Sendable {
-        /// Preferred first input (usually live install when known).
+        /// First input — FairPlayed modern path uses EmbeddedPayload / IPA, not live.
         var readingFrom: URL
         var writingTo: URL
-        /// Live App Store install for the same bundle, if readable.
+        /// Live App Store install for the same bundle (optional heal, not required).
         var liveInstall: URL? = nil
-        /// EmbeddedPayload / IPA app tree fallback.
+        /// EmbeddedPayload / IPA app tree (FairPlayed happy path).
         var embeddedOrIPA: URL? = nil
-        var maxRounds: Int = 3
+        var maxRounds: Int = 4
         var progress: (@Sendable (String) -> Void)? = nil
     }
 
@@ -52,26 +54,32 @@ enum FairPlaySelfHeal {
         return FairPlayFailureClass.current(fromLogs: lines)
     }
 
-    /// Decrypt with automatic detection + heal retries.
+    /// Decrypt with FairPlayed-style auto-recovery:
+    /// 1) EmbeddedPayload + SINF restage
+    /// 2) optional live install if embed EPERMs
+    /// 3) Media & Purchases guidance when keys are missing
     @discardableResult
     static func healAndDecrypt(context: Context) throws -> Outcome {
         var applied: [Strategy] = []
         var readingFrom = context.readingFrom
         var lastError: Error?
         let progress = context.progress
+        var triedLiveForLicense = false
+        var triedEmbedForLicense = false
 
-        // Prefer live install up front when the caller started on an embed copy.
-        if let live = context.liveInstall,
-           !pathsEqual(readingFrom, live),
-           FairPlayDecrypt.isLiveAppStoreInstall(live) {
-            progress?("Self-heal: preferring live App Store install for FairPlay keys…")
-            readingFrom = live
-            applied.append(.preferLiveInstall)
+        // FairPlayed happy path: start on EmbeddedPayload / IPA when available.
+        if let embed = context.embeddedOrIPA,
+           !pathsEqual(readingFrom, embed),
+           !FairPlayDecrypt.isLiveAppStoreInstall(embed) {
+            progress?("Self-heal: FairPlayed path — decrypting from EmbeddedPayload…")
+            readingFrom = embed
+            applied.append(.preferEmbedded)
+        } else if !FairPlayDecrypt.isLiveAppStoreInstall(readingFrom) {
+            applied.append(.preferEmbedded)
         }
 
         for round in 1...max(1, context.maxRounds) {
             do {
-                // Proactive memory heal before each attempt (Jetsam / mremap ENOMEM).
                 if fp_memory_tight_for(64 * 1024 * 1024) != 0 {
                     progress?("Self-heal: low memory — pausing before decrypt…")
                     if !applied.contains(.memoryPauseAndRetry) {
@@ -80,17 +88,17 @@ enum FairPlaySelfHeal {
                     Thread.sleep(forTimeInterval: 0.9)
                 }
 
+                // FairPlayed embed_ipa.sh + buddy3: restage SINFs before every embed attempt.
                 if !FairPlayDecrypt.isLiveAppStoreInstall(readingFrom) {
-                    let staged = FairPlayDecrypt.replicateSinfs(in: readingFrom)
-                    if staged > 0 {
-                        progress?("Self-heal: restaged \(staged) SINF license(s)…")
-                        if !applied.contains(.restageSinfs) { applied.append(.restageSinfs) }
+                    let staged = stageAllSinfs(in: readingFrom, progress: progress)
+                    if staged > 0, !applied.contains(.restageSinfs) {
+                        applied.append(.restageSinfs)
                     }
                 }
 
                 let label = FairPlayDecrypt.isLiveAppStoreInstall(readingFrom)
                     ? "live install"
-                    : readingFrom.lastPathComponent
+                    : "EmbeddedPayload/\(readingFrom.lastPathComponent)"
                 progress?("Self-heal round \(round)/\(context.maxRounds): decrypting from \(label)…")
 
                 let report = try FairPlayDecrypt.decryptMachOs(
@@ -99,15 +107,14 @@ enum FairPlaySelfHeal {
                     progress: progress
                 )
 
-                // Partial / leftover required binaries — one more pass from live if unused.
                 if (!report.failed.isEmpty || report.isPartial),
                    let live = context.liveInstall,
                    !pathsEqual(readingFrom, live) {
-                    progress?("Self-heal: partial decrypt — retrying required binaries from live install…")
+                    progress?("Self-heal: partial decrypt — trying live App Store install…")
                     applied.append(.switchLiveAfterPartial)
                     readingFrom = live
                     lastError = FairPlayDecryptError.stillEncrypted(
-                        "Partial decrypt (\(report.failed.count) leftover); retrying live install."
+                        "Partial decrypt (\(report.failed.count) leftover); trying live install."
                     )
                     continue
                 }
@@ -128,60 +135,68 @@ enum FairPlaySelfHeal {
                         applied.append(.memoryPauseAndRetry)
                     }
                     Thread.sleep(forTimeInterval: 1.6)
-                    // Same readingFrom next round.
                     continue
 
                 case .licenseOrKeys:
-                    if let live = context.liveInstall, !pathsEqual(readingFrom, live) {
-                        progress?("Self-heal: EPERM/license — switching to live App Store install…")
+                    // Embed first (FairPlayed): restage once more from EmbeddedPayload.
+                    if !triedEmbedForLicense,
+                       let embed = context.embeddedOrIPA ?? embedCandidate(readingFrom),
+                       !FairPlayDecrypt.isLiveAppStoreInstall(embed) {
+                        triedEmbedForLicense = true
+                        progress?("Self-heal: EPERM/license — restaging EmbeddedPayload SINFs and retrying…")
+                        _ = stageAllSinfs(in: embed, progress: progress)
+                        readingFrom = embed
+                        if !applied.contains(.preferEmbedded) { applied.append(.preferEmbedded) }
+                        if !applied.contains(.restageSinfs) { applied.append(.restageSinfs) }
+                        continue
+                    }
+                    // Optional live Store container if embed still EPERMs.
+                    if !triedLiveForLicense,
+                       let live = context.liveInstall,
+                       !pathsEqual(readingFrom, live) {
+                        triedLiveForLicense = true
+                        progress?("Self-heal: EPERM/license — trying live App Store install…")
                         readingFrom = live
-                        if !applied.contains(.preferLiveInstall) {
-                            applied.append(.preferLiveInstall)
+                        if !applied.contains(.tryLiveInstall) {
+                            applied.append(.tryLiveInstall)
                         }
                         continue
                     }
-                    if let embed = context.embeddedOrIPA, !pathsEqual(readingFrom, embed) {
-                        progress?("Self-heal: restaging SINFs on EmbeddedPayload and retrying…")
-                        _ = FairPlayDecrypt.replicateSinfs(in: embed)
-                        readingFrom = embed
-                        applied.append(.fallbackEmbedded)
-                        applied.append(.restageSinfs)
-                        continue
-                    }
-                    // Exhausted heal paths — distinguish missing live install vs missing keys.
-                    if context.liveInstall == nil {
-                        throw FairPlayDecryptError.mainExecutableFailed(
-                            "Couldn't decrypt after self-heal (licenseOrKeys): no live App Store install of this app was readable on this iPhone. Install the app from the App Store with the same Apple ID (so FairPlay can use the live install path), keep Media & Purchases signed in, then open Tetherless Decrypt again. EmbeddedPayload alone often returns mremap EPERM."
-                        )
-                    }
                     throw FairPlayDecryptError.mainExecutableFailed(
-                        "Couldn't decrypt after self-heal (\(klass.rawValue)). \(FairPlayFailureClass.licenseOrKeys.userMessage)"
+                        "Couldn't decrypt after self-heal (licenseOrKeys). \(FairPlayFailureClass.licenseOrKeys.userMessage)"
                     )
 
                 case .stillEncrypted:
-                    if let live = context.liveInstall, !pathsEqual(readingFrom, live) {
-                        progress?("Self-heal: still encrypted — retrying from live install…")
-                        readingFrom = live
-                        if !applied.contains(.preferLiveInstall) {
-                            applied.append(.preferLiveInstall)
-                        }
-                        continue
-                    }
                     if let embed = context.embeddedOrIPA, !pathsEqual(readingFrom, embed) {
                         progress?("Self-heal: still encrypted — restaging embed SINFs…")
-                        _ = FairPlayDecrypt.replicateSinfs(in: embed)
+                        _ = stageAllSinfs(in: embed, progress: progress)
                         readingFrom = embed
-                        applied.append(.fallbackEmbedded)
+                        if !applied.contains(.preferEmbedded) { applied.append(.preferEmbedded) }
+                        if !applied.contains(.restageSinfs) { applied.append(.restageSinfs) }
+                        continue
+                    }
+                    if let live = context.liveInstall, !pathsEqual(readingFrom, live) {
+                        progress?("Self-heal: still encrypted — trying live App Store install…")
+                        readingFrom = live
+                        if !applied.contains(.tryLiveInstall) {
+                            applied.append(.tryLiveInstall)
+                        }
                         continue
                     }
                     throw error
 
                 case .io, .other, .none:
+                    if let embed = context.embeddedOrIPA, !pathsEqual(readingFrom, embed) {
+                        progress?("Self-heal: retrying from EmbeddedPayload…")
+                        readingFrom = embed
+                        if !applied.contains(.preferEmbedded) { applied.append(.preferEmbedded) }
+                        continue
+                    }
                     if let live = context.liveInstall, !pathsEqual(readingFrom, live) {
-                        progress?("Self-heal: retrying from live install…")
+                        progress?("Self-heal: retrying from live App Store install…")
                         readingFrom = live
-                        if !applied.contains(.preferLiveInstall) {
-                            applied.append(.preferLiveInstall)
+                        if !applied.contains(.tryLiveInstall) {
+                            applied.append(.tryLiveInstall)
                         }
                         continue
                     }
@@ -196,6 +211,23 @@ enum FairPlaySelfHeal {
     }
 
     // MARK: - Helpers
+
+    /// Manifest SinfReplicationPaths + per-binary SC_Info/<exe>.sinf (FairPlayed / buddy3).
+    @discardableResult
+    private static func stageAllSinfs(in app: URL, progress: (@Sendable (String) -> Void)?) -> Int {
+        var n = FairPlayDecrypt.replicateSinfs(in: app)
+        if let bins = try? FairPlayDecrypt.collectMachOsForCompanion(under: app) {
+            n += FairPlayDecrypt.stageSinfsForEncryptedBinaries(bins, in: app)
+        }
+        if n > 0 {
+            progress?("Self-heal: staged \(n) SINF license(s) on EmbeddedPayload…")
+        }
+        return n
+    }
+
+    private static func embedCandidate(_ url: URL) -> URL? {
+        FairPlayDecrypt.isLiveAppStoreInstall(url) ? nil : url
+    }
 
     private static func pathsEqual(_ a: URL, _ b: URL) -> Bool {
         a.resolvingSymlinksInPath().standardizedFileURL.path

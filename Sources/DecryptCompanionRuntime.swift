@@ -100,7 +100,7 @@ enum DecryptCompanionRuntime {
             log("Host Store session was ready when this companion was built.")
         }
         if host["hostFairPlayAck"] as? Bool == false {
-            log("Self-heal note: Media & Purchases may not be signed in — will auto-retry live install / SINFs if mremap EPERMs.")
+            log("Self-heal note: Media & Purchases may not be signed in — FairPlayed needs that Apple ID’s keys on this iPhone.")
         }
 
         // 1) Pre-decrypt audit — prove FairPlay DRM is present on the embedded IPA tree.
@@ -138,46 +138,28 @@ enum DecryptCompanionRuntime {
         log("Copying app bundle…")
         try copyTree(from: src, to: destApp)
 
-        // 2) Decrypt INTO writable copy with self-heal (detect EPERM/ENOMEM/still-encrypted
-        // and automatically switch live ↔ embed / restage SINFs / pause for memory).
+        // 2) FairPlayed modern path: decrypt FROM EmbeddedPayload (+ SINF restage) into the
+        // writable Payload copy. Live App Store install is an optional self-heal only.
         DecryptCompanionController.shared.statusTitle = "2/5 · Decrypting…"
         let progressBridge: @Sendable (String) -> Void = { msg in
             progress?(msg)
             Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
         }
+        log("FairPlayed path: decrypting from EmbeddedPayload (+ SINF restage)…")
         let liveRead = Self.preferredLiveInstallURL(embeddedApp: src, manifest: man)
         if let live = liveRead {
-            let stamped = (man?["hostLiveInstallPath"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let published = DecryptCompanionHandoff.readLiveInstallPath()?.path ?? ""
-            let livePath = live.path
-            if !stamped.isEmpty,
-               livePath == URL(fileURLWithPath: stamped).resolvingSymlinksInPath().standardizedFileURL.path {
-                log("Using host-stamped live App Store install for FairPlay…")
-            } else if !published.isEmpty,
-                      livePath == URL(fileURLWithPath: published).resolvingSymlinksInPath().standardizedFileURL.path {
-                log("Using host App Group live App Store install for FairPlay…")
-            } else {
-                log("Live App Store install available for FairPlay self-heal…")
-            }
-            log(livePath)
+            log("Live App Store install kept as optional self-heal if embed EPERMs:")
+            log(live.path)
         } else {
-            let stamped = (man?["hostLiveInstallPath"] as? String) ?? ""
-            let published = DecryptCompanionHandoff.readLiveInstallPath()?.path ?? ""
-            if !stamped.isEmpty {
-                log("Host stamped live path was unusable (\(stamped)) — falling back to EmbeddedPayload.")
-            } else if !published.isEmpty {
-                log("Host App Group live path was unusable (\(published)) — falling back to EmbeddedPayload.")
-            }
-            log("No readable live install — self-heal will use EmbeddedPayload (+ SINF restage). Install this app from the App Store first if decrypt EPERMs.")
+            log("No live install on device — embed-only (FairPlayed happy path). Keys come from Media & Purchases.")
         }
         let outcome = try FairPlaySelfHeal.healAndDecrypt(
             context: FairPlaySelfHeal.Context(
-                readingFrom: liveRead ?? src,
+                readingFrom: src,
                 writingTo: destApp,
                 liveInstall: liveRead,
                 embeddedOrIPA: src,
-                maxRounds: 3,
+                maxRounds: 4,
                 progress: progressBridge
             )
         )

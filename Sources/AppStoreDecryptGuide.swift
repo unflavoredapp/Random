@@ -81,6 +81,6 @@ enum AppStoreDecryptGuide {
     nonisolated static var failureHint: String {
         let email = UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache") ?? ""
         let who = email.isEmpty ? "this Apple ID" : email
-        return "If decrypt failed right after the download, \(who) may never have signed in to the App Store on this iPhone. Sign in once in the App Store (or Settings → your name → Media & Purchases) with that account, then try again. That one-time step stores the decryption keys on the device."
+        return "FairPlay needs \(who)’s decryption keys on this iPhone. Sign in once in the App Store (or Settings → your name → Media & Purchases) with that account, keep ownership of the app, then try again. That one-time step stores the keys — switching the active App Store account afterward is fine."
     }
 }
