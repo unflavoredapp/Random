@@ -128,7 +128,7 @@ final class DecryptPipeline: ObservableObject {
         _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
         CertificateStore.shared.activatePreferredCertificate(forSigningMethod: "appleid")
         guard let material = try? CertificateStore.shared.activeMaterial() else {
-            throw DecryptError("No signing certificate. Open Settings › Store Access › Developer Portal › Create.")
+            throw DecryptError("No signing certificate. Open Settings › Apple ID › Developer Account › Create.")
         }
 
         stage = .signing("Signing \(displayName)…")

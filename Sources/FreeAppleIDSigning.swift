@@ -29,7 +29,7 @@ enum FreeAppleIDSigning {
 
         var auth = AppleIDStore.shared.portalSession()
         if auth == nil || AppleIDStore.shared.activeAccount == nil {
-            throw AppleAuthError.message("Sign in under Settings › Store Access first.")
+            throw AppleAuthError.message("Sign in under Account first.")
         }
         // Refresh stale portal sessions before creating a cert.
         if let current = auth {
@@ -44,7 +44,7 @@ enum FreeAppleIDSigning {
             }
         }
         guard let auth else {
-            throw AppleAuthError.message("Sign in under Settings › Store Access first.")
+            throw AppleAuthError.message("Sign in under Account first.")
         }
 
         let teams = try await DeveloperPortalClient.shared.listTeams(auth: auth)

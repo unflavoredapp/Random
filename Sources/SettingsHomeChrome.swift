@@ -1,7 +1,7 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-// MARK: - Store Access (multi-account)
+// MARK: - Apple ID (signing)
 
 struct SettingsAppleIDCard: View {
     @ObservedObject private var store = AppleIDStore.shared
@@ -22,13 +22,12 @@ struct SettingsAppleIDCard: View {
     var body: some View {
         GlassCard(corner: 24) {
             VStack(alignment: .leading, spacing: 14) {
-                // Reference chrome: Apple ID (signing) + Store Access in one card.
+                // Apple ID signing only — store login is on Account (iPadn).
                 appleIDHeader
 
                 if store.hasAnyAccount {
                     signedInAppleBlock
-                    storeAccessSection
-                } else if store.authPhase == .awaitingTwoFactor {
+                                    } else if store.authPhase == .awaitingTwoFactor {
                     // Legacy GSA fallback still needs the inline code field.
                     twoFactorBlock
                 } else if isPreparing {
@@ -55,7 +54,7 @@ struct SettingsAppleIDCard: View {
         .sheet(isPresented: $showManageAccounts) {
             NavigationStack {
                 manageStoreAccountsSheet
-                    .navigationTitle("Store Access")
+                    .navigationTitle("Apple Accounts")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) {
@@ -102,7 +101,7 @@ struct SettingsAppleIDCard: View {
             Button("Cancel", role: .cancel) { accountPendingDelete = nil }
         } message: {
             if let a = accountPendingDelete {
-                Text("Remove \(a.email) from Store Access on this device.")
+                Text("Remove \(a.email) from Apple Accounts on this device.")
             }
         }
     }
@@ -170,199 +169,6 @@ struct SettingsAppleIDCard: View {
             secondaryButton("Sign Out", busy: false) {
                 store.signOutActive()
                 email = ""; password = ""; twoFACode = ""
-            }
-        }
-    }
-
-    @ViewBuilder
-    private var storeAccessSection: some View {
-        Divider().overlay(.white.opacity(0.12))
-
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: "bag.fill")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(TetherlessPalette.accent)
-                .frame(width: 28)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("Store Access")
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
-                Text("Used by Decrypt to buy/download apps.")
-                    .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.55))
-            }
-            Spacer(minLength: 0)
-        }
-
-        // Target chrome: green “Signed in for Store access” with the same Apple ID email
-        // once the shared passwordToken session exists — never hide that behind a spinner.
-        if store.storefrontSession()?.isUsable == true {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "checkmark.seal.fill")
-                    .font(.title3)
-                    .foregroundStyle(Color.green.opacity(0.95))
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Signed in for Store access")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Text(store.email)
-                        .font(.subheadline)
-                        .foregroundStyle(.white.opacity(0.55))
-                        .lineLimit(1)
-                }
-                Spacer(minLength: 0)
-            }
-            .onAppear { store.clearStaleStoreErrorIfSessionUsable() }
-            .task {
-                // Keep anisette + SAP + aged passwordToken warm while Settings is open.
-                _ = await store.reinforceStoreConnection()
-            }
-
-            Text("Ready to fetch free apps and anything this Apple ID already purchased.")
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.5))
-                .fixedSize(horizontal: false, vertical: true)
-
-            Button {
-                AppNav.shared.goSearch()
-                DeviceDecryptService.shared.runStoreConnectionSmokeTest()
-            } label: {
-                Text("Test download → companion")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(TetherlessPalette.accent)
-            }
-            .buttonStyle(.plain)
-            .disabled(store.isBusy || store.storeConnecting || DeviceDecryptService.shared.busy)
-
-            Button { showManageAccounts = true } label: {
-                HStack(spacing: 12) {
-                    Image(systemName: "person.2.fill")
-                        .font(.body.weight(.semibold))
-                        .foregroundStyle(TetherlessPalette.accent)
-                        .frame(width: 28)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Manage Store Accounts")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.white)
-                        Text("Add another Apple ID for downloads, or switch accounts.")
-                            .font(.caption)
-                            .foregroundStyle(.white.opacity(0.55))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Image(systemName: "chevron.right")
-                        .font(.footnote.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.45))
-                }
-                .padding(.vertical, 4)
-            }
-            .buttonStyle(.plain)
-        } else if store.storeConnecting || isPreparing {
-            HStack(spacing: 10) {
-                ProgressView().tint(TetherlessPalette.accent)
-                Text("Signing in for Store access…")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-            }
-        } else if store.storeNeedsVerification || store.authPhase == .awaitingTwoFactor {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.title3)
-                    .foregroundStyle(.orange)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text("Store needs the first sign-in trust")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
-                    Text(store.statusMessage?.isEmpty == false
-                         ? store.statusMessage!
-                         : "Watch for Apple’s Allow sheet, then enter the 6-digit code below. Or tap Text me a code.")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.55))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-
-            // Signed-in Store unlock used to omit this field — Allow sheet appeared with nowhere to type.
-            TextField("123456", text: $twoFACode)
-                .keyboardType(.numberPad)
-                .textContentType(.oneTimeCode)
-                .foregroundStyle(.white)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 13)
-                .background(Color.black.opacity(0.28), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .strokeBorder(.white.opacity(0.10), lineWidth: 1)
-                )
-                .disabled(store.isBusy || store.storeConnecting)
-
-            primaryButton(store.isBusy ? "Unlocking Store…" : "Submit Code") {
-                Task {
-                    do {
-                        _ = try await store.submitStoreVerificationCode(twoFACode)
-                        twoFACode = ""
-                    } catch {
-                        // lastError / statusMessage already set on the store
-                    }
-                }
-            }
-            .disabled(store.isBusy || store.storeConnecting || twoFACode.filter(\.isNumber).count < 6)
-            .opacity(store.isBusy ? 0.7 : 1)
-
-            HStack(spacing: 16) {
-                Button {
-                    Task { await store.requestTrustedDevicePush() }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "iphone.radiowaves.left.and.right")
-                        Text("Send again to devices")
-                            .font(.footnote.weight(.semibold))
-                    }
-                    .foregroundStyle(TetherlessPalette.accent)
-                }
-                .buttonStyle(.plain)
-                .disabled(store.isBusy || store.storeConnecting)
-
-                Button {
-                    Task { await store.requestSMSCode(forStoreUnlock: true) }
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "message.fill")
-                        Text(store.isSMSTwoFactor ? "Resend text" : "Text me a code")
-                            .font(.footnote.weight(.semibold))
-                    }
-                    .foregroundStyle(TetherlessPalette.accent)
-                }
-                .buttonStyle(.plain)
-                .disabled(store.isBusy || store.storeConnecting)
-
-                Spacer(minLength: 0)
-            }
-
-            Button {
-                Task { await store.requestStoreVerificationPrompt() }
-            } label: {
-                Text("Retry Store unlock")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(TetherlessPalette.accent)
-            }
-            .buttonStyle(.plain)
-            .disabled(store.isBusy || store.storeConnecting)
-        } else {
-            // Portal signed in; store session not loaded yet — reconnect with the same password.
-            HStack(spacing: 10) {
-                ProgressView().tint(TetherlessPalette.accent)
-                Text("Signing in for Store access…")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-            }
-            .task {
-                await store.reconnectStoreSessionIfNeeded()
-                // Don't spin forever if reconnect no-ops or store still needs a code.
-                if store.storefrontSession()?.isUsable != true, !store.storeConnecting {
-                    store.noteStoreNeedsVerification()
-                }
             }
         }
     }
@@ -456,10 +262,7 @@ struct SettingsAppleIDCard: View {
                     }
                 }
 
-                AuthClientSpoofCard()
-                AnisetteServerCard()
                 PhoneDecryptWorkerCard()
-                IPadnOptionalCard()
             }
             .padding(20)
             .padding(.bottom, 28)

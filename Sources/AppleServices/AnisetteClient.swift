@@ -39,18 +39,12 @@ enum AnisetteError: LocalizedError {
 actor AnisetteClient {
     static let shared = AnisetteClient()
 
-    /// SideStore-style v3 defaults + optional site-hosted anisette (open-source pattern).
+    /// SideStore-style v3 defaults only — do not prefer tetherless.dev/anisette (often 404).
     nonisolated static var builtInServers: [String] {
-        var list = [
+        [
             "https://ani.jkcoxson.com",
             "https://ani.sidestore.io",
         ]
-        // Prefer a backend-hosted anisette when the site exposes /anisette (v3).
-        let site = DecryptClient.siteBase.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-        if let host = URL(string: site)?.host, !host.isEmpty {
-            list.insert("\(site)/anisette", at: 0)
-        }
-        return list
     }
 
     /// Override with UserDefaults "tetherless.anisette.server" if needed.

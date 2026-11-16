@@ -578,7 +578,7 @@ struct SigningSheet: View {
         switch method {
         case "appleid":
             let email = appleIDs.email
-            if email.isEmpty { return "Add an Apple ID in Settings › Store Access, then link a development certificate." }
+            if email.isEmpty { return "Add an Apple ID under Account, then link a development certificate in Settings." }
             return email
         case "enterprise":
             if let c = certs.preferredCertificate(forSigningMethod: "enterprise"),
@@ -1354,7 +1354,7 @@ struct SigningSheet: View {
         if method == "appleid" {
             appleIDs.activatePreferredSigningCertificate()
             if appleIDs.activeAccount == nil {
-                error = "Sign in with an Apple ID under Settings › Store Access first."
+                error = "Sign in with an Apple ID under Account first."
                 return
             }
             if appleIDs.preferredSigningCertificateID() == nil {
@@ -1362,7 +1362,7 @@ struct SigningSheet: View {
                     log.append(">>> Creating free Apple ID development certificate…")
                     _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
                 } catch {
-                    self.error = "Couldn't prepare a free Apple ID certificate: \(error.localizedDescription). Open Settings › Store Access › Manage Store Accounts › Developer Portal and tap Create."
+                    self.error = "Couldn't prepare a free Apple ID certificate: \(error.localizedDescription). Open Settings › Apple ID › Developer Account and tap Create."
                     return
                 }
             }

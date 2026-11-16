@@ -408,44 +408,31 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                 let dest = IPadnDownloadStorage.packagesDir
                     .appendingPathComponent("\(id.uuidString)_\(job.bundleID.isEmpty ? "app" : job.bundleID).ipa")
 
-                // Same Store reinforce as DeviceDecryptService silent purchase.
-                guard let reinforced = await AppleIDStore.shared.reinforceStoreConnection() else {
+                // iPadn Account login session only — no Store Access remint / anisette stack.
+                guard let account = AppleIDStore.shared.storefrontSession(), account.isUsable else {
                     throw IPadnDownloadError.message(
-                        "Sign in under Settings › Store Access with the Apple ID that owns this app."
+                        "Sign in under Account with the Apple ID that owns this app."
                     )
                 }
-                var account = reinforced
 
                 if let adam = job.adamId, adam > 0 {
-                    let result: (url: URL, item: StoreDownloadItem)
-                    do {
-                        result = try await AppStoreClient.shared.purchaseAndDownload(
-                            adamId: adam,
-                            account: account,
-                            destination: dest,
-                            externalVersionId: job.externalVersionId,
-                            version: job.version.isEmpty ? nil : job.version,
-                            onProgress: { [weak self] msg in
-                                Task { @MainActor in
-                                    guard let self, let i = self.jobs.firstIndex(where: { $0.id == id }) else { return }
-                                    if let (w, e) = Self.parseBytes(msg) {
-                                        self.jobs[i].downloaded = w
-                                        self.jobs[i].expected = e
-                                        let p = self.progress(for: id)
-                                        p.written = w; p.expected = e
-                                    }
+                    let result = try await IPadnStoreDownload.purchaseAndDownload(
+                        adamId: adam,
+                        account: account,
+                        destination: dest,
+                        externalVersionId: job.externalVersionId,
+                        onProgress: { [weak self] msg in
+                            Task { @MainActor in
+                                guard let self, let i = self.jobs.firstIndex(where: { $0.id == id }) else { return }
+                                if let (w, e) = Self.parseBytes(msg) {
+                                    self.jobs[i].downloaded = w
+                                    self.jobs[i].expected = e
+                                    let p = self.progress(for: id)
+                                    p.written = w; p.expected = e
                                 }
                             }
-                        )
-                    } catch {
-                        // Full device path has 403 remint / backend / installed-embed fallbacks.
-                        try Task.checkCancellation()
-                        await self.runOwnedStoreDecrypt(id: id, app: app, job: job)
-                        _ = account
-                        self.storeTasks[id] = nil
-                        self.schedule()
-                        return
-                    }
+                        }
+                    )
                     try Task.checkCancellation()
                     if result.url != dest {
                         try? FileManager.default.removeItem(at: dest)
@@ -461,11 +448,10 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                     if self.jobs[i].version.isEmpty { self.jobs[i].version = result.item.displayVersion }
                     if self.jobs[i].bundleID.isEmpty { self.jobs[i].bundleID = result.item.bundleID }
                     self.persist()
-                    _ = account
                     // iPadn IPA on disk → FairPlay companion / in-app decrypt.
                     await self.enqueueSerialDecrypt(id: id, ipa: dest, name: job.name)
                 } else {
-                    // No adam on the job — resolve via store URL / bundle in DeviceDecryptService.
+                    // No adam on the job — resolve via store URL / bundle, still iPadn fetch.
                     await self.runOwnedStoreDecrypt(id: id, app: app, job: job)
                 }
             } catch is CancellationError {

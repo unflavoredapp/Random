@@ -70,9 +70,9 @@ struct PurchasedHomeView: View {
                                 Label("Refresh", systemImage: "arrow.clockwise")
                             }
                             Button {
-                                AppNav.shared.goSettings()
+                                AppNav.shared.goAccount()
                             } label: {
-                                Label("Store Access", systemImage: "gearshape")
+                                Label("Account", systemImage: "person.crop.circle")
                             }
                         } label: {
                             Image(systemName: "ellipsis")

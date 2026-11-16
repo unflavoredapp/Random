@@ -131,28 +131,17 @@ struct DecryptSignedInCard: View {
                     .disabled(decrypting.busy || store.isBusy || store.storeConnecting)
                 } else {
                     Button {
-                        Task {
-                            if let session = await store.reinforceStoreConnection(forceRemint: true),
-                               session.isUsable {
-                                return
-                            }
-                            await store.requestStoreVerificationPrompt()
-                        }
+                        AppNav.shared.goAccount()
                     } label: {
-                        HStack {
-                            if store.storeConnecting {
-                                ProgressView().tint(.white)
-                            }
-                            Text(store.storeConnecting ? "Connecting Store…" : "Connect Store Access")
-                                .font(.body.weight(.semibold))
-                        }
-                        .foregroundStyle(.white)
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 12)
-                        .background(TetherlessPalette.accent, in: Capsule())
+                        Text("Sign in under Account")
+                            .font(.body.weight(.semibold))
+                            .foregroundStyle(.white)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(TetherlessPalette.accent, in: Capsule())
                     }
                     .buttonStyle(.plain)
-                    .disabled(store.isBusy || store.storeConnecting || decrypting.busy)
+                    .disabled(store.isBusy || decrypting.busy)
                 }
 
                 Button(action: onSignOut) {
@@ -234,7 +223,7 @@ struct DecryptOwnedStoreAppsSection: View {
                         } else if soft || loadError.localizedCaseInsensitiveContains("403")
                             || loadError.localizedCaseInsensitiveContains("expired")
                             || loadError.localizedCaseInsensitiveContains("token") {
-                            Text("Tip: pull to refresh here, or Settings › Store Access → Retry Store unlock (stay signed in). Search still works.")
+                            Text("Tip: pull to refresh here, or sign in again under Account. Search still works.")
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.45))
                                 .fixedSize(horizontal: false, vertical: true)
@@ -293,7 +282,7 @@ struct DecryptOwnedStoreAppsSection: View {
             }
         } catch AppStoreClientError.needsTwoFactor {
             owned = []
-            loadError = "Store needs the first Sign In trust — Sign Out, then Sign In once under Settings › Store Access. The Allow / verification code unlocks Store automatically (no second text)."
+            loadError = "Store needs the first Sign In trust — Sign Out, then Sign In once under Account. The Allow / verification code unlocks Store automatically (no second text)."
             AppleIDStore.shared.noteStoreNeedsVerification()
         } catch {
             owned = []
@@ -302,7 +291,7 @@ struct DecryptOwnedStoreAppsSection: View {
                 loadError = "Owned list couldn’t load right now. Store Access is still signed in — Search works for free & purchased apps."
             } else if detail.localizedCaseInsensitiveContains("token expired")
                         || detail.localizedCaseInsensitiveContains("session expired") {
-                loadError = "Store Access needs a refresh — open Settings › Store Access and tap Retry Store unlock (or Sign Out → Sign In once)."
+                loadError = "Store session needs a refresh — Sign Out → Sign In once under Account."
             } else {
                 loadError = detail
             }
@@ -666,7 +655,7 @@ struct DecryptStoreGateCard: View {
                         Text("Store Access needed")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text("Sign in under Settings › Store Access, and make sure that same Apple ID has signed in to this iPhone’s App Store at least once (App Store app, or Settings → your name → Media & Purchases). That’s how iOS stores the decryption keys — a one-time step per Apple ID.")
+                        Text("Sign in under Account, and make sure that same Apple ID has signed in to this iPhone’s App Store at least once (App Store app, or Settings → your name → Media & Purchases). That’s how iOS stores the decryption keys — a one-time step per Apple ID.")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.6))
                     }
