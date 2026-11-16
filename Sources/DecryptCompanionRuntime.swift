@@ -234,7 +234,26 @@ enum DecryptCompanionRuntime {
         DecryptCompanionController.shared.verifySummary = ipaVerify.summary
         DecryptCompanionController.shared.markFinished(url: outIPA, name: name)
         DecryptCompanionController.shared.statusTitle = "Done"
-        log("IPA is in this companion’s Documents/Decrypted. Use Share to save or AirDrop.")
+        log("IPA is in this companion’s Documents/Decrypted.")
+
+        // Hand the clear IPA back to the host (App Group → tetherless://decrypt-export).
+        let info = NSDictionary(contentsOf: src.appendingPathComponent("Info.plist")) as? [String: Any]
+        let bundleID = (info?["CFBundleIdentifier"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let published = DecryptCompanionHandoff.publishClearIPAExport(
+            ipa: outIPA,
+            displayName: name,
+            bundleID: bundleID,
+            version: version,
+            verifySummary: ipaVerify.summary
+        )
+        DecryptCompanionController.shared.exportSentToHost = published
+        if published {
+            log("Sent clear IPA to TetherLess via App Group — opening host…")
+            DecryptCompanionHandoff.openHostForClearIPAImport()
+        } else {
+            log("App Group unavailable — use Share to send the IPA to TetherLess (Open in TetherLess).")
+        }
         return outIPA
     }
 
@@ -452,7 +471,10 @@ struct DecryptCompanionRoot: View {
             .task {
                 do {
                     let url = try await DecryptCompanionRuntime.runEmbeddedDecrypt()
-                    shareURL = url
+                    // Auto-share only when App Group handoff failed (host can't import alone).
+                    if !companion.exportSentToHost {
+                        shareURL = url
+                    }
                 } catch {
                     errorText = error.localizedDescription
                     companion.markFailed(error.localizedDescription)

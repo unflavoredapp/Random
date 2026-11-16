@@ -710,7 +710,7 @@ struct DecryptView: View {
         case .done:
             return "Decrypted"
         case .handedOff:
-            return "Companion ready"
+            return "Waiting for companion IPA"
         case .failed:
             return "Failed"
         case .queued:
@@ -817,11 +817,18 @@ struct DecryptView: View {
                 if c.phase == .handedOff {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(c.message.isEmpty
-                             ? "Open Tetherless Decrypt to finish FairPlay."
+                             ? "Open Tetherless Decrypt to finish FairPlay. When it’s done, the clear IPA returns here for Sign → Install."
                              : c.message)
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.7))
                             .fixedSize(horizontal: false, vertical: true)
+                        Button("Check for clear IPA") {
+                            if DecryptCompanionHandoff.consumePendingClearIPAExport() != nil {
+                                // Phase flips to .done via handoff.
+                            }
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
                         Button("Dismiss") { c.reset() }
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(.white.opacity(0.55))

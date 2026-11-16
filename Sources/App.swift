@@ -44,7 +44,31 @@ struct TetherlessApp: App {
                     }
                     .environmentObject(session)
                     .environmentObject(config)
-                    .onOpenURL { url in session.receiveIncoming(url) }
+                    .onOpenURL { url in
+                        let scheme = url.scheme?.lowercased() ?? ""
+                        // Custom schemes are handled by RootView; only ingest real files here.
+                        if scheme == "tetherless" || scheme == "airshare" || scheme == "msign"
+                            || scheme == "sideloader" || scheme == "tetherless-decrypt" {
+                            if scheme == "tetherless",
+                               ["decrypt-export", "decrypt-import", "export"].contains(url.host?.lowercased() ?? "") {
+                                _ = DecryptCompanionHandoff.consumePendingClearIPAExport()
+                                AppNav.shared.goSearch()
+                            }
+                            return
+                        }
+                        // Shared / Open-in IPA from companion → treat as clear decrypt import.
+                        if url.pathExtension.lowercased() == "ipa" {
+                            Task { @MainActor in
+                                if DecryptCompanionHandoff.importSharedClearIPA(url) != nil {
+                                    AppNav.shared.goSearch()
+                                } else {
+                                    session.receiveIncoming(url)
+                                }
+                            }
+                            return
+                        }
+                        session.receiveIncoming(url)
+                    }
                     .overlay { BetaRevokedOverlay() }
                     .overlay { AccountBannedOverlay() }
                     .overlay(alignment: .bottom) { VStack(spacing: 8) { ResumeBatchBanner(); UndoUninstallBanner(); InstallQueuePill(); NativeInstallBanner() } }
@@ -54,6 +78,10 @@ struct TetherlessApp: App {
                             PhoneDecryptWorker.shared.startIfNeeded()
                             // Unsigned → Account + login once (FairPlay / Store need Apple ID).
                             AppNav.shared.nudgeAccountLoginIfNeeded()
+                            // Companion may have published a clear IPA while we were backgrounded.
+                            if DecryptCompanionHandoff.consumePendingClearIPAExport() != nil {
+                                AppNav.shared.goSearch()
+                            }
                             Task {
                                 await OTABootstrap.ensurePublicPack()
                                 await VPNReconnectCoordinator.shared.appBecameActive()

@@ -742,11 +742,13 @@ final class DeviceDecryptService: ObservableObject {
     private func markCompanionHandoff(displayName: String) {
         DecryptClient.shared.phase = .handedOff
         DecryptClient.shared.message =
-            "Open Tetherless Decrypt — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
+            "Open Tetherless Decrypt to finish FairPlay (Trust under Settings › General › VPN & Device Management if asked). The clear IPA returns here for Sign → Install."
         DecryptClient.shared.error = nil
         DecryptClient.shared.finishedName = displayName
         status = "Companion installed for \(displayName)"
         DecryptCompanionController.shared.dismiss()
+        // If a previous companion export is already waiting, import it now.
+        _ = DecryptCompanionHandoff.consumePendingClearIPAExport()
     }
 
     /// iPadn DownloadDispatch fetch + FairPlay handoff. No remint / anisette / backend IPA stack.
