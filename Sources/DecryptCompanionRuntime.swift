@@ -251,8 +251,8 @@ enum DecryptCompanionRuntime {
            !fromPlist.isEmpty {
             candidates.append(fromPlist)
         }
-        let seen = NSMutableSet()
-        for bid in candidates where seen.add(bid) {
+        var seen = Set<String>()
+        for bid in candidates where seen.insert(bid).inserted {
             guard let live = FairPlayDecrypt.installedAppURL(bundleID: bid) else { continue }
             // Must be a real live container — not our own EmbeddedPayload.
             guard FairPlayDecrypt.isLiveAppStoreInstall(live) else { continue }
