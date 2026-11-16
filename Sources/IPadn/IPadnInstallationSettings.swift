@@ -130,6 +130,9 @@ struct IPadnInstallationSettingsView: View {
             }
         }
         .navigationTitle("Installation settings")
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            Color.clear.frame(height: 88)
+        }
         .navigationBarTitleDisplayMode(.inline)
         .onAppear { selected = currentMethod() }
         .fileImporter(

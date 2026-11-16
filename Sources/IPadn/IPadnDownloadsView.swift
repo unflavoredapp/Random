@@ -224,18 +224,11 @@ struct DownloadsHomeView: View {
                 .buttonStyle(.plain)
             }
 
-            AsyncImage(url: job.iconURL) { phase in
-                switch phase {
-                case .success(let img):
-                    img.resizable().scaledToFill()
-                default:
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Color.white.opacity(0.08))
-                        .overlay { Image(systemName: "app.fill").foregroundStyle(.white.opacity(0.35)) }
+            CachedIcon(url: job.iconURL, side: 64, fallback: job.name)
+                .task(id: job.id) {
+                    guard job.iconURL == nil else { return }
+                    await manager.backfillIcon(for: job.id)
                 }
-            }
-            .frame(width: 64, height: 64)
-            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(job.name)
@@ -259,7 +252,10 @@ struct DownloadsHomeView: View {
                 }
 
                 if let err = job.error, job.status == .failed {
-                    Text(err).font(.caption2).foregroundStyle(.orange).lineLimit(3)
+                    Text(err)
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
                     if let play = FailurePlaybook.match(errorText: err) {
                         HStack(spacing: 8) {
                             Button(play.actionTitle) {

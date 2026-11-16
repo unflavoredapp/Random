@@ -235,6 +235,40 @@ final class DeviceDecryptService: ObservableObject {
         return ([DecryptVersion(v: ver, current: true, minOS: minOS)], minOS)
     }
 
+    /// Public iTunes artwork for job cards when a DecryptApp / download was created without an icon.
+    static func artworkURL(bundleID: String?, storeURL: String?) async -> URL? {
+        if let storeURL,
+           let r = storeURL.range(of: #"/id(\d+)"#, options: .regularExpression) {
+            let adam = String(storeURL[r]).filter(\.isNumber)
+            if let url = await artworkURL(adamId: adam) { return url }
+        }
+        let bid = (bundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bid.isEmpty else { return nil }
+        guard var comps = URLComponents(string: "https://itunes.apple.com/lookup") else { return nil }
+        comps.queryItems = [
+            URLQueryItem(name: "bundleId", value: bid),
+            URLQueryItem(name: "limit", value: "1")
+        ]
+        guard let url = comps.url else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let row = (json["results"] as? [[String: Any]])?.first
+        return (row?["artworkUrl512"] as? String).flatMap(URL.init(string:))
+            ?? (row?["artworkUrl100"] as? String).flatMap(URL.init(string:))
+    }
+
+    private static func artworkURL(adamId: String) async -> URL? {
+        guard !adamId.isEmpty,
+              var comps = URLComponents(string: "https://itunes.apple.com/lookup") else { return nil }
+        comps.queryItems = [URLQueryItem(name: "id", value: adamId), URLQueryItem(name: "limit", value: "1")]
+        guard let url = comps.url else { return nil }
+        guard let (data, _) = try? await URLSession.shared.data(from: url) else { return nil }
+        let json = (try? JSONSerialization.jsonObject(with: data) as? [String: Any]) ?? [:]
+        let row = (json["results"] as? [[String: Any]])?.first
+        return (row?["artworkUrl512"] as? String).flatMap(URL.init(string:))
+            ?? (row?["artworkUrl100"] as? String).flatMap(URL.init(string:))
+    }
+
     /// Resolve an App Store URL for a bundle ID via Apple’s public lookup (on-device, no bot).
     func storeURL(forBundleID bundleID: String) async throws -> String {
         let id = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -495,12 +529,13 @@ final class DeviceDecryptService: ObservableObject {
         status = "Preparing \(app.name)…"
         defer { busy = false }
         do {
+            let icon = await Self.artworkURL(bundleID: app.bundleID, storeURL: nil)
             DecryptClient.shared.select(
                 DecryptApp(
                     id: app.bundleID,
                     name: app.name,
                     bundle: app.bundleID,
-                    icon: nil,
+                    icon: icon,
                     dev: "",
                     version: app.version,
                     url: ""
@@ -603,6 +638,27 @@ final class DeviceDecryptService: ObservableObject {
                 isAppStore: true
             )
             Task {
+                if app.icon == nil,
+                   let icon = await Self.artworkURL(bundleID: app.bundle, storeURL: app.url) {
+                    DecryptClient.shared.finishedIcon = icon
+                    // Update artwork without `select()` so search results stay visible.
+                    if DecryptClient.shared.selected?.id == app.id {
+                        DecryptClient.shared.selected = DecryptApp(
+                            id: app.id,
+                            name: app.name,
+                            bundle: app.bundle,
+                            icon: icon,
+                            dev: app.dev,
+                            version: app.version,
+                            url: app.url,
+                            countryCode: app.countryCode,
+                            countryLabel: app.countryLabel,
+                            category: app.category,
+                            sizeBytes: app.sizeBytes,
+                            externalVersionId: app.externalVersionId
+                        )
+                    }
+                }
                 await decryptOwnedStoreApp(
                     deviceApp,
                     storeURL: app.url,
