@@ -306,7 +306,7 @@ enum FairPlayDecrypt {
                 "Refusing in-place decrypt of a live App Store install. Use decryptInstalledApp (writes a Payload copy) or the companion."
             )
         }
-        try decryptMachOs(readingFrom: appURL, writingTo: appURL, progress: progress)
+        return try decryptMachOs(readingFrom: appURL, writingTo: appURL, progress: progress)
     }
 
     /// Copy installed App Store .app → Payload, decrypt from live install path, zip IPA.
