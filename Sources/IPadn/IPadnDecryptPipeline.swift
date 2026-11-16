@@ -1,16 +1,15 @@
 //
 // Brand: Tetherless · https://tetherless.dev
 //  IPadnDecryptPipeline.swift
-//  Get / Download → iPadn store download queue → FairPlay (DeviceDecryptService).
-//  Keeps mengangs/ipadn Downloads UI while decrypt “just works” after the IPA lands.
+//  Get / Download → Downloads queue (stack many) → IPA download → companion push FIFO.
 //
 
 import Foundation
 
 @MainActor
 enum IPadnDecryptPipeline {
-    /// Search Get, App Detail Download, Purchased cloud — enqueue iPadn store job.
-    /// IPadnDownloadManager auto-handoffs the finished IPA to FairPlay.
+    /// Search Get, App Detail Download, Purchased — enqueue a Downloads job.
+    /// Jobs stack: Store downloads run up to maxConcurrent; companion pushes serialize.
     static func get(
         _ app: DecryptApp,
         externalVersionId: String? = nil,
@@ -24,18 +23,15 @@ enum IPadnDecryptPipeline {
                 app: app,
                 externalVersionId: externalVersionId
             )
-            if openDownloads {
-                AppNav.shared.goDownloads()
-            }
+        } catch IPadnDownloadError.duplicate {
+            // Already stacked — just show the queue; never bypass into decryptFromSearch.
         } catch {
-            // Already queued, or enqueue rejected — still run the proven device decrypt path.
-            DeviceDecryptService.shared.decryptFromSearch(
-                app,
-                externalVersionId: externalVersionId
-            )
-            if openDownloads {
-                AppNav.shared.goDownloads()
-            }
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = error.localizedDescription
+            DecryptClient.shared.message = error.localizedDescription
+        }
+        if openDownloads {
+            AppNav.shared.goDownloads()
         }
     }
 
