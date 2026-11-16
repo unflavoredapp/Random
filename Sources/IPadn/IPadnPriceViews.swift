@@ -168,6 +168,8 @@ struct IPadnRegionPriceView: View {
         loading = true
         defer { loading = false }
         rates = await IPadnExchangeRates.load(base: baseCurrency)
+        // Capture off MainActor before nonisolated TaskGroup work (Swift 6).
+        let currencyBase = baseCurrency
         var out: [IPadnRegionPrice] = []
         await withTaskGroup(of: IPadnRegionPrice?.self) { group in
             for code in regions {
@@ -178,7 +180,7 @@ struct IPadnRegionPriceView: View {
                     return IPadnRegionPrice(
                         country: code,
                         price: listing.priceValue,
-                        currency: listing.currency ?? baseCurrency,
+                        currency: listing.currency ?? currencyBase,
                         formatted: listing.isFree ? "Free" : (listing.price.isEmpty ? "—" : listing.price)
                     )
                 }

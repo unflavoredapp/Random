@@ -21,7 +21,7 @@ enum DecryptCompanionInstaller {
         displayName: String,
         progress: ((String) -> Void)? = nil
     ) async throws -> String {
-        try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
+        return try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
             try DecryptCompanionPackager.buildCompanionIPA(
                 embedding: encryptedIPA,
                 bundleID: bundleID,
@@ -45,7 +45,7 @@ enum DecryptCompanionInstaller {
         if !bid.isEmpty {
             DecryptCompanionHandoff.publishLiveInstallPath(installedApp.path, bundleID: bid)
         }
-        try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
+        return try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
             try DecryptCompanionPackager.buildCompanionIPA(
                 embeddingInstalledApp: installedApp,
                 bundleID: bundleID,
