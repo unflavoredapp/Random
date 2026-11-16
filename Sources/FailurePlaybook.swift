@@ -72,10 +72,18 @@ enum FailurePlaybook {
             action: .reauthStore
         ),
         FailurePlay(
+            id: "fairplay-gate",
+            title: "App Store Media & Purchases sign-in needed",
+            summary: "Sign in once in the App Store (or Settings → your name → Media & Purchases) with the same Apple ID, then tap I’ve signed in on this iPhone and retry the download.",
+            matches: ["before silent download", "i’ve signed in on this iphone", "i've signed in on this iphone", "media & purchases"],
+            actionTitle: "I’ve signed in on this iPhone",
+            action: .acknowledgeFairPlay
+        ),
+        FailurePlay(
             id: "cryptid",
             title: "FairPlay still encrypted (cryptid)",
             summary: "iOS never stored Media & Purchases keys for this Apple ID. Sign in once in the App Store (Media & Purchases), then tap I’ve signed in on this iPhone.",
-            matches: ["cryptid", "fairplay", "still encrypted", "decryption keys", "media & purchases"],
+            matches: ["cryptid", "fairplay", "still encrypted", "decryption keys"],
             actionTitle: "Open App Store sign-in",
             action: .openAppStoreSignIn
         ),
@@ -103,7 +111,13 @@ enum FailurePlaybook {
             AppStoreDecryptGuide.setAcknowledged(false, email: AppleIDStore.shared.email)
             AppStoreDecryptGuide.openAppStore()
         case .acknowledgeFairPlay:
-            AppStoreDecryptGuide.setAcknowledged(true, email: AppleIDStore.shared.email)
+            let email = AppleIDStore.shared.email
+            if email.isEmpty {
+                // Can't key the FairPlay ack without an Apple ID — send them to Account first.
+                AppNav.shared.goAccount()
+                return
+            }
+            AppStoreDecryptGuide.setAcknowledged(true, email: email)
         case .reauthStore:
             AppleIDStore.shared.clearPersistedStoreSession()
             AppNav.shared.goAccount()

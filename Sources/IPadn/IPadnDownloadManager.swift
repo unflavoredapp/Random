@@ -433,6 +433,9 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                         "Sign in under Account with the Apple ID that owns this app."
                     )
                 }
+                // Fail before purchase when Media & Purchases keys were never acknowledged —
+                // matches DeviceDecryptService so Cake Wallet–style jobs don't look like a Store outage.
+                try FairPlayKeyGate.requireReady()
 
                 if let adam = job.adamId, adam > 0 {
                     let result = try await IPadnStoreDownload.purchaseAndDownload(
