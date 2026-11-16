@@ -26,7 +26,7 @@ nonisolated enum Keychain {
         deleteAccount(key, service: service)
         deleteAccount(key, service: legacyService)
         if value.isEmpty { return true }
-        var add: [String: Any] = [
+        let add: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,

@@ -83,10 +83,10 @@ struct IPadnBlurNavScroll<Trailing: View, Content: View>: View {
                 VStack(alignment: .leading, spacing: 16) {
                     IPadnPageHeader(title: title) {
                         trailing()
-                            .opacity(1 - progress)
+                            .opacity(1.0 - Double(progress))
                             .allowsHitTesting(progress < 0.55)
                     }
-                    .opacity(1 - min(1, progress * 1.25))
+                    .opacity(1.0 - min(1.0, Double(progress) * 1.25))
                     .accessibilityHidden(progress > 0.85)
                     .background(
                         GeometryReader { geo in

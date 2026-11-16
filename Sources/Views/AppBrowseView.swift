@@ -66,7 +66,7 @@ struct AppBrowseView: View {
     @AppStorage("appTintColorHex") private var appTintColorHex = "2EF262"
     
     private var accent: Color {
-        Color(hex: appTintColorHex) ?? .green
+        Color(hex: appTintColorHex)
     }
     
     private var preferredColorScheme: ColorScheme? {

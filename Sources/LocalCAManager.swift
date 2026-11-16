@@ -183,10 +183,9 @@ nonisolated enum LocalCAManager {
     // MARK: Leaf SANs (for the "does this cert cover this host" check)
 
     static func leafSANs() -> [String] {
-        guard let pem = try? String(contentsOf: leafCertURL) else { return [] }
-        // Reuse the same SAN parser style as ZefvCert: read from the leaf's own
-        // Common Name, plus the wildcard we always issue (host + *.host).
-        guard let m = meta else { return [] }
+        // Leaf must exist on disk; SANs come from issued meta (host + wildcard).
+        guard FileManager.default.fileExists(atPath: leafCertURL.path),
+              let m = meta else { return [] }
         return [m.host, "*.\(m.host)"]
     }
 
