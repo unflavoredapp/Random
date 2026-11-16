@@ -165,8 +165,8 @@ struct LibraryHomeView: View {
             GlassCard {
                 StatusRow(
                     kind: .info,
-                    title: "Decrypt via Store package → companion",
-                    subtitle: "When Account is signed in, TetherLess fetches the IPA and pushes FairPlay to Tetherless Decrypt. Install embed is only a fallback."
+                    title: "Download IPA → companion",
+                    subtitle: "Signed-in Account downloads the Store IPA, then Tetherless Decrypt companion runs FairPlay. No in-app decrypt path."
                 )
             }
             if !decrypting.status.isEmpty {

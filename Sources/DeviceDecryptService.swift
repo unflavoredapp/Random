@@ -518,10 +518,8 @@ final class DeviceDecryptService: ObservableObject {
         return (clear, name, result.item.displayVersion)
     }
 
-    /// Decrypt an app already on this iPhone via companion FairPlay.
-    /// Prefers Store download → companion when Store Access is ready (avoids hanging
-    /// host-side FairPlay audits on live install paths). Falls back to install embed
-    /// only when Store isn’t usable or the package fetch fails.
+    /// Decrypt an app already on this iPhone: Store IPA → companion when possible,
+    /// otherwise embed the live install into the companion. No in-app FairPlay.
     func decryptInstalled(_ app: DeviceApp, version: String? = nil) async {
         guard !busy else { return }
         busy = true
@@ -564,7 +562,7 @@ final class DeviceDecryptService: ObservableObject {
             // 2) Live install embed only when Store isn’t available / package fetch failed.
             if let installed = await resolveInstalledAppURL(bundleID: app.bundleID) {
                 publishDecryptProgress("Embedding installed \(app.name) into companion…")
-                try await decryptFromInstalledPath(installed, displayName: app.name, bundleID: app.bundleID)
+                try await decryptFromInstalledPath(installed, displayName: app.name)
                 return
             }
 
@@ -580,35 +578,19 @@ final class DeviceDecryptService: ObservableObject {
         }
     }
 
-    /// Companion embed from a live `/var/containers/Bundle/Application/…/*.app`, then
-    /// in-process FairPlay if companion signing/install fails.
+    /// Companion embed from a live install — no in-app FairPlay. Prefer Store IPA → companion.
     private func decryptFromInstalledPath(
         _ installed: URL,
-        displayName: String,
-        bundleID: String
+        displayName: String
     ) async throws {
         publishDecryptProgress("Building Tetherless Decrypt companion for \(displayName)…")
-        do {
-            _ = try await DecryptCompanionInstaller.installAndOpen(
-                embeddingInstalledApp: installed,
-                displayName: displayName
-            ) { [weak self] msg in
-                Task { @MainActor in self?.publishDecryptProgress(msg) }
-            }
-            markCompanionHandoff(displayName: displayName)
-            return
-        } catch {
-            publishDecryptProgress("Companion install failed — trying in-app FairPlay…")
-            publishDecryptProgress(error.localizedDescription)
-            let clear = try FairPlayDecrypt.decryptInstalledApp(
-                bundleID: bundleID,
-                displayName: displayName,
-                knownPath: installed.path
-            ) { [weak self] msg in
-                Task { @MainActor in self?.publishDecryptProgress(msg) }
-            }
-            finishSuccess(url: clear, name: displayName)
+        _ = try await DecryptCompanionInstaller.installAndOpen(
+            embeddingInstalledApp: installed,
+            displayName: displayName
+        ) { [weak self] msg in
+            Task { @MainActor in self?.publishDecryptProgress(msg) }
         }
+        markCompanionHandoff(displayName: displayName)
     }
 
     func decryptFromSearch(_ app: DecryptApp, version: String? = nil, externalVersionId: String? = nil) {
@@ -802,7 +784,7 @@ final class DeviceDecryptService: ObservableObject {
                 externalVersionId: pinned.isEmpty ? nil : pinned,
                 version: version
             )
-            try await handoffStoreIPAToFairPlay(
+            try await handoffStoreIPAToCompanion(
                 ipa: result.url,
                 displayName: displayName,
                 downloadedVersion: result.item.displayVersion
@@ -838,8 +820,7 @@ final class DeviceDecryptService: ObservableObject {
         }
     }
 
-    /// FairPlay a Store IPA already on disk (iPadn Downloads Get → purchaseAndDownload).
-    /// Same companion + in-app fallback as the silent-purchase path.
+    /// Push a Store IPA already on disk through the companion (Downloads Get → purchaseAndDownload).
     func decryptDownloadedStoreIPA(at ipa: URL, displayName: String) async {
         guard FileManager.default.fileExists(atPath: ipa.path) else {
             let text = "Downloaded IPA missing — retry Get."
@@ -867,11 +848,11 @@ final class DeviceDecryptService: ObservableObject {
         busy = true
         lastError = nil
         DecryptClient.shared.phase = .running
-        DecryptClient.shared.message = "Decrypting \(displayName)…"
+        DecryptClient.shared.message = "Preparing companion for \(displayName)…"
         DecryptClient.shared.error = nil
         defer { busy = false }
         do {
-            try await handoffStoreIPAToFairPlay(
+            try await handoffStoreIPAToCompanion(
                 ipa: ipa,
                 displayName: displayName,
                 downloadedVersion: ""
@@ -886,15 +867,14 @@ final class DeviceDecryptService: ObservableObject {
         }
     }
 
-    /// Companion embed first; in-app FairPlay on the Store package if companion install fails.
-    private func handoffStoreIPAToFairPlay(
+    /// Download path only: embed the Store IPA into the companion, sign, install, open.
+    /// No in-app FairPlay fallback — decrypt runs inside the companion.
+    private func handoffStoreIPAToCompanion(
         ipa: URL,
         displayName: String,
         downloadedVersion: String
     ) async throws {
         let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
-        // Competition path: build/sign/install a real “Tetherless Decrypt” companion
-        // IPA (EmbeddedPayload + user’s Apple ID cert). The console UI runs only there.
         publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
         try FairPlayKeyGate.requireReady()
         do {
@@ -905,29 +885,10 @@ final class DeviceDecryptService: ObservableObject {
                 Task { @MainActor in self?.publishDecryptProgress(msg) }
             }
             markCompanionHandoff(displayName: displayName)
-            return
         } catch {
-            // Last-resort: in-process IPA decrypt from package contents only — never prefer
-            // a live install path here (that re-hangs FairPlay cryptid probes).
-            let companionError = error.localizedDescription
-            publishDecryptProgress("Companion install failed — trying in-app FairPlay on Store package…")
-            publishDecryptProgress(companionError)
-            do {
-                let clear = try FairPlayDecrypt.decryptIPA(
-                    at: ipa,
-                    displayName: displayName,
-                    preferIPAContentsOnly: true
-                ) { [weak self] msg in
-                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                }
-                finishSuccess(url: clear, name: displayName)
-                return
-            } catch let ipaError {
-                AppStoreDecryptGuide.setAcknowledged(false, email: AppleIDStore.shared.email)
-                throw DecryptError(
-                    "Companion failed (\(companionError)). In-app FairPlay on the Store package also failed (\(ipaError.localizedDescription)). Trust your Apple ID under Settings › General › VPN & Device Management if the companion installed, then open Tetherless Decrypt — or sign in again under Account and retry. \(AppStoreDecryptGuide.failureHint)"
-                )
-            }
+            throw DecryptError(
+                "Couldn't install the companion with this IPA (\(error.localizedDescription)). Create a 7-day Apple ID certificate under Account › Settings › Installation › Certificate, trust it under Settings › General › VPN & Device Management, then retry."
+            )
         }
     }
 
