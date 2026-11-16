@@ -56,6 +56,9 @@ enum DecryptCompanionHandoff {
         var bytes: Int64
     }
 
+    private static let liveInstallPathKey = "companion.hostLiveInstallPath"
+    private static let liveInstallBundleKey = "companion.hostLiveInstallBundleID"
+
     /// Snapshot the host Apple ID / FairPlay gate state into a plist-safe dictionary.
     /// Calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
     static func hostSnapshot() -> [String: Any] {
@@ -73,7 +76,7 @@ enum DecryptCompanionHandoff {
             return String(email.prefix(2)) + "•••"
         }()
         let storeReady = UserDefaults.standard.bool(forKey: "tetherless.appleid.storeReady")
-        return [
+        var snap: [String: Any] = [
             "hostSignedIn": !email.isEmpty,
             "hostStoreReady": storeReady,
             "hostFairPlayAck": AppStoreDecryptGuide.isAcknowledged(email: email),
@@ -82,6 +85,19 @@ enum DecryptCompanionHandoff {
             // Explicit: no secrets.
             "secrets": false,
         ]
+        // Carry the last stamped live Store path so the companion can FairPlay-mremap
+        // even when LS/MI inside the companion sandbox can't resolve the app.
+        if let path = (suite?.string(forKey: liveInstallPathKey) ?? local.string(forKey: liveInstallPathKey))?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            snap["hostLiveInstallPath"] = path
+        }
+        if let bid = (suite?.string(forKey: liveInstallBundleKey) ?? local.string(forKey: liveInstallBundleKey))?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !bid.isEmpty {
+            snap["bundleID"] = bid
+        }
+        return snap
     }
 
     /// Publish snapshot to App Group when the free/paid provision still has the group.
@@ -89,6 +105,47 @@ enum DecryptCompanionHandoff {
         let snap = hostSnapshot()
         suite?.set(snap, forKey: "companion.hostSnapshot")
         local.set(snap, forKey: "companion.hostSnapshot")
+    }
+
+    /// Remember the live App Store `.app` path for the companion (Roblox EPERM path).
+    static func publishLiveInstallPath(_ path: String, bundleID: String) {
+        let p = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bid = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !p.isEmpty else {
+            clearLiveInstallPath()
+            return
+        }
+        suite?.set(p, forKey: liveInstallPathKey)
+        local.set(p, forKey: liveInstallPathKey)
+        if !bid.isEmpty {
+            suite?.set(bid, forKey: liveInstallBundleKey)
+            local.set(bid, forKey: liveInstallBundleKey)
+        }
+        publishHostSnapshot()
+    }
+
+    static func clearLiveInstallPath() {
+        suite?.removeObject(forKey: liveInstallPathKey)
+        local.removeObject(forKey: liveInstallPathKey)
+        suite?.removeObject(forKey: liveInstallBundleKey)
+        local.removeObject(forKey: liveInstallBundleKey)
+        publishHostSnapshot()
+    }
+
+    /// Live Store path published by the host packager (App Group / local fallback).
+    static func readLiveInstallPath() -> (path: String, bundleID: String)? {
+        let path = (suite?.string(forKey: liveInstallPathKey)
+            ?? local.string(forKey: liveInstallPathKey)
+            ?? (suite?.dictionary(forKey: "companion.hostSnapshot")?["hostLiveInstallPath"] as? String)
+            ?? (local.dictionary(forKey: "companion.hostSnapshot")?["hostLiveInstallPath"] as? String))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !path.isEmpty else { return nil }
+        let bid = (suite?.string(forKey: liveInstallBundleKey)
+            ?? local.string(forKey: liveInstallBundleKey)
+            ?? (suite?.dictionary(forKey: "companion.hostSnapshot")?["bundleID"] as? String)
+            ?? (local.dictionary(forKey: "companion.hostSnapshot")?["bundleID"] as? String))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (path, bid)
     }
 
     static func readHostSnapshot(fromManifest manifest: [String: Any]?) -> [String: Any] {

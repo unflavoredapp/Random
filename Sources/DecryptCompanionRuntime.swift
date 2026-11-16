@@ -149,16 +149,25 @@ enum DecryptCompanionRuntime {
         if let live = liveRead {
             let stamped = (man?["hostLiveInstallPath"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !stamped.isEmpty, live.path == URL(fileURLWithPath: stamped).resolvingSymlinksInPath().standardizedFileURL.path {
+            let published = DecryptCompanionHandoff.readLiveInstallPath()?.path ?? ""
+            let livePath = live.path
+            if !stamped.isEmpty,
+               livePath == URL(fileURLWithPath: stamped).resolvingSymlinksInPath().standardizedFileURL.path {
                 log("Using host-stamped live App Store install for FairPlay…")
+            } else if !published.isEmpty,
+                      livePath == URL(fileURLWithPath: published).resolvingSymlinksInPath().standardizedFileURL.path {
+                log("Using host App Group live App Store install for FairPlay…")
             } else {
                 log("Live App Store install available for FairPlay self-heal…")
             }
-            log(live.path)
+            log(livePath)
         } else {
             let stamped = (man?["hostLiveInstallPath"] as? String) ?? ""
+            let published = DecryptCompanionHandoff.readLiveInstallPath()?.path ?? ""
             if !stamped.isEmpty {
                 log("Host stamped live path was unusable (\(stamped)) — falling back to EmbeddedPayload.")
+            } else if !published.isEmpty {
+                log("Host App Group live path was unusable (\(published)) — falling back to EmbeddedPayload.")
             }
             log("No readable live install — self-heal will use EmbeddedPayload (+ SINF restage). Install this app from the App Store first if decrypt EPERMs.")
         }
@@ -260,12 +269,13 @@ enum DecryptCompanionRuntime {
     // MARK: - Embedded metadata
 
     /// Resolve a live App Store install for fairplayd input when the same app is on-device.
-    /// Prefers `hostLiveInstallPath` stamped by the host packager — companion LS/MI
-    /// lookups often miss apps the host can see via Pair / DeviceLibrary.
+    /// Prefers `hostLiveInstallPath` stamped by the host packager (manifest + App Group) —
+    /// companion LS/MI lookups often miss apps the host can see via Pair / DeviceLibrary.
     private static func preferredLiveInstallURL(
         embeddedApp: URL,
         manifest: [String: Any]?
     ) -> URL? {
+        // 1) Manifest stamp (baked into the companion IPA at package time).
         if let stamped = (manifest?["hostLiveInstallPath"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !stamped.isEmpty,
@@ -273,11 +283,28 @@ enum DecryptCompanionRuntime {
             return live
         }
 
+        // 2) App Group / host snapshot — host may have refreshed the path after install.
+        if let published = DecryptCompanionHandoff.readLiveInstallPath(),
+           let live = Self.usableLiveInstall(at: URL(fileURLWithPath: published.path)) {
+            return live
+        }
+        if let fromSnap = (DecryptCompanionHandoff.readHostSnapshot(fromManifest: manifest)["hostLiveInstallPath"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !fromSnap.isEmpty,
+           let live = Self.usableLiveInstall(at: URL(fileURLWithPath: fromSnap)) {
+            return live
+        }
+
+        // 3) Best-effort LS/MI inside the companion (often sandboxed away).
         var candidates: [String] = []
         if let fromMan = (manifest?["bundleID"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !fromMan.isEmpty {
             candidates.append(fromMan)
+        }
+        if let publishedBid = DecryptCompanionHandoff.readLiveInstallPath()?.bundleID,
+           !publishedBid.isEmpty {
+            candidates.append(publishedBid)
         }
         let info = NSDictionary(contentsOf: embeddedApp.appendingPathComponent("Info.plist")) as? [String: Any]
         if let fromPlist = (info?["CFBundleIdentifier"] as? String)?

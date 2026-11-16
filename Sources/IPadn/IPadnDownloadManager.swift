@@ -582,7 +582,12 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
         guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
         jobs[i].status = .processing
         persist()
-        await DeviceDecryptService.shared.decryptDownloadedStoreIPA(at: ipa, displayName: name)
+        let bid = jobs.first(where: { $0.id == id })?.bundleID
+        await DeviceDecryptService.shared.decryptDownloadedStoreIPA(
+            at: ipa,
+            displayName: name,
+            bundleID: bid
+        )
         guard let j = jobs.firstIndex(where: { $0.id == id }) else { return }
         switch DecryptClient.shared.phase {
         case .handedOff:
