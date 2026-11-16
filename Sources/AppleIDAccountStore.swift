@@ -59,6 +59,10 @@ final class AppleIDStore: ObservableObject {
     private static let storeSessionPrefix = "tetherless.appleid.storesession."
     /// Short-lived GrandSlam PET for Retry Store unlock (same sign-in window).
     private static let petPrefix = "tetherless.appleid.pet."
+    /// When the PET was last minted — Apple PETs die in minutes; past this we skip PET remint.
+    private static let petMintedAtPrefix = "tetherless.appleid.petMintedAt."
+    /// PET is typically only good for a few minutes after Allow / GSA.
+    private static let petUsefulLifetime: TimeInterval = 4 * 60
 
     enum AuthPhase: Equatable {
         case idle
@@ -830,6 +834,7 @@ final class AppleIDStore: ObservableObject {
     func removeAccount(id: String) {
         Keychain.deleteSessionSecret(Self.passwordPrefix + id)
         Keychain.deleteSessionSecret(Self.petPrefix + id)
+        Keychain.deleteSessionSecret(Self.petMintedAtPrefix + id)
         _ = Keychain.setSessionData(Self.storeSessionPrefix + id, Data())
         accounts.removeAll { $0.id == id }
         if activeAccountID == id {
@@ -856,6 +861,7 @@ final class AppleIDStore: ObservableObject {
         for a in accounts {
             Keychain.deleteSessionSecret(Self.passwordPrefix + a.id)
             Keychain.deleteSessionSecret(Self.petPrefix + a.id)
+            Keychain.deleteSessionSecret(Self.petMintedAtPrefix + a.id)
             _ = Keychain.setSessionData(Self.storeSessionPrefix + a.id, Data())
         }
         Keychain.deleteSessionSecret(Self.accountsBackupKey)
@@ -1074,7 +1080,8 @@ final class AppleIDStore: ObservableObject {
         }
 
         let code = (pendingStoreAuthCode ?? "").filter(\.isNumber)
-        let pet = storedPET()?.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Skip dead PETs — they expire in minutes and make remint look like a logout.
+        let pet = freshStoredPET()?.trimmingCharacters(in: .whitespacesAndNewlines)
         var lastError: Error?
 
         func accept(_ session: StorefrontSession) -> StorefrontSession {
@@ -1086,7 +1093,20 @@ final class AppleIDStore: ObservableObject {
             return session
         }
 
-        // 1) PET + Allow/SMS digits (often required even with a fresh PET).
+        // Prefer password (+ code) when PET is stale/absent so we don't burn the UX on a dead PET.
+        // 1) Password + digits.
+        if code.count == 6 {
+            do {
+                let session = try await authenticateStoreWithRetries(
+                    email: email, password: password, authCode: code
+                )
+                if session.isUsable { return accept(session) }
+            } catch {
+                lastError = error
+            }
+        }
+
+        // 2) Fresh PET + digits (same Allow window).
         if let pet, !pet.isEmpty, code.count == 6 {
             do {
                 let session = try await authenticateStoreWithRetries(
@@ -1098,7 +1118,7 @@ final class AppleIDStore: ObservableObject {
             }
         }
 
-        // 2) PET alone.
+        // 3) Fresh PET alone.
         if let pet, !pet.isEmpty {
             do {
                 let session = try await authenticateStoreWithRetries(
@@ -1107,18 +1127,8 @@ final class AppleIDStore: ObservableObject {
                 if session.isUsable { return accept(session) }
             } catch {
                 lastError = error
-            }
-        }
-
-        // 3) Password + digits.
-        if code.count == 6 {
-            do {
-                let session = try await authenticateStoreWithRetries(
-                    email: email, password: password, authCode: code
-                )
-                if session.isUsable { return accept(session) }
-            } catch {
-                lastError = error
+                // Dead PET — drop it so the next remint goes straight to password.
+                clearStoredPET()
             }
         }
 
@@ -1442,7 +1452,7 @@ final class AppleIDStore: ObservableObject {
         save()
 
         if let petForStore, !petForStore.isEmpty, let aid = activeAccountID {
-            _ = Keychain.setSessionSecret(Self.petPrefix + aid, petForStore)
+            persistPET(petForStore, forAccountID: aid)
         }
 
         await connectStoreSession(
@@ -1487,7 +1497,8 @@ final class AppleIDStore: ObservableObject {
         }
 
         let code = (authCode ?? "").filter(\.isNumber)
-        let resolvedPET = (pet ?? storedPET())?
+        // Prefer an explicitly passed PET from this sign-in; otherwise only a fresh PET.
+        let resolvedPET = (pet ?? freshStoredPET())?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         var lastStoreError: String?
 
@@ -1599,6 +1610,35 @@ final class AppleIDStore: ObservableObject {
     private func storedPET() -> String? {
         guard let aid = activeAccountID else { return nil }
         return Keychain.getSessionSecret(Self.petPrefix + aid)
+    }
+
+    /// PET only if minted recently — Apple PETs die in minutes and fake a “logged out” remint.
+    private func freshStoredPET() -> String? {
+        guard let aid = activeAccountID,
+              let pet = Keychain.getSessionSecret(Self.petPrefix + aid),
+              !pet.isEmpty else { return nil }
+        guard let raw = Keychain.getSessionSecret(Self.petMintedAtPrefix + aid),
+              let minted = Double(raw) else {
+            // Legacy PET without mint time — treat as stale so password remint wins.
+            return nil
+        }
+        let age = Date().timeIntervalSince1970 - minted
+        guard age >= 0, age <= Self.petUsefulLifetime else { return nil }
+        return pet
+    }
+
+    private func persistPET(_ pet: String, forAccountID aid: String) {
+        _ = Keychain.setSessionSecret(Self.petPrefix + aid, pet)
+        _ = Keychain.setSessionSecret(
+            Self.petMintedAtPrefix + aid,
+            String(Date().timeIntervalSince1970)
+        )
+    }
+
+    private func clearStoredPET() {
+        guard let aid = activeAccountID else { return }
+        Keychain.deleteSessionSecret(Self.petPrefix + aid)
+        Keychain.deleteSessionSecret(Self.petMintedAtPrefix + aid)
     }
 
     private func finishPreparing() async {
