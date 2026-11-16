@@ -389,14 +389,10 @@ enum DecryptCompanionPackager {
         return name
     }
 
-    /// True when `app` is still under the system App Store container (not a temp Payload).
+    /// True when `app` is still under the system App Store container (not a temp Payload
+    /// or companion EmbeddedPayload). Shared rules live on FairPlayDecrypt.
     private static func isLiveAppStoreInstall(_ app: URL) -> Bool {
-        let p = app.standardizedFileURL.path
-        return p.contains("/Bundle/Application/")
-            || p.contains("/Containers/Bundle/")
-            || p.contains("/private/var/containers/")
-            || p.contains("/var/containers/")
-            || p.contains("/AppTranslocation/")
+        FairPlayDecrypt.isLiveAppStoreInstall(app)
     }
 
     private static func copySlimAppTree(from src: URL, to dest: URL, progress: ((String) -> Void)?) throws {

@@ -101,13 +101,21 @@ enum DecryptCompanionRuntime {
         }
 
         // 1) Pre-decrypt audit — prove FairPlay DRM is present on the embedded IPA tree.
+        // EmbeddedPayload is inside our sideloaded .app under /var/containers — that is NOT
+        // a live App Store install; verifyApp must cryptid-probe (not skip as live-install).
         log("DRM audit (before): scanning EmbeddedPayload Mach-Os…")
         let before = try FairPlayDecrypt.verifyApp(at: src)
         logAudit(before, prefix: "BEFORE", log: log)
         if before.entries.isEmpty {
             throw DecryptError("EmbeddedPayload has no Mach-Os — companion package is incomplete. Re-run decrypt from TetherLess.")
         }
-        if let expected = expectedEncryptedCount(), expected > 0, before.encrypted < expected {
+        // Unknown-only results mean probes were skipped/failed — don't treat as "missing DRM".
+        if before.encrypted == 0 && before.unknown > 0 && before.clear == 0 && before.plain == 0 {
+            throw DecryptError(
+                "Couldn't inspect FairPlay cryptids on EmbeddedPayload (\(before.unknown) unknown). Re-run Get from TetherLess after updating, then open Tetherless Decrypt again."
+            )
+        }
+        if let expected = expectedEncryptedCount(), expected > 0, before.encrypted < expected, before.unknown == 0 {
             throw DecryptError(
                 "EmbeddedPayload is missing FairPlay binaries (\(before.encrypted) encrypted vs \(expected) in the full IPA). Re-run decrypt so the companion embeds every DRM Mach-O."
             )

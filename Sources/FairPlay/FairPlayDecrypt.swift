@@ -1450,9 +1450,22 @@ enum FairPlayDecrypt {
         return out
     }
 
-    /// True when `app` lives in the system App Store install container (not our temp Payload).
-    private static func isLiveAppStoreInstall(_ app: URL) -> Bool {
-        let p = app.standardizedFileURL.path
+    /// True when `app` lives in the system App Store install container (not our temp Payload
+    /// or the companion's EmbeddedPayload copy).
+    ///
+    /// Sideloaded companion apps also live under `/var/containers/Bundle/Application/…`.
+    /// Their `EmbeddedPayload/` tree is a staged IPA copy — cryptid probes must run there
+    /// (Roblox showed `0 encrypted vs 8` when probes were wrongly skipped).
+    static func isLiveAppStoreInstall(_ app: URL) -> Bool {
+        let p = app.resolvingSymlinksInPath().standardizedFileURL.path
+        if p.contains("/EmbeddedPayload/") || p.hasSuffix("/EmbeddedPayload") {
+            return false
+        }
+        // Anything inside this process's own .app (companion or host) is not a live Store install.
+        let own = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+        if !own.isEmpty, p == own || p.hasPrefix(own.hasSuffix("/") ? own : own + "/") {
+            return false
+        }
         return p.contains("/Bundle/Application/")
             || p.contains("/Containers/Bundle/")
             || p.contains("/private/var/containers/")
