@@ -52,6 +52,8 @@ struct TetherlessApp: App {
                         if phase == .active {
                             ZefvAccount.shared.restoreFromKeychainIfNeeded()
                             PhoneDecryptWorker.shared.startIfNeeded()
+                            // Unsigned → Account + login once (FairPlay / Store need Apple ID).
+                            AppNav.shared.nudgeAccountLoginIfNeeded()
                             Task {
                                 await OTABootstrap.ensurePublicPack()
                                 await VPNReconnectCoordinator.shared.appBecameActive()

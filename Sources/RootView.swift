@@ -18,7 +18,8 @@ struct RootView: View {
     @ObservedObject private var decrypt = DecryptClient.shared
     @ObservedObject private var deviceDecrypt = DeviceDecryptService.shared
     @ObservedObject private var downloads = IPadnDownloadManager.shared
-    @State private var tab: AppTab = .search
+    /// Unsigned launches land on Account so Store login is the first thing they see.
+    @State private var tab: AppTab = AppleIDStore.shared.isSignedIn ? .search : .account
     @State private var signItem: SignItem?
     @State private var signError: String?
 
@@ -73,6 +74,8 @@ struct RootView: View {
 
         .task {
             theme.startCycleIfNeeded()
+            // Full FairPlay / Purchases / Downloads need Apple ID — nudge unsigned users to Account.
+            AppNav.shared.nudgeAccountLoginIfNeeded()
             Task.detached(priority: .utility) { try? await Task.sleep(nanoseconds: 8_000_000_000); await StorageCleaner.run() }
             Task { _ = await LibraryCache.shared.refresh() }
             await SourceStore.shared.warmUpAtLaunch()
@@ -163,10 +166,15 @@ struct RootView: View {
     private func handleAirShareDeepLink(_ url: URL) {
         let scheme = url.scheme?.lowercased() ?? ""
         // Companion console is a separate IPA (`tetherless-decrypt://`). Host only owns
-        // `tetherless://` — bounce decrypt-companion deep links to Search.
+        // `tetherless://` — bounce decrypt-companion deep links to Search, or Account
+        // when unsigned so they can sign in for FairPlay / Purchases.
         if scheme == "tetherless"
             && (url.host?.lowercased() == "decrypt-companion" || url.host?.lowercased() == "companion") {
-            nav.goSearch()
+            if AppleIDStore.shared.isSignedIn {
+                nav.goSearch()
+            } else {
+                nav.goStoreLogin()
+            }
             return
         }
         guard ["airshare", "msign", "tetherless", "sideloader"].contains(scheme) else { return }
