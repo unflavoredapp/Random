@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Brand: Tetherless · https://tetherless.dev
 #
 # build.sh — produce an UNSIGNED .ipa from the Tetherless Xcode project.
 # Runs on the GitHub Actions macOS runner (and any Mac). No signing identity,

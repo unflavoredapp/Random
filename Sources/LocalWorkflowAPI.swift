@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LocalWorkflowAPI.swift
 //  One tracked transaction across the decrypt and sign stages of the local TrustCore engine.
 //

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Brand: Tetherless · https://tetherless.dev
 # Generate a Feather / backloop-style SSL pack for *.tetherless.dev.
 # Output lands in server/ota/public/ — deploy those files to the apex VPS
 # (https://tetherless.dev/pack.json) and/or publish via publish-ota-pack.yml.

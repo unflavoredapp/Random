@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  FileEditorView.swift
 //  Raw source viewer/editor for a file in the extracted tree. Text files are
 //  editable and save back to disk (so Push / Export Zip pick up the changes);

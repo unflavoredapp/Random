@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LocalCAManager.swift
 //  Hand-rolled AirShare TLS. Generates a root CA once (LocalCA.mm / OpenSSL). The
 //  private keys (root + leaf) live ONLY in the Keychain, marked
@@ -91,7 +92,7 @@ nonisolated enum LocalCAManager {
 
     /// Create the root once (idempotent unless force). Key → Keychain only; cert → file.
     @discardableResult
-    static func ensureRoot(commonName: String = "TetherLess Local Root CA", years: Int = 10, force: Bool = false) throws -> Bool {
+    static func ensureRoot(commonName: String = "Tetherless Local Root CA", years: Int = 10, force: Bool = false) throws -> Bool {
         rehydrateIfNeeded()
         if hasRoot && !force { return false }
         guard let pair = LocalCA.generateRootCA(withCommonName: commonName, validYears: Int32(years)),
@@ -262,7 +263,7 @@ nonisolated enum LocalCAManager {
               <key>PayloadVersion</key><integer>1</integer>
               <key>PayloadIdentifier</key><string>ms.mrvek.localca.\(payloadUUID)</string>
               <key>PayloadUUID</key><string>\(payloadUUID)</string>
-              <key>PayloadDisplayName</key><string>TetherLess Local Root CA</string>
+              <key>PayloadDisplayName</key><string>Tetherless Local Root CA</string>
               <key>PayloadContent</key>
               <data>\(certB64)</data>
             </dict>
@@ -271,7 +272,7 @@ nonisolated enum LocalCAManager {
           <key>PayloadVersion</key><integer>1</integer>
           <key>PayloadIdentifier</key><string>ms.mrvek.localca.profile.\(profileUUID)</string>
           <key>PayloadUUID</key><string>\(profileUUID)</string>
-          <key>PayloadDisplayName</key><string>ᴍƦᴢᴇꜰΛ TetherLess Trust (\(host))</string>
+          <key>PayloadDisplayName</key><string>Tetherless Trust (\(host))</string>
           <key>PayloadDescription</key><string>Installs the TetherLess local root so on-device TetherLess installs are trusted. After installing, enable it in Settings › General › About › Certificate Trust Settings.</string>
           <key>PayloadRemovalDisallowed</key><false/>
         </dict>
@@ -282,7 +283,7 @@ nonisolated enum LocalCAManager {
 
     static func writeMobileConfig() -> URL? {
         guard let data = mobileConfig() else { return nil }
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("TetherLess-Trust.mobileconfig")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Tetherless-Trust.mobileconfig")
         try? data.write(to: url)
         return url
     }
@@ -297,7 +298,7 @@ nonisolated enum LocalCAManager {
 nonisolated enum OTAFiles {
     static var folder: URL {
         let d = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("TetherLess Certs", isDirectory: true)
+            .appendingPathComponent("Tetherless Certs", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }
@@ -316,16 +317,16 @@ nonisolated enum OTAFiles {
     static func exportLocalCA() -> [URL] {
         var out: [URL] = []
         func put(_ name: String, _ data: Data?) { guard let data else { return }; let u = folder.appendingPathComponent(name); if (try? data.write(to: u, options: .atomic)) != nil { out.append(u) } }
-        put("TetherLess-Root-CA.crt", try? Data(contentsOf: LocalCAManager.rootCertURL))
-        put("TetherLess-Root-CA.cer", LocalCAManager.rootDER())
+        put("Tetherless-Root-CA.crt", try? Data(contentsOf: LocalCAManager.rootCertURL))
+        put("Tetherless-Root-CA.cer", LocalCAManager.rootDER())
         if let host = LocalCAManager.meta?.host { put("leaf-\(host).crt", try? Data(contentsOf: LocalCAManager.leafCertURL)) }
-        put("TetherLess-Trust.mobileconfig", LocalCAManager.mobileConfig())
+        put("Tetherless-Trust.mobileconfig", LocalCAManager.mobileConfig())
         put("README.txt", Data("""
-        TetherLess Certs — exported by Tetherless
+        Tetherless Certs — exported by Tetherless
 
-        TetherLess-Root-CA.crt / .cer     your on-device root CA (PEM / DER). Public — safe to share.
+        Tetherless-Root-CA.crt / .cer     your on-device root CA (PEM / DER). Public — safe to share.
         leaf-<host>.crt              the leaf + chain the on-device HTTPS server presents.
-        TetherLess-Trust.mobileconfig the trust profile. Open it to install the root, then enable it in
+        Tetherless-Trust.mobileconfig the trust profile. Open it to install the root, then enable it in
                                      Settings › General › About › Certificate Trust Settings.
 
         Private keys are NOT here — they live in the Keychain (ThisDeviceOnly) and never touch disk.

@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import BackgroundTasks
 import Combine
 import Foundation

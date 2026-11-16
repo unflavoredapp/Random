@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 // Widget support: App Group snapshot for a cert-days / Refresh All widget.

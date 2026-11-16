@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnLoginView.swift
 //  English Login + Verification UI from mengangs/ipadn AccountsView (GPL-2.0).
 //  Calls AppleIDStore.signInViaIPadnStore — MZFinance first (same as iPadn).

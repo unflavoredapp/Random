@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 const crypto = require("crypto");
 const fs = require("fs");

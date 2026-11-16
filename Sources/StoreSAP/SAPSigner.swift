@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Stateful local signer. Calls on the same actor advance one shared RNG stream.

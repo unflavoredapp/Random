@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  NotificationManager.swift
 //  Certificate expiry notifications and alerts.
 //

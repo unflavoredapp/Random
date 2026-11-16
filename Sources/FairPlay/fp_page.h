@@ -1,4 +1,5 @@
 // Pure page-window helpers for mremap_encrypted (host-testable, no Darwin deps).
+// Brand: Tetherless · https://tetherless.dev
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>

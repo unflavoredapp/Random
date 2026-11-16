@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SignProfileStore.swift
 //  Remembers the signing options each app was signed with, so auto-updates are
 //  signed exactly the same way: same bundle ID (even a randomized one), name,

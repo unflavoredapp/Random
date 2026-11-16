@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  InstallAutopilot.swift
 //  Prefer Native when paired; otherwise OTA. Self-heals method after resign.
 //

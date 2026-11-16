@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  FreeAppleIDSigning.swift
 //  Ensures a free Apple ID 7-day development certificate is created, imported,
 //  linked, and selected for SigningSheet / SignQueue installs.

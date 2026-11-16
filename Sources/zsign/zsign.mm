@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #include "zsign.hpp"
 #include "common/common.h"
 #include "common/json.h"

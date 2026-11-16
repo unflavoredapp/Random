@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  CertInspector.swift
 //  Parse any X.509 PEM into human-readable facts — works identically on the
 //  ACME (public) cert and the on-device local CA's root + leaf, so a user can
@@ -195,7 +196,7 @@ nonisolated enum TransparencyReport {
         Endpoint(host: "acme-v02.api.letsencrypt.org (from GitHub Actions, not the phone)", purpose: "Certificate issuance",
                  sends: "Your ACME email + domain — from the workflow runner, never from this device.",
                  when: "Renew now (Public/ACME mode only)."),
-        Endpoint(host: "mrzefv.com", purpose: "Legacy cert-refresh fallback",
+        Endpoint(host: "tetherless.dev", purpose: "Cert / OTA pack host",
                  sends: "Standard GET for pack.json. No identifiers.",
                  when: "Only if the certs branch fetch fails in Public mode."),
         Endpoint(host: "127.0.0.1 (your TetherLess host resolves here)", purpose: "On-device Vapor HTTPS server for installs",

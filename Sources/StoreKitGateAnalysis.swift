@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Groups StoreKit and entitlement evidence separately from generic branch candidates.

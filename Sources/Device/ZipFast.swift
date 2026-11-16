@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  ZipFast.swift
 //  Faster IPA unpack / repack for signing.
 //

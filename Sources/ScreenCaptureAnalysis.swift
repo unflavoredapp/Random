@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Finds screenshot and screen-recording observation code for authorized review.

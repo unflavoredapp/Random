@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SideloadIPACache.swift
 //  LRU retention of decrypted/signed IPAs + resumable Store CDN downloads.
 //

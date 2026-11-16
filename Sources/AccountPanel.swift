@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AccountPanel.swift
 //  Bottom account chip + compact user-settings dropdown.
 //

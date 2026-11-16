@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  InstallLiveActivity.swift
 //  Drives the lock-screen / Dynamic Island progress for downloads, signing and installs.
 //  Started and stopped by BackgroundKeepAlive (so it lives exactly as long as the song does).

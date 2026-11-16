@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  ThemeKit.swift
 //  Live theme state (accent · appearance · background), the palette dropdown
 //  shown from the top bar, and the particle-network background.

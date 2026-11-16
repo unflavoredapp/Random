@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AirShareLiveActivity.swift
 //  Lock-screen banner + Dynamic Island for AirShare downloads, signing and installs.
 //  App icon inside a transparent progress ring, percentage on the right, your accent color.

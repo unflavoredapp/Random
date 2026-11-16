@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 /**
  * TetherLess decrypt backend — phone worker + optional own Telegram bot.

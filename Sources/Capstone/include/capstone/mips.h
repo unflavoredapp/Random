@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #ifndef CAPSTONE_MIPS_H
 #define CAPSTONE_MIPS_H
 

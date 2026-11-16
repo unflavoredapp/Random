@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #include "verify.h"
 #include <openssl/sha.h>
 #include <fcntl.h>

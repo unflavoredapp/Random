@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Card payments (server/stripe.js) against a fake Stripe API: intent, verify, webhook signature, exactly-once grant, refund.
 //   node --experimental-sqlite tests/live/stripe-test.js

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  BackgroundKeepAlive.swift
 //  Keeps AirShare running while an install is in progress, so you can leave the app mid-install.
 //

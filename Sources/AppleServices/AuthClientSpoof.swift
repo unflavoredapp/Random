@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AuthClientSpoof.swift
 //  GrandSlam / HSA2 AuthKit identity: claim a MacBook or iPhone + OS so Apple’s
 //  Allow (map) + verification-code sheets target this phone (or another device).

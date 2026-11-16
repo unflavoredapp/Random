@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  MultiDeviceUDID.swift
 //  Register this iPhone + a spare UDID under the free Apple ID without digging the portal.
 //

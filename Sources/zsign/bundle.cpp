@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #include "bundle.h"
 #include "macho.h"
 #include "sys/stat.h"

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SSTheme.swift
 //  Ported from AirShare (Layer 1). Adaptive light/dark theme + orange tint default.
 //

@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 /* Capstone Disassembly Engine */
 /* By Nguyen Anh Quynh <aquynh@gmail.com>, 2013-2019 */
 #if defined(CAPSTONE_HAS_OSXKERNEL)

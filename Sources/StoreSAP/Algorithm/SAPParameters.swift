@@ -1,4 +1,5 @@
 // Copyright (c) 2026 ApplePackage contributors.
+// Brand: Tetherless · https://tetherless.dev
 
 /// Session parameters derived from the natural, address-independent material.
 struct SAPParameters: Sendable {

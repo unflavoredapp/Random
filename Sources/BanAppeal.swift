@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  BanAppeal.swift
 //  Lets a banned account send one appeal message to the admins, and shows it back (pending / reviewed,
 //  with the admin's note once there is one) instead of just a static "you're banned" string.

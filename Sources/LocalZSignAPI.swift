@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LocalZSignAPI.swift
 //  Loopback-only Vapor API for the local ZSign engine.
 //

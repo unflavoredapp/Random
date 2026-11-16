@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  NewsIPA.swift
 //  Download / Sign for an IPA attached to a news card. It uses the same shared download as the app pages,
 //  so a Sign tapped while the file is still coming down waits for it and then starts by itself.

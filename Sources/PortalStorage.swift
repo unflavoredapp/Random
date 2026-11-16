@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Local storage accounting and temporary-workspace cleanup used at launch.

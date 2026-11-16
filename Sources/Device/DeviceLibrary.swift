@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DeviceLibrary.swift
 //  Every user-installed app on this device, for the Library tab. Read through the native connection
 //  (built-in VPN + pairing), cached on disk so the Library opens instantly. App Store apps that don't have a

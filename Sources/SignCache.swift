@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SignCache.swift
 //  Signing the same IPA with the same certificate and the same options gives the same result, so the
 //  second time it's a file copy instead of a full sign. The cache lives in the system Caches folder

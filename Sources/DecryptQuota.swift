@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DecryptQuota.swift
 //  Today's decrypt allowance (guest 3 · signed in 10 · developer 25 · staff and admin unlimited), as the
 //  server counts it. Shown in the account dropdown, on the Decrypt tab and on the Partner card.

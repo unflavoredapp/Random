@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Real-HTTP test: boots appapi/payments/support/early behind a small Express-compatible server a fake Litecoin explorer and fake price feeds.
 // Run:  node --experimental-sqlite tests/live/run.js   (Node 22+).  With real Express installed, swap miniexpress for it.

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Brand: Tetherless · https://tetherless.dev
 # Host regression for fp_page / decrypt-order locks (no device / mremap required).
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"

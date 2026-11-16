@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SourcesView.swift
 //  Browse tab — AltStore / Feather / DELvEK style sources (repo.json).
 //  Sources list → source detail (icon header, "N Apps" bar, rows with icon ·

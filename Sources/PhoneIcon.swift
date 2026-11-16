@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  PhoneIcon.swift
 //  The iPhone picture from onboarding (asset "iphone_render"), used next to "This device" in the
 //  certificate and account screens. Falls back to a drawn iPhone if the asset is missing.

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AVX512ObjectRef.h
 //  AVX512
 //

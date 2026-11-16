@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import SwiftUI
 
 struct PremiumPlan: Identifiable, Decodable, Equatable {

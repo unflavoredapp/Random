@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // AirShare on-device install (OTA) cert service for the iOS app.  Mounted from site.js.
 //

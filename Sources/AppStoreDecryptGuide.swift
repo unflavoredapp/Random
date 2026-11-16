@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AppStoreDecryptGuide.swift
 //  One-time App Store sign-in is required so iOS has decryption keys for an Apple ID.
 //  TetherLess cannot mint those keys; this helper opens the App Store and tracks “I’ve signed in.”

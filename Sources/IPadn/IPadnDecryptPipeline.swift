@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnDecryptPipeline.swift
 //  Get / Download → iPadn store download queue → FairPlay (DeviceDecryptService).
 //  Keeps mengangs/ipadn Downloads UI while decrypt “just works” after the IPA lands.

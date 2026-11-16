@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Combine
 import Foundation
 #if canImport(UIKit)

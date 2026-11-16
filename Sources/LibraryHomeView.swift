@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LibraryHomeView.swift
 //  TetherLess-style Library tab with Unsigned / Signed / Installed segments.
 //  Reuses LibraryView (downloaded IPAs), SignedView (signed), DeviceLibrary (installed).

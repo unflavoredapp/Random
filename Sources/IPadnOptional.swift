@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnOptional.swift
 //  In-app iPadn search + version history (vendored under Sources/IPadn, GPL-2.0).
 //  Upstream: https://github.com/mengangs/ipadn

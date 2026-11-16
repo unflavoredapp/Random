@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AppStoreClient.swift
 //  Silent App Store purchase + IPA download (ipatool-style MZFinance APIs).
 //  Non-jailbroken: uses the signed-in Apple ID’s store passwordToken — no App Store UI.

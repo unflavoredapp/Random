@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  TetherlessChrome.swift
 //  Visual shell matching the TetherLess glassmorphism UI (purple→teal gradient,
 //  glass cards, floating capsule tab bar). Tab information architecture follows

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  RepoBrowseView.swift
 //  Browse tab. Your GitHub repos (or any public one by name) → releases with
 //  .ipa assets, latest Actions artifacts, and the file tree. Any IPA goes

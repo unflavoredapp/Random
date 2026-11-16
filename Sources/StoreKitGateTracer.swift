@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Read-only, static control-flow tracing for StoreKit/entitlement findings.

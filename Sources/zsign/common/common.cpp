@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #include "common.h"
 #include "base64.h"
 #include <cinttypes>

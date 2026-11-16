@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DecryptChannel.swift
 //  Device FairPlay vs own Telegram bot (phone worker — not FastDecryptBot).
 //

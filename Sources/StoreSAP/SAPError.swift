@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 public enum SAPError: Error, LocalizedError, Sendable {

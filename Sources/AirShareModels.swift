@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AirShareModels.swift
 //  Layer 2 — AirShare data models ported into Tetherless.
 //

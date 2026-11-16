@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #include "json.h"
 #include <stdio.h>
 #include <stdlib.h>

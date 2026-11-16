@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Native-app API for the AirShare iOS app.  Mounted from site.js (inside the password-account block).
 //

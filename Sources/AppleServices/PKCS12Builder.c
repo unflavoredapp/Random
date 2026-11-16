@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  PKCS12Builder.c
 //  Build a passworded PKCS#12 from PEM certificate + private key (OpenSSL).
 //

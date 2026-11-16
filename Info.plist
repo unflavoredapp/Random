@@ -71,9 +71,9 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>CFBundleDisplayName</key>
-	<string>TetherLess</string>
+	<string>Tetherless</string>
 	<key>CFBundleName</key>
-	<string>TetherLess</string>
+	<string>Tetherless</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

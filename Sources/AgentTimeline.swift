@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AgentTimeline.swift
 //  Copilot-style step timeline used by the signing terminal, AirShare install and
 //  the Actions build tab: icon · title · timing, indented children on a hairline,

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  BuildView.swift
 //  Build tab — GitHub Actions runs for the target repo, presented like the
 //  GitHub job page: status glyph · step name · duration, live-polled while the

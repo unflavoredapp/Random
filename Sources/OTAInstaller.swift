@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  OTAInstaller.swift
 //  Serves a locally-signed IPA over the on-device Vapor HTTPS server and hands
 //  iOS the itms-services URL directly. That URL is handled entirely by the

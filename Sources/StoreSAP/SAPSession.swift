@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Logical inputs for one signing session, produced by the SAP handshake.

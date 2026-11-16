@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  FairPlayKeyGate.swift
 //  Hard gate: require one-time App Store / Media & Purchases sign-in before silent download.
 //

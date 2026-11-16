@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LocalDecryptAPI.swift
 //  Decrypt functions on the local TrustCore engine (the on-device Vapor server).
 //

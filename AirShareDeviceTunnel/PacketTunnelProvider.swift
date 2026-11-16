@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import NetworkExtension
 
 // A local IPv4 loopback route. No remote endpoint, DNS override, default route,

@@ -1,8 +1,17 @@
+<!-- Brand: Tetherless · https://tetherless.dev -->
+<pre align="center">
+ _____     _   _           _
+|_   _|__ | |_| |__   ___ | | ___  ___ ___
+  | |/ _ \| __| '_ \ / _ \| |/ _ \/ __/ __|
+  | |  __/| |_| | | |  __/| |  __/\__ \__ \
+  |_|\___| \__|_| |_|\___||_|\___||___/___/
+</pre>
+
 <p align="center">
-  <img src="docs/assets/tetherless-icon.png" width="148" alt="TetherLess app icon" />
+  <img src="docs/assets/tetherless-icon.png" width="148" alt="Tetherless app icon" />
 </p>
 
-<h1 align="center">TetherLess</h1>
+<h1 align="center">Tetherless</h1>
 
 <p align="center">
   <strong>On-device sideloading — pair, sign, install. No computer required.</strong><br />
@@ -15,7 +24,7 @@
 
 ## Look & feel
 
-TetherLess ships a glassmorphism shell over the existing signing and install stack:
+Tetherless ships a glassmorphism shell over the existing signing and install stack:
 
 - **Purple → teal** full-bleed gradient background
 - **Glass cards** and capsule controls with soft material blur
@@ -27,10 +36,10 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 ## Features
 
 - **Sign & install any IPA** — using your free Apple ID, or your own certificate.
-- **Get a clean copy of apps you own** — FairPlay decrypt on this iPhone (Installed or Store). Optional **iPadn** (Settings) vendors [mengangs/ipadn](https://github.com/mengangs/ipadn) search + Store login into TetherLess (GPL-2.0). Optional Telegram Phone Worker.
+- **Get a clean copy of apps you own** — FairPlay decrypt on this iPhone (Installed or Store). Optional **iPadn** (Settings) vendors [mengangs/ipadn](https://github.com/mengangs/ipadn) search + Store login into Tetherless (GPL-2.0). Optional Telegram Phone Worker.
 - **Multiple App Store accounts** — sign several Apple IDs in for downloads and switch between them from Search or Account.
 - **Tweak injection** — add `.deb` or `.dylib` tweaks while you sign.
-- **Keep apps alive** — resign in one tap, Refresh All at once, or automate it with a Shortcut so your apps (and TetherLess itself) never expire — even while your iPhone is locked.
+- **Keep apps alive** — resign in one tap, Refresh All at once, or automate it with a Shortcut so your apps (and Tetherless itself) never expire — even while your iPhone is locked.
 - **Built-in Files** — manage IPAs, tweaks, and downloads without leaving the app.
 - **Custom certificate mode** — bring your own paid certificate to install over the air, with no pairing or VPN.
 - **Manage your Apple ID** — view your signing certificates, App IDs, and devices from Apple’s Developer services, and revoke a certificate to free a free-tier slot — in the app.
@@ -60,11 +69,17 @@ Backends (TrustCore signing, OTA, native install) are unchanged under the new ch
 
 Native install details: [`NATIVE_INSTALL.md`](NATIVE_INSTALL.md)
 
+## Build
+
+```bash
+xcodebuild -project ./Tetherless.xcodeproj -scheme Tetherless -configuration Release -sdk iphoneos clean archive
+```
+
 ## ADID identity
 
 New installations mint a cryptographically random `AS-XXXXXX-XX` ADID on first use. The ID is stored in Keychain and is not derived from hardware or display fingerprints.
 
-Administrators can reassign the ADID of their authenticated admin account from Settings → Account. The app calls `account.php` with `action=admin_set_mdid`; the server must atomically update the account ADID and its ADID-based role mapping before returning the canonical ADID. TetherLess only changes its local Keychain value after that server response.
+Administrators can reassign the ADID of their authenticated admin account from Settings → Account. The app calls `account.php` with `action=admin_set_mdid`; the server must atomically update the account ADID and its ADID-based role mapping before returning the canonical ADID. Tetherless only changes its local Keychain value after that server response.
 
 See [`MDID_IDENTITY.md`](MDID_IDENTITY.md) for the API contract.
 

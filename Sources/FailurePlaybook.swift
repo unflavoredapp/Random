@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  FailurePlaybook.swift
 //  Map store/portal/FairPlay failures to one-tap fixes.
 //

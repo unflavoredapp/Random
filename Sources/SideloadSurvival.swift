@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SideloadSurvival.swift
 //  7-day survival loop: cert countdown, expiry push, Refresh All with KeepAlive.
 //

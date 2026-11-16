@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SettingsView.swift
 //  AirShare-style settings: sectioned rows (icon tile · title · subtitle · open
 //  glyph). Tapping a row pushes a dedicated screen. Rows have a fixed height
@@ -568,9 +569,9 @@ private struct AboutScreen: View {
         let name: String, blurb: String, asset: String, symbol: String, url: String
     }
     private let credits: [Credit] = [
-        Credit(name: "ᴍƦᴢᴇꜰΛ", blurb: "Built TetherLess. Sign anything, keep it local.", asset: "airshare_mark", symbol: "person.fill", url: "https://tetherless.dev"),
+        Credit(name: TetherlessBrand.name, blurb: "Built at tetherless.dev. Sign anything, keep it local.", asset: "airshare_mark", symbol: "person.fill", url: TetherlessBrand.siteDisplay),
         Credit(name: "DELvEK", blurb: "Trusted partner. Respected, protected apps updated daily with screenshots.", asset: "delvek_logo", symbol: "pawprint.fill", url: "https://delvek.net"),
-        Credit(name: "iPadn", blurb: "Store search + login + version history feeds (bag.xml / MZFinance / Timbrd·Bilin·iosdump). Vendored under Sources/IPadn (GPL-2.0); decrypt uses TetherLess FairPlay.", asset: "", symbol: "arrow.down.app.fill", url: "https://github.com/mengangs/ipadn"),
+        Credit(name: "iPadn", blurb: "Store search + login + version history feeds (bag.xml / MZFinance / Timbrd·Bilin·iosdump). Vendored under Sources/IPadn (GPL-2.0); decrypt uses Tetherless FairPlay.", asset: "", symbol: "arrow.down.app.fill", url: "https://github.com/mengangs/ipadn"),
     ]
     private let sponsors: [(String, Color)] = [
         ("MYKALL", Color(red: 0.42, green: 0.85, blue: 0.45)),
@@ -590,6 +591,14 @@ private struct AboutScreen: View {
                     .padding(.top, 18)
 
                 Text(Theme.appName).font(.system(size: 34, weight: .bold)).foregroundStyle(Theme.text).padding(.top, 18)
+                Text(TetherlessBrand.ascii)
+                    .font(.system(size: 7, weight: .medium, design: .monospaced))
+                    .foregroundStyle(Theme.accent.opacity(0.9))
+                    .multilineTextAlignment(.center)
+                    .padding(.top, 10)
+                Link(TetherlessBrand.siteDisplay, destination: TetherlessBrand.siteURL)
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.top, 4)
                 HStack(spacing: 10) {
                     Text("Version \(version)")
                     Text("|").foregroundStyle(Theme.subtle)
@@ -1470,7 +1479,7 @@ private struct LocalCAScreen: View {
                 }
 
                 Section {
-                    TRow(k: "Subject", v: "ᴍƦᴢᴇꜰΛ Local Root CA")
+                    TRow(k: "Subject", v: "Tetherless Local Root CA")
                     TRow(k: "Fingerprint", v: fingerprint)
                     if let m = LocalCAManager.meta {
                         TRow(k: "Created", v: m.rootCreated.formatted(date: .abbreviated, time: .shortened))
