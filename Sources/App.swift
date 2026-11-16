@@ -57,6 +57,7 @@ struct TetherlessApp: App {
                                 await VPNReconnectCoordinator.shared.appBecameActive()
                                 _ = await ZefvAccount.shared.autoLoginIfNeeded()
                                 await BetaGuard.shared.check()
+                                _ = await DecryptCompanionHandoff.resumePendingOpenIfNeeded()
                             }
                         }
                     }

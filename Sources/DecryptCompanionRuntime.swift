@@ -64,21 +64,41 @@ enum DecryptCompanionRuntime {
         guard let name = embeddedAppName() else {
             throw DecryptError("No EmbeddedPayload in Tetherless Decrypt — reinstall the companion from TetherLess.")
         }
-        let src = embeddedPayloadRoot.appendingPathComponent(name, isDirectory: true)
+        // Path traversal guard — only allow a single path component under EmbeddedPayload.
+        guard !name.contains("/") && !name.contains("..") && !name.hasPrefix(".") else {
+            throw DecryptError("Invalid EmbeddedPayload name.")
+        }
+        let src = embeddedPayloadRoot.appendingPathComponent(name, isDirectory: true).standardizedFileURL
+        let embedRoot = embeddedPayloadRoot.standardizedFileURL
+        guard src.path.hasPrefix(embedRoot.path + "/") || src.path == embedRoot.path else {
+            throw DecryptError("EmbeddedPayload path escaped bundle — refusing decrypt.")
+        }
         guard fm.fileExists(atPath: src.path) else {
             throw DecryptError("EmbeddedPayload/\(name) missing.")
         }
 
         let version = Self.embeddedAppVersion(at: src) ?? ""
         let icon = Self.loadEmbeddedAppIcon(at: src)
+            ?? TetherlessBrand.appIconImage()
         DecryptCompanionController.shared.present(
             name: name,
             version: version,
             iconImage: icon,
             clearLog: true
         )
-        DecryptCompanionController.shared.statusTitle = "Auditing DRM…"
+        DecryptCompanionController.shared.statusTitle = "1/5 · Auditing DRM…"
         log("Found embedded app: \(name)")
+        let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
+        let host = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
+        if let hint = host["hostEmailHint"] as? String, !hint.isEmpty {
+            log("Host account: \(hint)")
+        }
+        if host["hostFairPlayAck"] as? Bool == false {
+            log("Note: host has not acknowledged Media & Purchases yet — FairPlay keys may be missing.")
+        }
+        if host["hostStoreReady"] as? Bool == true {
+            log("Host Store session was ready when this companion was built.")
+        }
 
         // 1) Pre-decrypt audit — prove FairPlay DRM is present on the embedded IPA tree.
         log("DRM audit (before): scanning EmbeddedPayload Mach-Os…")
@@ -108,7 +128,7 @@ enum DecryptCompanionRuntime {
         try copyTree(from: src, to: destApp)
 
         // 2) Decrypt FROM embedded (fairplayd reads SC_Info beside binaries) INTO writable copy.
-        DecryptCompanionController.shared.statusTitle = "Decrypting…"
+        DecryptCompanionController.shared.statusTitle = "2/5 · Decrypting…"
         let report = try FairPlayDecrypt.decryptMachOs(
             readingFrom: src,
             writingTo: destApp
@@ -134,20 +154,23 @@ enum DecryptCompanionRuntime {
         }
 
         // 3) Post-decrypt audit on the writable Payload tree (before packaging).
-        DecryptCompanionController.shared.statusTitle = "Verifying…"
+        DecryptCompanionController.shared.statusTitle = "3/5 · Verifying…"
         log("DRM audit (after decrypt): verifying copied Payload…")
         let afterCopy = try FairPlayDecrypt.verifyApp(at: destApp)
         logAudit(afterCopy, prefix: "AFTER", log: log)
         try assertFullyClear(afterCopy, stage: "copied Payload")
 
         // 4) Strip SC_Info / license crumbs, zip clear IPA.
+        DecryptCompanionController.shared.statusTitle = "4/5 · Packaging…"
         log("Packaging \(name)-decrypted.ipa…")
         try stripLicenseArtifacts(in: destApp)
 
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
         let outDir = docs.appendingPathComponent("Decrypted", isDirectory: true)
         try fm.createDirectory(at: outDir, withIntermediateDirectories: true)
-        let outIPA = outDir.appendingPathComponent("\(name)-decrypted.ipa")
+        let safeName = name.replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "..", with: "_")
+        let outIPA = outDir.appendingPathComponent("\(safeName)-decrypted.ipa")
         try? fm.removeItem(at: outIPA)
 
         let tmpZip = outIPA.appendingPathExtension("tmp")
@@ -156,6 +179,7 @@ enum DecryptCompanionRuntime {
         try fm.moveItem(at: tmpZip, to: outIPA)
 
         // 5) Double-check the packaged IPA itself (FairPlayed verify_ipa.sh).
+        DecryptCompanionController.shared.statusTitle = "5/5 · Verifying IPA…"
         log("DRM audit (packaged IPA): unpacking and verifying every Mach-O…")
         let ipaVerify = try FairPlayDecrypt.verifyIPA(at: outIPA)
         logAudit(ipaVerify, prefix: "IPA", log: log)
@@ -169,6 +193,7 @@ enum DecryptCompanionRuntime {
 
         DecryptCompanionController.shared.verifySummary = ipaVerify.summary
         DecryptCompanionController.shared.markFinished(url: outIPA, name: name)
+        DecryptCompanionController.shared.statusTitle = "Done"
         log("IPA is in this companion’s Documents/Decrypted. Use Share to save or AirDrop.")
         return outIPA
     }
