@@ -19,7 +19,8 @@ enum DecryptCompanionHandoff {
     private static var local: UserDefaults { .standard }
 
     /// Snapshot the host Apple ID / FairPlay gate state into a plist-safe dictionary.
-    /// Uses UserDefaults caches only (safe off the main actor; never passwords / tokens).
+    /// MainActor — calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
+    @MainActor
     static func hostSnapshot() -> [String: Any] {
         let email = (UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -47,6 +48,7 @@ enum DecryptCompanionHandoff {
     }
 
     /// Publish snapshot to App Group when the free/paid provision still has the group.
+    @MainActor
     static func publishHostSnapshot() {
         let snap = hostSnapshot()
         suite?.set(snap, forKey: "companion.hostSnapshot")

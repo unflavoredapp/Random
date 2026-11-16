@@ -11,6 +11,9 @@ import Foundation
 import UIKit
 import ZIPFoundation
 
+/// Companion packaging runs on the main actor (called from `DecryptCompanionInstaller`)
+/// so host FairPlay-ack snapshots can read `AppStoreDecryptGuide` safely.
+@MainActor
 enum DecryptCompanionPackager {
     static let companionBundleIDFallback = "dev.tetherless.decrypt"
     static let companionDisplayName = "Tetherless Decrypt"
