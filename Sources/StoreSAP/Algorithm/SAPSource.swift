@@ -1,4 +1,5 @@
 // Copyright (c) 2026 ApplePackage contributors.
+// Brand: Tetherless · https://tetherless.dev
 
 /// Address-independent expansion of the session's 576 logical source bytes.
 struct SAPSource: Sendable {

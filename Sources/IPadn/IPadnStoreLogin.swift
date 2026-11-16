@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnStoreLogin.swift
 //  Derived from mengangs/ipadn AppleService.performLogin + AppleLoginResponse (GPL-2.0).
 //  Primary path: WASM SAPRuntime (IPadnWASMSPSigner) for ActionSignature + ADI store-proof.

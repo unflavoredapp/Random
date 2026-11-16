@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  PairHomeView.swift
 //  TetherLess-style Pair tab — wraps DeviceInstallationManager / DevicePairingService.
 //  Uses the built-in local VPN (AirShareDeviceTunnel), never an external LocalDevVPN app.

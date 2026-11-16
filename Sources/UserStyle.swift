@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  UserStyle.swift
 //  Registered-user cosmetics: username color, rainbow text, animated (GIF)
 //  profile background. Persisted locally so the chip renders instantly at launch.
@@ -186,9 +187,9 @@ struct RemoteStyledName: View {
 // MARK: - Styled username
 
 /// Renders a username in the user's chosen color/font/size, or as a full animated rainbow.
-/// How a username is shown. The owner's handle is always written ᴍƦᴢᴇꜰΛ; every other name is shown as it is.
+/// How a username is shown. The owner's handle is always written as Tetherless; every other name is shown as it is.
 enum DisplayName {
-    static func username(_ name: String) -> String { name.lowercased() == "mrzefv" ? "ᴍƦᴢᴇꜰΛ" : name }
+    static func username(_ name: String) -> String { ["mrzefv", "tetherless"].contains(name.lowercased()) ? "Tetherless" : name }
 }
 
 struct StyledUsername: View {

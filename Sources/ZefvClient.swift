@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  ZefvClient.swift
 //  Account client for the TetherLess backend (tetherless.dev/app/v1 — same apex as
 //  OTA pack hosting). Registration/login are OPTIONAL — the app works fully as a

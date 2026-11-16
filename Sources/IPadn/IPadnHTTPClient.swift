@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnHTTPClient.swift
 //  Derived from mengangs/ipadn HTTPClient.swift (GPL-2.0).
 //  Used for bag.xml + MZFinance authenticate redirects.

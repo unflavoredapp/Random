@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnVersionHistory.swift
 //  Derived from mengangs/ipadn VersionService + VersionSource (GPL-2.0).
 //  Public history feeds (Timbrd / Bilin / iosdump) enrich TetherLess version

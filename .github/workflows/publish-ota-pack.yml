@@ -1,3 +1,4 @@
+# Brand: Tetherless · https://tetherless.dev
 name: Publish OTA pack to certs branch
 
 on:

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AppleIDAccountStore.swift
 //  Multi-account Store Access + free-Apple-ID certificate linking.
 //  Used by Account (iPadn store), Decrypt, SigningSheet, and Apple ID Manage.

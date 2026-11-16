@@ -1,4 +1,5 @@
 // FairPlayed — FairPlay decryption research tool.
+// Brand: Tetherless · https://tetherless.dev
 // Revised mremap_encrypted: page-aligned remap window, native cryptid mode,
 // libsystem_kernel dlsym fallback, guarded page-in retries.
 //

@@ -1,3 +1,4 @@
+<!-- Brand: Tetherless · https://tetherless.dev -->
 # Native install (built-in VPN + device pairing)
 
 Settings › **Install Method** switches every install (Signed, Library, Sign sheet, notification deep link)

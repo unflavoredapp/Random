@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnStoreProofStore.swift
 //  Derived from mengangs/ipadn KeychainStore StoreProofRecord / StoreProofStore (GPL-2.0).
 //  Persists WASM ADI store-proof state per device GUID.

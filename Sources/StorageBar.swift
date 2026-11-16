@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import SwiftUI
 
 /// Snapshot of this device's storage. AirShare runs on the phone it manages, so the local volume is the device's.

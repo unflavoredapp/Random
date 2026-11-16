@@ -1,3 +1,4 @@
+<!-- Brand: Tetherless · https://tetherless.dev -->
 # ADID identity model
 
 ## First launch

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  ResumeBatchBanner.swift
 //  If iOS killed AirShare in the middle of a batch install or uninstall, offer to carry on where it stopped.
 //

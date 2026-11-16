@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LocalCA.mm
 //  Hand-rolled TLS for on-device AirShare. Generates a self-signed root CA once,
 //  then issues leaf certs for any host on demand — all with the OpenSSL that's
@@ -70,7 +71,7 @@ static void randSerial(X509 *cert) {
     X509_gmtime_adj(X509_getm_notAfter(x), (long)years * 365 * 24 * 3600);
     X509_set_pubkey(x, key);
     X509_NAME *nm = X509_get_subject_name(x);
-    setName(nm, cn.UTF8String, "ᴍƦᴢᴇꜰΛ Local CA");
+    setName(nm, cn.UTF8String, "Tetherless Local CA");
     X509_set_issuer_name(x, nm); // self-signed
     addExt(x, x, NID_basic_constraints, "critical,CA:TRUE");
     addExt(x, x, NID_key_usage, "critical,keyCertSign,cRLSign");
@@ -109,7 +110,7 @@ static void randSerial(X509 *cert) {
     X509_gmtime_adj(X509_getm_notBefore(x), -3600);
     X509_gmtime_adj(X509_getm_notAfter(x), (long)days * 24 * 3600);   // iOS rejects leaves > 398 days
     X509_set_pubkey(x, leafKey);
-    setName(X509_get_subject_name(x), host.UTF8String, "ᴍƦᴢᴇꜰΛ Decrypt.Team");
+    setName(X509_get_subject_name(x), host.UTF8String, "Tetherless");
     X509_set_issuer_name(x, X509_get_subject_name(root));
     addExt(x, root, NID_basic_constraints, "critical,CA:FALSE");
     addExt(x, root, NID_key_usage, "critical,digitalSignature,keyEncipherment");

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  CryptoUtilities.swift
 //  GSACryptoKit (vendored) — CommonCrypto CBC so we don't need CryptoExtras.
 //

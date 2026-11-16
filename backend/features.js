@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Extra features for the AirShare site: admin page, link checker, hide/pin overrides,
 // plus the files that power favorites + offline support (webui.js, sw.js, offline.html).

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnPriceViews.swift
 //  English multi-region price comparison — mengangs/ipadn PriceViews (GPL-2.0).
 //

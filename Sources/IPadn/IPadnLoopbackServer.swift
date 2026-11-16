@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnLoopbackServer.swift
 //  Derived from mengangs/ipadn LoopbackServer.swift (GPL-2.0).
 //  Loopback HTTP for WASM SAPRuntime + upstream SAP/ADI proxy.

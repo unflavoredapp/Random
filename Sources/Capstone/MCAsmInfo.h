@@ -1,4 +1,5 @@
 // Copyright © 2024 Rot127 <unisono@quyllur.org>
+// Brand: Tetherless · https://tetherless.dev
 // SPDX-License-Identifier: BSD-3
 
 /// The equivalent of the MCAsmInfo class in LLVM.

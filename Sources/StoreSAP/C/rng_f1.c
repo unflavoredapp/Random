@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #include "rng_f1.h"
 #include <string.h>
 #include "algorithm_tables.inc.h"

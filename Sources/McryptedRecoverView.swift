@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  McryptedRecoverView.swift
 //  Standalone "Recover from any IPA" — the cross-device half of Inject Data.
 //

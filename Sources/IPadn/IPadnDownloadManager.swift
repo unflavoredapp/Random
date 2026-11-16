@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnDownloadManager.swift
 //  Real download queue modeled on mengangs/ipadn DownloadManager (GPL-2.0).
 //  English UI; Store IPA via AppStoreClient, then FairPlay via DeviceDecryptService.

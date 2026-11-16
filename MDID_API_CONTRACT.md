@@ -1,3 +1,4 @@
+<!-- Brand: Tetherless · https://tetherless.dev -->
 # AirShare ADID API contract
 
 The AirShare client now expects the existing `account.php` endpoint to support one additional authenticated action:

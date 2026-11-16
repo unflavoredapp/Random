@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnSearchChrome.swift
 //  App Store–style search chrome derived from mengangs/ipadn SearchView /
 //  DesignSystem / SharedViews (GPL-2.0). Used by TetherLess Decrypt.

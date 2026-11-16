@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnApplePropertyList.swift
 //  Derived from mengangs/ipadn ApplePropertyList.swift (GPL-2.0).
 //

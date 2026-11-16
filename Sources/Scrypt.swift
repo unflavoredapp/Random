@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  Scrypt.swift
 //  Pure-Swift scrypt (RFC 7914) for Mcrypted-512's memory-hard KDF.
 //  PBKDF2-HMAC-SHA256 → ROMix(BlockMix(Salsa20/8)) → PBKDF2 finalize.

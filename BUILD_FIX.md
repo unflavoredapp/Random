@@ -1,3 +1,4 @@
+<!-- Brand: Tetherless · https://tetherless.dev -->
 # Build compatibility fix
 
 The project previously allowed SwiftPM to select the newest Vapor 4 release. Newer Vapor

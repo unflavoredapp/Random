@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AppSets.swift
 //  Named groups of apps ("My tweaks") you can install or uninstall in one tap, using the same batch
 //  installers as multi-select. Installing needs a signed copy of each app in AirShare.

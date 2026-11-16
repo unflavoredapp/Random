@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  BackgroundDownloader.swift
 //  IPA downloads that keep going after you leave AirShare — even if iOS kills the app.
 //

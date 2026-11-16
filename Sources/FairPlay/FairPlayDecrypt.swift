@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  FairPlayDecrypt.swift
 //  Hardened on-device FairPlay decrypt via revised mremap_encrypted (FairPlayed/fpcore):
 //  page-aligned remap window (4K LC → 16K pages), native LC cryptid + R/cid2/RX fallbacks,

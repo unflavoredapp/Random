@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  FilesHomeView.swift
 //  TetherLess-style Files tab — Signed / Unsigned folders over existing stores.
 //

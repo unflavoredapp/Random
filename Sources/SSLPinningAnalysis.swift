@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Finds certificate/trust-validation implementation clues for authorized review.

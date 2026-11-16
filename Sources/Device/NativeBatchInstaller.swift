@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  NativeBatchInstaller.swift
 //  Installs several signed apps in one native session: one VPN/tunnel for the whole batch,
 //  two apps in flight at a time (the next one uploads while the previous one installs).

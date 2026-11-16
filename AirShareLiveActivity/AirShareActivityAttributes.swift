@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  AirShareActivityAttributes.swift
 //  Shared by the app and the Live Activity widget extension (compiled into both targets).
 //

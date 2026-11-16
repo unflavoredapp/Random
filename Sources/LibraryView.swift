@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LibraryView.swift
 //  Library tab — imported/downloaded IPAs, AirShare-style rows in floating glass chrome.
 //

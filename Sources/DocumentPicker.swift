@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DocumentPicker.swift
 //  AirShare-style UIKit document picker (asCopy: true → local, readable copies).
 //  pickZip: single archive.  pickFiles: any files, multi-select (for importing

@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Premium payments in Litecoin. Non-custodial: the server holds only your extended PUBLIC key (LTC_XPUB), derives a fresh
 // receive address for every order, and watches the chain through a block-explorer API. Funds go straight to your wallet.

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  CertificateAnalytics.swift
 //  Analytics and statistics for certificates and signing.
 //

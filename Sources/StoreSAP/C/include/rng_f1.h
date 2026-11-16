@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #ifndef SAP_RNG_F1_H
 #define SAP_RNG_F1_H
 #include <stdint.h>

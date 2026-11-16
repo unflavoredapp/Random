@@ -1,4 +1,5 @@
 // FairPlayLSLookup.m — LaunchServices helpers for installed-app path resolution.
+// Brand: Tetherless · https://tetherless.dev
 #import "FairPlayLSLookup.h"
 #import <objc/runtime.h>
 #import <objc/message.h>

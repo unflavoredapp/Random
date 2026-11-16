@@ -1,4 +1,5 @@
 // FairPlayed — FairPlay decryption research tool.
+// Brand: Tetherless · https://tetherless.dev
 // Core: Mach-O parsing + revised mremap_encrypted path (page-aligned, native cryptid).
 #pragma once
 #include <stdint.h>

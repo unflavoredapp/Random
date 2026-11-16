@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #ifndef JSON_INCLUDED
 #define JSON_INCLUDED
 

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  MachOInspector.swift
 //  Hand-rolled Mach-O reader for the signer. Answers, before you sign:
 //    • Is the binary still FairPlay-encrypted? (LC_ENCRYPTION_INFO_64 cryptid ≠ 0

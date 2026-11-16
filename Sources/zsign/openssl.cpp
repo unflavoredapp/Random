@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #include "common/common.h"
 #include "common/base64.h"
 #include "openssl.h"

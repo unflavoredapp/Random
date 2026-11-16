@@ -1,4 +1,5 @@
 //===-- llvm/Support/MathExtras.h - Useful math functions -------*- C++ -*-===//
+// Brand: Tetherless · https://tetherless.dev
 //
 //                     The LLVM Compiler Infrastructure
 //

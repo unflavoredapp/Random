@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  IPadnWASMSPSigner.swift
 //  Derived from mengangs/ipadn SAPSigner.swift (GPL-2.0).
 //  WKWebView + loopback SAPRuntime for sapSign / sapStoreProofHeaders / sapStoreProvision.

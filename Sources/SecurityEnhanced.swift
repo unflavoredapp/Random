@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SecurityEnhanced.swift
 //  Enhanced security features for certificates.
 //

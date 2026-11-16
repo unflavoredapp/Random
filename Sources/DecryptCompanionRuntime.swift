@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionRuntime.swift
 //  When this process is the installed “Tetherless Decrypt” companion (cloned
 //  binary + EmbeddedPayload), run FairPlayed-style export and write the clear IPA

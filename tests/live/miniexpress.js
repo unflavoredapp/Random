@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Small Express-compatible server (real HTTP, real header/body handling). Used only because the npm registry is unreachable here.
 const http = require("http");

@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #pragma once
 
 typedef int cpu_type_t;

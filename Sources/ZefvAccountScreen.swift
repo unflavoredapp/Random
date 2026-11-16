@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  ZefvAccountScreen.swift
 //  Optional account onboarding — Sign in / Register against the VPS API.
 //  Presented from the Settings footer when there is no account, and re-usable

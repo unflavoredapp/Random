@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import Foundation
 
 /// Local, evidence-first analysis model. Every displayed count comes from bytes

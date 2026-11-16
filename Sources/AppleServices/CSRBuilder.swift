@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  CSRBuilder.swift
 //  RSA-2048 PKCS#10 CSR + private key PEM via Security framework (no CodeSignKit).
 //

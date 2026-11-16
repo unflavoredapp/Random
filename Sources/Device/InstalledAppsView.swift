@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  InstalledAppsView.swift
 //  Lists the user apps installed on this device (never system apps) and uninstalls them through the same
 //  built-in VPN + pairing connection the Native installer uses. No Apple prompt.

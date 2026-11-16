@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 "use strict";
 // Early looks: posts staff write ahead of time. Premium members (and staff) see a post as soon as it exists; everyone
 // else sees it once its public_at time has passed.

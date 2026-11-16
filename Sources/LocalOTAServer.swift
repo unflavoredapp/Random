@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LocalOTAServer.swift
 //  On-device AirShare install: a Vapor HTTPS server on the device (NIOSSL) serving
 //  an itms-services manifest + the signed IPA.
@@ -461,7 +462,7 @@ nonisolated enum ZefvCert {
               <key>PayloadVersion</key><integer>1</integer>
               <key>PayloadIdentifier</key><string>dev.tetherless.app.packca.\(payloadUUID)</string>
               <key>PayloadUUID</key><string>\(payloadUUID)</string>
-              <key>PayloadDisplayName</key><string>TetherLess OTA Root</string>
+              <key>PayloadDisplayName</key><string>Tetherless OTA Root</string>
               <key>PayloadContent</key>
               <data>\(certB64)</data>
             </dict>
@@ -470,13 +471,13 @@ nonisolated enum ZefvCert {
           <key>PayloadVersion</key><integer>1</integer>
           <key>PayloadIdentifier</key><string>dev.tetherless.app.packca.profile.\(profileUUID)</string>
           <key>PayloadUUID</key><string>\(profileUUID)</string>
-          <key>PayloadDisplayName</key><string>TetherLess OTA Trust (tetherless.dev)</string>
+          <key>PayloadDisplayName</key><string>Tetherless OTA Trust (tetherless.dev)</string>
           <key>PayloadDescription</key><string>Trusts the tetherless.dev OTA certificate authority so on-device installs work. After installing, enable Full Trust in Settings › General › About › Certificate Trust Settings.</string>
           <key>PayloadRemovalDisallowed</key><false/>
         </dict>
         </plist>
         """
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent("TetherLess-OTA-Trust.mobileconfig")
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("Tetherless-OTA-Trust.mobileconfig")
         guard let data = xml.data(using: .utf8) else { return nil }
         try? data.write(to: url)
         return url

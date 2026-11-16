@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 import SwiftUI
 
 /// Educational, non-mutating preview of the possible behavior change and its trade-offs.

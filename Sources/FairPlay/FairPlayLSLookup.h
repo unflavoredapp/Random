@@ -1,4 +1,5 @@
 // FairPlayLSLookup.h — LaunchServices helpers for installed-app path resolution.
+// Brand: Tetherless · https://tetherless.dev
 #pragma once
 #import <Foundation/Foundation.h>
 

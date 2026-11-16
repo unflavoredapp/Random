@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  App.swift
 //  Tetherless — on-device sign, decrypt, and install.
 //
@@ -14,6 +15,7 @@ struct TetherlessApp: App {
     @UIApplicationDelegateAdaptor(AirShareAppDelegate.self) private var appDelegate
 
     init() {
+        TetherlessBrand.printBanner()
         // Re-attach to background downloads that finished while the app was closed.
         _ = IPADownloader.shared
         // Must register before launch finishes (pairing keeps running via a continued-processing task).

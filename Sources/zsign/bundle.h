@@ -1,3 +1,4 @@
+// Brand: Tetherless · https://tetherless.dev
 #pragma once
 #include "common/common.h"
 #include "common/json.h"

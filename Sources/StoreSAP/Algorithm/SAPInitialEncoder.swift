@@ -1,4 +1,5 @@
 // Copyright (c) 2026 ApplePackage contributors.
+// Brand: Tetherless · https://tetherless.dev
 
 /// Sixteen finite byte maps obtained by projecting the source word table.
 struct SAPInitialEncoder: Sendable {

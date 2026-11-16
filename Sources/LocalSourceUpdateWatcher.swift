@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LocalSourceUpdateWatcher.swift
 //  Watches every source added to AirShare, detects version changes, optionally
 //  signs new IPAs with the user's active certificate, and hands the result to

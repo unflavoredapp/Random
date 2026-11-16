@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  CertificateStore.swift
 //  Signing certificates (.p12 + .mobileprovision) and the signed-IPA history.
 //  Files live under Documents; the .p12 password lives in the Keychain.

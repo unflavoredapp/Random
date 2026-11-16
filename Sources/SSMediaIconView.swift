@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  SSMediaIconView.swift
 //  Ported from AirShare (Layer 1). Rounded app-icon view — same public API as AirShare's
 //  (url / size / cornerRadius / inset) so AirShare's Library/Signed rows drop in unchanged.

@@ -1,4 +1,5 @@
 //
+// Brand: Tetherless · https://tetherless.dev
 //  LocalCA.h — on-device root CA + leaf issuer (implemented in LocalCA.mm).
 //
 #import <Foundation/Foundation.h>
