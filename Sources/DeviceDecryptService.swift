@@ -154,13 +154,13 @@ final class DeviceDecryptService: ObservableObject {
         return await Self.hydrateOwnedArtwork(apps)
     }
 
-    /// Batch-fill `iconURL` via `itunes.apple.com/lookup` (comma-separated adam IDs).
+    /// Batch-fill `iconURL` via `itunes.apple.com/lookup` (comma-separated adam IDs),
+    /// then fall back to per-app bundle ID / store URL lookup for any still missing.
     private static func hydrateOwnedArtwork(_ apps: [OwnedStoreApp]) async -> [OwnedStoreApp] {
         var out = apps
         let missing = out.enumerated().compactMap { idx, app -> (Int, Int)? in
             app.iconURL == nil && app.adamId != 0 ? (idx, app.adamId) : nil
         }
-        guard !missing.isEmpty else { return out }
 
         let chunkSize = 40
         var cursor = 0
@@ -193,6 +193,15 @@ final class DeviceDecryptService: ObservableObject {
             }
             for (idx, adam) in chunk {
                 if let icon = byAdam[adam] { out[idx].iconURL = icon }
+            }
+        }
+
+        // Bundle-ID / store-URL fallback when adam batch missed a row (region / delisted / empty id).
+        for i in out.indices where out[i].iconURL == nil {
+            let bid = out[i].bundleId.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !bid.isEmpty || out[i].adamId != 0 else { continue }
+            if let icon = await artworkURL(bundleID: bid.isEmpty ? nil : bid, storeURL: out[i].storeURL) {
+                out[i].iconURL = icon
             }
         }
         return out
@@ -640,13 +649,13 @@ final class DeviceDecryptService: ObservableObject {
         if !bid.isEmpty {
             DecryptCompanionHandoff.publishLiveInstallPath(installed.path, bundleID: bid)
         }
-        _ = try await DecryptCompanionInstaller.installAndOpen(
+        let companionID = try await DecryptCompanionInstaller.installAndOpen(
             embeddingInstalledApp: installed,
             displayName: displayName
         ) { [weak self] msg in
             Task { @MainActor in self?.publishDecryptProgress(msg) }
         }
-        markCompanionHandoff(displayName: displayName)
+        markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
     }
 
     func decryptFromSearch(_ app: DecryptApp, version: String? = nil, externalVersionId: String? = nil) {
@@ -789,13 +798,17 @@ final class DeviceDecryptService: ObservableObject {
 
     /// Host finished packaging — FairPlay console continues in the installed companion IPA.
     /// Terminal for the host: not busy, so further decrypts / pipeline can proceed.
-    private func markCompanionHandoff(displayName: String) {
+    private func markCompanionHandoff(displayName: String, companionBundleID: String? = nil) {
         DecryptClient.shared.phase = .handedOff
         DecryptClient.shared.message =
             "Open Tetherless Decrypt to finish FairPlay (Trust under Settings › General › VPN & Device Management if asked). The clear IPA returns here for Sign → Install."
         DecryptClient.shared.error = nil
         DecryptClient.shared.finishedName = displayName
-        status = "Companion installed for \(displayName)"
+        if let companionBundleID, !companionBundleID.isEmpty {
+            status = "Companion installed for \(displayName) · \(companionBundleID)"
+        } else {
+            status = "Companion installed for \(displayName)"
+        }
         DecryptCompanionController.shared.dismiss()
         // If a previous companion export is already waiting, import it now.
         _ = DecryptCompanionHandoff.consumePendingClearIPAExport()
@@ -941,13 +954,13 @@ final class DeviceDecryptService: ObservableObject {
             publishDecryptProgress("Live App Store install ready for FairPlay: \(live.lastPathComponent)")
         }
         do {
-            _ = try await DecryptCompanionInstaller.installAndOpen(
+            let companionID = try await DecryptCompanionInstaller.installAndOpen(
                 embedding: ipa,
                 displayName: displayName
             ) { [weak self] msg in
                 Task { @MainActor in self?.publishDecryptProgress(msg) }
             }
-            markCompanionHandoff(displayName: displayName)
+            markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
         } catch {
             throw DecryptError(
                 "Couldn't install the companion with this IPA (\(error.localizedDescription)). Create a 7-day Apple ID certificate under Account › Settings › Installation › Certificate, trust it under Settings › General › VPN & Device Management, then retry."
