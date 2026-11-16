@@ -15,13 +15,13 @@ nonisolated enum TetherlessBrand {
     static let userAgent = "tetherless-ios"
 
     /// Figlet-style mark — keep this pure ASCII for logs, README, and About.
-    /// Spells T-e-t-h-e-r-l-e-s-s (the previous mark dropped the “r”).
+    /// Spells T-e-t-h-e-r-l-e-s-s; tight letter spacing (~65 cols).
     static let ascii: String = #"""
- _____         _      _                    _
-|_   _|  ___  | |_   | |__    ___   _ __  | |      ___   ___    ___
-  | |   / _ \ | __|  | '_ \  / _ \ | '__| | |     / _ \ / __|  / __|
-  | |  |  __/ | |_   | | | ||  __/ | |    | |    |  __/ \__ \  \__ \
-  |_|   \___|  \__|  |_| |_| \___| |_|    |_|     \___| |___/  |___/
+_____           _     _                     _
+|_   _|  ___   | |_  | |__    ___    _ __  | |  ___    ___   ___
+  | |   / _ \  | __| | '_ \  / _ \  | '__| | | / _ \  / __| / __|
+  | |   |  __/ | |_  | | | | |  __/ | |    | | |  __/ \__ \ \__ \
+  |_|   \___|   \__| |_| |_| \___|  |_|    |_| \___|  |___/ |___/
 """#
 
     static var asciiBanner: String {
