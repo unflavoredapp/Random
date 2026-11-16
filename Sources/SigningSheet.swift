@@ -1362,7 +1362,7 @@ struct SigningSheet: View {
                     log.append(">>> Creating free Apple ID development certificate…")
                     _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
                 } catch {
-                    self.error = "Couldn't prepare a free Apple ID certificate: \(error.localizedDescription). Open Settings › Apple ID › Developer Account and tap Create."
+                    self.error = "Couldn't prepare a free Apple ID certificate: \(error.localizedDescription). Sign in again under Account and retry."
                     return
                 }
             }
