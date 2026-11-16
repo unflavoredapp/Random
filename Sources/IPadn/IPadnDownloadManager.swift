@@ -160,7 +160,6 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
     private var decryptTail: Task<Void, Never>?
     private var session: URLSession!
     private var maxConcurrent = 3
-    private var maxQueued = 40
     private var pathMonitor: NWPathMonitor?
     private var onCellular = false
     private var wifiOnly = false
@@ -184,7 +183,6 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
         applySettings(
             maxConcurrent: defaults.object(forKey: "ipadn.settings.maxConcurrentDownloads") as? Int ?? 3,
             wifiOnly: defaults.bool(forKey: "ipadn.settings.wifiOnlyDownloads"),
-            maxQueued: defaults.object(forKey: "ipadn.settings.maxQueuedDownloads") as? Int ?? 40,
             compatibleMode: defaults.bool(forKey: "ipadn.settings.compatibleDownloadMode")
         )
         startPathMonitor()
@@ -192,10 +190,10 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
     }
 
     /// Prefs from iPadn Settings (Downloads page).
-    func applySettings(maxConcurrent: Int, wifiOnly: Bool, maxQueued: Int, compatibleMode: Bool) {
+    /// No queue-size cap — Get only downloads + companion-decrypts; signing is a later Install step.
+    func applySettings(maxConcurrent: Int, wifiOnly: Bool, compatibleMode: Bool) {
         self.maxConcurrent = min(6, max(1, maxConcurrent))
         self.wifiOnly = wifiOnly
-        self.maxQueued = min(100, max(1, maxQueued))
         self.compatibleMode = compatibleMode
         schedule()
     }
@@ -226,9 +224,6 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             return sameApp && samePin && ![.completed, .failed].contains($0.status)
         }) {
             throw IPadnDownloadError.duplicate
-        }
-        if activeCount >= maxQueued {
-            throw IPadnDownloadError.queueFull(maxQueued)
         }
         let adam = Int(app.id.split(separator: "-").last.map(String.init) ?? "")
             ?? Int(app.id.filter(\.isNumber))
@@ -278,9 +273,6 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
     func enqueueURL(_ url: URL, name: String? = nil) throws {
         guard url.scheme?.lowercased() == "https", url.host != nil else {
             throw IPadnDownloadError.message("Enter a valid HTTPS download link.")
-        }
-        if activeCount >= maxQueued {
-            throw IPadnDownloadError.queueFull(maxQueued)
         }
         let label = name?.trimmingCharacters(in: .whitespacesAndNewlines)
         let job = IPadnDownloadJob(
@@ -759,13 +751,11 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
 enum IPadnDownloadError: LocalizedError, Equatable {
     case message(String)
     case duplicate
-    case queueFull(Int)
 
     var errorDescription: String? {
         switch self {
         case .message(let m): return m
         case .duplicate: return "Already in the Downloads queue."
-        case .queueFull(let n): return "Downloads queue is full (\(n) jobs). Wait for some to finish or remove failed ones."
         }
     }
 }
