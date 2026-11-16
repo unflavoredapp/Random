@@ -51,16 +51,9 @@ enum DecryptCompanionInstaller {
         progress: ((String) -> Void)?,
         build: (_ bundleID: String, _ progress: ((String) -> Void)?) throws -> DecryptCompanionPackager.Package
     ) async throws -> String {
-        progress?("1/6 · Preparing Apple ID signing certificate…")
+        progress?("1/6 · Preparing signing certificate (Apple ID, then custom)…")
         DecryptCompanionHandoff.publishHostSnapshot()
-        FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
-        _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
-        CertificateStore.shared.activatePreferredCertificate(forSigningMethod: "appleid")
-        guard let material = try? CertificateStore.shared.activeMaterial() else {
-            throw DecryptError(
-                "No signing certificate for the companion app. Sign in under Account, then retry — a free development certificate is created automatically when possible."
-            )
-        }
+        let material = try await resolveCompanionSigningMaterial(progress: progress)
 
         let bundleID = DecryptCompanionPackager.companionBundleID(forProvision: material.provision)
         UserDefaults.standard.set(bundleID, forKey: companionBundleIDKey)
@@ -70,15 +63,28 @@ enum DecryptCompanionInstaller {
         let sizeMB = Double(package.approximateBytes) / 1_048_576.0
         progress?(String(format: "Companion package · %.0f MB", sizeMB))
 
-        progress?("3/6 · Signing Tetherless Decrypt with your Apple ID…")
+        progress?("3/6 · Signing Tetherless Decrypt with \(material.name)…")
         var options = SignOptions()
         options.name = DecryptCompanionPackager.companionDisplayName
         options.bundleID = bundleID
         options.surgicalMode = false
         options.parallelSigning = false
         options.autoFixEntitlements = true
-        // Keep App Group when the provision allows — host↔companion handoff (no secrets).
-        options.disableAppGroups = false
+        // Seed from profile so scrubbers can strip host-only entitlements (groups/push/iCloud).
+        if let xml = xmlPlistData(fromMobileProvision: material.provision),
+           let plist = try? PropertyListSerialization.propertyList(from: xml, format: nil) as? [String: Any],
+           let ents = plist["Entitlements"] as? [String: Any],
+           let data = try? PropertyListSerialization.data(fromPropertyList: ents, format: .xml, options: 0) {
+            options.entitlementsPlistData = data
+        }
+        // Free/dev profiles rarely grant host App Groups — leaving them on → 0xe8008016.
+        options.disableAppGroups = !Self.provisionAllowsAppGroup(
+            material.provision,
+            group: "group.dev.tetherless.app"
+        )
+        options.disablePush = true
+        options.disableiCloud = true
+        options.disableSiri = true
         options.stripWatchApps = true
         options.stripExtensions = true // companion shell doesn't need host appexes
         options.removeURLSchemes = false
@@ -186,5 +192,59 @@ enum DecryptCompanionInstaller {
         let selOpen = NSSelectorFromString("openApplicationWithBundleID:")
         guard workspace.responds(to: selOpen) else { return }
         _ = workspace.perform(selOpen, with: bundleID)
+    }
+
+    /// Apple ID 7-day development cert first; fall back to any active / imported custom cert.
+    private static func resolveCompanionSigningMaterial(
+        progress: ((String) -> Void)?
+    ) async throws -> CertMaterial {
+        var appleIDError: String?
+        FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
+        do {
+            _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
+            CertificateStore.shared.activatePreferredCertificate(forSigningMethod: "appleid")
+            if let material = try? CertificateStore.shared.activeMaterial() {
+                progress?("Using Apple ID certificate: \(material.name)")
+                return material
+            }
+        } catch {
+            appleIDError = error.localizedDescription
+            progress?("Apple ID cert unavailable — trying custom certificate…")
+        }
+
+        CertificateStore.shared.activatePreferredCertificate(forSigningMethod: "saved")
+        if let material = try? CertificateStore.shared.activeMaterial() {
+            progress?("Using custom certificate: \(material.name)")
+            return material
+        }
+
+        // Last resort: first non-expired imported cert.
+        for cert in CertificateStore.shared.certificates {
+            let info = CertificateStore.shared.cachedProfileInfo(for: cert)
+            guard !info.isExpired else { continue }
+            CertificateStore.shared.activeID = cert.id
+            if let material = try? CertificateStore.shared.activeMaterial() {
+                progress?("Using certificate: \(material.name)")
+                return material
+            }
+        }
+
+        var msg = "No signing certificate for Tetherless Decrypt. Sign in under Account to create a free 7-day Apple ID cert, or import a .p12 + mobileprovision under Account › Settings › Installation › Certificate."
+        if let appleIDError, !appleIDError.isEmpty {
+            msg += " (Apple ID: \(appleIDError))"
+        }
+        throw DecryptError(msg)
+    }
+
+    /// True when the provisioning profile grants the given App Group.
+    private static func provisionAllowsAppGroup(_ provision: Data, group: String) -> Bool {
+        guard let s = String(data: provision, encoding: .isoLatin1),
+              let a = s.range(of: "<?xml"), let b = s.range(of: "</plist>") else { return false }
+        let xml = String(s[a.lowerBound..<b.upperBound])
+        guard let d = xml.data(using: .isoLatin1),
+              let plist = try? PropertyListSerialization.propertyList(from: d, format: nil) as? [String: Any],
+              let ents = plist["Entitlements"] as? [String: Any] else { return false }
+        let groups = ents["com.apple.security.application-groups"] as? [String] ?? []
+        return groups.contains(group)
     }
 }
