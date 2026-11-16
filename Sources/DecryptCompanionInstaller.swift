@@ -37,6 +37,14 @@ enum DecryptCompanionInstaller {
         displayName: String,
         progress: ((String) -> Void)? = nil
     ) async throws -> String {
+        // Publish before packaging so the companion can FairPlay-mremap this live path
+        // even if open(2) of the FairPlay binary EPERMs under the host (Roblox).
+        let info = NSDictionary(contentsOf: installedApp.appendingPathComponent("Info.plist")) as? [String: Any]
+        let bid = (info?["CFBundleIdentifier"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !bid.isEmpty {
+            DecryptCompanionHandoff.publishLiveInstallPath(installedApp.path, bundleID: bid)
+        }
         try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
             try DecryptCompanionPackager.buildCompanionIPA(
                 embeddingInstalledApp: installedApp,

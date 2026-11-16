@@ -10,6 +10,7 @@
 import Foundation
 import IDeviceSwift
 import SwiftUI
+import ZIPFoundation
 
 @MainActor
 final class DeviceDecryptService: ObservableObject {
@@ -584,6 +585,14 @@ final class DeviceDecryptService: ObservableObject {
         displayName: String
     ) async throws {
         publishDecryptProgress("Building Tetherless Decrypt companion for \(displayName)…")
+        // Stamp the live path before packaging so the companion FairPlay input is ready
+        // even when open(2) of the FairPlay binary EPERMs under the host sandbox.
+        let info = NSDictionary(contentsOf: installed.appendingPathComponent("Info.plist")) as? [String: Any]
+        let bid = (info?["CFBundleIdentifier"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !bid.isEmpty {
+            DecryptCompanionHandoff.publishLiveInstallPath(installed.path, bundleID: bid)
+        }
         _ = try await DecryptCompanionInstaller.installAndOpen(
             embeddingInstalledApp: installed,
             displayName: displayName
@@ -712,13 +721,7 @@ final class DeviceDecryptService: ObservableObject {
                 )
                 publishDecryptProgress(error.localizedDescription)
                 try FairPlayKeyGate.requireReady()
-                _ = try await DecryptCompanionInstaller.installAndOpen(
-                    embeddingInstalledApp: installed,
-                    displayName: app.name
-                ) { [weak self] msg in
-                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                }
-                markCompanionHandoff(displayName: app.name)
+                try await decryptFromInstalledPath(installed, displayName: app.name)
             }
         } catch {
             let text = error.localizedDescription
@@ -789,7 +792,8 @@ final class DeviceDecryptService: ObservableObject {
             try await handoffStoreIPAToCompanion(
                 ipa: result.url,
                 displayName: displayName,
-                downloadedVersion: result.item.displayVersion
+                downloadedVersion: result.item.displayVersion,
+                bundleID: bundleID
             )
         } catch {
             let detail = error.localizedDescription
@@ -801,13 +805,7 @@ final class DeviceDecryptService: ObservableObject {
                 )
                 publishDecryptProgress(detail)
                 try FairPlayKeyGate.requireReady()
-                _ = try await DecryptCompanionInstaller.installAndOpen(
-                    embeddingInstalledApp: installed,
-                    displayName: displayName
-                ) { [weak self] msg in
-                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                }
-                markCompanionHandoff(displayName: displayName)
+                try await decryptFromInstalledPath(installed, displayName: displayName)
                 return
             }
             let lower = detail.lowercased()
@@ -823,7 +821,7 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     /// Push a Store IPA already on disk through the companion (Downloads Get → purchaseAndDownload).
-    func decryptDownloadedStoreIPA(at ipa: URL, displayName: String) async {
+    func decryptDownloadedStoreIPA(at ipa: URL, displayName: String, bundleID: String? = nil) async {
         guard FileManager.default.fileExists(atPath: ipa.path) else {
             let text = "Downloaded IPA missing — retry Get."
             lastError = text
@@ -857,7 +855,8 @@ final class DeviceDecryptService: ObservableObject {
             try await handoffStoreIPAToCompanion(
                 ipa: ipa,
                 displayName: displayName,
-                downloadedVersion: ""
+                downloadedVersion: "",
+                bundleID: bundleID
             )
         } catch {
             let text = error.localizedDescription
@@ -874,7 +873,8 @@ final class DeviceDecryptService: ObservableObject {
     private func handoffStoreIPAToCompanion(
         ipa: URL,
         displayName: String,
-        downloadedVersion: String
+        downloadedVersion: String,
+        bundleID: String? = nil
     ) async throws {
         let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
         publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
@@ -882,6 +882,17 @@ final class DeviceDecryptService: ObservableObject {
         // Refresh install inventory so the packager can stamp hostLiveInstallPath —
         // companion FairPlay needs the live Store path when the app is already on-device.
         _ = await DeviceLibrary.shared.refreshAwaiting()
+        // Pre-resolve + publish live path via App Group before packaging. FairPlay
+        // binaries often EPERM on open under the host, so the packager must stamp by
+        // path existence alone — and the companion re-reads this App Group value.
+        let resolvedBid = (bundleID?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
+            $0.isEmpty ? nil : $0
+        } ?? Self.bundleIDFromStoreIPA(ipa)
+        if let bid = resolvedBid,
+           let live = await resolveInstalledAppURL(bundleID: bid) {
+            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
+            publishDecryptProgress("Live App Store install ready for FairPlay: \(live.lastPathComponent)")
+        }
         do {
             _ = try await DecryptCompanionInstaller.installAndOpen(
                 embedding: ipa,
@@ -895,6 +906,30 @@ final class DeviceDecryptService: ObservableObject {
                 "Couldn't install the companion with this IPA (\(error.localizedDescription)). Create a 7-day Apple ID certificate under Account › Settings › Installation › Certificate, trust it under Settings › General › VPN & Device Management, then retry."
             )
         }
+    }
+
+    /// Peek CFBundleIdentifier from a Store IPA zip without extracting the whole archive.
+    private static func bundleIDFromStoreIPA(_ ipa: URL) -> String? {
+        guard let archive = Archive(url: ipa, accessMode: .read) else { return nil }
+        for entry in archive {
+            let path = entry.path
+            guard path.hasPrefix("Payload/"),
+                  path.hasSuffix(".app/Info.plist"),
+                  !path.contains("/Watch/"),
+                  !path.contains(".appex/") else { continue }
+            var data = Data()
+            do {
+                _ = try archive.extract(entry) { data.append($0) }
+            } catch {
+                continue
+            }
+            guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let bid = (plist["CFBundleIdentifier"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !bid.isEmpty else { continue }
+            return bid
+        }
+        return nil
     }
 
     private func resolveAdamId(bundleID: String, storeURL: String) async throws -> Int? {
