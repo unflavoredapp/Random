@@ -177,6 +177,13 @@ struct RootView: View {
             }
             return
         }
+        // Companion finished FairPlay — import clear IPA from App Group into inbox / DecryptClient.
+        if scheme == "tetherless",
+           ["decrypt-export", "decrypt-import", "export"].contains(url.host?.lowercased() ?? "") {
+            _ = DecryptCompanionHandoff.consumePendingClearIPAExport()
+            nav.goSearch()
+            return
+        }
         guard ["airshare", "msign", "tetherless", "sideloader"].contains(scheme) else { return }
         switch url.host?.lowercased() {
         case "activity", "signed":

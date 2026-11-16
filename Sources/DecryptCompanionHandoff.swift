@@ -16,9 +16,45 @@ enum DecryptCompanionHandoff {
     static let pendingBundleKey = "tetherless.decrypt.pendingCompanionBundle"
     static let pendingEmbedKey = "tetherless.decrypt.pendingEmbeddedName"
     static let pendingAtKey = "tetherless.decrypt.pendingCompanionAt"
+    /// Metadata for a clear IPA the companion wants the host to import.
+    static let clearExportMetaKey = "companion.clearIPA.export"
+    static let clearExportDirName = "ClearExports"
+    /// Host deep link — companion opens this after publishing a clear IPA.
+    static let hostImportURLString = "tetherless://decrypt-export"
 
     private static var suite: UserDefaults? { UserDefaults(suiteName: suiteName) }
     private static var local: UserDefaults { .standard }
+
+    /// App Group container when the provision still includes the group entitlement.
+    static var sharedContainerURL: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suiteName)
+    }
+
+    /// True when we can read/write the shared group container (host + companion both need the group).
+    static var appGroupAvailable: Bool {
+        guard let root = sharedContainerURL else { return false }
+        let probe = root.appendingPathComponent(".tl-group-probe")
+        do {
+            try "ok".write(to: probe, atomically: true, encoding: .utf8)
+            try? FileManager.default.removeItem(at: probe)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    /// Companion → host clear-IPA export record (no secrets).
+    struct ClearIPAExport: Codable, Equatable {
+        var fileName: String
+        var displayName: String
+        var bundleID: String
+        var version: String
+        var verifySummary: String
+        var exportedAt: TimeInterval
+        /// Path relative to the App Group container (e.g. `ClearExports/Foo-decrypted.ipa`).
+        var relativePath: String
+        var bytes: Int64
+    }
 
     /// Snapshot the host Apple ID / FairPlay gate state into a plist-safe dictionary.
     /// Calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
@@ -120,5 +156,160 @@ enum DecryptCompanionHandoff {
         )
         if opened { clearPendingOpen() }
         return opened
+    }
+
+    // MARK: - Clear IPA export (companion → host)
+
+    /// Companion: copy the clear IPA into the App Group and publish metadata.
+    /// Returns `true` when the host can import via `consumePendingClearIPAExport()`.
+    @discardableResult
+    static func publishClearIPAExport(
+        ipa: URL,
+        displayName: String,
+        bundleID: String,
+        version: String,
+        verifySummary: String
+    ) -> Bool {
+        guard appGroupAvailable, let root = sharedContainerURL else {
+            clearClearIPAExport()
+            return false
+        }
+        let fm = FileManager.default
+        let dir = root.appendingPathComponent(clearExportDirName, isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let safe = sanitizeFileName(ipa.lastPathComponent.isEmpty ? "\(displayName)-decrypted.ipa" : ipa.lastPathComponent)
+        let dest = dir.appendingPathComponent(safe)
+        do {
+            try? fm.removeItem(at: dest)
+            try fm.copyItem(at: ipa, to: dest)
+        } catch {
+            clearClearIPAExport()
+            return false
+        }
+        let size = (try? fm.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
+        let meta = ClearIPAExport(
+            fileName: safe,
+            displayName: displayName.isEmpty ? dest.deletingPathExtension().lastPathComponent : displayName,
+            bundleID: bundleID,
+            version: version,
+            verifySummary: verifySummary,
+            exportedAt: Date().timeIntervalSince1970,
+            relativePath: "\(clearExportDirName)/\(safe)",
+            bytes: size
+        )
+        guard let data = try? JSONEncoder().encode(meta) else {
+            try? fm.removeItem(at: dest)
+            return false
+        }
+        suite?.set(data, forKey: clearExportMetaKey)
+        local.set(data, forKey: clearExportMetaKey)
+        return true
+    }
+
+    static func clearClearIPAExport() {
+        suite?.removeObject(forKey: clearExportMetaKey)
+        local.removeObject(forKey: clearExportMetaKey)
+    }
+
+    static func pendingClearIPAExport() -> ClearIPAExport? {
+        let data = suite?.data(forKey: clearExportMetaKey) ?? local.data(forKey: clearExportMetaKey)
+        guard let data, let meta = try? JSONDecoder().decode(ClearIPAExport.self, from: data) else {
+            return nil
+        }
+        // Expire after 2 hours so stale exports don't surprise the user later.
+        if Date().timeIntervalSince1970 - meta.exportedAt > 2 * 60 * 60 {
+            clearClearIPAExport()
+            return nil
+        }
+        return meta
+    }
+
+    /// Companion / host: open the main TetherLess app on the import deep link.
+    static func openHostForClearIPAImport() {
+        guard let url = URL(string: hostImportURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    /// Host: copy a pending companion clear IPA into `AppPaths.dir("inbox")`, wire DecryptClient,
+    /// and attach it to a matching Downloads job when possible.
+    @discardableResult
+    static func consumePendingClearIPAExport() -> URL? {
+        guard let meta = pendingClearIPAExport() else { return nil }
+        guard let root = sharedContainerURL else {
+            clearClearIPAExport()
+            return nil
+        }
+        let src = root.appendingPathComponent(meta.relativePath)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: src.path) else {
+            clearClearIPAExport()
+            return nil
+        }
+        let inbox = AppPaths.dir("inbox")
+        let dest = inbox.appendingPathComponent(sanitizeFileName(meta.fileName))
+        do {
+            try? fm.removeItem(at: dest)
+            try fm.copyItem(at: src, to: dest)
+        } catch {
+            return nil
+        }
+        // Best-effort cleanup of the shared copy (host keeps inbox).
+        try? fm.removeItem(at: src)
+        clearClearIPAExport()
+
+        DecryptClient.shared.finished = dest
+        DecryptClient.shared.finishedName = meta.displayName
+        DecryptClient.shared.phase = .done
+        DecryptClient.shared.error = nil
+        let verify = meta.verifySummary.trimmingCharacters(in: .whitespacesAndNewlines)
+        DecryptClient.shared.message = verify.isEmpty
+            ? "Imported clear IPA from Tetherless Decrypt."
+            : "Imported clear IPA from Tetherless Decrypt · \(verify)"
+        SideloadIPACache.shared.remember(url: dest, kind: .decrypted, name: meta.displayName)
+        IPadnDownloadManager.shared.attachCompanionClearIPA(
+            url: dest,
+            displayName: meta.displayName,
+            bundleID: meta.bundleID
+        )
+        return dest
+    }
+
+    /// Host: import a clear IPA shared via Open In / Share (App Group unavailable path).
+    @discardableResult
+    static func importSharedClearIPA(_ url: URL) -> URL? {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let fm = FileManager.default
+        guard url.pathExtension.lowercased() == "ipa" else { return nil }
+        let inbox = AppPaths.dir("inbox")
+        let dest = inbox.appendingPathComponent(sanitizeFileName(url.lastPathComponent))
+        do {
+            try? fm.removeItem(at: dest)
+            try fm.copyItem(at: url, to: dest)
+        } catch {
+            return nil
+        }
+        let name = dest.deletingPathExtension().lastPathComponent
+            .replacingOccurrences(of: "-decrypted", with: "")
+        DecryptClient.shared.finished = dest
+        DecryptClient.shared.finishedName = name
+        DecryptClient.shared.phase = .done
+        DecryptClient.shared.error = nil
+        DecryptClient.shared.message = "Imported clear IPA from Share."
+        SideloadIPACache.shared.remember(url: dest, kind: .decrypted, name: name)
+        IPadnDownloadManager.shared.attachCompanionClearIPA(
+            url: dest,
+            displayName: name,
+            bundleID: ""
+        )
+        return dest
+    }
+
+    private static func sanitizeFileName(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base = trimmed.isEmpty ? "decrypted.ipa" : trimmed
+        return base
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "..", with: "_")
     }
 }

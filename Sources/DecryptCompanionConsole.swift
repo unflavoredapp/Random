@@ -25,6 +25,8 @@ final class DecryptCompanionController: ObservableObject {
     @Published var statusTitle = "Ready"
     /// Last FairPlay verify_ipa summary (e.g. "12 cryptid=0 · 0 encrypted · 3 no LC_ENCRYPTION").
     @Published var verifySummary = ""
+    /// True when the clear IPA was copied into the App Group for the host to import.
+    @Published var exportSentToHost = false
 
     private init() {}
 
@@ -44,6 +46,7 @@ final class DecryptCompanionController: ObservableObject {
         done = false
         finishedURL = nil
         verifySummary = ""
+        exportSentToHost = false
         statusTitle = "Decrypting…"
         isPresented = true
     }
@@ -135,6 +138,11 @@ struct DecryptCompanionConsole: View {
                 statusPill
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
+                if companion.done, companion.finishedURL != nil {
+                    exportActions
+                        .padding(.horizontal, 16)
+                        .padding(.top, 12)
+                }
                 console
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
@@ -288,6 +296,46 @@ struct DecryptCompanionConsole: View {
                 : Color.white.opacity(0.07),
             in: RoundedRectangle(cornerRadius: 16, style: .continuous)
         )
+    }
+
+    private var exportActions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if companion.exportSentToHost {
+                Text("Clear IPA sent to TetherLess. Switch back for Sign → Install.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.65))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    DecryptCompanionHandoff.openHostForClearIPAImport()
+                } label: {
+                    Text("Open TetherLess")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(Color.white, in: Capsule())
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("App Group isn’t available on this certificate — Share the IPA and choose Open in TetherLess.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.65))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button {
+                shareURL = companion.finishedURL
+            } label: {
+                Text(companion.exportSentToHost ? "Share copy…" : "Share IPA with TetherLess")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(TetherlessPalette.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .padding(14)
+        .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
     private var console: some View {

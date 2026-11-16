@@ -394,6 +394,47 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
         SignQueue.shared.enqueue(url)
     }
 
+    /// Host import from companion App Group — replace the Downloads package with the clear IPA.
+    func attachCompanionClearIPA(url: URL, displayName: String, bundleID: String) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: url.path) else { return }
+        let needleName = displayName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let needleBundle = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let idx = jobs.firstIndex(where: { job in
+            guard job.kind == .store else { return false }
+            if !needleBundle.isEmpty, !job.bundleID.isEmpty, job.bundleID == needleBundle { return true }
+            if !needleName.isEmpty, job.name.lowercased() == needleName { return true }
+            return false
+        }) ?? jobs.firstIndex(where: { job in
+            guard job.kind == .store else { return false }
+            if !needleName.isEmpty, job.name.lowercased().contains(needleName) { return true }
+            return false
+        })
+        guard let idx else { return }
+        let id = jobs[idx].id
+        let filename = "\(id.uuidString)_decrypted_\(url.lastPathComponent)"
+        let dest = IPadnDownloadStorage.packagesDir.appendingPathComponent(filename)
+        try? fm.removeItem(at: dest)
+        do {
+            try fm.copyItem(at: url, to: dest)
+        } catch {
+            return
+        }
+        if let old = jobs[idx].fileURL, old != dest {
+            try? fm.removeItem(at: old)
+        }
+        jobs[idx].localFilename = filename
+        let size = (try? fm.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
+        jobs[idx].downloaded = size
+        jobs[idx].expected = size
+        jobs[idx].status = .completed
+        jobs[idx].error = nil
+        if jobs[idx].bundleID.isEmpty, !needleBundle.isEmpty {
+            jobs[idx].bundleID = needleBundle
+        }
+        persist()
+    }
+
     // MARK: Scheduling
 
     private func schedule() {
