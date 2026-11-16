@@ -405,7 +405,7 @@ struct DownloadsHomeView: View {
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
             Text(manager.jobs.isEmpty
-                 ? "Tap Get on as many apps as you want — they stack here. Store downloads run in parallel; companion pushes go one at a time."
+                 ? "Tap Get on as many apps as you want — they stack here (download + decrypt only; sign later via Install). Store fetches run in parallel; companion pushes go one at a time."
                  : "Try another filter or clear the search.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.5))

@@ -28,7 +28,6 @@ struct IPadnSettingsView: View {
     var page: Page = .root
 
     @AppStorage("ipadn.settings.maxConcurrentDownloads") private var maxConcurrentDownloads = 3
-    @AppStorage("ipadn.settings.maxQueuedDownloads") private var maxQueuedDownloads = 40
     @AppStorage("ipadn.settings.notifications") private var notifications = true
     @AppStorage("ipadn.settings.updateNotifications") private var updateNotifications = true
     @AppStorage("ipadn.settings.wifiOnlyDownloads") private var wifiOnlyDownloads = false
@@ -127,7 +126,9 @@ struct IPadnSettingsView: View {
             if page == .downloads {
                 Section {
                     Stepper("Concurrent downloads: \(maxConcurrentDownloads)", value: $maxConcurrentDownloads, in: 1...6)
-                    Stepper("Queued download limit: \(maxQueuedDownloads)", value: $maxQueuedDownloads, in: 1...100)
+                    Text("Stack as many Gets as you want — they download and decrypt only. Signing happens later when you Install.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                     Toggle("Download finished notifications", isOn: $notifications)
                     Toggle("New version alerts", isOn: $updateNotifications)
                         .onChange(of: updateNotifications) { on in
@@ -282,7 +283,6 @@ struct IPadnSettingsView: View {
         .onAppear { applyDownloadPrefs() }
         .onChange(of: maxConcurrentDownloads) { _ in applyDownloadPrefs() }
         .onChange(of: wifiOnlyDownloads) { _ in applyDownloadPrefs() }
-        .onChange(of: maxQueuedDownloads) { _ in applyDownloadPrefs() }
         .onChange(of: compatibleDownloadMode) { _ in applyDownloadPrefs() }
         .confirmationDialog("Reset settings to defaults?", isPresented: $resetSettings, titleVisibility: .visible) {
             Button("Reset settings", role: .destructive) { resetToDefaults() }
@@ -312,14 +312,12 @@ struct IPadnSettingsView: View {
         IPadnDownloadManager.shared.applySettings(
             maxConcurrent: maxConcurrentDownloads,
             wifiOnly: wifiOnlyDownloads,
-            maxQueued: maxQueuedDownloads,
             compatibleMode: compatibleDownloadMode
         )
     }
 
     private func resetToDefaults() {
         maxConcurrentDownloads = 3
-        maxQueuedDownloads = 40
         notifications = true
         updateNotifications = true
         wifiOnlyDownloads = false
