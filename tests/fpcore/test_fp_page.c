@@ -118,6 +118,40 @@ static void test_exact_geometry_helper(void) {
            "exact on 4K page env");
 }
 
+static void test_map_window_skips_leading_bytes(void) {
+    const uint64_t page = 16384;
+    const uint64_t slice_off = 0x100000;
+    const uint64_t cryptoff = 32768; // page-aligned into the slice
+    const uint64_t cryptsize = 65536;
+    const uint64_t slice = 256 * 1024;
+    uint64_t map_off = 0, map_len = 0, read_bias = 0, remap_off = 0, remap_len = 0;
+    expect(fp_map_window_for_crypt(slice_off, cryptoff, cryptsize, slice, page,
+                                   &map_off, &map_len, &read_bias, &remap_off, &remap_len),
+           "map window for mid-slice crypt");
+    expect(map_off == slice_off + cryptoff, "mmap starts at crypt (no leading pad)");
+    expect(map_len == cryptsize, "mmap length is crypt window only");
+    expect(read_bias == 0, "exact geometry read_bias 0");
+}
+
+static void test_map_window_4k_on_16k(void) {
+    const uint64_t page = 16384;
+    uint64_t map_off = 0, map_len = 0, read_bias = 0, remap_off = 0, remap_len = 0;
+    expect(fp_map_window_for_crypt(0, 4096, 8192, 64 * 1024, page,
+                                   &map_off, &map_len, &read_bias, &remap_off, &remap_len),
+           "4K crypt map window on 16K page");
+    expect(remap_off == 0 && remap_len == 16384, "aligned remap covers crypt");
+    expect(map_off == 0 && map_len == 16384, "mmap is aligned window only");
+    expect(read_bias == 4096, "read_bias skips align-down pad");
+}
+
+static void test_chunk_pages_hint(void) {
+    const uint64_t page = 16384;
+    expect(fp_suggested_chunk_pages(page * 4, page) == 4, "small crypt uses full page count");
+    expect(fp_suggested_chunk_pages(64ull << 20, page) == ((4ull << 20) / page),
+           "large crypt caps near 4MiB");
+    expect(fp_suggested_chunk_pages(0, page) == 0, "empty crypt → 0");
+}
+
 int main(void) {
     printf("fpcore page/order regression tests\n");
     test_decrypt_order_starts_with_native();
@@ -127,6 +161,9 @@ int main(void) {
     test_malformed_ranges();
     test_no_hard_reject_semantics();
     test_exact_geometry_helper();
+    test_map_window_skips_leading_bytes();
+    test_map_window_4k_on_16k();
+    test_chunk_pages_hint();
     if (g_failed) {
         fprintf(stderr, "%d failure(s)\n", g_failed);
         return 1;
