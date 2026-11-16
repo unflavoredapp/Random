@@ -66,9 +66,9 @@ enum FailurePlaybook {
         FailurePlay(
             id: "9610",
             title: "Store auth rejected (9610)",
-            summary: "passwordToken / storefront session invalid. Sign in again under Account.",
+            summary: "passwordToken went stale. Tap to silently remint the Store session from your saved Apple ID — you stay signed in.",
             matches: ["9610", "passwordtoken", "storefront"],
-            actionTitle: "Sign in under Account",
+            actionTitle: "Refresh Store session",
             action: .reauthStore
         ),
         FailurePlay(
@@ -119,8 +119,15 @@ enum FailurePlaybook {
             }
             AppStoreDecryptGuide.setAcknowledged(true, email: email)
         case .reauthStore:
-            AppleIDStore.shared.clearPersistedStoreSession()
-            AppNav.shared.goAccount()
+            // Silent remint — do not wipe the account or force a full login.
+            // Dead passwordTokens are reminted from the saved Keychain password.
+            do {
+                AppleIDStore.shared.invalidateStorefrontSession()
+                _ = try await AppleIDStore.shared.ensureStorefrontSession(forceRefresh: true)
+            } catch {
+                // Only escalate to Account if remint itself failed (missing password / 2FA).
+                AppNav.shared.goAccount()
+            }
         case .refreshPortal:
             do {
                 _ = try await AppleIDStore.shared.refreshPortalSession()
