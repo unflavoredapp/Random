@@ -224,7 +224,7 @@ struct DecryptOwnedStoreAppsSection: View {
                         } else if soft || loadError.localizedCaseInsensitiveContains("403")
                             || loadError.localizedCaseInsensitiveContains("expired")
                             || loadError.localizedCaseInsensitiveContains("token") {
-                            Text("Tip: pull to refresh here, or sign in again under Account. Search still works.")
+                            Text("Tip: pull to refresh here. Stay signed in — Search still works.")
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.45))
                                 .fixedSize(horizontal: false, vertical: true)
@@ -283,23 +283,29 @@ struct DecryptOwnedStoreAppsSection: View {
             }
         } catch AppStoreClientError.needsTwoFactor {
             owned = []
-            loadError = "Store needs the first Sign In trust — Sign Out, then Sign In once under Account. The Allow / verification code unlocks Store automatically (no second text)."
-            AppleIDStore.shared.noteStoreNeedsVerification()
+            if AppleIDStore.shared.storefrontSession()?.isUsable == true {
+                // Usable passwordToken — Owned/DAAP 2FA noise must not force Sign Out.
+                loadError = "Owned list couldn’t load right now. Account is still signed in — Search works for free & purchased apps."
+                AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
+            } else {
+                loadError = "Store needs an Allow push under Account › Unlock Store — stay signed in; no Sign Out required."
+                AppleIDStore.shared.noteStoreNeedsVerification()
+            }
         } catch {
             owned = []
             let detail = error.localizedDescription
             if AppleIDStore.shared.storefrontSession()?.isUsable == true {
                 loadError = "Owned list couldn’t load right now. Account is still signed in — Search works for free & purchased apps."
+                AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
             } else if detail.localizedCaseInsensitiveContains("token expired")
                         || detail.localizedCaseInsensitiveContains("session expired") {
-                loadError = "Store session needs a refresh — Sign Out → Sign In once under Account."
+                loadError = "Store session needs a refresh — Unlock Store under Account (stay signed in)."
+                AppleIDStore.shared.noteStoreNeedsVerification()
             } else {
                 loadError = detail
-            }
-            if detail.localizedCaseInsensitiveContains("verification")
-                || AppleIDStore.shared.storefrontSession()?.isUsable != true {
-                // Only flag verification when we truly have no usable Store session.
-                if AppleIDStore.shared.storefrontSession()?.isUsable != true {
+                if detail.localizedCaseInsensitiveContains("verification")
+                    || detail.localizedCaseInsensitiveContains("2fa")
+                    || detail.localizedCaseInsensitiveContains("two-factor") {
                     AppleIDStore.shared.noteStoreNeedsVerification()
                 }
             }
