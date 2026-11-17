@@ -79,8 +79,31 @@ enum AppStoreDecryptGuide {
     }
 
     nonisolated static var failureHint: String {
-        let email = UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache") ?? ""
-        let who = email.isEmpty ? "this Apple ID" : email
+        let who = owningAppleIDDescription()
         return "FairPlay needs \(who)’s decryption keys on this iPhone. Sign in once in the App Store (or Settings → your name → Media & Purchases) with that account, keep ownership of the app, then try again. That one-time step stores the keys — switching the active App Store account afterward is fine."
+    }
+
+    /// Host email from standard defaults, App Group cache, or companion host snapshot.
+    nonisolated private static func owningAppleIDDescription() -> String {
+        let key = "tetherless.appleid.activeEmailCache"
+        if let email = UserDefaults.standard.string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !email.isEmpty {
+            return email
+        }
+        if let email = UserDefaults(suiteName: "group.dev.tetherless.app")?
+            .string(forKey: key)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !email.isEmpty {
+            return email
+        }
+        if let snap = UserDefaults(suiteName: "group.dev.tetherless.app")?
+            .dictionary(forKey: "companion.hostSnapshot"),
+           let email = (snap["hostEmail"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !email.isEmpty {
+            return email
+        }
+        return "this Apple ID"
     }
 }
