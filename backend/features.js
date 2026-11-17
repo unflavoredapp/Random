@@ -543,20 +543,32 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       const TCSS = CSS + "label{display:block;margin:12px 0 4px;font-size:13px;color:#9a9a9a}input[type=text],input[type=password],input[type=tel]{width:100%;height:44px;padding:0 12px;border:1px solid #333;border-radius:11px;background:#0b0b0b;color:#fff;font:16px system-ui;outline:0}input:focus{border-color:var(--acc)}.acts{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:#f33}.dot.ok{background:#2fd16b}.mm{color:#9a9a9a;font-size:12px}.sm.danger{border-color:#7a2318;color:#f66}code.k{background:#111;border:1px solid #292929;border-radius:8px;padding:2px 7px}";
       web.get("/admin/telegram", auth, async (req, res) => {
         const s = await T.status();
+        const fp = s.fairplay || {};
+        const order = Array.isArray(fp.backends) ? fp.backends.join(" → ") : (s.mode || "phone");
         const state = s.authed
-          ? `Own bot <b>@${esc(s.bot || s.who.username || "")}</b> is configured. Jobs wait for the <b>iPhone worker</b> (TetherLess › Settings › Phone Worker).`
-          : (s.error ? esc(s.error) : "Set <code class=\"k\">TELEGRAM_BOT_TOKEN</code> on the server.");
+          ? `Own bot <b>@${esc(s.bot || s.who.username || "")}</b> is configured. Jobs use FairPlay backends: <code class="k">${esc(order)}</code>.`
+          : (s.error ? esc(s.error) : "Set <code class=\"k\">TELEGRAM_BOT_TOKEN</code> on the server (optional for site queue).");
         const worker = s.workerConfigured
-          ? "Worker token configured (<code class=\"k\">DECRYPT_WORKER_TOKEN</code>)."
-          : "Set <code class=\"k\">DECRYPT_WORKER_TOKEN</code> and enter the same token in the iOS app.";
+          ? "Phone Worker token configured (<code class=\"k\">DECRYPT_WORKER_TOKEN</code>)."
+          : "Set <code class=\"k\">DECRYPT_WORKER_TOKEN</code> for the phone backend, or omit <code class=\"k\">phone</code> from <code class=\"k\">DECRYPT_BACKENDS</code>.";
+        const readyBits = ["phone", "fairplay-decrypt", "ipadecrypt", "ipa-decrypter", "unfaird"]
+          .map((k) => {
+            const row = fp[k];
+            if (!row) return "";
+            return `${row.ready ? "✓" : "·"} ${k}`;
+          })
+          .filter(Boolean)
+          .join(" &nbsp; ");
         res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'unsafe-inline'" });
         res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="dark"><title>Telegram \u00b7 Admin</title><style>${TCSS}</style></head><body><div class="w"><div class="lay">${menu("/admin/telegram")}<main class="main">
 <h1>Telegram decrypt bot</h1>
-<div class="box"><span class="dot${s.authed && s.workerConfigured ? " ok" : ""}"></span>${state}
+<div class="box"><span class="dot${s.authed || (fp.backends && fp.backends.length) ? " ok" : ""}"></span>${state}
 <p class="mm">${worker}</p>
-<p class="mm">Build ${esc(s.build || "")} \u00b7 mode ${esc(s.mode || "phone-worker")} \u00b7 waiting ${esc(String(s.waiting || 0))}</p>
-<p class="mm">FastDecryptBot / GramJS userbot login is removed. Create a bot with <b>@BotFather</b>, set env <code class=\"k\">TELEGRAM_BOT_TOKEN</code>, optional <code class=\"k\">TELEGRAM_BOT_USERNAME</code> and <code class=\"k\">TELEGRAM_ALLOWED_IDS</code> (comma chat ids).</p>
-<p class="mm">Keep TetherLess open on the signed-in iPhone with Phone Worker enabled so FairPlay can run.</p></div>
+<p class="mm">Backends: ${readyBits || "—"}</p>
+<p class="mm">Build ${esc(s.build || "")} \u00b7 mode ${esc(s.mode || "phone")} \u00b7 waiting ${esc(String(s.waiting || 0))}</p>
+<p class="mm">Set <code class=\"k\">DECRYPT_BACKENDS</code> to any of <code class=\"k\">fairplay-decrypt,ipadecrypt,ipa-decrypter,unfaird,phone</code>. Docs: <code class=\"k\">server/fairplay-backends.md</code>.</p>
+<p class="mm">Create a bot with <b>@BotFather</b>, set <code class=\"k\">TELEGRAM_BOT_TOKEN</code>, optional <code class=\"k\">TELEGRAM_BOT_USERNAME</code> / <code class=\"k\">TELEGRAM_ALLOWED_IDS</code>.</p>
+<p class="mm">For the phone backend: Account › Settings › FairPlay Decrypt › Phone Worker.</p></div>
 </main></div></div></body></html>`);
       });
     }
