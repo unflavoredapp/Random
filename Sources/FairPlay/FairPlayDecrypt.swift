@@ -126,6 +126,8 @@ struct FairPlayDecryptReport: Sendable {
     var verify: FairPlayVerifyReport?
     /// True when a required framework stayed encrypted but the main binary is clear (`-PARTIAL.ipa`).
     var isPartial = false
+    /// Encrypted IPA / EmbeddedPayload path — every iPhone Mach-O must clear (no fake PARTIAL).
+    var fullIPACoverage = false
 
     var summary: String {
         var parts: [String] = []
@@ -150,10 +152,16 @@ private enum FairPlayBinaryRole {
     case other
 
     /// Fail the whole job if this role can't decrypt.
-    var isRequired: Bool {
+    /// - live triage: main + frameworks required; Watch / App Clip / widgets soft
+    /// - encrypted IPA full decrypt: everything except Watch (not decryptable on iPhone)
+    func isRequired(fullIPACoverage: Bool) -> Bool {
         switch self {
         case .main, .framework: return true
-        case .appex, .nestedApp, .other: return false
+        case .appex, .other: return fullIPACoverage
+        case .nestedApp:
+            // Watch stays optional — iPhone fairplayd cannot clear watchOS text.
+            // App Clip / Messages nested apps are required for full IPA coverage.
+            return fullIPACoverage
         }
     }
 }
@@ -454,8 +462,21 @@ enum FairPlayDecrypt {
             if staged > 0 { detail?("Staged \(staged) Manifest SINF license(s)…") }
         }
 
-        detail?("Locating Mach-Os under \(isLiveAppStoreInstall(sourceApp) ? "install path" : "app bundle")…")
-        let binaries = try collectMachOs(under: sourceApp, progress: detail)
+        // Encrypted IPA / EmbeddedPayload → real full decrypt (every iPhone Mach-O).
+        // Live App Store install → hang-safe structured scan (may still triage).
+        let liveSource = isLiveAppStoreInstall(sourceApp)
+        let fullIPACoverage = !liveSource || options.requireAllFrameworks
+        report.fullIPACoverage = fullIPACoverage
+        detail?(
+            fullIPACoverage
+                ? "Full Mach-O coverage (encrypted IPA / fail-closed)…"
+                : "Locating Mach-Os under install path…"
+        )
+        let binaries = try collectMachOs(
+            under: sourceApp,
+            fullIPACoverage: fullIPACoverage,
+            progress: detail
+        )
         guard !binaries.isEmpty else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(sourceApp.lastPathComponent).")
         }
@@ -465,7 +486,6 @@ enum FairPlayDecrypt {
         // stage SINFs for the full Mach-O list so FairPlay can proceed (CARROT / Flutter).
         var encryptedBins: [URL] = []
         var encCount = 0
-        let liveSource = isLiveAppStoreInstall(sourceApp)
         if !liveSource {
             for url in binaries {
                 if let n = withTimeout(seconds: 0.6, work: {
@@ -511,27 +531,24 @@ enum FairPlayDecrypt {
             budget: TimeInterval
         ) throws {
             let rel = relativePath(file, under: sourceApp)
+            let required = r.isRequired(fullIPACoverage: fullIPACoverage)
             switch outcome {
             case .timedOut:
                 progress?("[FAILED]    \(rel) (timeout \(Int(budget))s)")
-                if r.isRequired {
+                if required {
                     report.failed.append(rel)
                     if r == .main {
                         throw FairPlayDecryptError.mainExecutableFailed(
                             "Timed out decrypting the main executable (\(rel)). \(AppStoreDecryptGuide.failureHint)"
                         )
                     }
-                } else if options.requireAllFrameworks {
-                    report.failed.append(rel)
                 } else {
                     report.softFailed.append(rel)
                 }
             case .threw(let error):
                 progress?("[FAILED]    \(rel)")
-                if r.isRequired {
+                if required {
                     if r == .main { throw error }
-                    report.failed.append(rel)
-                } else if options.requireAllFrameworks {
                     report.failed.append(rel)
                 } else {
                     report.softFailed.append(rel)
@@ -540,7 +557,8 @@ enum FairPlayDecrypt {
                 report.decrypted.append(contentsOf: mini.decrypted)
                 report.plain.append(contentsOf: mini.plain)
                 report.failed.append(contentsOf: mini.failed)
-                if options.requireAllFrameworks {
+                // Full IPA coverage: optional soft-fails become hard failures (no fake PARTIAL).
+                if fullIPACoverage {
                     report.failed.append(contentsOf: mini.softFailed)
                 } else {
                     report.softFailed.append(contentsOf: mini.softFailed)
@@ -595,9 +613,16 @@ enum FairPlayDecrypt {
             progress: detail
         )
 
-        // FairPlayed-style -PARTIAL.ipa: if the main executable is clear, keep going even when
-        // a required framework stayed encrypted. hardenDecryptedApp + zip tag the triage IPA.
+        // Encrypted IPA / full coverage: never ship a fake PARTIAL — every scanned iPhone
+        // Mach-O must clear. Live-install triage may still mark PARTIAL when main is clear.
         if !report.failed.isEmpty {
+            let names = report.failed.prefix(4).joined(separator: ", ")
+            let suffix = report.failed.count > 4 ? "…" : ""
+            if fullIPACoverage {
+                throw FairPlayDecryptError.stillEncrypted(
+                    "Full IPA decrypt left \(report.failed.count) Mach-O(s) encrypted: \(names)\(suffix). \(AppStoreDecryptGuide.failureHint)"
+                )
+            }
             let mainClear = report.decrypted.contains { isMainExecutable($0, app: sourceApp) }
                 || report.plain.contains { isMainExecutable($0, app: sourceApp) }
             if mainClear {
@@ -605,7 +630,7 @@ enum FairPlayDecrypt {
                 detail?("Main clear — packaging PARTIAL (\(report.failed.count) required leftover)…")
             } else {
                 throw FairPlayDecryptError.stillEncrypted(
-                    "FairPlay left \(report.failed.count) required binary(ies) encrypted: \(report.failed.prefix(4).joined(separator: ", "))\(report.failed.count > 4 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
+                    "FairPlay left \(report.failed.count) required binary(ies) encrypted: \(names)\(suffix). \(AppStoreDecryptGuide.failureHint)"
                 )
             }
         }
@@ -818,7 +843,7 @@ enum FairPlayDecrypt {
             let r = role(of: url, under: app, app: app)
             if report.isPartial {
                 if r == .main { out.append(rel) }
-            } else if r.isRequired {
+            } else if r.isRequired(fullIPACoverage: report.fullIPACoverage) {
                 out.append(rel)
             }
         }
@@ -962,7 +987,8 @@ enum FairPlayDecrypt {
                 if sourceApp != destApp {
                     _ = copyFileChunked(from: decryptInput, to: outFile, timeout: 60)
                 }
-                if role.isRequired {
+                // Outer decryptMachOs promotes appex soft→hard when fullIPACoverage is on.
+                if role == .main || role == .framework {
                     report.failed.append(rel)
                     if role == .main {
                         throw FairPlayDecryptError.mainExecutableFailed(
@@ -984,7 +1010,7 @@ enum FairPlayDecrypt {
         } else {
             try? fm.removeItem(at: tmp)
             let detail = logBuf.lines.suffix(2).joined(separator: " | ")
-            if role.isRequired {
+            if role == .main || role == .framework {
                 report.failed.append(rel)
                 if role == .main {
                     let klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
@@ -1053,12 +1079,12 @@ enum FairPlayDecrypt {
             }
             guard stillHot else { return false }
             let rel = relativePath(url, under: app)
-            // Soft-failed Watch / widget / App Clip, and known PARTIAL leftovers, may stay encrypted.
+            // Soft-failed Watch-only leftovers may stay encrypted; PARTIAL triage is live-only.
             if softSet.contains(rel) || failedSet.contains(rel) { return false }
             let r = role(of: url, under: app, app: app)
             // PARTIAL packages only require the main executable to be clear.
             if report.isPartial { return r == .main }
-            return r.isRequired
+            return r.isRequired(fullIPACoverage: report.fullIPACoverage)
         }
         if !remaining.isEmpty {
             let names = remaining.prefix(4).map(\.lastPathComponent).joined(separator: ", ")
@@ -1153,12 +1179,15 @@ enum FairPlayDecrypt {
     /// same Flutter / live-install trust rules (do not reimplement `fp_is_macho` filtering).
     static func collectMachOs(
         under root: URL,
+        fullIPACoverage: Bool? = nil,
         progress: ((String) -> Void)? = nil
     ) throws -> [URL] {
         let fm = FileManager.default
         var out: [URL] = []
         var seen = Set<String>()
         let liveInstall = isLiveAppStoreInstall(root)
+        // Encrypted IPA / EmbeddedPayload default to full coverage unless caller overrides.
+        let fullCoverage = fullIPACoverage ?? !liveInstall
 
         /// Fast Mach-O probe: read magic locally first (no fpcore hang). Fall back to a
         /// short `fp_is_macho` only when the header can't be read (live EPERM).
@@ -1367,15 +1396,69 @@ enum FairPlayDecrypt {
             }
         }
 
-        // FairPlayed `embed_ipa.sh` deletes Watch/ — watchOS Mach-Os are not decryptable
-        // with the iPhone's fairplayd, and listing `/Watch` on live App Store installs often
-        // hangs forever on stock iOS (UI stuck on “Watch / App Clips…”). Skip Watch always.
+        // Watch: iPhone fairplayd cannot clear watchOS text — skip always (FairPlayed embed_ipa.sh).
         progress?("Skipping Watch (not decryptable on iPhone)…")
 
-        // App Clips are the same hang class: directory listing can return, then nested
-        // Frameworks / fp_is_macho on the clip binary blocks forever on stock installs
-        // (UI stuck on “App Clips…”). Soft role only — skip like Watch.
-        progress?("Skipping App Clips (optional · avoids install-path hang)…")
+        /// Walk the entire encrypted IPA `.app` for any Mach-O the structured pass missed.
+        func fullIPAMachOSweep() {
+            let skipExt: Set<String> = [
+                "png", "jpg", "jpeg", "gif", "webp", "heic", "pdf", "json", "plist", "strings",
+                "car", "nib", "storyboardc", "html", "css", "js", "txt", "md", "xml", "svg",
+                "mp3", "mp4", "m4a", "wav", "caf", "ttf", "otf", "ttc", "zip", "ipa", "mom",
+                "omo", "sqlite", "db", "realm", "metal", "air", "bcsymbolmap", "dSYM", "sinf",
+                "supf", "supp", "sisv",
+            ]
+            guard let en = fm.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else { return }
+            var budget = 500
+            while let url = en.nextObject() as? URL {
+                guard budget > 0 else { break }
+                let rel = relativePath(url, under: root)
+                if rel == "Watch" || rel.hasPrefix("Watch/") {
+                    en.skipDescendants()
+                    continue
+                }
+                let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                if isDir { continue }
+                let ext = url.pathExtension.lowercased()
+                if skipExt.contains(ext) { continue }
+                budget -= 1
+                switch fastMagicProbe(url) {
+                case .yes:
+                    consider(url, trustIfUnreadable: true)
+                case .unknown where ext.isEmpty || ext == "dylib":
+                    consider(url, trustIfUnreadable: true)
+                default:
+                    break
+                }
+            }
+        }
+
+        if fullCoverage {
+            // Encrypted IPA / EmbeddedPayload: include App Clips + nested .app (not Watch),
+            // then sweep every regular file for Mach-O magic so nothing is silently dropped.
+            progress?("App Clips / nested apps (full IPA)…")
+            for folder in ["AppClips", "App Clip"] {
+                let dir = root.appendingPathComponent(folder, isDirectory: true)
+                let items = withTimeout(seconds: 6, work: {
+                    try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])
+                }) ?? nil
+                guard let items else { continue }
+                for item in items where item.pathExtension.lowercased() == "app" {
+                    consider(bundleExecutableURL(in: item), trustIfUnreadable: true)
+                    _ = withTimeout(seconds: 8, work: { collectFrameworks(in: item); return true })
+                    _ = withTimeout(seconds: 3, work: { collectFromSCInfo(in: item); return true })
+                }
+            }
+            progress?("Full IPA Mach-O sweep…")
+            _ = withTimeout(seconds: 20, work: { fullIPAMachOSweep(); return true })
+        } else {
+            // Live install: App Clip listing/fp_is_macho can hang forever on stock iOS.
+            progress?("Skipping App Clips (live install · avoids hang)…")
+        }
 
         if out.isEmpty {
             // Absolute last resort: force-include CFBundleExecutable / basename even if

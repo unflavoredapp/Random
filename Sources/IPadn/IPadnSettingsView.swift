@@ -314,7 +314,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Decrypt engine")
         } footer: {
-            Text("Verbose logs retries and SINF staging in Tetherless Decrypt. Require all frameworks turns optional framework soft-fails into hard failures (no PARTIAL IPA).")
+            Text("Encrypted IPA Get already fail-closes on every iPhone Mach-O (no fake PARTIAL). Require all frameworks also applies that to live-install triage. Verbose logs retries and SINF staging.")
         }
 
         Section {
