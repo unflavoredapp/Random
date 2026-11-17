@@ -22,6 +22,7 @@ struct FairPlayKeysCaptureSheet: View {
                     header
                     sessionRow
                     phaseCard
+                    sessionLicensesCard
                     if !keys.verifyLines.isEmpty {
                         verifyList
                     }
@@ -51,10 +52,26 @@ struct FairPlayKeysCaptureSheet: View {
                         dismiss()
                     }
                 }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        keys.refreshSessionLicenses()
+                    } label: {
+                        if keys.licensesScanning {
+                            ProgressView().tint(.white)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                    }
+                    .disabled(keys.licensesScanning || email.isEmpty)
+                    .accessibilityLabel("Refresh licenses")
+                }
             }
         }
         .preferredColorScheme(.dark)
-        .onAppear { keys.refreshFromAck() }
+        .onAppear {
+            keys.refreshFromAck()
+            keys.refreshSessionLicenses()
+        }
         .onChange(of: keys.phase) { phase in
             if case .grabbed = phase {
                 // Auto-dismiss shortly after success so decrypt can continue.
@@ -104,6 +121,100 @@ struct FairPlayKeysCaptureSheet: View {
         }
         .padding(14)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var sessionLicensesCard: some View {
+        let licenses = displayedLicenses
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("App Store licenses in session", systemImage: "doc.on.clipboard")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                Spacer(minLength: 4)
+                Text(licenseSummary(licenses))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.45))
+            }
+
+            if keys.licensesScanning && licenses.isEmpty {
+                HStack(spacing: 8) {
+                    ProgressView().tint(TetherlessPalette.accent)
+                    Text("Scanning installd for App Store apps…")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+            } else if licenses.isEmpty {
+                Text("No App Store installs visible yet. Pair Native, install an app under \(email.isEmpty ? "this Apple ID" : email), then refresh.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(licenses.prefix(16)) { entry in
+                        licenseRow(entry)
+                        if entry.id != licenses.prefix(16).last?.id {
+                            Divider().background(Color.white.opacity(0.08))
+                        }
+                    }
+                }
+                if licenses.count > 16 {
+                    Text("+\(licenses.count - 16) more")
+                        .font(.caption2)
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var displayedLicenses: [FairPlayKeysFetcher.LicenseEntry] {
+        if !keys.sessionLicenses.isEmpty { return keys.sessionLicenses }
+        return keys.lastReadiness.licenses
+    }
+
+    private func licenseSummary(_ licenses: [FairPlayKeysFetcher.LicenseEntry]) -> String {
+        let sc = licenses.filter(\.hasSCInfo).count
+        if licenses.isEmpty { return "0" }
+        return "\(licenses.count) · \(sc) SC_Info"
+    }
+
+    private func licenseRow(_ entry: FairPlayKeysFetcher.LicenseEntry) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: entry.hasSCInfo ? "checkmark.seal.fill" : "app.badge")
+                .font(.body)
+                .foregroundStyle(entry.hasSCInfo ? TetherlessPalette.success : .white.opacity(0.35))
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.name)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
+                Text(entry.bundleID)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+                HStack(spacing: 8) {
+                    if !entry.version.isEmpty {
+                        Text("v\(entry.version)")
+                            .font(.caption2)
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                    Text(entry.hasSCInfo ? "SC_Info" : "no SC_Info visible")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(entry.hasSCInfo ? TetherlessPalette.success.opacity(0.9) : .white.opacity(0.35))
+                    if !entry.pathTail.isEmpty {
+                        Text(entry.pathTail)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.white.opacity(0.28))
+                            .lineLimit(1)
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 8)
     }
 
     @ViewBuilder
@@ -273,6 +384,14 @@ struct FairPlayKeysCaptureSheet: View {
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.62))
                 .fixedSize(horizontal: false, vertical: true)
+
+            if !readiness.licenses.isEmpty {
+                Text(readiness.licenses.prefix(4).map(\.name).joined(separator: " · ")
+                     + (readiness.licenses.count > 4 ? " · +\(readiness.licenses.count - 4)" : ""))
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(2)
+            }
 
             Button {
                 keys.confirmGrabbed()
