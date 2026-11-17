@@ -97,11 +97,53 @@ function validateCredentialBin() {
   return { ok: true, path: p, bytes: 16 };
 }
 
+function homeDir() {
+  return String(process.env.HOME || process.env.USERPROFILE || "").trim();
+}
+
+/** Local copies from MacDuty / UnfairPlay setup (never commit these files). */
+function localEnrollmentCandidates() {
+  const home = homeDir();
+  const out = [];
+  if (home) {
+    out.push(path.join(home, "unfairplay", "models", "fairplay-enrollment.bin"));
+    // MacDuty sudo-setup often lands models under the managed account home.
+    out.push(path.join(home, "Library", "Application Support", "unfairplay", "models"));
+  }
+  out.push(DEFAULT_ENROLLMENT_PATH);
+  return out;
+}
+
+function firstExistingEnrollmentFile() {
+  for (const p of localEnrollmentCandidates()) {
+    try {
+      if (!p || !fs.existsSync(p)) continue;
+      const st = fs.statSync(p);
+      if (st.isFile() && st.size > 32) return p;
+      if (st.isDirectory()) {
+        const hit = fs.readdirSync(p).find((name) => {
+          try {
+            const f = path.join(p, name);
+            return fs.statSync(f).isFile() && fs.statSync(f).size > 32 && name.endsWith(".bin");
+          } catch {
+            return false;
+          }
+        });
+        if (hit) return path.join(p, hit);
+      }
+    } catch {
+      /* continue */
+    }
+  }
+  return "";
+}
+
 function enrollmentModelPath() {
   const fromEnv = String(process.env.FAIRPLAY_ENROLLMENT_MODEL || "").trim();
   if (fromEnv) return fromEnv;
-  if (fs.existsSync(DEFAULT_ENROLLMENT_PATH)) return DEFAULT_ENROLLMENT_PATH;
-  return fromEnv || DEFAULT_ENROLLMENT_PATH;
+  const found = firstExistingEnrollmentFile();
+  if (found) return found;
+  return DEFAULT_ENROLLMENT_PATH;
 }
 
 function enrollmentModelReady() {
@@ -114,7 +156,23 @@ function enrollmentModelReady() {
 }
 
 function unfairplayModelDir() {
-  return String(process.env.UNFAIRPLAY_MODEL_DIR || "").trim();
+  const fromEnv = String(process.env.UNFAIRPLAY_MODEL_DIR || "").trim();
+  if (fromEnv) return fromEnv;
+  const home = homeDir();
+  if (!home) return "";
+  const macDefault = path.join(home, "Library", "Application Support", "unfairplay", "models");
+  const localCopy = path.join(home, "unfairplay", "models");
+  try {
+    if (fs.existsSync(macDefault) && fs.statSync(macDefault).isDirectory()) return macDefault;
+  } catch {
+    /* ignore */
+  }
+  try {
+    if (fs.existsSync(localCopy) && fs.statSync(localCopy).isDirectory()) return localCopy;
+  } catch {
+    /* ignore */
+  }
+  return "";
 }
 
 function unfairplayModelDirReady() {

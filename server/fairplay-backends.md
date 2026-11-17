@@ -18,15 +18,24 @@ On an Apple Silicon Mac (rented or local), signed into the **Mac App Store** wit
 sudo ./unfairplay setup --app /Applications/SomeOwnedApp.app
 # or: export-enrollment on this Mac, then setup --enrollment … --ipa App.ipa
 
-# 3) Run the TetherLess Node server on THIS Mac
+# 3) Point env at the enrollment model (MacDuty example paths)
 export FAIRPLAY_HOST=mac
 export DECRYPT_BACKENDS=unfairplay
-export UNFAIRPLAY_BIN=/usr/local/bin/unfairplay
+export UNFAIRPLAY_BIN="$HOME/bin/unfairplay"
+export FAIRPLAY_ENROLLMENT_MODEL="$HOME/unfairplay/models/fairplay-enrollment.bin"
+export UNFAIRPLAY_MODEL_DIR="$HOME/unfairplay/models"
 export FAIRPLAY_IPATOOL_BIN=ipatool
-# FAIRPLAY_REQUIRE_CREDENTIAL defaults off on Mac — unfairplay uses its saved model dir
+# FAIRPLAY_REQUIRE_CREDENTIAL defaults off on Mac
+
+# 4) Run the TetherLess Node site on THIS Mac (same process as production)
+# Then in the iOS app: Account → Settings → FairPlay Decrypt → Decrypt site URL
+# set to https://YOUR-MAC-HOST/  (HTTPS required for App Transport; or keep tetherless.dev
+# and copy FAIRPLAY_ENROLLMENT_MODEL to the Linux production host instead)
 ```
 
-Point the app / site API base URL at this Mac host. Decrypt jobs never leave it.
+**App setting:** FairPlay Decrypt → **Decrypt site URL** writes UserDefaults `as_site_base`. Leave empty for `tetherless.dev`.
+
+**Never commit** `fairplay-enrollment.bin` / `enrollment.snapshot` — private enrollment secrets.
 
 Optional: also set `FAIRPLAY_CREDENTIAL_BIN` + `fairplay-decrypt` if you want that backend as a fallback on the same Mac.
 
