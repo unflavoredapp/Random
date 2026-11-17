@@ -3,25 +3,30 @@
 /**
  * FairPlay decrypt backends for the site decrypt queue.
  *
- * Tools (install separately on the host / LAN):
- *   1. phone          — existing iPhone Phone Worker (FairPlay on-device)
- *   2. fairplay-decrypt — EthanArbuckle/fairplay-decrypt CLI (Linux/macOS)
- *   3. ipadecrypt     — londek/ipadecrypt CLI (download + decrypt)
- *   4. ipa-decrypter  — ac0d3r/ipa-decrypter HTTP server
- *   5. unfaird        — jailbroken-device daemon (LAN fallback)
+ * Preferred: run this Node server on a rented/enrolled Mac (Apple Silicon) and
+ * decrypt there with UnfairPlay — enroll once, every job stays on that Mac.
+ * Optional: Linux host with a copied enrollment model / credential.bin.
+ *
+ * Backends (no jailbreak / TrollStore / Phone Worker required):
+ *   1. unfairplay       — DrWhax/unfairplay (macOS arm64 or Linux; model or live Mac setup)
+ *   2. fairplay-decrypt — EthanArbuckle CLI + 16-byte credential.bin
+ *   3. ipadecrypt       — londek CLI
+ *   4. ipa-decrypter    — ac0d3r HTTP/Docker
+ *
+ * Opt-in only: phone, unfaird
  *
  * Env:
- *   DECRYPT_BACKENDS=fairplay-decrypt   (default — credential.bin required)
- *   FAIRPLAY_CREDENTIAL_BIN=/var/lib/tetherless/credential.bin   (required, exactly 16 bytes)
- *   FAIRPLAY_DECRYPT_BIN=/usr/local/bin/decrypt.py
- *   FAIRPLAY_DECRYPT_PYTHON=python3
+ *   FAIRPLAY_HOST=mac|linux          (default: detect process.platform)
+ *   DECRYPT_BACKENDS=…              (mac default: unfairplay; linux: fairplay-decrypt,unfairplay)
+ *   FAIRPLAY_CREDENTIAL_BIN=/var/lib/tetherless/credential.bin
+ *   FAIRPLAY_REQUIRE_CREDENTIAL=1   (linux / fairplay-decrypt; Mac unfairplay-only can skip)
+ *   FAIRPLAY_DECRYPT_BIN=…
  *   FAIRPLAY_IPATOOL_BIN=ipatool
- *   FAIRPLAY_REQUIRE_CREDENTIAL=1       (default on — refuse jobs without a valid credential.bin)
- *   IPADECRYPT_BIN=ipadecrypt
- *   IPA_DECRYPTER_URL=http://127.0.0.1:8787
- *   IPA_DECRYPTER_TOKEN=
- *   UNFAIRD_URL=http://192.168.1.20:6347
- *   UNFAIRD_TOKEN=
+ *   UNFAIRPLAY_BIN=unfairplay
+ *   UNFAIRPLAY_MODEL_DIR=…          (optional; else Mac uses UnfairPlay’s default saved models)
+ *   FAIRPLAY_ENROLLMENT_MODEL=…     (Linux copy of the model file)
+ *
+ * See server/fairplay-backends.md.
  *
  * This module shells out / HTTP-calls those tools — it does not embed their crypto.
  */
@@ -33,13 +38,28 @@ const https = require("https");
 const http = require("http");
 const { URL } = require("url");
 
-/** Default: credential.bin offline path only — no silent phone fallback. */
-const DEFAULT_BACKENDS = ["fairplay-decrypt"];
 const DEFAULT_CREDENTIAL_PATH = "/var/lib/tetherless/credential.bin";
+const DEFAULT_ENROLLMENT_PATH = "/var/lib/tetherless/fairplay-enrollment.bin";
+
+/** @returns {"mac"|"linux"} */
+function hostMode() {
+  const raw = String(process.env.FAIRPLAY_HOST || "").trim().toLowerCase();
+  if (raw === "mac" || raw === "macos" || raw === "darwin") return "mac";
+  if (raw === "linux") return "linux";
+  return process.platform === "darwin" ? "mac" : "linux";
+}
+
+function defaultBackends() {
+  // Mac host: UnfairPlay can use the live enrollment / default model dir — no Linux hop.
+  return hostMode() === "mac" ? ["unfairplay"] : ["fairplay-decrypt", "unfairplay"];
+}
 
 function requireCredential() {
-  const raw = String(process.env.FAIRPLAY_REQUIRE_CREDENTIAL ?? "1").trim().toLowerCase();
-  return raw !== "0" && raw !== "false" && raw !== "no" && raw !== "off";
+  const raw = String(process.env.FAIRPLAY_REQUIRE_CREDENTIAL ?? "").trim().toLowerCase();
+  if (raw === "0" || raw === "false" || raw === "no" || raw === "off") return false;
+  if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") return true;
+  // Default on for Linux; off for Mac unfairplay-only (enrollment lives on the box).
+  return hostMode() !== "mac";
 }
 
 function credentialPath() {
@@ -71,60 +91,139 @@ function validateCredentialBin() {
     return {
       ok: false,
       path: p,
-      error: `credential.bin must be exactly 16 bytes (got ${st.size}) — remint with fairplay-decrypt credential-retrieval`,
+      error: `credential.bin must be exactly 16 bytes (got ${st.size}) — mint via UnfairPlay on an enrolled Mac`,
     };
   }
   return { ok: true, path: p, bytes: 16 };
 }
 
+function enrollmentModelPath() {
+  const fromEnv = String(process.env.FAIRPLAY_ENROLLMENT_MODEL || "").trim();
+  if (fromEnv) return fromEnv;
+  if (fs.existsSync(DEFAULT_ENROLLMENT_PATH)) return DEFAULT_ENROLLMENT_PATH;
+  return fromEnv || DEFAULT_ENROLLMENT_PATH;
+}
+
+function enrollmentModelReady() {
+  const p = enrollmentModelPath();
+  try {
+    return !!(p && fs.existsSync(p) && fs.statSync(p).isFile() && fs.statSync(p).size > 32);
+  } catch {
+    return false;
+  }
+}
+
+function unfairplayModelDir() {
+  return String(process.env.UNFAIRPLAY_MODEL_DIR || "").trim();
+}
+
+function unfairplayModelDirReady() {
+  const d = unfairplayModelDir();
+  if (!d) return false;
+  try {
+    if (!fs.existsSync(d)) return false;
+    const st = fs.statSync(d);
+    if (st.isFile()) return st.size > 32;
+    if (!st.isDirectory()) return false;
+    return fs.readdirSync(d).some((name) => {
+      try {
+        return fs.statSync(path.join(d, name)).isFile() && fs.statSync(path.join(d, name)).size > 32;
+      } catch {
+        return false;
+      }
+    });
+  } catch {
+    return false;
+  }
+}
+
+/** True when UnfairPlay can decrypt: explicit model, model dir, or Mac host (default saved models). */
+function unfairplaySecretsReady() {
+  return enrollmentModelReady() || unfairplayModelDirReady() || hostMode() === "mac";
+}
+
 function configuredBackends() {
-  const raw = String(process.env.DECRYPT_BACKENDS || "fairplay-decrypt")
+  const fallback = defaultBackends().join(",");
+  const raw = String(process.env.DECRYPT_BACKENDS || fallback)
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
   const allowed = new Set([
-    "phone",
     "fairplay-decrypt",
+    "unfairplay",
     "ipadecrypt",
     "ipa-decrypter",
+    "phone",
     "unfaird",
   ]);
   const list = raw.filter((b) => allowed.has(b));
-  return list.length ? list : DEFAULT_BACKENDS.slice();
+  return list.length ? list : defaultBackends();
 }
 
 function backendStatus() {
   const backends = configuredBackends();
   const cred = validateCredentialBin();
+  const modelPath = enrollmentModelPath();
+  const modelOk = enrollmentModelReady();
+  const modelDir = unfairplayModelDir();
+  const host = hostMode();
+  const unfairReady = !!which(process.env.UNFAIRPLAY_BIN || "unfairplay") && unfairplaySecretsReady();
   return {
     backends,
+    host,
+    macHost: host === "mac",
+    linuxOnly: host === "linux" && !backends.includes("phone") && !backends.includes("unfaird"),
     requireCredential: requireCredential(),
     credential: cred.ok
       ? { ready: true, path: cred.path, bytes: cred.bytes }
       : { ready: false, path: cred.path, error: cred.error },
-    phone: { ready: true, note: "iPhone Phone Worker (DECRYPT_WORKER_TOKEN) — opt-in via DECRYPT_BACKENDS" },
+    enrollmentModel: modelOk
+      ? { ready: true, path: modelPath }
+      : {
+          ready: host === "mac" || unfairplayModelDirReady(),
+          path: modelOk ? modelPath : modelDir || modelPath,
+          error: modelOk
+            ? ""
+            : host === "mac"
+              ? "Mac host — UnfairPlay will use its default saved model dir after local setup"
+              : unfairplayModelDirReady()
+                ? ""
+                : `enrollment model missing at ${modelPath}`,
+        },
     "fairplay-decrypt": {
       ready: cred.ok,
       bin: process.env.FAIRPLAY_DECRYPT_BIN || "decrypt.py",
       credential: cred.path || "",
       note: cred.ok
-        ? "credential.bin OK (16 bytes)"
-        : cred.error || "Needs valid 16-byte FAIRPLAY_CREDENTIAL_BIN",
+        ? `credential.bin OK (16 bytes) · ${host}`
+        : cred.error || "Needs 16-byte FAIRPLAY_CREDENTIAL_BIN",
+    },
+    unfairplay: {
+      ready: unfairReady,
+      bin: process.env.UNFAIRPLAY_BIN || "unfairplay",
+      note:
+        host === "mac"
+          ? "Preferred on Mac — setup once on this host, decrypt every job here"
+          : "Linux binary — needs FAIRPLAY_ENROLLMENT_MODEL or UNFAIRPLAY_MODEL_DIR",
     },
     ipadecrypt: {
       ready: !!which(process.env.IPADECRYPT_BIN || "ipadecrypt"),
       bin: process.env.IPADECRYPT_BIN || "ipadecrypt",
-      note: "Install londek/ipadecrypt on PATH or set IPADECRYPT_BIN",
+      note: "londek/ipadecrypt on PATH",
     },
     "ipa-decrypter": {
       ready: !!process.env.IPA_DECRYPTER_URL,
       url: process.env.IPA_DECRYPTER_URL || "",
-      note: "Set IPA_DECRYPTER_URL to ac0d3r/ipa-decrypter base URL",
+      note: "ac0d3r/ipa-decrypter Docker/HTTP",
+    },
+    phone: {
+      ready: true,
+      note: "Opt-in only — not needed for Mac/Linux offline decrypt",
     },
     unfaird: {
       ready: !!process.env.UNFAIRD_URL,
       url: process.env.UNFAIRD_URL || "",
-      note: "Set UNFAIRD_URL to jailbroken unfaird (default port 6347)",
+      note: "Opt-in jailbreak daemon — skip",
     },
   };
 }
@@ -239,18 +338,41 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
   const backends = configuredBackends().filter((b) => b !== "phone" && !skip.includes(b));
   if (!backends.length) return null;
 
-  // Force a correct credential.bin whenever fairplay-decrypt is in the chain
-  // (or when FAIRPLAY_REQUIRE_CREDENTIAL is on — default).
-  const needsCred =
-    requireCredential() || backends.includes("fairplay-decrypt");
-  if (needsCred) {
-    const cred = validateCredentialBin();
-    if (!cred.ok) {
+  // fairplay-decrypt needs 16-byte credential.bin.
+  // unfairplay needs a model file/dir, or a Mac host with local UnfairPlay setup.
+  const host = hostMode();
+  const cred = validateCredentialBin();
+  const modelOk = enrollmentModelReady() || unfairplayModelDirReady();
+  const unfairOk = unfairplaySecretsReady();
+  const wantsDecrypt = backends.includes("fairplay-decrypt");
+  const wantsUnfairplay = backends.includes("unfairplay");
+  say(`FairPlay host mode: ${host}`);
+  if (wantsDecrypt && !cred.ok) {
+    if (!(wantsUnfairplay && unfairOk)) {
       throw new Error(
-        `FairPlay credential.bin required: ${cred.error} — mint once with fairplay-decrypt credential-retrieval and set FAIRPLAY_CREDENTIAL_BIN.`
+        `FairPlay credential.bin required for fairplay-decrypt: ${cred.error}. ` +
+          `Prefer running the site on a Mac with DECRYPT_BACKENDS=unfairplay, or set FAIRPLAY_CREDENTIAL_BIN. ` +
+          `See server/fairplay-backends.md.`
       );
     }
+    say(`credential.bin missing for fairplay-decrypt — will try unfairplay…`);
+  } else if (cred.ok) {
     say(`Using credential.bin (${cred.bytes} bytes)…`);
+  }
+  if (host === "mac" && wantsUnfairplay) {
+    say(`Mac host — UnfairPlay decrypt on this machine (no Linux mint hop)…`);
+  } else if (modelOk) {
+    say(`UnfairPlay enrollment model ready…`);
+  } else if (wantsUnfairplay && !wantsDecrypt && !unfairOk) {
+    throw new Error(
+      `UnfairPlay needs a model (FAIRPLAY_ENROLLMENT_MODEL / UNFAIRPLAY_MODEL_DIR) or FAIRPLAY_HOST=mac with local setup. ` +
+        `See server/fairplay-backends.md.`
+    );
+  } else if (requireCredential() && !cred.ok && !unfairOk) {
+    throw new Error(
+      `FairPlay secret required: set FAIRPLAY_CREDENTIAL_BIN and/or enrollment model, or run on a Mac (FAIRPLAY_HOST=mac). ` +
+        `See server/fairplay-backends.md.`
+    );
   }
 
   const errors = [];
@@ -260,6 +382,8 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
       let result = null;
       if (backend === "fairplay-decrypt") {
         result = await runFairplayDecrypt({ url, dir, say, vreq });
+      } else if (backend === "unfairplay") {
+        result = await runUnfairplay({ url, dir, say, vreq });
       } else if (backend === "ipadecrypt") {
         result = await runIpadecrypt({ url, dir, say, vreq });
       } else if (backend === "ipa-decrypter") {
@@ -330,6 +454,58 @@ async function runFairplayDecrypt({ url, dir, say, vreq }) {
   }
   if (!fs.existsSync(out) || fs.statSync(out).size < 100) {
     throw new Error("fairplay-decrypt produced no IPA");
+  }
+  return { file: out, name: "App" };
+}
+
+async function runUnfairplay({ url, dir, say, vreq }) {
+  const bin = which(process.env.UNFAIRPLAY_BIN || "unfairplay");
+  if (!bin) throw new Error("unfairplay not found — set UNFAIRPLAY_BIN");
+
+  // --model accepts a file or directory. On Mac, omit it to use UnfairPlay’s default saved models.
+  let modelArg = "";
+  if (enrollmentModelReady()) modelArg = enrollmentModelPath();
+  else if (unfairplayModelDirReady()) modelArg = unfairplayModelDir();
+  else if (hostMode() !== "mac") {
+    throw new Error(
+      `unfairplay needs FAIRPLAY_ENROLLMENT_MODEL or UNFAIRPLAY_MODEL_DIR (or FAIRPLAY_HOST=mac)`
+    );
+  }
+
+  const enc = path.join(dir, "encrypted-source.ipa");
+  const out = path.join(dir, "unfairplay-out.ipa");
+  try {
+    fs.rmSync(out, { force: true });
+  } catch {
+    /* ignore */
+  }
+
+  if (!fs.existsSync(enc) || fs.statSync(enc).size < 100) {
+    const ipatool = which(process.env.FAIRPLAY_IPATOOL_BIN || "ipatool");
+    if (!ipatool) {
+      throw new Error(
+        "unfairplay needs encrypted IPA at encrypted-source.ipa or FAIRPLAY_IPATOOL_BIN/ipatool on PATH"
+      );
+    }
+    say("ipatool downloading encrypted IPA…");
+    const adam = adamFromStoreUrl(url);
+    const args = ["download", "--purchase", "-o", enc];
+    if (adam) args.push("--adam-id", adam);
+    else args.push(url);
+    if (vreq) args.push("--external-version-id", String(vreq));
+    await runCmd(ipatool, args, { cwd: dir });
+  }
+
+  const args = ["decrypt", "--input", enc, "--output", out, "--force"];
+  if (modelArg) {
+    say(`unfairplay decrypt (--model ${modelArg})…`);
+    args.push("--model", modelArg);
+  } else {
+    say("unfairplay decrypt (Mac default model dir)…");
+  }
+  await runCmd(bin, args, { cwd: dir });
+  if (!fs.existsSync(out) || fs.statSync(out).size < 100) {
+    throw new Error("unfairplay produced no IPA");
   }
   return { file: out, name: "App" };
 }
@@ -506,6 +682,11 @@ module.exports = {
   adamFromStoreUrl,
   validateCredentialBin,
   credentialPath,
+  enrollmentModelPath,
+  enrollmentModelReady,
+  unfairplaySecretsReady,
+  hostMode,
   requireCredential,
   DEFAULT_CREDENTIAL_PATH,
+  DEFAULT_ENROLLMENT_PATH,
 };

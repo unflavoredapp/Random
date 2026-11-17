@@ -1,97 +1,94 @@
 # FairPlay decrypt backends
 
-TetherLess decrypt jobs (`POST /api/decrypt`) run through backends listed in
-`DECRYPT_BACKENDS`. **Default is `fairplay-decrypt` only** — a valid 16-byte
-`credential.bin` is required so offline decrypt stays correct.
+**Best path if you rent a Mac:** run the whole TetherLess site decrypt queue **on that Mac**. Enroll once with UnfairPlay, then every job decrypts there — no mint → Linux hop.
 
-```bash
-# Default (forced credential.bin path)
-DECRYPT_BACKENDS=fairplay-decrypt
-FAIRPLAY_REQUIRE_CREDENTIAL=1
-FAIRPLAY_CREDENTIAL_BIN=/var/lib/tetherless/credential.bin
-FAIRPLAY_DECRYPT_BIN=/opt/fairplay-decrypt/decrypt.py
-FAIRPLAY_DECRYPT_PYTHON=python3
-FAIRPLAY_IPATOOL_BIN=ipatool
-```
+No jailbreak / TrollStore / Phone Worker required.
 
-Optional extras (explicit opt-in):
-
-```bash
-DECRYPT_BACKENDS=fairplay-decrypt,ipadecrypt,ipa-decrypter,unfaird,phone
-```
-
-Status: `GET /api/decrypt/backends` and Admin → Telegram decrypt bot.
-
-Jobs **refuse to start** when `FAIRPLAY_REQUIRE_CREDENTIAL=1` (default) and
-`credential.bin` is missing or not exactly **16 bytes**.
+Status: `GET /api/decrypt/backends` (includes `host`: `mac` | `linux`)
 
 ---
 
-## 1. `fairplay-decrypt` (default) — [EthanArbuckle/fairplay-decrypt](https://github.com/EthanArbuckle/fairplay-decrypt)
+## Preferred — Mac server does everything
 
-1. Mint once from a jailbroken device (`credential-retrieval` → `credential.bin`).
-2. Put the file on the server and point `FAIRPLAY_CREDENTIAL_BIN` at it.
-3. Install the Python decryptor; set `FAIRPLAY_DECRYPT_BIN`.
-4. Provide `ipatool` (or drop `encrypted-source.ipa` into the job dir).
+On an Apple Silicon Mac (rented or local), signed into the **Mac App Store** with the same Apple ID / enrollment as your IPAs:
 
 ```bash
-# Validate size
-wc -c /var/lib/tetherless/credential.bin   # must print: 16 …
+# 1) Install UnfairPlay + ipatool, put them on PATH
+# 2) One-time enrollment (either form)
+sudo ./unfairplay setup --app /Applications/SomeOwnedApp.app
+# or: export-enrollment on this Mac, then setup --enrollment … --ipa App.ipa
+
+# 3) Run the TetherLess Node server on THIS Mac
+export FAIRPLAY_HOST=mac
+export DECRYPT_BACKENDS=unfairplay
+export UNFAIRPLAY_BIN=/usr/local/bin/unfairplay
+export FAIRPLAY_IPATOOL_BIN=ipatool
+# FAIRPLAY_REQUIRE_CREDENTIAL defaults off on Mac — unfairplay uses its saved model dir
 ```
+
+Point the app / site API base URL at this Mac host. Decrypt jobs never leave it.
+
+Optional: also set `FAIRPLAY_CREDENTIAL_BIN` + `fairplay-decrypt` if you want that backend as a fallback on the same Mac.
 
 ---
 
-## 2. `ipadecrypt` — [londek/ipadecrypt](https://github.com/londek/ipadecrypt)
+## Alternate — Linux decrypt (copy secrets once)
+
+If the Node server stays on Debian/Linux, mint on a Mac once and copy:
 
 ```bash
-IPADECRYPT_BIN=/usr/local/bin/ipadecrypt
+# On Mac
+sudo ./unfairplay export-enrollment --output enrollment.snapshot
+# then on Mac or Linux:
+./unfairplay setup --enrollment enrollment.snapshot --ipa SomeOwnedApp.ipa
+# copy the resulting model file to the Linux host
+
+# On Linux
+export FAIRPLAY_HOST=linux
+export DECRYPT_BACKENDS=fairplay-decrypt,unfairplay
+export FAIRPLAY_ENROLLMENT_MODEL=/var/lib/tetherless/fairplay-enrollment.bin
+export FAIRPLAY_CREDENTIAL_BIN=/var/lib/tetherless/credential.bin   # if using fairplay-decrypt
+export FAIRPLAY_REQUIRE_CREDENTIAL=1
+export UNFAIRPLAY_BIN=/usr/local/bin/unfairplay
+export FAIRPLAY_DECRYPT_BIN=/opt/fairplay-decrypt/decrypt.py
+export FAIRPLAY_IPATOOL_BIN=ipatool
+chmod 600 "$FAIRPLAY_ENROLLMENT_MODEL" "$FAIRPLAY_CREDENTIAL_BIN"
 ```
 
-Still subject to `FAIRPLAY_REQUIRE_CREDENTIAL` when that flag is on (keeps the
-account credential story consistent). Prefer minting with fairplay-decrypt and
-keeping one `credential.bin` as source of truth.
+| Step | Mac-host mode | Linux-host mode |
+|------|----------------|-----------------|
+| Enroll / setup | Same Mac | Mac once → copy model |
+| Decrypt jobs | Same Mac | Linux |
+| Jailbreak? | No | No |
 
 ---
 
-## 3. `ipa-decrypter` — [ac0d3r/ipa-decrypter](https://github.com/ac0d3r/ipa-decrypter)
+## Backends
 
-```bash
-IPA_DECRYPTER_URL=http://127.0.0.1:8787
-IPA_DECRYPTER_TOKEN=
-```
+### `unfairplay` (Mac default) — [DrWhax/unfairplay](https://github.com/DrWhax/unfairplay)
 
-Upload the same `credential.bin` in its admin UI for each Apple ID.
+`decrypt --input … --output …` with optional `--model`. On Mac, omitting `--model` uses UnfairPlay’s default saved model directory after local `setup`.
 
----
+### `fairplay-decrypt` — [EthanArbuckle/fairplay-decrypt](https://github.com/EthanArbuckle/fairplay-decrypt)
 
-## 4. `unfaird` — jailbroken LAN daemon
+Needs a 16-byte `credential.bin` + encrypted IPA (`ipatool`).
 
-```bash
-UNFAIRD_URL=http://192.168.1.20:6347
-```
+### `ipadecrypt` / `ipa-decrypter`
 
-Opt-in fallback only — not the default.
+Optional Linux/Mac CLIs or HTTP wrappers.
 
----
+### Opt-in only
 
-## 5. `phone` — iPhone Phone Worker
-
-On-device FairPlay via TetherLess. **Not default.** Add `phone` to
-`DECRYPT_BACKENDS` only if you want the iPhone to claim leftover jobs.
-
-```bash
-DECRYPT_WORKER_TOKEN=shared-secret
-```
-
-App: **Account → Settings → FairPlay Decrypt → Phone Worker**.
+- `phone` — TetherLess Phone Worker  
+- `unfaird` — jailbroken LAN daemon  
 
 ---
 
-## App ↔ server flow
+## App ↔ server
 
-1. App / Telegram / site → `POST /api/decrypt` `{ url }`
-2. Server verifies `credential.bin` (16 bytes) when required
-3. Tries backends in order → clear IPA → `/api/ipa/file/:up`
+1. App / site → `POST /api/decrypt` `{ url }`
+2. Host runs UnfairPlay / fairplay-decrypt
+3. Clear IPA → `/api/ipa/file/:up`
 4. App downloads → Sign → Install
 
-Device-channel Gets (companion FairPlay on this iPhone) are unchanged.
+On-device companion FairPlay inside the iOS app is separate and unchanged.

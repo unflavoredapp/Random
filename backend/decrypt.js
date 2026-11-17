@@ -87,8 +87,9 @@ function create({ db /*, secret */ }) {
 
   /**
    * Called from site.js runDecrypt.
-   * Tries configured FairPlay backends (fairplay-decrypt / ipadecrypt /
-   * ipa-decrypter / unfaird) then falls back to the iPhone Phone Worker.
+   * Default: Mac host → unfairplay on this machine; Linux → fairplay-decrypt
+   * + unfairplay with copied secrets. Phone / unfaird only if listed in
+   * DECRYPT_BACKENDS (not needed without jailbreak / TrollStore).
    */
   async function request(url, dir, say, tryCache, vreq, job) {
     if (!validUrl(url)) throw new Error("Paste an App Store link.");
@@ -516,19 +517,22 @@ function create({ db /*, secret */ }) {
     const wantsPhone = fp.backends.includes("phone");
     const cred = fp.credential || {};
     let error = "";
-    if (fp.requireCredential && !cred.ready) {
+    const model = fp.enrollmentModel || {};
+    const unfair = fp.unfairplay || {};
+    if (fp.requireCredential && !cred.ready && !model.ready && !unfair.ready) {
       error =
         cred.error ||
-        "Set FAIRPLAY_CREDENTIAL_BIN to a valid 16-byte credential.bin (fairplay-decrypt).";
+        "Set FAIRPLAY_CREDENTIAL_BIN / FAIRPLAY_ENROLLMENT_MODEL, or run on a Mac (FAIRPLAY_HOST=mac) with UnfairPlay setup — see server/fairplay-backends.md.";
     } else if (wantsPhone && !WORKER_TOKEN) {
       error = "Set DECRYPT_WORKER_TOKEN and enable Phone Worker in the iOS app (or drop phone from DECRYPT_BACKENDS).";
     } else if (!BOT_TOKEN) {
       error =
-        "TELEGRAM_BOT_TOKEN optional. Decrypt defaults to credential.bin (fairplay-decrypt) — see server/fairplay-backends.md.";
+        "TELEGRAM_BOT_TOKEN optional. Prefer FAIRPLAY_HOST=mac + DECRYPT_BACKENDS=unfairplay on a rented Mac — see server/fairplay-backends.md.";
     }
     return {
       lib: true,
-      mode: fp.backends.join("+") || "fairplay-decrypt",
+      mode: fp.backends.join("+") || (fp.host === "mac" ? "unfairplay" : "fairplay-decrypt+unfairplay"),
+      host: fp.host || "linux",
       authed: !!BOT_TOKEN,
       who: BOT_TOKEN ? { name: "Bot API", username: BOT_USERNAME } : {},
       workerConfigured: !!WORKER_TOKEN,
