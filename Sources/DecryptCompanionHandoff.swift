@@ -12,7 +12,9 @@ import UIKit
 /// Entire type is MainActor so FairPlay-ack reads stay isolation-safe under Swift 6.
 @MainActor
 enum DecryptCompanionHandoff {
-    static let suiteName = "group.dev.tetherless.app"
+    // Path helpers are nonisolated so download jobs / background queues can resolve
+    // EncryptedIPAs without hopping onto the main actor (Swift 6 / build #204).
+    nonisolated static let suiteName = "group.dev.tetherless.app"
     static let pendingBundleKey = "tetherless.decrypt.pendingCompanionBundle"
     static let pendingEmbedKey = "tetherless.decrypt.pendingEmbeddedName"
     static let pendingAtKey = "tetherless.decrypt.pendingCompanionAt"
@@ -21,12 +23,13 @@ enum DecryptCompanionHandoff {
     static let clearExportDirName = "ClearExports"
     /// Host deep link — companion opens this after publishing a clear IPA.
     static let hostImportURLString = "tetherless://decrypt-export"
+    nonisolated static let encryptedIPADirName = "EncryptedIPAs"
 
     private static var suite: UserDefaults? { UserDefaults(suiteName: suiteName) }
     private static var local: UserDefaults { .standard }
 
     /// App Group container when the provision still includes the group entitlement.
-    static var sharedContainerURL: URL? {
+    nonisolated static var sharedContainerURL: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suiteName)
     }
 
@@ -60,7 +63,6 @@ enum DecryptCompanionHandoff {
     private static let liveInstallBundleKey = "companion.hostLiveInstallBundleID"
     private static let encryptedIPAPathKey = "companion.hostEncryptedIPAPath"
     private static let encryptedIPABundleKey = "companion.hostEncryptedIPABundleID"
-    static let encryptedIPADirName = "EncryptedIPAs"
 
     /// Snapshot the host Apple ID / FairPlay gate state into a plist-safe dictionary.
     /// Calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
@@ -158,7 +160,8 @@ enum DecryptCompanionHandoff {
     }
 
     /// Durable folder for App Store encrypted IPAs (Documents + App Group when available).
-    static func encryptedIPADirectory() -> URL {
+    /// Pure filesystem path — safe from sync nonisolated callers (e.g. `IPadnDownloadJob.fileURL`).
+    nonisolated static func encryptedIPADirectory() -> URL {
         if let root = sharedContainerURL {
             let dir = root.appendingPathComponent(encryptedIPADirName, isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
