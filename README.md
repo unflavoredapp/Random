@@ -4,9 +4,13 @@
   <img src="docs/assets/tetherless-icon.png" width="128" alt="Tetherless app icon" />
 </p>
 
-<p align="center">
-  <img src="docs/assets/tetherless-ascii.png" width="680" alt="Tetherless" />
-</p>
+<pre align="center">
+ _____    _   _               _
+|_   _|__| |_| |__   ___ _ __| | ___  ___ ___
+  | |/ _ \ __| '_ \ / _ \ '__| |/ _ \/ __/ __|
+  | |  __/ |_| | | |  __/ |  | |  __/\__ \__ \
+  |_|\___|\__|_| |_|\___|_|  |_|\___||___/___/
+</pre>
 
 <p align="center">
   <strong>On-device sideloading — pair, sign, install. No computer required.</strong><br />
@@ -14,19 +18,6 @@
   · Bundle ID <code>dev.tetherless.app</code>
   · v3.7
 </p>
-
-<details>
-<summary>Plain-text ASCII wordmark</summary>
-
-```
- _____    _   _               _
-|_   _|__| |_| |__   ___ _ __| | ___  ___ ___
-  | |/ _ \ __| '_ \ / _ \ '__| |/ _ \/ __/ __|
-  | |  __/ |_| | | |  __/ |  | |  __/\__ \__ \
-  |_|\___|\__|_| |_|\___|_|  |_|\___||___/___/
-```
-
-</details>
 
 ---
 
