@@ -51,6 +51,7 @@ enum FairPlayAdvancedOptions {
     static let retryRoundsKey = "tetherless.fairplay.retryRounds"
     static let pathDiagnosticsKey = "tetherless.fairplay.pathDiagnostics"
     static let requireAllFrameworksKey = "tetherless.fairplay.requireAllFrameworks"
+    static let includeTestFlightKey = "tetherless.fairplay.includeTestFlight"
 
     /// Default retry schedule length when unset (matches buddy3).
     static let defaultRetryRounds = 5
@@ -98,6 +99,15 @@ enum FairPlayAdvancedOptions {
         set { UserDefaults.standard.set(newValue, forKey: requireAllFrameworksKey) }
     }
 
+    /// When true (default), installed TestFlight betas appear as FairPlay decrypt targets.
+    static var includeTestFlightApps: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: includeTestFlightKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: includeTestFlightKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: includeTestFlightKey) }
+    }
+
     /// Resolved options for one decrypt run (host defaults or companion snapshot).
     struct Resolved: Sendable, Equatable {
         var sourceMode: SourceMode
@@ -106,6 +116,7 @@ enum FairPlayAdvancedOptions {
         var retryRounds: Int
         var pathDiagnostics: Bool
         var requireAllFrameworks: Bool
+        var includeTestFlightApps: Bool
 
         static var current: Resolved {
             Resolved(
@@ -114,7 +125,8 @@ enum FairPlayAdvancedOptions {
                 keepEncryptedIPA: FairPlayAdvancedOptions.keepEncryptedIPA,
                 retryRounds: FairPlayAdvancedOptions.retryRounds,
                 pathDiagnostics: FairPlayAdvancedOptions.pathDiagnostics,
-                requireAllFrameworks: FairPlayAdvancedOptions.requireAllFrameworks
+                requireAllFrameworks: FairPlayAdvancedOptions.requireAllFrameworks,
+                includeTestFlightApps: FairPlayAdvancedOptions.includeTestFlightApps
             )
         }
 
@@ -134,6 +146,7 @@ enum FairPlayAdvancedOptions {
             }
             if let v = snapshot["fpPathDiagnostics"] as? Bool { r.pathDiagnostics = v }
             if let v = snapshot["fpRequireAllFrameworks"] as? Bool { r.requireAllFrameworks = v }
+            if let v = snapshot["fpIncludeTestFlight"] as? Bool { r.includeTestFlightApps = v }
             return r
         }
 
@@ -145,6 +158,7 @@ enum FairPlayAdvancedOptions {
                 "fpRetryRounds": retryRounds,
                 "fpPathDiagnostics": pathDiagnostics,
                 "fpRequireAllFrameworks": requireAllFrameworks,
+                "fpIncludeTestFlight": includeTestFlightApps,
             ]
         }
 
@@ -162,5 +176,6 @@ enum FairPlayAdvancedOptions {
         retryRounds = defaultRetryRounds
         pathDiagnostics = false
         requireAllFrameworks = false
+        includeTestFlightApps = true
     }
 }

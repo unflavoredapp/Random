@@ -337,7 +337,7 @@ enum DecryptCompanionHandoff {
             "hostSignedIn", "hostStoreReady", "hostFairPlayAck", "hostEmailHint", "hostEmail",
             "hostSnapshotAt", "hostLiveInstallPath", "hostEncryptedIPAPath", "bundleID",
             "fpSourceMode", "fpVerbose", "fpKeepEncryptedIPA", "fpRetryRounds",
-            "fpPathDiagnostics", "fpRequireAllFrameworks",
+            "fpPathDiagnostics", "fpRequireAllFrameworks", "fpIncludeTestFlight",
         ] {
             if let v = manifest[key] { out[key] = v }
         }

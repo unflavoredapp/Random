@@ -337,13 +337,16 @@ private struct OwnedStoreTrustHint: View {
     }
 }
 
-/// Installed App Store (DRM) apps on this device — primary on-device decrypt targets.
+/// Installed App Store / TestFlight (DRM) apps on this device — primary on-device decrypt targets.
 struct DecryptDeviceAppsSection: View {
     @ObservedObject private var device = DeviceLibrary.shared
     @ObservedObject private var decrypting = DeviceDecryptService.shared
     @AppStorage("uzd_decrypt_channel") private var channelRaw = DecryptChannel.device.rawValue
+    @AppStorage(FairPlayAdvancedOptions.includeTestFlightKey) private var includeTestFlight = true
 
-    private var drm: [DeviceApp] { device.apps.filter(\.isAppStore) }
+    private var drm: [DeviceApp] {
+        device.apps.filter { $0.isDecryptTarget(includeTestFlight: includeTestFlight) }
+    }
     private var channel: DecryptChannel { DecryptChannel(rawValue: channelRaw) ?? .device }
 
     var body: some View {
@@ -371,7 +374,9 @@ struct DecryptDeviceAppsSection: View {
                     }
                 }
 
-                Text("Decrypts from the live install with this iPhone’s FairPlay keys — Account login is not required. Watch + App Clips skipped. Pair with Native if the list is empty.")
+                Text(includeTestFlight
+                     ? "Decrypts App Store and TestFlight installs with this iPhone’s FairPlay keys — Account login is not required. Watch + App Clips skipped. Pair with Native if the list is empty."
+                     : "Decrypts App Store installs with this iPhone’s FairPlay keys — Account login is not required. Enable TestFlight apps in FairPlay advanced settings to include betas. Watch + App Clips skipped.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.5))
                     .fixedSize(horizontal: false, vertical: true)
@@ -421,7 +426,9 @@ struct DecryptDeviceAppsSection: View {
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(TetherlessPalette.accent)
                 } else if drm.isEmpty && !device.loading {
-                    Text("No App Store apps listed yet. Tap refresh after pairing completes.")
+                    Text(includeTestFlight
+                         ? "No App Store or TestFlight apps listed yet. Tap refresh after pairing completes."
+                         : "No App Store apps listed yet. Tap refresh after pairing completes.")
                         .font(.footnote)
                         .foregroundStyle(.white.opacity(0.45))
                 }
@@ -433,7 +440,11 @@ struct DecryptDeviceAppsSection: View {
                                 .font(.subheadline.weight(.semibold))
                                 .foregroundStyle(.white)
                                 .lineLimit(1)
-                            Text([app.version.isEmpty ? nil : "v\(app.version)", app.bundleID].compactMap { $0 }.joined(separator: " · "))
+                            Text([
+                                app.isTestFlight ? "TestFlight" : nil,
+                                app.version.isEmpty ? nil : "v\(app.version)",
+                                app.bundleID,
+                            ].compactMap { $0 }.joined(separator: " · "))
                                 .font(.caption2)
                                 .foregroundStyle(.white.opacity(0.45))
                                 .lineLimit(1)

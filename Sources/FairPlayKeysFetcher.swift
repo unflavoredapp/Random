@@ -368,7 +368,10 @@ final class FairPlayKeysFetcher: ObservableObject {
     private func probeReadiness() async -> Readiness {
         await refreshDeviceLibraryBounded(seconds: 2.5)
 
-        let storeApps = DeviceLibrary.shared.apps.filter(\.isAppStore)
+        let includeTF = FairPlayAdvancedOptions.includeTestFlightApps
+        let storeApps = DeviceLibrary.shared.apps.filter {
+            $0.isDecryptTarget(includeTestFlight: includeTF)
+        }
         struct Candidate {
             var bundleID: String
             var name: String

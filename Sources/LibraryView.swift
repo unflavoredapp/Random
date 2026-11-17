@@ -170,7 +170,8 @@ struct LibraryView: View {
 
     private func deviceActions(for app: DeviceApp) -> [AppActionSheet.Action] {
         var list: [AppActionSheet.Action] = []
-        if app.isAppStore {
+        let includeTF = FairPlayAdvancedOptions.includeTestFlightApps
+        if app.isDecryptTarget(includeTestFlight: includeTF) {
             // Encrypted (FairPlay) and no decrypted copy in the Library: hand it to the Decrypt tab by name.
             list.append(.init(title: "Decrypt", icon: "lock.open.fill", role: .normal) {
                 deviceSheet = nil
@@ -228,12 +229,14 @@ struct LibraryView: View {
                 icon: device.icons[app.bundleID],
                 title: app.name,
                 subtitle: ([app.version.isEmpty ? nil : app.version, app.sizeText].compactMap { $0 } + [app.bundleID]).joined(separator: " • "),
-                badge: app.isAppStore ? "DRM · Locked" : "Installed",
-                badgeAccented: app.isAppStore,
-                badgeSymbol: app.isAppStore ? "lock.fill" : nil,
-                locked: app.isAppStore,
+                badge: app.isTestFlight
+                    ? "TestFlight · Locked"
+                    : (app.isAppStore ? "DRM · Locked" : "Installed"),
+                badgeAccented: app.isFairPlayEncrypted,
+                badgeSymbol: app.isFairPlayEncrypted ? "lock.fill" : nil,
+                locked: app.isFairPlayEncrypted,
                 updatePill: expiryPill(for: app),
-                accent: app.isAppStore ? Color(red: 1, green: 0.35, blue: 0.32) : SSTheme.tintColor,
+                accent: app.isFairPlayEncrypted ? Color(red: 1, green: 0.35, blue: 0.32) : SSTheme.tintColor,
                 onAction: { deviceSheet = app },
                 onTap: { deviceSheet = app }
             )
