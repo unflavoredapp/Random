@@ -962,7 +962,7 @@ final class DeviceDecryptService: ObservableObject {
             publishDecryptProgress("Encrypted IPA is in App Group (companion-readable).")
         } else {
             publishDecryptProgress(
-                "App Group unavailable — companion will carry EncryptedSource.ipa inside Tetherless Decrypt."
+                "App Group unavailable (common on free Apple ID certs) — companion will embed EncryptedSource.ipa. Delete any old Tetherless Decrypt app before Get so the new package is installed."
             )
         }
         if fpOpts.pathDiagnostics {

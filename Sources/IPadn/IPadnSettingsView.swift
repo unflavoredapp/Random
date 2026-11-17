@@ -351,7 +351,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Temp paths")
         } footer: {
-            Text("Store Get holds the encrypted IPA under App Group EncryptedIPAs when available (companion-readable), and always bundles EncryptedSource.ipa into Tetherless Decrypt. Turn Keep off to delete the stamped file after a successful clear export.")
+            Text("Free Apple ID certs usually strip App Groups, so stamps under Documents stay host-only. Get always embeds EncryptedSource.ipa inside Tetherless Decrypt for FairPlay. Delete the old companion before Get. Turn Keep off to delete the stamped file after a successful clear export.")
         }
 
         Section {

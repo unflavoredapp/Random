@@ -219,42 +219,88 @@ enum DecryptCompanionRuntime {
                 Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
             }
         }
-        let report: FairPlayDecryptReport
-        do {
-            report = try FairPlayDecrypt.decryptMachOs(
-                readingFrom: readRoot,
+        func runDecrypt(from root: URL) throws -> FairPlayDecryptReport {
+            try FairPlayDecrypt.decryptMachOs(
+                readingFrom: root,
                 writingTo: destApp,
                 quietConsole: !verbose,
                 options: fpOpts,
                 progress: progressBridge
             )
+        }
+
+        func isLicenseEPERM(_ error: Error) -> Bool {
+            FairPlayFailureClass.current(fromLogs: [error.localizedDescription]) == .licenseOrKeys
+        }
+
+        func epermGuidance(triedBundled: Bool) -> String {
+            let bundled = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+            let hasBundled = fm.fileExists(atPath: bundled.path)
+            if !hasBundled {
+                return "FairPlay EPERM on EmbeddedPayload — this Tetherless Decrypt build has no EncryptedSource.ipa. Update TetherLess, delete Tetherless Decrypt, re-run Get so the encrypted IPA is bundled, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
+            }
+            if triedBundled {
+                return "FairPlay EPERM after unpacking EncryptedSource.ipa — install \(name) from the App Store on this iPhone (same Apple ID) so fairplayd has a live path, re-run Get, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
+            }
+            return "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone (same Apple ID), re-run Get from TetherLess so the live path is stamped, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
+        }
+
+        var report: FairPlayDecryptReport
+        do {
+            report = try runDecrypt(from: readRoot)
         } catch let fp as FairPlayDecryptError {
-            // Keys / EPERM miss — if we already used live path, surface Media & Purchases.
-            // If we only had EmbeddedPayload, push the install-first guidance.
             switch fp {
             case .missingLicense:
                 throw fp
             case .mainExecutableFailed(let detail)
                 where FairPlayFailureClass.current(fromLogs: [detail]) == .licenseOrKeys:
-                if !usedLiveInstall {
-                    throw FairPlayDecryptError.missingLicense(
-                        "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone (same Apple ID), re-run Get from TetherLess so the live path is stamped, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
-                    )
+                // Auto-retry once from bundled EncryptedSource.ipa when we started on EmbeddedPayload.
+                let bundled = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+                let usedEmbed = readRoot.resolvingSymlinksInPath().standardizedFileURL
+                    == src.resolvingSymlinksInPath().standardizedFileURL
+                if !usedLiveInstall, usedEmbed, fm.fileExists(atPath: bundled.path) {
+                    log("EmbeddedPayload EPERM — retrying FairPlay from bundled EncryptedSource.ipa…")
+                    try? fm.removeItem(at: destApp)
+                    try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
+                    try copyTree(from: src, to: destApp)
+                    do {
+                        let unpacked = try unpackStampedIPA(bundled)
+                        report = try runDecrypt(from: unpacked)
+                    } catch {
+                        throw FairPlayDecryptError.missingLicense(epermGuidance(triedBundled: true))
+                    }
+                } else if !usedLiveInstall {
+                    throw FairPlayDecryptError.missingLicense(epermGuidance(triedBundled: false))
+                } else {
+                    throw FairPlayDecryptError.missingLicense(FairPlayFailureClass.licenseOrKeys.userMessage)
                 }
-                throw FairPlayDecryptError.missingLicense(FairPlayFailureClass.licenseOrKeys.userMessage)
             default:
                 throw fp
             }
         } catch {
-            if FairPlayFailureClass.current(fromLogs: [error.localizedDescription]) == .licenseOrKeys {
-                if !usedLiveInstall {
-                    throw FairPlayDecryptError.missingLicense(
-                        "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone, re-run Get from TetherLess, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
-                    )
+            if isLicenseEPERM(error) {
+                let bundled = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+                let usedEmbed = readRoot.resolvingSymlinksInPath().standardizedFileURL
+                    == src.resolvingSymlinksInPath().standardizedFileURL
+                if !usedLiveInstall, usedEmbed, fm.fileExists(atPath: bundled.path) {
+                    log("EmbeddedPayload EPERM — retrying FairPlay from bundled EncryptedSource.ipa…")
+                    try? fm.removeItem(at: destApp)
+                    try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
+                    try copyTree(from: src, to: destApp)
+                    do {
+                        let unpacked = try unpackStampedIPA(bundled)
+                        report = try runDecrypt(from: unpacked)
+                    } catch {
+                        throw FairPlayDecryptError.missingLicense(epermGuidance(triedBundled: true))
+                    }
+                } else if !usedLiveInstall {
+                    throw FairPlayDecryptError.missingLicense(epermGuidance(triedBundled: false))
+                } else {
+                    throw FairPlayDecryptError.missingLicense(FairPlayFailureClass.licenseOrKeys.userMessage)
                 }
-                throw FairPlayDecryptError.missingLicense(FairPlayFailureClass.licenseOrKeys.userMessage)
+            } else {
+                throw error
             }
-            throw error
         }
         let decN = report.decrypted.count
         let plainN = report.plain.count
