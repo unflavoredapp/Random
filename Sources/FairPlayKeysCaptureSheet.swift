@@ -72,7 +72,7 @@ struct FairPlayKeysCaptureSheet: View {
             Label("Capture keys for companion decrypt", systemImage: "key.fill")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
-            Text("iOS only stores FairPlay keys after a real App Store / Media & Purchases sign-in. TetherLess cannot mint them from the Store login token.")
+            Text("Open-source decryptors (fairplay-decrypt / ipadecrypt) mint a credential only on jailbreak. TetherLess uses on-device mremap like fouldecrypt/FairPlayed: enroll Media & Purchases for this Apple ID, keep ≥1 App Store app installed, then Confirm.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.62))
                 .fixedSize(horizontal: false, vertical: true)
@@ -109,10 +109,10 @@ struct FairPlayKeysCaptureSheet: View {
     @ViewBuilder
     private var phaseCard: some View {
         switch keys.phase {
-        case .grabbed(_, let at, let hints):
-            successCard(at: at, hints: hints)
-        case .confirmSignIn(let e, let hints):
-            confirmCard(email: e, hints: hints)
+        case .grabbed(_, let at, let readiness):
+            successCard(at: at, readiness: readiness)
+        case .confirmSignIn(let e, let readiness):
+            confirmCard(email: e, readiness: readiness)
         case .verifying, .redirecting, .waitingForReturn:
             waitingCard
         case .needsAccount:
@@ -124,10 +124,12 @@ struct FairPlayKeysCaptureSheet: View {
 
     private var idleActions: some View {
         VStack(spacing: 10) {
+            prerequisitesCard
+
             Button {
                 keys.startFetchFromSession(preferSettings: false)
             } label: {
-                Label("Open App Store account", systemImage: "bag.fill")
+                Label("1 · Open App Store account", systemImage: "bag.fill")
                     .font(.body.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -140,7 +142,21 @@ struct FairPlayKeysCaptureSheet: View {
             Button {
                 keys.startFetchFromSession(preferSettings: true)
             } label: {
-                Label("Open Media & Purchases", systemImage: "gearshape.fill")
+                Label("1b · Open Media & Purchases", systemImage: "gearshape.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 12)
+                    .background(.white.opacity(0.10), in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(email.isEmpty)
+
+            Button {
+                keys.openSeedAppStoreApp()
+            } label: {
+                Label("2 · Install a free App Store app", systemImage: "arrow.down.app")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -154,13 +170,40 @@ struct FairPlayKeysCaptureSheet: View {
             Button {
                 keys.markGrabbedManually()
             } label: {
-                Text("Already signed in — verify & confirm")
+                Text("3 · Already signed in — verify & confirm")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.white.opacity(0.7))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.plain)
             .disabled(email.isEmpty)
+        }
+    }
+
+    private var prerequisitesCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Checklist (from open-source decryptors)")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.55))
+            checklistRow("App Store / Media & Purchases signed in as session Apple ID")
+            checklistRow("≥1 owned App Store app installed on this iPhone")
+            checklistRow("Confirm here — companion decrypts via mremap on the live install")
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private func checklistRow(_ text: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "circle")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(TetherlessPalette.accent)
+                .padding(.top, 2)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.62))
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -221,14 +264,12 @@ struct FairPlayKeysCaptureSheet: View {
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private func confirmCard(email: String, hints: Int) -> some View {
+    private func confirmCard(email: String, readiness: FairPlayKeysFetcher.Readiness) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             Label("Confirm key capture", systemImage: "checkmark.shield")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.white)
-            Text(hints > 0
-                 ? "Saw \(hints) App Store license folder(s). Tap Confirm if App Store showed \(email)."
-                 : "TetherLess often can’t see SC_Info from the sandbox — that doesn’t mean sign-in failed. If App Store Account Settings showed \(email), tap Confirm.")
+            Text(confirmCopy(email: email, readiness: readiness))
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.62))
                 .fixedSize(horizontal: false, vertical: true)
@@ -244,6 +285,18 @@ struct FairPlayKeysCaptureSheet: View {
                     .background(TetherlessPalette.accent, in: Capsule())
             }
             .buttonStyle(.plain)
+
+            if readiness.storeApps == 0 {
+                Button {
+                    keys.openSeedAppStoreApp()
+                } label: {
+                    Text("Install free TestFlight first (recommended)")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.8))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+            }
 
             Button {
                 AppStoreDecryptGuide.openPurchaseHistory()
@@ -269,14 +322,22 @@ struct FairPlayKeysCaptureSheet: View {
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
     }
 
-    private func successCard(at: Date, hints: Int) -> some View {
+    private func confirmCopy(email: String, readiness: FairPlayKeysFetcher.Readiness) -> String {
+        if readiness.scInfoHits > 0 {
+            return "Saw \(readiness.scInfoHits) SC_Info folder(s) beside \(readiness.storeApps) store install(s). Confirm App Store showed \(email)."
+        }
+        if readiness.storeApps > 0 {
+            return "Found \(readiness.storeApps) App Store install(s). SC_Info may be host-invisible — companion still decrypts from the live path. Confirm if Account Settings showed \(email)."
+        }
+        return "No App Store installs visible yet (open-source tools require ≥1). Install free TestFlight under \(email), or Confirm if you already signed in and have store apps."
+    }
+
+    private func successCard(at: Date, readiness: FairPlayKeysFetcher.Readiness) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Keys grabbed", systemImage: "checkmark.seal.fill")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(TetherlessPalette.success)
-            Text(hints > 0
-                 ? "Ready for companion decrypt · \(hints) license folder(s) seen."
-                 : "Ready for companion decrypt.")
+            Text(successCopy(readiness))
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.62))
             Text(at.formatted(date: .abbreviated, time: .shortened))
@@ -293,6 +354,13 @@ struct FairPlayKeysCaptureSheet: View {
         }
         .padding(16)
         .background(TetherlessPalette.success.opacity(0.12), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+    }
+
+    private func successCopy(_ readiness: FairPlayKeysFetcher.Readiness) -> String {
+        if readiness.storeApps > 0 || readiness.scInfoHits > 0 {
+            return "Ready for companion decrypt · \(readiness.storeApps) store app(s) · \(readiness.scInfoHits) SC_Info."
+        }
+        return "Ready for companion decrypt. Prefer keeping ≥1 App Store app installed under this Apple ID."
     }
 
     private var needsAccountCard: some View {
@@ -345,13 +413,21 @@ struct FairPlayKeysCaptureSheet: View {
         let who = email.isEmpty ? "your Apple ID" : email
         switch keys.phase {
         case .redirecting(_, let dest):
-            return dest == .mediaAndPurchases
-                ? "Opening Media & Purchases — sign in with \(who)."
-                : "Opening App Store account — sign in with \(who)."
-        case .waitingForReturn:
-            return "In App Store, open Account Settings and make sure it shows \(who). Then return here and Confirm — don’t worry if the license scan is empty."
+            switch dest {
+            case .mediaAndPurchases:
+                return "Opening Media & Purchases — sign in with \(who)."
+            case .seedApp:
+                return "Opening TestFlight — Install with \(who) so this iPhone has ≥1 App Store app."
+            case .appStoreAccount:
+                return "Opening App Store account — sign in with \(who)."
+            }
+        case .waitingForReturn(_, let dest):
+            if dest == .seedApp {
+                return "Install TestFlight (or any free app) while signed in as \(who), then return here."
+            }
+            return "In App Store, open Account Settings and make sure it shows \(who). Then return here."
         case .verifying:
-            return "Wrapping up — next step is Confirm keys for \(who)."
+            return "Checking installd for store apps + SC_Info, then Confirm for \(who)."
         default:
             return keys.banner ?? "Working…"
         }

@@ -644,10 +644,12 @@ struct DecryptAppStoreSignInHint: View {
                 Label("Confirm key capture", systemImage: "checkmark.shield")
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.white)
-                if case .confirmSignIn(let e, let hints) = keys.phase {
-                    Text(hints > 0
-                         ? "Saw \(hints) license folder(s). Confirm App Store showed \(e)."
-                         : "If App Store Account Settings showed \(e), tap Confirm — a missing SC_Info scan is normal.")
+                if case .confirmSignIn(let e, let readiness) = keys.phase {
+                    Text(readiness.scInfoHits > 0
+                         ? "Saw \(readiness.scInfoHits) SC_Info · \(readiness.storeApps) store app(s). Confirm App Store showed \(e)."
+                         : readiness.storeApps > 0
+                            ? "Found \(readiness.storeApps) store app(s). Confirm if Account Settings showed \(e)."
+                            : "If App Store showed \(e), Confirm — install a free App Store app if you have none.")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.62))
                         .fixedSize(horizontal: false, vertical: true)
@@ -732,11 +734,14 @@ struct DecryptAppStoreSignInHint: View {
     }
 
     private var grabbedDetail: String {
-        if case .grabbed(let e, _, let hints) = keys.phase {
+        if case .grabbed(let e, _, let readiness) = keys.phase {
             let base = e.isEmpty
                 ? "FairPlay keys ready for companion decrypt."
                 : "Grabbed for \(e)."
-            return hints > 0 ? "\(base) \(hints) license folder(s) seen." : base
+            if readiness.storeApps > 0 || readiness.scInfoHits > 0 {
+                return "\(base) \(readiness.storeApps) store app(s) · \(readiness.scInfoHits) SC_Info."
+            }
+            return base
         }
         return email.isEmpty
             ? "FairPlay keys ready for companion decrypt."

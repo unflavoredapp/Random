@@ -1,11 +1,22 @@
 //
 // Brand: Tetherless · https://tetherless.dev
 //  FairPlayKeysFetcher.swift
-//  Guided capture of FairPlay keys for the active Apple ID session:
-//  deep-link to App Store account / Media & Purchases → return → verify → confirm.
+//  Guided FairPlay readiness for companion decrypt (on-device mremap).
 //
-//  TetherLess cannot mint FairPlay keys from the Store login token — iOS only
-//  installs them after a real App Store / Media & Purchases sign-in.
+//  What open-source tools actually do (and what we can / cannot copy):
+//  • EthanArbuckle/fairplay-decrypt + londek/ipadecrypt — mint a reusable
+//    16-byte account credential from a *jailbroken* device (SIDB + SINF).
+//    Requires ≥1 owned App Store app installed. We cannot mint that credential
+//    from a sideloaded host (no root / fairplayd private state).
+//  • fouldecrypt / FairPlayed / TrollDecrypt — decrypt on-device while fairplayd
+//    has the account enrolled; keys never leave the device as a file. TetherLess
+//    companion uses the same class of path (mremap next to SC_Info on a live
+//    install). Prerequisites: Media & Purchases / App Store sign-in for the
+//    owning Apple ID, plus an App Store install that carries SC_Info.
+//
+//  This fetcher therefore: (1) deep-links App Store Account / Media & Purchases,
+//  (2) checks for ≥1 App Store install via installd Path when paired,
+//  (3) soft-probes SC_Info beside those paths, (4) requires explicit confirm.
 //
 
 import Combine
@@ -20,6 +31,15 @@ final class FairPlayKeysFetcher: ObservableObject {
     enum Destination: String, Equatable {
         case appStoreAccount
         case mediaAndPurchases
+        case seedApp
+    }
+
+    /// Open-source-style readiness snapshot (install + SC_Info), not a credential.
+    struct Readiness: Equatable {
+        var storeApps: Int
+        var scInfoHits: Int
+
+        static let empty = Readiness(storeApps: 0, scInfoHits: 0)
     }
 
     enum Phase: Equatable {
@@ -28,14 +48,16 @@ final class FairPlayKeysFetcher: ObservableObject {
         case waitingForReturn(email: String, destination: Destination)
         case verifying(email: String)
         /// Soft checks done — user must confirm they signed in as this Apple ID.
-        case confirmSignIn(email: String, licenseHints: Int)
-        case grabbed(email: String, at: Date, licenseHints: Int)
+        case confirmSignIn(email: String, readiness: Readiness)
+        case grabbed(email: String, at: Date, readiness: Readiness)
         case needsAccount
     }
 
     @Published private(set) var phase: Phase = .idle
     @Published var banner: String?
     @Published var verifyLines: [String] = []
+    /// Last readiness probe (also shown while idle after a scan).
+    @Published private(set) var lastReadiness: Readiness = .empty
 
     private var foregroundObserver: NSObjectProtocol?
     private var openedAt: Date?
@@ -44,6 +66,7 @@ final class FairPlayKeysFetcher: ObservableObject {
 
     private static let grabbedAtPrefix = "tetherless.decrypt.keysGrabbedAt."
     private static let hintsPrefix = "tetherless.decrypt.keysLicenseHints."
+    private static let storeAppsPrefix = "tetherless.decrypt.keysStoreApps."
 
     private init() {
         foregroundObserver = NotificationCenter.default.addObserver(
@@ -92,9 +115,10 @@ final class FairPlayKeysFetcher: ObservableObject {
         }
         if AppStoreDecryptGuide.isAcknowledged(email: email) {
             let at = grabbedAt(email: email) ?? Date()
-            let hints = licenseHints(email: email)
+            let readiness = storedReadiness(email: email)
+            lastReadiness = readiness
             if case .grabbed(let current, _, _) = phase, current == email { return }
-            phase = .grabbed(email: email, at: at, licenseHints: hints)
+            phase = .grabbed(email: email, at: at, readiness: readiness)
         } else if case .grabbed = phase {
             phase = .idle
         }
@@ -134,7 +158,6 @@ final class FairPlayKeysFetcher: ObservableObject {
             ? "Opening Media & Purchases — sign in with \(email), then return here."
             : "Opening App Store account — sign in with \(email), then return here."
 
-        // Brief beat so UI can show “Opening…” before we leave.
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 350_000_000)
             guard case .redirecting(let e, let d) = self.phase, e == email else { return }
@@ -144,29 +167,54 @@ final class FairPlayKeysFetcher: ObservableObject {
                 AppStoreDecryptGuide.openAppStoreAccountSheet()
             case .mediaAndPurchases:
                 AppStoreDecryptGuide.openMediaAndPurchases()
+            case .seedApp:
+                AppStoreDecryptGuide.openAppStoreListing(DeviceDecryptService.smokeTestApp.url)
             }
+        }
+    }
+
+    /// Open a free App Store listing (TestFlight) so the account can install ≥1 store app —
+    /// same prerequisite as fairplay-decrypt / ipadecrypt mint (“≥1 owned App Store app”).
+    func openSeedAppStoreApp() {
+        let email = activeEmail()
+        guard !email.isEmpty else {
+            phase = .needsAccount
+            return
+        }
+        cacheEmail(email)
+        verifyTask?.cancel()
+        openedAt = Date()
+        armReturnAfter = Date().addingTimeInterval(1.4)
+        phase = .redirecting(email: email, destination: .seedApp)
+        banner = "Open TestFlight (free) and Install with \(email), then return here."
+        verifyLines = []
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard case .redirecting(let e, .seedApp) = self.phase, e == email else { return }
+            self.phase = .waitingForReturn(email: email, destination: .seedApp)
+            AppStoreDecryptGuide.openAppStoreListing(DeviceDecryptService.smokeTestApp.url)
         }
     }
 
     /// User confirmed they signed in as the session Apple ID.
     func confirmGrabbed() {
         let email: String
-        let hints: Int
+        let readiness: Readiness
         switch phase {
-        case .confirmSignIn(let e, let h):
-            email = e; hints = h
+        case .confirmSignIn(let e, let r):
+            email = e; readiness = r
         case .verifying(let e):
-            email = e; hints = 0
+            email = e; readiness = lastReadiness
         case .waitingForReturn(let e, _):
-            email = e; hints = 0
+            email = e; readiness = lastReadiness
         default:
-            email = activeEmail(); hints = 0
+            email = activeEmail(); readiness = lastReadiness
         }
         guard !email.isEmpty else {
             phase = .needsAccount
             return
         }
-        finishGrab(email: email, licenseHints: hints, source: "confirm")
+        finishGrab(email: email, readiness: readiness, source: "confirm")
     }
 
     /// Manual path when already signed in (skips redirect).
@@ -178,9 +226,9 @@ final class FairPlayKeysFetcher: ObservableObject {
         }
         Task { @MainActor in
             phase = .verifying(email: email)
-            banner = "Finishing key capture for \(email)…"
-            let hints = await softProbeLicenseHints()
-            presentConfirm(email: email, licenseHints: hints, fromReturn: false)
+            banner = "Checking installd for App Store apps + SC_Info…"
+            let readiness = await probeReadiness()
+            presentConfirm(email: email, readiness: readiness, fromReturn: false)
         }
     }
 
@@ -190,7 +238,6 @@ final class FairPlayKeysFetcher: ObservableObject {
         armReturnAfter = nil
         verifyLines = []
         banner = nil
-        // Drop in-progress states so refreshFromAck can sync the ack bit.
         phase = .idle
         refreshFromAck()
     }
@@ -207,53 +254,70 @@ final class FairPlayKeysFetcher: ObservableObject {
     private func beginVerify(email: String) {
         verifyTask?.cancel()
         phase = .verifying(email: email)
-        banner = "Back in TetherLess — finish by confirming \(email)."
+        banner = "Back in TetherLess — checking readiness for \(email)…"
         verifyLines = ["Returned from App Store"]
         verifyTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 280_000_000)
+            try? await Task.sleep(nanoseconds: 250_000_000)
             guard !Task.isCancelled else { return }
             verifyLines.append("Matching session \(email)")
             cacheEmail(email)
 
-            try? await Task.sleep(nanoseconds: 220_000_000)
+            try? await Task.sleep(nanoseconds: 200_000_000)
             guard !Task.isCancelled else { return }
-            verifyLines.append("Optional license folder check…")
-            let hints = await softProbeLicenseHints()
+            verifyLines.append("Probing App Store installs (installd Path)…")
+            let readiness = await probeReadiness()
 
             guard !Task.isCancelled else { return }
-            if hints > 0 {
-                verifyLines.append("Saw \(hints) SC_Info folder(s) — good signal")
+            if readiness.storeApps > 0 {
+                verifyLines.append("Found \(readiness.storeApps) App Store install(s)")
             } else {
-                // Soft scan often misses in the sandboxed host — not a failed App Store sign-in.
-                verifyLines.append("License folders not visible here — confirm if you signed in as \(email)")
+                verifyLines.append("No App Store installs visible — install a free app under \(email)")
+            }
+            if readiness.scInfoHits > 0 {
+                verifyLines.append("SC_Info readable beside \(readiness.scInfoHits) install(s)")
+            } else if readiness.storeApps > 0 {
+                verifyLines.append("SC_Info not readable from host — companion still uses live install path")
+            } else {
+                verifyLines.append("Install ≥1 App Store app (open-source mint prerequisite), then Confirm")
             }
 
-            presentConfirm(email: email, licenseHints: hints, fromReturn: true)
+            presentConfirm(email: email, readiness: readiness, fromReturn: true)
             openedAt = nil
             armReturnAfter = nil
         }
     }
 
-    private func presentConfirm(email: String, licenseHints: Int, fromReturn: Bool) {
-        phase = .confirmSignIn(email: email, licenseHints: licenseHints)
-        if licenseHints > 0 {
-            banner = "Almost done — confirm keys for \(email)."
+    private func presentConfirm(email: String, readiness: Readiness, fromReturn: Bool) {
+        lastReadiness = readiness
+        phase = .confirmSignIn(email: email, readiness: readiness)
+        if readiness.scInfoHits > 0 {
+            banner = "Ready — confirm keys for \(email)."
+        } else if readiness.storeApps > 0 {
+            banner = "App Store installs found. If Account Settings showed \(email), tap Confirm."
         } else if fromReturn {
-            banner = "If App Store Account Settings showed \(email), tap Confirm keys."
+            banner = "Sign-in step done. Install a free App Store app under \(email) if you haven’t, then Confirm."
         } else {
-            banner = "Confirm you signed in to App Store / Media & Purchases as \(email)."
+            banner = "Confirm Media & Purchases / App Store for \(email). Prefer ≥1 installed store app."
         }
     }
 
-    private func finishGrab(email: String, licenseHints: Int, source: String) {
+    private func finishGrab(email: String, readiness: Readiness, source: String) {
         AppStoreDecryptGuide.setAcknowledged(true, email: email)
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.grabbedAtPrefix + email.lowercased())
-        UserDefaults.standard.set(licenseHints, forKey: Self.hintsPrefix + email.lowercased())
+        let key = email.lowercased()
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: Self.grabbedAtPrefix + key)
+        UserDefaults.standard.set(readiness.scInfoHits, forKey: Self.hintsPrefix + key)
+        UserDefaults.standard.set(readiness.storeApps, forKey: Self.storeAppsPrefix + key)
         DecryptCompanionHandoff.publishHostSnapshot()
-        phase = .grabbed(email: email, at: Date(), licenseHints: licenseHints)
-        banner = source == "confirm"
-            ? "Keys grabbed for \(email)\(licenseHints > 0 ? " · \(licenseHints) license folder(s) seen" : "")."
-            : "Keys marked ready for \(email)."
+        lastReadiness = readiness
+        phase = .grabbed(email: email, at: Date(), readiness: readiness)
+        var detail = "Keys grabbed for \(email)"
+        if readiness.storeApps > 0 {
+            detail += " · \(readiness.storeApps) store app(s)"
+        }
+        if readiness.scInfoHits > 0 {
+            detail += " · \(readiness.scInfoHits) SC_Info"
+        }
+        banner = source == "confirm" ? detail : "Keys marked ready for \(email)."
         verifyLines = []
         openedAt = nil
         armReturnAfter = nil
@@ -264,14 +328,12 @@ final class FairPlayKeysFetcher: ObservableObject {
         }
     }
 
-    // MARK: - Soft probe
+    // MARK: - Readiness probe (installd-oriented)
 
-    /// Best-effort: count App Store installs that expose an SC_Info folder.
-    /// Cache-only — a live DeviceLibrary refresh needs pairing and can hang this sheet.
-    /// A miss is common in the sandboxed host and does **not** mean App Store sign-in failed.
-    private func softProbeLicenseHints() async -> Int {
-        // Kick a background refresh for next time; never await it here.
-        DeviceLibrary.shared.refreshIfStale()
+    /// Aligns with foulwrapper / FairPlayed: find live App Store installs and SC_Info
+    /// beside installd `Path`. Bounded refresh — never hang the sheet on pairing.
+    private func probeReadiness() async -> Readiness {
+        await refreshDeviceLibraryBounded(seconds: 2.5)
 
         let storeApps = DeviceLibrary.shared.apps.filter(\.isAppStore)
         var candidates: [(bundleID: String, path: String?)] = storeApps.map {
@@ -286,19 +348,53 @@ final class FairPlayKeysFetcher: ObservableObject {
 
         var seen = Set<String>()
         var hits = 0
+        var visible = 0
         for item in candidates where seen.insert(item.bundleID).inserted {
-            guard hits < 12 else { break }
-            guard let live = FairPlayDecrypt.installedAppURL(
-                bundleID: item.bundleID,
-                knownPath: item.path
-            ) else { continue }
-            let sc = live.appendingPathComponent("SC_Info", isDirectory: true)
-            var isDir: ObjCBool = false
-            if FileManager.default.fileExists(atPath: sc.path, isDirectory: &isDir), isDir.boolValue {
-                hits += 1
+            guard visible < 24 else { break }
+            // Prefer installd Path (open-source foulplay / FairPlayed pattern).
+            if let path = item.path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
+                visible += 1
+                let live = FairPlayDecrypt.installedAppURL(bundleID: item.bundleID, knownPath: path)
+                    ?? URL(fileURLWithPath: path)
+                if scInfoExists(beside: live) { hits += 1 }
+                continue
+            }
+            if let live = FairPlayDecrypt.installedAppURL(bundleID: item.bundleID) {
+                visible += 1
+                if scInfoExists(beside: live) { hits += 1 }
             }
         }
-        return hits
+
+        // Count store apps from DeviceLibrary even when SC_Info isn’t host-readable.
+        let storeCount = max(storeApps.count, visible)
+        let readiness = Readiness(storeApps: storeCount, scInfoHits: hits)
+        lastReadiness = readiness
+        return readiness
+    }
+
+    private func scInfoExists(beside appURL: URL) -> Bool {
+        let sc = appURL.appendingPathComponent("SC_Info", isDirectory: true)
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: sc.path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    /// Await DeviceLibrary refresh at most `seconds`; keep cache on timeout/failure.
+    private func refreshDeviceLibraryBounded(seconds: Double) async {
+        guard NativeInstaller.isSelected, DevicePairingStore.hasSavedPairing else {
+            DeviceLibrary.shared.refreshIfStale()
+            return
+        }
+        let nanos = UInt64(max(0.5, seconds) * 1_000_000_000)
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                _ = await DeviceLibrary.shared.refreshAwaiting()
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: nanos)
+            }
+            _ = await group.next()
+            group.cancelAll()
+        }
     }
 
     // MARK: - Helpers
@@ -319,7 +415,11 @@ final class FairPlayKeysFetcher: ObservableObject {
         return t > 0 ? Date(timeIntervalSince1970: t) : nil
     }
 
-    private func licenseHints(email: String) -> Int {
-        UserDefaults.standard.integer(forKey: Self.hintsPrefix + email.lowercased())
+    private func storedReadiness(email: String) -> Readiness {
+        let key = email.lowercased()
+        return Readiness(
+            storeApps: UserDefaults.standard.integer(forKey: Self.storeAppsPrefix + key),
+            scInfoHits: UserDefaults.standard.integer(forKey: Self.hintsPrefix + key)
+        )
     }
 }
