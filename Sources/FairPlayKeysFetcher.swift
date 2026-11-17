@@ -178,12 +178,9 @@ final class FairPlayKeysFetcher: ObservableObject {
         }
         Task { @MainActor in
             phase = .verifying(email: email)
-            banner = "Checking this iPhone for App Store licenses…"
+            banner = "Finishing key capture for \(email)…"
             let hints = await softProbeLicenseHints()
-            phase = .confirmSignIn(email: email, licenseHints: hints)
-            banner = hints > 0
-                ? "Found \(hints) App Store license folder(s) on device. Confirm you signed in as \(email)."
-                : "Confirm you signed in to Media & Purchases as \(email)."
+            presentConfirm(email: email, licenseHints: hints, fromReturn: false)
         }
     }
 
@@ -210,33 +207,41 @@ final class FairPlayKeysFetcher: ObservableObject {
     private func beginVerify(email: String) {
         verifyTask?.cancel()
         phase = .verifying(email: email)
-        banner = "Back in TetherLess — verifying key capture for \(email)…"
+        banner = "Back in TetherLess — finish by confirming \(email)."
         verifyLines = ["Returned from App Store"]
         verifyTask = Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 450_000_000)
+            try? await Task.sleep(nanoseconds: 280_000_000)
             guard !Task.isCancelled else { return }
             verifyLines.append("Matching session \(email)")
             cacheEmail(email)
 
-            try? await Task.sleep(nanoseconds: 400_000_000)
+            try? await Task.sleep(nanoseconds: 220_000_000)
             guard !Task.isCancelled else { return }
-            verifyLines.append("Scanning on-device App Store licenses…")
+            verifyLines.append("Optional license folder check…")
             let hints = await softProbeLicenseHints()
 
-            try? await Task.sleep(nanoseconds: 350_000_000)
             guard !Task.isCancelled else { return }
             if hints > 0 {
-                verifyLines.append("Found \(hints) SC_Info license folder(s)")
+                verifyLines.append("Saw \(hints) SC_Info folder(s) — good signal")
             } else {
-                verifyLines.append("No local license folders yet — sign-in still required")
+                // Soft scan often misses in the sandboxed host — not a failed App Store sign-in.
+                verifyLines.append("License folders not visible here — confirm if you signed in as \(email)")
             }
 
-            phase = .confirmSignIn(email: email, licenseHints: hints)
-            banner = hints > 0
-                ? "Almost done — confirm keys for \(email)."
-                : "Sign-in done? Confirm keys for \(email) to unlock companion decrypt."
+            presentConfirm(email: email, licenseHints: hints, fromReturn: true)
             openedAt = nil
             armReturnAfter = nil
+        }
+    }
+
+    private func presentConfirm(email: String, licenseHints: Int, fromReturn: Bool) {
+        phase = .confirmSignIn(email: email, licenseHints: licenseHints)
+        if licenseHints > 0 {
+            banner = "Almost done — confirm keys for \(email)."
+        } else if fromReturn {
+            banner = "If App Store Account Settings showed \(email), tap Confirm keys."
+        } else {
+            banner = "Confirm you signed in to App Store / Media & Purchases as \(email)."
         }
     }
 
@@ -261,23 +266,32 @@ final class FairPlayKeysFetcher: ObservableObject {
 
     // MARK: - Soft probe
 
-    /// Best-effort: count live App Store installs that expose an SC_Info folder.
-    /// Not proof of fairplayd keys, but a useful on-device signal after Media & Purchases.
+    /// Best-effort: count App Store installs that expose an SC_Info folder.
+    /// Cache-only — a live DeviceLibrary refresh needs pairing and can hang this sheet.
+    /// A miss is common in the sandboxed host and does **not** mean App Store sign-in failed.
     private func softProbeLicenseHints() async -> Int {
-        _ = await DeviceLibrary.shared.refreshAwaiting()
-        var bids = DeviceLibrary.shared.apps.filter(\.isAppStore).map(\.bundleID)
-        if bids.isEmpty {
-            // Fallback sample of common system-visible store apps from recent decrypt history.
-            bids = DecryptClient.shared.history.compactMap { app in
+        // Kick a background refresh for next time; never await it here.
+        DeviceLibrary.shared.refreshIfStale()
+
+        let storeApps = DeviceLibrary.shared.apps.filter(\.isAppStore)
+        var candidates: [(bundleID: String, path: String?)] = storeApps.map {
+            ($0.bundleID, $0.installPath)
+        }
+        if candidates.isEmpty {
+            candidates = DecryptClient.shared.history.compactMap { app in
                 let b = app.bundle.trimmingCharacters(in: .whitespacesAndNewlines)
-                return b.isEmpty ? nil : b
+                return b.isEmpty ? nil : (b, nil)
             }
         }
+
         var seen = Set<String>()
         var hits = 0
-        for bid in bids where seen.insert(bid).inserted {
+        for item in candidates where seen.insert(item.bundleID).inserted {
             guard hits < 12 else { break }
-            guard let live = FairPlayDecrypt.installedAppURL(bundleID: bid) else { continue }
+            guard let live = FairPlayDecrypt.installedAppURL(
+                bundleID: item.bundleID,
+                knownPath: item.path
+            ) else { continue }
             let sc = live.appendingPathComponent("SC_Info", isDirectory: true)
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: sc.path, isDirectory: &isDir), isDir.boolValue {

@@ -227,8 +227,8 @@ struct FairPlayKeysCaptureSheet: View {
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.white)
             Text(hints > 0
-                 ? "Found \(hints) App Store license folder(s) on this iPhone. Confirm you signed in as \(email)."
-                 : "Soft scan didn’t find SC_Info folders yet — that’s OK if you just signed in. Confirm you used \(email) in Media & Purchases.")
+                 ? "Saw \(hints) App Store license folder(s). Tap Confirm if App Store showed \(email)."
+                 : "TetherLess often can’t see SC_Info from the sandbox — that doesn’t mean sign-in failed. If App Store Account Settings showed \(email), tap Confirm.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.62))
                 .fixedSize(horizontal: false, vertical: true)
@@ -246,11 +246,21 @@ struct FairPlayKeysCaptureSheet: View {
             .buttonStyle(.plain)
 
             Button {
+                AppStoreDecryptGuide.openPurchaseHistory()
+            } label: {
+                Text("Open Purchase History to re-auth")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.white.opacity(0.75))
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.plain)
+
+            Button {
                 keys.startFetchFromSession(preferSettings: true)
             } label: {
                 Text("Not yet — open Media & Purchases again")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.7))
+                    .foregroundStyle(.white.opacity(0.55))
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.plain)
@@ -339,9 +349,9 @@ struct FairPlayKeysCaptureSheet: View {
                 ? "Opening Media & Purchases — sign in with \(who)."
                 : "Opening App Store account — sign in with \(who)."
         case .waitingForReturn:
-            return "Sign in with \(who), then return here. We’ll scan for license folders and ask you to confirm."
+            return "In App Store, open Account Settings and make sure it shows \(who). Then return here and Confirm — don’t worry if the license scan is empty."
         case .verifying:
-            return "Checking this iPhone for App Store license folders…"
+            return "Wrapping up — next step is Confirm keys for \(who)."
         default:
             return keys.banner ?? "Working…"
         }
