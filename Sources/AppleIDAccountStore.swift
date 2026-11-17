@@ -375,6 +375,8 @@ final class AppleIDStore: ObservableObject {
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
             statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
             lastError = nil
+            // MZFinance asks for a code but does not fire the Allow push — deliver it once via GSA.
+            await deliverAllowPushForStoreCode(force: false)
             throw AppStoreClientError.needsTwoFactor
         } catch let err as IPadnAppleLoginError {
             switch err {
@@ -382,6 +384,7 @@ final class AppleIDStore: ObservableObject {
                 withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
                 statusMessage = err.localizedDescription
                 lastError = nil
+                await deliverAllowPushForStoreCode(force: false)
                 throw AppStoreClientError.needsTwoFactor
             case .verificationRejected:
                 authPhase = .awaitingTwoFactor
@@ -533,67 +536,71 @@ final class AppleIDStore: ObservableObject {
 
         let gsaPending = GSAAuthClient.shared.hasPendingTwoFactor
 
-        // Path A — Store-first sign-in (iPadn MZFinance). That flow sets awaitingTwoFactor
-        // without starting GrandSlam. Never fall through to GSA submitTwoFactor or we hit
-        // missingPendingAuth ("Start Apple ID sign-in again… Store unlock also failed").
-        if !gsaPending {
-            statusMessage = "Unlocking Store with verification code…"
-            do {
-                try await signInViaIPadnStore(email: email, password: pw, code: digits)
-                return
-            } catch AppStoreClientError.needsTwoFactor {
-                lastError = "That code didn’t unlock Store. Tap Resend or enter a fresh code."
-                authPhase = .awaitingTwoFactor
-                statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
-                return
-            } catch {
-                // One more direct MZFinance attempt with the same credentials.
-                do {
-                    let store = try await authenticateStoreWithRetries(
-                        email: email,
-                        password: pw,
-                        authCode: digits
-                    )
-                    await finishRealSignInWithStoreOnly(email: email, password: pw, store: store)
-                    return
-                } catch AppStoreClientError.needsTwoFactor {
-                    lastError = "That code didn’t unlock Store. Tap Resend or enter a fresh code."
-                } catch {
-                    lastError = error.localizedDescription
-                        + " Try Resend for a fresh code, or Sign Out / Sign In."
-                }
-                authPhase = .awaitingTwoFactor
-                statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
-                return
-            }
-        }
-
-        // Path B — GrandSlam trusted-device / SMS challenge is live.
-        // Submit GSA FIRST. HSA2 Allow-sheet codes are for AuthKit; burning them on
-        // MZFinance first used to invalidate the pending challenge (missingPendingAuth).
-        statusMessage = "Finishing Apple ID trust…"
+        // Allow digits are delivered by GSA push but must hit MZFinance first (password+code).
+        // Submitting GSA first burns the one-time code so Store then says invalid — that was
+        // the “second try Allow appears, code already invalid” failure mode.
+        statusMessage = "Unlocking Store with verification code…"
         do {
-            let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
-            await finishRealSignIn(session: session, password: pw)
+            try await signInViaIPadnStore(email: email, password: pw, code: digits)
+            await finishOrClearPendingGSA(code: digits)
+            return
+        } catch AppStoreClientError.needsTwoFactor {
+            lastError = "That code didn’t unlock Store. Tap Send again for a fresh Allow sheet, then enter the new code."
+            authPhase = .awaitingTwoFactor
+            statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
+            return
         } catch {
-            // Recovery: if MZFinance still accepts the digits, finish Store-only.
+            // Direct MZFinance retry before involving GrandSlam.
             do {
                 let store = try await authenticateStoreWithRetries(
                     email: email,
                     password: pw,
                     authCode: digits
                 )
-                if store.isUsable {
-                    await finishRealSignInWithStoreOnly(email: email, password: pw, store: store)
+                await finishRealSignInWithStoreOnly(email: email, password: pw, store: store)
+                await finishOrClearPendingGSA(code: digits)
+                return
+            } catch AppStoreClientError.needsTwoFactor {
+                lastError = "That code didn’t unlock Store. Tap Send again for a fresh Allow sheet, then enter the new code."
+                authPhase = .awaitingTwoFactor
+                statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
+                return
+            } catch {
+                if !gsaPending {
+                    lastError = error.localizedDescription
+                        + " Tap Send again for a fresh Allow sheet, or Sign Out / Sign In."
+                    authPhase = .awaitingTwoFactor
+                    statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
                     return
                 }
-            } catch {
-                // Keep the original GSA error below.
+                // Fall through to portal GSA when Store rejected for a non-2FA reason.
             }
+        }
+
+        guard gsaPending else { return }
+
+        // Portal / GrandSlam only — Store already failed above.
+        statusMessage = "Finishing Apple ID trust…"
+        do {
+            let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
+            await finishRealSignIn(session: session, password: pw)
+        } catch {
             lastError = error.localizedDescription
-                + " Try Resend, or Sign Out / Sign In."
+                + " Tap Send again for a fresh Allow sheet, or Sign Out / Sign In."
             statusMessage = twoFactorPromptMessage()
             authPhase = .awaitingTwoFactor
+        }
+    }
+
+    /// Fire trusted-device Allow once so the in-app code field has digits to enter.
+    /// MZFinance `needsTwoFactor` does not send the system Allow sheet by itself.
+    private func deliverAllowPushForStoreCode(force: Bool) async {
+        await requestTrustedDevicePush(forStoreUnlock: false, force: force)
+        if authPhase != .awaitingTwoFactor, authPhase != .verifying {
+            withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+        }
+        if statusMessage?.isEmpty != false {
+            statusMessage = twoFactorPromptMessage()
         }
     }
 
@@ -742,14 +749,27 @@ final class AppleIDStore: ObservableObject {
         return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off (moon) if they don’t appear. Enter that code below."
     }
 
-    /// Force another trusted-device Allow push (“Send again to devices”).
+    /// Trusted-device Allow push (“Send again to devices”).
     /// - Parameter forStoreUnlock: Second-step Store unlock after Apple ID is already signed in.
-    ///   Opens a fresh GSA challenge + Allow push when none is pending (same as pre-#111 Settings).
-    func requestTrustedDevicePush(forStoreUnlock: Bool = false) async {
+    /// - Parameter force: When false, keep an Allow that was already sent (a second push burns the first code).
+    func requestTrustedDevicePush(forStoreUnlock: Bool = false, force: Bool = false) async {
         lastError = nil
+        let keepStoreSheet = forStoreUnlock || (isSignedIn && storeNeedsVerification)
         authPhase = .verifying
-        statusMessage = "Sending Allow request to your trusted devices…"
+        statusMessage = force
+            ? "Sending a fresh Allow request to your trusted devices…"
+            : "Sending Allow request to your trusted devices…"
         let gsa = GSAAuthClient.shared
+
+        func finishWaitingForCode() {
+            refreshTwoFactorChannelFromGSA()
+            if forStoreUnlock || storeNeedsVerification || isSignedIn {
+                storeNeedsVerification = forStoreUnlock || storeNeedsVerification || isSignedIn
+            }
+            authPhase = keepStoreSheet ? .idle : .awaitingTwoFactor
+            statusMessage = twoFactorPromptMessage()
+        }
+
         do {
             if !gsa.hasPendingTwoFactor {
                 // After Apple ID sign-in, GSA pending is cleared — open a new challenge and
@@ -763,8 +783,7 @@ final class AppleIDStore: ObservableObject {
                         statusMessage = "Store access ready — free & purchased downloads unlocked"
                         return
                     }
-                    // No 2FA and no Store session — keep unlock UI up.
-                    if forStoreUnlock || storeNeedsVerification {
+                    if keepStoreSheet {
                         storeNeedsVerification = true
                         authPhase = .idle
                         statusMessage = "Couldn't mint Store from trust alone — tap Send again, then enter the Allow code."
@@ -773,28 +792,24 @@ final class AppleIDStore: ObservableObject {
                     }
                     return
                 } catch AppleAuthError.needsTwoFactor {
-                    // authenticateOnce already sent the Allow push.
-                    refreshTwoFactorChannelFromGSA()
-                    storeNeedsVerification = forStoreUnlock || storeNeedsVerification || isSignedIn
-                    // Keep Apple ID login sheet closed when this is the Store second step.
-                    authPhase = (forStoreUnlock || (isSignedIn && storeNeedsVerification))
-                        ? .idle
-                        : .awaitingTwoFactor
-                    statusMessage = twoFactorPromptMessage()
+                    // authenticateOnce already sent the Allow push — do not send another.
+                    finishWaitingForCode()
                     return
                 }
             }
+
+            // Challenge already live: only re-push when the user explicitly asks (force),
+            // otherwise a second /trusteddevice invalidates the code on screen.
+            if gsa.twoFactorCodeAlreadySent, !force {
+                finishWaitingForCode()
+                return
+            }
             _ = try await gsa.requestTrustedDevicePush()
-            refreshTwoFactorChannelFromGSA()
-            storeNeedsVerification = forStoreUnlock || storeNeedsVerification || isSignedIn
-            authPhase = (forStoreUnlock || (isSignedIn && storeNeedsVerification))
-                ? .idle
-                : .awaitingTwoFactor
-            statusMessage = twoFactorPromptMessage()
+            finishWaitingForCode()
         } catch {
             refreshTwoFactorChannelFromGSA()
-            storeNeedsVerification = forStoreUnlock || storeNeedsVerification || isSignedIn
-            if forStoreUnlock || (isSignedIn && storeNeedsVerification) {
+            if keepStoreSheet {
+                storeNeedsVerification = true
                 authPhase = .idle
             } else {
                 authPhase = gsa.hasPendingTwoFactor ? .awaitingTwoFactor : .idle

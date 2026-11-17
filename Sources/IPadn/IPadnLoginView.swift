@@ -376,39 +376,20 @@ struct IPadnLoginView: View {
         }
     }
 
-    /// Sign in again without a code so Apple sends a fresh one (iPadn resend).
+    /// Ask Apple for a fresh Allow push. Do not re-run password login — that can leave
+    /// an old Allow on screen while a new push invalidates its code.
     private func resendCode() {
         guard !busy else { return }
         restorePendingIdentityIfNeeded()
-        let e = email.trimmingCharacters(in: .whitespacesAndNewlines)
-        let p = password.isEmpty ? (store.pendingSignInPassword() ?? "") : password
-        guard !e.isEmpty, !p.isEmpty else {
-            failure = "Missing Apple ID for resend. Tap Change account or password, then sign in again."
-            return
-        }
-        if password.isEmpty { password = p }
         busy = true
         failure = nil
         code = ""
         loginTask = Task {
             defer { busy = false; loginTask = nil }
-            do {
-                try await store.signInViaIPadnStore(
-                    email: e,
-                    password: p,
-                    code: ""
-                )
-                password = ""
-                onSignedIn?()
-                dismiss()
-            } catch AppStoreClientError.needsTwoFactor {
-                verifying = true
-                failure = nil
-            } catch is CancellationError {
-                // Resend cancelled (e.g. app backgrounded) — keep the code sheet.
-                verifying = true
-            } catch {
-                failure = error.localizedDescription
+            await store.requestTrustedDevicePush(force: true)
+            verifying = true
+            if let err = store.lastError, !err.isEmpty {
+                failure = err
             }
         }
     }
@@ -500,7 +481,7 @@ struct IPadnStoreUnlockSheet: View {
                         issue: failure ?? store.lastError,
                         submitTitle: "Unlock Store",
                         sent: true,
-                        resend: { Task { await sendAllowPush() } },
+                        resend: { Task { await sendAllowPush(force: true) } },
                         submit: { submit() },
                         changeAccount: {
                             store.clearPendingTwoFactorUI()
@@ -518,7 +499,7 @@ struct IPadnStoreUnlockSheet: View {
                         .padding(.horizontal, 8)
 
                     Button {
-                        Task { await sendAllowPush() }
+                        Task { await sendAllowPush(force: true) }
                     } label: {
                         Label("Send Allow to devices again", systemImage: "iphone.radiowaves.left.and.right")
                             .font(.footnote.weight(.semibold))
@@ -542,17 +523,18 @@ struct IPadnStoreUnlockSheet: View {
             .task {
                 guard !didRequestPush else { return }
                 didRequestPush = true
-                await sendAllowPush()
+                // force:false — keep an Allow already in flight; a second push burns its code.
+                await sendAllowPush(force: false)
             }
         }
         .presentationDetents([.medium, .large])
     }
 
-    private func sendAllowPush() async {
+    private func sendAllowPush(force: Bool) async {
         busy = true
         failure = nil
         defer { busy = false }
-        await store.requestTrustedDevicePush(forStoreUnlock: true)
+        await store.requestTrustedDevicePush(forStoreUnlock: true, force: force)
         if let err = store.lastError, !err.isEmpty {
             failure = err
         }
