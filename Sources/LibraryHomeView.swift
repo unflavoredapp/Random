@@ -187,14 +187,14 @@ struct LibraryHomeView: View {
                             Text(app.name).font(.headline).foregroundStyle(.white)
                             Text(app.bundleID)
                                 .font(.caption).foregroundStyle(.white.opacity(0.55)).lineLimit(1)
-                            if app.isAppStore {
-                                Text("FairPlay · on device")
+                            if app.isFairPlayEncrypted {
+                                Text(app.isTestFlight ? "TestFlight · FairPlay" : "FairPlay · on device")
                                     .font(.caption2.weight(.semibold))
                                     .foregroundStyle(TetherlessPalette.accent.opacity(0.9))
                             }
                         }
                         Spacer(minLength: 8)
-                        if app.isAppStore {
+                        if app.isDecryptTarget(includeTestFlight: FairPlayAdvancedOptions.includeTestFlightApps) {
                             Button {
                                 AppNav.shared.goSearch()
                                 Task { await DeviceDecryptService.shared.decryptInstalled(app) }

@@ -285,6 +285,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         FairPlayAdvancedOptions.defaultRetryRounds
     @AppStorage(FairPlayAdvancedOptions.pathDiagnosticsKey) private var pathDiagnostics = false
     @AppStorage(FairPlayAdvancedOptions.requireAllFrameworksKey) private var requireAllFrameworks = false
+    @AppStorage(FairPlayAdvancedOptions.includeTestFlightKey) private var includeTestFlight = true
 
     private var sourceMode: FairPlayAdvancedOptions.SourceMode {
         FairPlayAdvancedOptions.SourceMode(rawValue: sourceModeRaw) ?? .automatic
@@ -304,6 +305,14 @@ private struct FairPlayAdvancedSettingsSection: View {
             Text("Source")
         } footer: {
             Text("Automatic is best for most apps. Live install only helps when EmbeddedPayload hits FairPlay EPERM (e.g. Roblox).")
+        }
+
+        Section {
+            Toggle("Include TestFlight apps", isOn: $includeTestFlight)
+        } header: {
+            Text("Installed apps")
+        } footer: {
+            Text("When on, TestFlight betas (Beta Distribution signing) appear in Decrypt and FairPlay keys readiness alongside App Store installs.")
         }
 
         Section {
@@ -363,6 +372,7 @@ private struct FairPlayAdvancedSettingsSection: View {
                 retryRounds = FairPlayAdvancedOptions.defaultRetryRounds
                 pathDiagnostics = false
                 requireAllFrameworks = false
+                includeTestFlight = true
             }
         }
     }

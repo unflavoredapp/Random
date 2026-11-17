@@ -26,9 +26,10 @@ final class DeviceDecryptService: ObservableObject {
 
     private init() {}
 
-    /// App Store / DRM apps on this device that can be decrypted with local keys.
+    /// App Store / TestFlight DRM apps on this device that can be decrypted with local keys.
     var drmApps: [DeviceApp] {
-        DeviceLibrary.shared.apps.filter(\.isAppStore)
+        let includeTF = FairPlayAdvancedOptions.includeTestFlightApps
+        return DeviceLibrary.shared.apps.filter { $0.isDecryptTarget(includeTestFlight: includeTF) }
     }
 
     /// Known-free App Store listing used for one-tap Store → download → companion smoke tests.

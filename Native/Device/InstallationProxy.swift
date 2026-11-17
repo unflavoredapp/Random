@@ -239,27 +239,55 @@ public final class InstallationProxy: Identifiable, ObservableObject {
 
 /// A user-installed app reported by the device's installation service.
 /// `isAppStore` is true when iOS reports Apple's App Store signature (FairPlay-encrypted, i.e. not decrypted).
+/// `isTestFlight` is true for TestFlight Beta Distribution installs (also FairPlay-encrypted).
 public struct DeviceApp: Identifiable, Hashable, Codable, Sendable {
     public let bundleID: String
     public let name: String
     public let version: String
     public let isAppStore: Bool
+    /// TestFlight beta install (SignerIdentity / beta markers) — FairPlay-encrypted like Store apps.
+    public let isTestFlight: Bool
     /// App + data size on disk, when the device reported it.
     public let sizeBytes: Int64?
     /// On-device .app / bundle container path from installd (`Path`), when available.
     public let installPath: String?
     public var id: String { bundleID }
+    /// FairPlay decrypt candidate: App Store and/or TestFlight beta.
+    public var isFairPlayEncrypted: Bool { isAppStore || isTestFlight }
+    /// Whether this install should appear as a decrypt target given advanced options.
+    public func isDecryptTarget(includeTestFlight: Bool) -> Bool {
+        if isAppStore { return true }
+        return includeTestFlight && isTestFlight
+    }
     public init(
         bundleID: String,
         name: String,
         version: String,
         isAppStore: Bool = false,
+        isTestFlight: Bool = false,
         sizeBytes: Int64? = nil,
         installPath: String? = nil
     ) {
         self.bundleID = bundleID; self.name = name; self.version = version
-        self.isAppStore = isAppStore; self.sizeBytes = sizeBytes
+        self.isAppStore = isAppStore; self.isTestFlight = isTestFlight
+        self.sizeBytes = sizeBytes
         self.installPath = installPath
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case bundleID, name, version, isAppStore, isTestFlight, sizeBytes, installPath
+    }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        bundleID = try c.decode(String.self, forKey: .bundleID)
+        name = try c.decode(String.self, forKey: .name)
+        version = try c.decode(String.self, forKey: .version)
+        isAppStore = try c.decodeIfPresent(Bool.self, forKey: .isAppStore) ?? false
+        // Older cached lists omit this key — treat as non-TestFlight until refresh.
+        isTestFlight = try c.decodeIfPresent(Bool.self, forKey: .isTestFlight) ?? false
+        sizeBytes = try c.decodeIfPresent(Int64.self, forKey: .sizeBytes)
+        installPath = try c.decodeIfPresent(String.self, forKey: .installPath)
     }
 }
 
@@ -336,10 +364,20 @@ extension InstallationProxy {
     private static func deviceApp(from info: plist_t) -> DeviceApp? {
         guard let bundleID = string(info, "CFBundleIdentifier") else { return nil }
         if let type = string(info, "ApplicationType"), type != "User" { return nil }
-        // App Store (and TestFlight) apps carry Apple's own signature and are FairPlay-encrypted.
+        // App Store: Apple iPhone OS Application Signing / ApplicationDSID.
+        // TestFlight betas: "TestFlight Beta Distribution" (etc.) — also FairPlay-encrypted.
         let signer = string(info, "SignerIdentity") ?? ""
-        let store = signer.hasPrefix("Apple iPhone OS Application Signing") || plist_dict_get_item(info, "ApplicationDSID") != nil
-        if bundleID.hasPrefix("com.apple.") && !store { return nil }
+        let signerLower = signer.lowercased()
+        let storeSigning = signer.hasPrefix("Apple iPhone OS Application Signing")
+            || plist_dict_get_item(info, "ApplicationDSID") != nil
+        let testFlightSigning = signerLower.contains("testflight")
+            || signerLower.contains("beta distribution")
+            || plist_dict_get_item(info, "BetaAppStatus") != nil
+            || plist_dict_get_item(info, "IsBetaApp") != nil
+        // Apple's TestFlight *client* is a normal Store app, not a beta target.
+        let isTF = testFlightSigning && bundleID != "com.apple.TestFlight"
+        let isStore = storeSigning || bundleID == "com.apple.TestFlight"
+        if bundleID.hasPrefix("com.apple.") && !isStore && !isTF { return nil }
         let name = string(info, "CFBundleDisplayName") ?? string(info, "CFBundleName") ?? bundleID
         let version = string(info, "CFBundleShortVersionString") ?? string(info, "CFBundleVersion") ?? ""
         let fixed = uint(info, "StaticDiskUsage"), dynamic = uint(info, "DynamicDiskUsage")
@@ -349,7 +387,8 @@ extension InstallationProxy {
             bundleID: bundleID,
             name: name,
             version: version,
-            isAppStore: store,
+            isAppStore: isStore,
+            isTestFlight: isTF,
             sizeBytes: size,
             installPath: path
         )
@@ -376,7 +415,8 @@ extension InstallationProxy {
         plist_dict_set_item(options, "ApplicationType", plist_new_string("User"))
         let attributes = plist_new_array()
         for key in ["CFBundleIdentifier", "CFBundleDisplayName", "CFBundleName", "CFBundleShortVersionString", "CFBundleVersion",
-                    "ApplicationType", "SignerIdentity", "ApplicationDSID", "StaticDiskUsage", "DynamicDiskUsage",
+                    "ApplicationType", "SignerIdentity", "ApplicationDSID", "BetaAppStatus", "IsBetaApp",
+                    "StaticDiskUsage", "DynamicDiskUsage",
                     "Path", "BundlePath", "Container"] {
             plist_array_append_item(attributes, plist_new_string(key))
         }
