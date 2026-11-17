@@ -192,6 +192,43 @@ struct AuthClientSpoof: Equatable, Codable, Sendable {
         }
     }
 
+    /// Allow (map) + code sheets overlay **this** iPhone only when AuthKit claims a MacBook.
+    /// An iPhone AuthKit identity (left over after the Sign-in device picker was removed)
+    /// pushes to *other* trusted devices instead — no location Allow on this phone.
+    /// Returns `true` when a stuck non-Mac identity was reset.
+    @discardableResult
+    static func ensureMacBookForAllowOverlay() -> Bool {
+        let before = current
+        guard before.kind != .mac else { return false }
+        current = .default
+        return true
+    }
+
+    /// Mac-only Client-Info list for `/auth/verify/trusteddevice` (map Allow on this iPhone).
+    /// Never leads with a persisted iPhone profile.
+    static func macAllowClientInfos() -> [(clientInfo: String, userAgent: String)] {
+        _ = ensureMacBookForAllowOverlay()
+        var seen = Set<String>()
+        var out: [(String, String)] = []
+        let primary = current
+        if primary.kind == .mac {
+            seen.insert(primary.clientInfo)
+            out.append((primary.clientInfo, primary.userAgent))
+        }
+        for profile in AuthClientProfile.builtIn where profile.kind == .mac {
+            let info = profile.clientInfo
+            guard !seen.contains(info) else { continue }
+            seen.insert(info)
+            out.append((info, profile.userAgent))
+            if out.count >= 4 { break }
+        }
+        if out.isEmpty {
+            let d = AuthClientSpoof.default
+            out.append((d.clientInfo, d.userAgent))
+        }
+        return out
+    }
+
     mutating func apply(_ profile: AuthClientProfile) {
         profileID = profile.id
         kind = profile.kind

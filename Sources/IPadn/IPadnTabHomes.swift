@@ -430,7 +430,7 @@ struct AccountHomeView: View {
                                 systemImage: "person.badge.key.fill"
                             )
                         }
-                        Text("Step 1 of 2 — Apple ID. You’ll get an Allow sheet and a 6-digit code. Store downloads are a separate Allow in step 2.")
+                        Text("Step 1 of 2 — Apple ID. Sign-in uses MacBook style so the Allow sheet (with a map) and code appear on this iPhone. Store downloads are a separate Allow in step 2.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } header: {

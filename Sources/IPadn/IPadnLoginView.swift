@@ -100,8 +100,8 @@ struct IPadnVerificationStep: View {
                 .font(.title.weight(.bold))
                 .foregroundStyle(.white)
             Text(sent
-                 ? "Apple sent a sign-in request to trusted devices for “\(accountLabel)”. Tap Allow, then enter the 6-digit code."
-                 : "Asking Apple to send a verification code to trusted devices for “\(accountLabel)”…")
+                 ? "Apple sent a sign-in request for “\(accountLabel)”. Watch for the Allow sheet with a map on this iPhone (MacBook sign-in), tap Allow, then enter the 6-digit code."
+                 : "Asking Apple to send an Allow sheet (map on this iPhone) for “\(accountLabel)”…")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.55))
                 .multilineTextAlignment(.center)
@@ -165,7 +165,7 @@ struct IPadnVerificationStep: View {
         .alert("Get a verification code", isPresented: $showingHelp) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Codes go to iPhone, iPad, or Mac devices signed into this Apple Account — not SMS by default.\n1. Tap Allow on the Apple Account sign-in prompt.\n2. Or open Settings › [your name] › Sign-In & Security › Get Verification Code on a trusted device.\n3. If nothing arrives, tap Resend Code. Apple may throttle frequent requests.")
+            Text("Tetherless signs in as a MacBook so Apple’s Allow sheet (with a map) and the 6-digit code appear on this iPhone.\n1. Tap Allow on that sheet, then type the code below.\n2. Turn Focus / Do Not Disturb off if nothing appears.\n3. Tap Resend Code for a fresh MacBook Allow — don’t pull the code only from another device unless this phone never shows the map sheet.")
         }
     }
 }
@@ -195,6 +195,8 @@ struct IPadnLoginView: View {
     @State private var code = ""
     @State private var busy = false
     @State private var verifying = false
+    /// True only after GSA reports a trusted-device push was accepted (not assumed).
+    @State private var allowPushSent = false
     @State private var failure: String?
     @State private var loginTask: Task<Void, Never>?
     @FocusState private var focus: Field?
@@ -232,12 +234,14 @@ struct IPadnLoginView: View {
                         busy: busy,
                         issue: failure,
                         submitTitle: "Verify & Sign In",
+                        sent: allowPushSent,
                         stepLabel: "Step 1 of 2 · Apple ID",
-                        footnote: "If Store downloads still need access after this, you’ll get a second Allow sheet — that’s step 2, not a failed login.",
+                        footnote: "Allow uses the MacBook sign-in style so the map sheet appears on this iPhone. If Store downloads still need access after this, you’ll get a second Allow — that’s step 2.",
                         resend: resendCode,
                         submit: submit,
                         changeAccount: {
                             verifying = false
+                            allowPushSent = false
                             code = ""
                             failure = nil
                             focus = .password
@@ -410,8 +414,13 @@ struct IPadnLoginView: View {
             defer { busy = false; loginTask = nil }
             await store.requestTrustedDevicePush(force: true)
             verifying = true
+            allowPushSent = GSAAuthClient.shared.twoFactorCodeAlreadySent
             if let err = store.lastError, !err.isEmpty {
                 failure = err
+            } else if !allowPushSent {
+                failure = "Allow sheet wasn’t delivered. Turn Focus off, then tap Resend Code."
+            } else {
+                failure = nil
             }
         }
     }
@@ -456,7 +465,15 @@ struct IPadnLoginView: View {
             } catch AppStoreClientError.needsTwoFactor {
                 verifying = true
                 code = ""
-                failure = nil
+                allowPushSent = GSAAuthClient.shared.twoFactorCodeAlreadySent
+                // Don’t claim “Apple sent…” when the MacBook Allow push failed or was skipped.
+                if let err = store.lastError, !err.isEmpty {
+                    failure = err
+                } else if !allowPushSent {
+                    failure = "Allow sheet wasn’t delivered. Turn Focus off, then tap Resend Code."
+                } else {
+                    failure = nil
+                }
             } catch is CancellationError {
                 // Leaving the app to tap Allow cancels the network task — keep the sheet.
                 if verifying || store.authPhase == .awaitingTwoFactor {
@@ -502,9 +519,9 @@ struct IPadnStoreUnlockSheet: View {
                         busy: busy,
                         issue: failure ?? store.lastError,
                         submitTitle: "Unlock Store",
-                        sent: true,
+                        sent: GSAAuthClient.shared.twoFactorCodeAlreadySent || didRequestPush,
                         stepLabel: "Step 2 of 2 · Store downloads",
-                        footnote: "Apple ID is already signed in. This second Allow unlocks purchases and silent downloads — separate from step 1.",
+                        footnote: "Apple ID is already signed in. This second MacBook-style Allow (map on this iPhone) unlocks purchases and silent downloads — separate from step 1.",
                         resend: { Task { await sendAllowPush(force: true) } },
                         submit: { submit() },
                         changeAccount: {
@@ -525,7 +542,7 @@ struct IPadnStoreUnlockSheet: View {
                     Button {
                         Task { await sendAllowPush(force: true) }
                     } label: {
-                        Label("Send Allow to devices again", systemImage: "iphone.radiowaves.left.and.right")
+                        Label("Send MacBook Allow again", systemImage: "iphone.radiowaves.left.and.right")
                             .font(.footnote.weight(.semibold))
                             .foregroundStyle(TetherlessPalette.accent)
                     }
@@ -548,6 +565,7 @@ struct IPadnStoreUnlockSheet: View {
                 guard !didRequestPush else { return }
                 didRequestPush = true
                 // force:false — keep an Allow already in flight; a second push burns its code.
+                // (If AuthKit was stuck on iPhone, requestTrustedDevicePush force-refreshes as Mac.)
                 await sendAllowPush(force: false)
             }
         }
@@ -561,6 +579,8 @@ struct IPadnStoreUnlockSheet: View {
         await store.requestTrustedDevicePush(forStoreUnlock: true, force: force)
         if let err = store.lastError, !err.isEmpty {
             failure = err
+        } else if !GSAAuthClient.shared.twoFactorCodeAlreadySent {
+            failure = "Allow sheet wasn’t delivered. Turn Focus off, then tap Send MacBook Allow again."
         }
     }
 

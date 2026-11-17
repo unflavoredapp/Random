@@ -685,10 +685,11 @@ final class GSAAuthClient: ObservableObject {
 
         var lastData = Data()
         var lastCode = 0
-        // Selected MacBook/iPhone AuthKit identity first (Settings › Sign-in device),
-        // then alternate Mac profiles, then raw anisette/Windows — SideSign parity.
+        // MacBook AuthKit only — that is what makes Apple’s map Allow + code overlay
+        // this iPhone. A persisted iPhone Client-Info (old Sign-in device setting) sends
+        // the push to *other* devices and looks like “trusted device but no location popup”.
         if preferMacClient {
-            for identity in AuthClientSpoof.current.fallbackClientInfos {
+            for identity in AuthClientSpoof.macAllowClientInfos() {
                 let (data, code) = try await attempt(spoofClient: true, override: identity)
                 lastData = data
                 lastCode = code

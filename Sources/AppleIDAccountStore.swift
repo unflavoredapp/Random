@@ -375,7 +375,8 @@ final class AppleIDStore: ObservableObject {
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
             statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
             lastError = nil
-            // MZFinance asks for a code but does not fire the Allow push — deliver it once via GSA.
+            // MZFinance asks for a code but does not fire the Allow push — deliver it once via GSA
+            // as a MacBook so the map Allow overlays this iPhone (not “other trusted devices only”).
             await deliverAllowPushForStoreCode(force: false)
             throw AppStoreClientError.needsTwoFactor
         } catch let err as IPadnAppleLoginError {
@@ -595,7 +596,10 @@ final class AppleIDStore: ObservableObject {
     /// Fire trusted-device Allow once so the in-app code field has digits to enter.
     /// MZFinance `needsTwoFactor` does not send the system Allow sheet by itself.
     private func deliverAllowPushForStoreCode(force: Bool) async {
-        await requestTrustedDevicePush(forStoreUnlock: false, force: force)
+        // Reset a stuck iPhone AuthKit identity and re-push as MacBook when needed —
+        // otherwise Apple never shows the location Allow on this phone.
+        let resetFromiPhone = AuthClientSpoof.ensureMacBookForAllowOverlay()
+        await requestTrustedDevicePush(forStoreUnlock: false, force: force || resetFromiPhone)
         if authPhase != .awaitingTwoFactor, authPhase != .verifying {
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
         }
@@ -741,12 +745,12 @@ final class AppleIDStore: ObservableObject {
             }
             return "Enter the 6-digit code texted to your phone."
         }
-        // System sheets overlay THIS app when we sign in as the spoofed MacBook/iPhone.
+        // System sheets overlay THIS app when AuthKit claims a MacBook (not iPhone).
         let device = AuthClientSpoof.current.displayName
         if storeNeedsVerification, isSignedIn {
-            return "Watch for Apple’s Allow sheet (map · \(device)) and enter the 6-digit code below to unlock Store downloads. Turn Focus off (moon) if it doesn’t appear."
+            return "Watch for Apple’s Allow sheet (map · \(device)) on this iPhone and enter the 6-digit code below to unlock Store downloads. Turn Focus off (moon) if it doesn’t appear."
         }
-        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off (moon) if they don’t appear. Enter that code below."
+        return "Watch for Apple’s Allow sheet (map · \(device)) on this iPhone, then enter the verification code below — turn Focus off (moon) if they don’t appear."
     }
 
     /// Trusted-device Allow push (“Send again to devices”).
@@ -754,11 +758,14 @@ final class AppleIDStore: ObservableObject {
     /// - Parameter force: When false, keep an Allow that was already sent (a second push burns the first code).
     func requestTrustedDevicePush(forStoreUnlock: Bool = false, force: Bool = false) async {
         lastError = nil
+        // Always MacBook for map Allow on this iPhone (Store unlock + Apple ID Step 1).
+        let resetFromiPhone = AuthClientSpoof.ensureMacBookForAllowOverlay()
+        let forcePush = force || resetFromiPhone
         let keepStoreSheet = forStoreUnlock || (isSignedIn && storeNeedsVerification)
         authPhase = .verifying
-        statusMessage = force
-            ? "Sending a fresh Allow request to your trusted devices…"
-            : "Sending Allow request to your trusted devices…"
+        statusMessage = forcePush
+            ? "Sending a fresh Allow request (MacBook · map on this iPhone)…"
+            : "Sending Allow request (MacBook · map on this iPhone)…"
         let gsa = GSAAuthClient.shared
 
         func finishWaitingForCode() {
@@ -807,8 +814,8 @@ final class AppleIDStore: ObservableObject {
             }
 
             // Challenge already live: only re-push when the user explicitly asks (force),
-            // otherwise a second /trusteddevice invalidates the code on screen.
-            if gsa.twoFactorCodeAlreadySent, !force {
+            // or we just flipped AuthKit back to MacBook (prior iPhone push won't overlay here).
+            if gsa.twoFactorCodeAlreadySent, !forcePush {
                 finishWaitingForCode()
                 return
             }
@@ -826,7 +833,7 @@ final class AppleIDStore: ObservableObject {
                 authPhase = gsa.hasPendingTwoFactor ? .awaitingTwoFactor : .idle
             }
             lastError = error.localizedDescription
-            statusMessage = "Couldn't reach your other devices. Turn Focus off, then tap Send again."
+            statusMessage = "Couldn't send the MacBook Allow sheet. Turn Focus off, then tap Resend Code."
         }
     }
 
