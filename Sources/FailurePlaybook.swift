@@ -75,7 +75,7 @@ enum FailurePlaybook {
             id: "fairplay-gate",
             title: "App Store Media & Purchases sign-in needed",
             summary: "Sign in once in the App Store (or Settings → your name → Media & Purchases) with the same Apple ID, then tap I’ve signed in on this iPhone and retry the download.",
-            matches: ["before silent download", "i’ve signed in on this iphone", "i've signed in on this iphone", "media & purchases"],
+            matches: ["before silent download", "before companion decrypt", "i’ve signed in on this iphone", "i've signed in on this iphone", "media & purchases", "confirming fairplay keys", "fairplay keys ready"],
             actionTitle: "I’ve signed in on this iPhone",
             action: .acknowledgeFairPlay
         ),

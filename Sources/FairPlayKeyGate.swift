@@ -13,7 +13,7 @@ enum FairPlayKeyGateError: LocalizedError {
         switch self {
         case .notAcknowledged(let email):
             let who = email.isEmpty ? "your Apple Account" : email
-            return "Before silent download, sign in once to the App Store (Media & Purchases) with \(who) on this iPhone, then tap “I’ve signed in on this iPhone” under Decrypt. That stores FairPlay keys iOS needs."
+            return "Before companion decrypt, sign in once to the App Store (Media & Purchases) with \(who) on this iPhone, then tap “I’ve signed in on this iPhone” under Decrypt. That stores FairPlay keys iOS needs."
         }
     }
 }
@@ -40,5 +40,23 @@ enum FairPlayKeyGate {
 
     static var isReady: Bool {
         AppleIDStore.shared.isSignedIn && AppStoreDecryptGuide.isAcknowledged(email: AppleIDStore.shared.email)
+    }
+
+    /// Visible host step before packaging/opening the companion: confirm Media & Purchases
+    /// ack for the active Apple ID, publish the snapshot to App Group, report progress.
+    @discardableResult
+    static func confirmReadyForCompanion(progress: ((String) -> Void)? = nil) throws -> String {
+        let email = AppleIDStore.shared.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        let who = email.isEmpty ? "your Apple Account" : email
+        progress?("Confirming FairPlay keys for \(who)…")
+        try requireReady(email: email.isEmpty ? nil : email)
+        // Companion reads email / ack via App Group — publish before packaging.
+        DecryptCompanionHandoff.publishHostSnapshot()
+        if enforce {
+            progress?("FairPlay keys ready · \(who)")
+        } else {
+            progress?("FairPlay key gate off — continuing without Media & Purchases ack")
+        }
+        return email
     }
 }

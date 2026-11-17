@@ -59,19 +59,25 @@ enum DecryptCompanionInstaller {
         progress: ((String) -> Void)?,
         build: (_ bundleID: String, _ progress: ((String) -> Void)?) throws -> DecryptCompanionPackager.Package
     ) async throws -> String {
-        progress?("1/6 · Preparing signing certificate (Apple ID, then custom)…")
-        DecryptCompanionHandoff.publishHostSnapshot()
+        // Step 1 — never package/open companion until Media & Purchases ack is on record.
+        progress?("1/7 · Confirming FairPlay keys on this iPhone…")
+        let keyEmail = try FairPlayKeyGate.confirmReadyForCompanion { msg in
+            progress?("1/7 · \(msg)")
+        }
+        _ = keyEmail
+
+        progress?("2/7 · Preparing signing certificate (Apple ID, then custom)…")
         let material = try await resolveCompanionSigningMaterial(progress: progress)
 
         let bundleID = DecryptCompanionPackager.companionBundleID(forProvision: material.provision)
         UserDefaults.standard.set(bundleID, forKey: companionBundleIDKey)
 
-        progress?("2/6 · Embedding \(displayName) (slim Mach-Os + SC_Info)…")
+        progress?("3/7 · Embedding \(displayName) (slim Mach-Os + SC_Info)…")
         let package = try build(bundleID, progress)
         let sizeMB = Double(package.approximateBytes) / 1_048_576.0
         progress?(String(format: "Companion package · %.0f MB", sizeMB))
 
-        progress?("3/6 · Signing Tetherless Decrypt with \(material.name)…")
+        progress?("4/7 · Signing Tetherless Decrypt with \(material.name)…")
         var options = SignOptions()
         options.name = DecryptCompanionPackager.companionDisplayName
         options.bundleID = bundleID
@@ -105,7 +111,7 @@ enum DecryptCompanionInstaller {
         )
         progress?("Signed \(DecryptCompanionPackager.companionDisplayName).")
 
-        progress?("4/6 · Installing on this iPhone…")
+        progress?("5/7 · Installing on this iPhone…")
         let hold = "companion-\(UUID().uuidString)"
         if NativeInstaller.isSelected { BackgroundKeepAlive.shared.start(hold) }
         defer { BackgroundKeepAlive.shared.stop(hold) }
@@ -139,8 +145,8 @@ enum DecryptCompanionInstaller {
             }
         }
 
-        progress?("5/6 · Trust Apple ID under Settings › General › VPN & Device Management if asked…")
-        progress?("6/6 · Opening Tetherless Decrypt…")
+        progress?("6/7 · Trust Apple ID under Settings › General › VPN & Device Management if asked…")
+        progress?("7/7 · Opening Tetherless Decrypt…")
 
         // Host must not keep a fake companion sheet — the console UI is the separate IPA.
         DecryptCompanionController.shared.dismiss()

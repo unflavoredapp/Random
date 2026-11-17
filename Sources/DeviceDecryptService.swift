@@ -640,6 +640,9 @@ final class DeviceDecryptService: ObservableObject {
         _ installed: URL,
         displayName: String
     ) async throws {
+        _ = try FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
+            self?.publishDecryptProgress(msg)
+        }
         publishDecryptProgress("Building Tetherless Decrypt companion for \(displayName)…")
         // Stamp the live path before packaging so the companion FairPlay input is ready
         // even when open(2) of the FairPlay binary EPERMs under the host sandbox.
@@ -937,8 +940,11 @@ final class DeviceDecryptService: ObservableObject {
         bundleID: String? = nil
     ) async throws {
         let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
+        // Visible keys step before any companion packaging (also enforced inside installAndOpen).
+        _ = try FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
+            self?.publishDecryptProgress(msg)
+        }
         publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
-        try FairPlayKeyGate.requireReady()
         // Refresh install inventory so the packager can stamp hostLiveInstallPath —
         // companion FairPlay needs the live Store path when the app is already on-device.
         _ = await DeviceLibrary.shared.refreshAwaiting()

@@ -507,7 +507,8 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                 }
                 // Fail before purchase when Media & Purchases keys were never acknowledged —
                 // matches DeviceDecryptService so Cake Wallet–style jobs don't look like a Store outage.
-                try FairPlayKeyGate.requireReady()
+                // Publishes host snapshot so companion handoff already has the owning email.
+                _ = try FairPlayKeyGate.confirmReadyForCompanion()
 
                 if let adam = job.adamId, adam > 0 {
                     let result = try await IPadnStoreDownload.purchaseAndDownload(
