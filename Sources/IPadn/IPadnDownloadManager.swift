@@ -625,9 +625,8 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             jobs[j].error = nil
         case .failed:
             jobs[j].status = .failed
-            jobs[j].error = DecryptClient.shared.error
-                ?? DecryptClient.shared.message
-                ?? "Decrypt failed."
+            let msg = DecryptClient.shared.error ?? DecryptClient.shared.message
+            jobs[j].error = msg.isEmpty ? "Decrypt failed." : msg
         default:
             // Still running / unknown — treat as completed if IPA exists.
             jobs[j].status = jobs[j].fileURL != nil ? .completed : .failed
@@ -683,9 +682,8 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                 self.jobs[j].error = nil
             case .failed:
                 self.jobs[j].status = .failed
-                self.jobs[j].error = DecryptClient.shared.error
-                    ?? DecryptClient.shared.message
-                    ?? "Decrypt failed."
+                let msg = DecryptClient.shared.error ?? DecryptClient.shared.message
+                self.jobs[j].error = msg.isEmpty ? "Decrypt failed." : msg
             default:
                 self.jobs[j].status = .failed
                 self.jobs[j].error = DecryptClient.shared.message.isEmpty
