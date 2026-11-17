@@ -307,32 +307,90 @@ struct DecryptOwnedStoreAppsSection: View {
     }
 }
 
-/// Store must piggyback the first Allow/code — no second Store OTP here.
+/// Store may need a second Allow push + code after Apple ID 2FA.
 private struct OwnedStoreTrustHint: View {
     var onRetry: () async -> Void
     @ObservedObject private var store = AppleIDStore.shared
     @State private var busy = false
+    @State private var code = ""
+    @State private var localError: String?
+    @State private var showUnlockSheet = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Store piggybacks the Allow / verification code from Sign In — it should not ask for another text.")
+            Text("If Apple ID signed in but purchases stay locked, open Unlock Store for a second Allow push.")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
-            Button {
-                Task {
-                    busy = true
-                    defer { busy = false }
-                    await store.requestStoreVerificationPrompt()
-                    await onRetry()
+
+            TextField("6-digit Store code", text: $code)
+                .keyboardType(.numberPad)
+                .textContentType(.oneTimeCode)
+                .foregroundStyle(.white)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .disabled(busy || store.isBusy || store.storeConnecting)
+
+            HStack(spacing: 14) {
+                Button {
+                    Task {
+                        let digits = code.filter(\.isNumber)
+                        guard digits.count == 6 else { return }
+                        busy = true
+                        localError = nil
+                        defer { busy = false }
+                        do {
+                            _ = try await store.submitStoreVerificationCode(digits)
+                            code = ""
+                            await onRetry()
+                        } catch {
+                            localError = store.lastError ?? error.localizedDescription
+                            code = ""
+                        }
+                    }
+                } label: {
+                    Text(busy ? "Unlocking…" : "Submit Code")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
                 }
-            } label: {
-                Text(busy ? "Retrying…" : "Retry Store unlock")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(TetherlessPalette.accent)
+                .buttonStyle(.plain)
+                .disabled(busy || store.isBusy || store.storeConnecting || code.filter(\.isNumber).count < 6)
+
+                Button { showUnlockSheet = true } label: {
+                    Text("Unlock Store…")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                }
+                .buttonStyle(.plain)
+
+                Button {
+                    Task {
+                        busy = true
+                        defer { busy = false }
+                        await store.requestStoreVerificationPrompt()
+                        await onRetry()
+                    }
+                } label: {
+                    Text(busy ? "Retrying…" : "Retry")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.55))
+                }
+                .buttonStyle(.plain)
+                .disabled(busy || store.isBusy || store.storeConnecting)
             }
-            .buttonStyle(.plain)
-            .disabled(busy || store.isBusy || store.storeConnecting)
+
+            if let localError, !localError.isEmpty {
+                Text(localError)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
+        }
+        .sheet(isPresented: $showUnlockSheet) {
+            IPadnStoreUnlockSheet {
+                showUnlockSheet = false
+                Task { await onRetry() }
+            }
         }
     }
 }

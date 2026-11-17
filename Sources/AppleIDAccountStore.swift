@@ -736,24 +736,71 @@ final class AppleIDStore: ObservableObject {
         }
         // System sheets overlay THIS app when we sign in as the spoofed MacBook/iPhone.
         let device = AuthClientSpoof.current.displayName
-        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off (moon) if they don’t appear. Enter that code below; Store unlocks from the same trust after Submit (no second text)."
+        if storeNeedsVerification, isSignedIn {
+            return "Watch for Apple’s Allow sheet (map · \(device)) and enter the 6-digit code below to unlock Store downloads. Turn Focus off (moon) if it doesn’t appear."
+        }
+        return "Watch for Apple’s Allow sheet (map · \(device)) and verification code on this iPhone — turn Focus off (moon) if they don’t appear. Enter that code below."
     }
 
-    /// Force another trusted-device push (Settings “Send again to devices”).
-    func requestTrustedDevicePush() async {
+    /// Force another trusted-device Allow push (“Send again to devices”).
+    /// - Parameter forStoreUnlock: Second-step Store unlock after Apple ID is already signed in.
+    ///   Opens a fresh GSA challenge + Allow push when none is pending (same as pre-#111 Settings).
+    func requestTrustedDevicePush(forStoreUnlock: Bool = false) async {
         lastError = nil
         authPhase = .verifying
-        statusMessage = "Sending sign-in request to your other Apple devices…"
+        statusMessage = "Sending Allow request to your trusted devices…"
+        let gsa = GSAAuthClient.shared
         do {
-            _ = try await GSAAuthClient.shared.requestTrustedDevicePush()
+            if !gsa.hasPendingTwoFactor {
+                // After Apple ID sign-in, GSA pending is cleared — open a new challenge and
+                // fire the trusted-device push so Store can get a fresh Allow code.
+                do {
+                    try await openGSATwoFactorChallenge(forStoreSMS: false)
+                    storefrontNeedsRefresh = true
+                    if let session = try? await ensureStorefrontSession(forceRefresh: true), session.isUsable {
+                        storeNeedsVerification = false
+                        authPhase = .idle
+                        statusMessage = "Store access ready — free & purchased downloads unlocked"
+                        return
+                    }
+                    // No 2FA and no Store session — keep unlock UI up.
+                    if forStoreUnlock || storeNeedsVerification {
+                        storeNeedsVerification = true
+                        authPhase = .idle
+                        statusMessage = "Couldn't mint Store from trust alone — tap Send again, then enter the Allow code."
+                    } else {
+                        authPhase = .idle
+                    }
+                    return
+                } catch AppleAuthError.needsTwoFactor {
+                    // authenticateOnce already sent the Allow push.
+                    refreshTwoFactorChannelFromGSA()
+                    storeNeedsVerification = forStoreUnlock || storeNeedsVerification || isSignedIn
+                    // Keep Apple ID login sheet closed when this is the Store second step.
+                    authPhase = (forStoreUnlock || (isSignedIn && storeNeedsVerification))
+                        ? .idle
+                        : .awaitingTwoFactor
+                    statusMessage = twoFactorPromptMessage()
+                    return
+                }
+            }
+            _ = try await gsa.requestTrustedDevicePush()
             refreshTwoFactorChannelFromGSA()
-            authPhase = .awaitingTwoFactor
+            storeNeedsVerification = forStoreUnlock || storeNeedsVerification || isSignedIn
+            authPhase = (forStoreUnlock || (isSignedIn && storeNeedsVerification))
+                ? .idle
+                : .awaitingTwoFactor
             statusMessage = twoFactorPromptMessage()
         } catch {
             refreshTwoFactorChannelFromGSA()
-            authPhase = GSAAuthClient.shared.hasPendingTwoFactor ? .awaitingTwoFactor : .idle
+            storeNeedsVerification = forStoreUnlock || storeNeedsVerification || isSignedIn
+            if forStoreUnlock || (isSignedIn && storeNeedsVerification) {
+                authPhase = .idle
+            } else {
+                authPhase = gsa.hasPendingTwoFactor ? .awaitingTwoFactor : .idle
+            }
             lastError = error.localizedDescription
-            statusMessage = "Couldn't reach your other devices. Tap Text me a code, or turn Focus off and try Send again."
+            statusMessage = "Couldn't reach your other devices. Turn Focus off, then tap Send again."
         }
     }
 
@@ -1241,11 +1288,13 @@ final class AppleIDStore: ObservableObject {
             GSAAuthClient.shared.cancel()
             twoFactorUsesSMS = false
             twoFactorPhoneHint = nil
-            lastError = "That code didn’t unlock Store downloads (often burned by a second Apple prompt). Tap Resend text for a fresh code, then Submit — stay signed in."
+            lastError = "That code didn’t unlock Store downloads (often burned by a second Apple prompt). Tap Send again for a fresh Allow sheet, then Submit — stay signed in."
+            // Stay idle so Account shows Unlock Store (not the full Sign In sheet).
+            authPhase = .idle
             throw AppStoreClientError.message(lastError ?? "Store needs a fresh code.")
         } catch {
             storeNeedsVerification = true
-            authPhase = .awaitingTwoFactor
+            authPhase = .idle
             lastError = error.localizedDescription
             throw error
         }
@@ -1340,7 +1389,7 @@ final class AppleIDStore: ObservableObject {
         }
 
         storeNeedsVerification = true
-        statusMessage = "Store still needs the Allow-sheet trust token. Sign Out, then Sign In once — Submit Code unlocks Store automatically (no second text)."
+        statusMessage = "Store still needs an Allow push — open Unlock Store, tap Send again, then enter the 6-digit code."
         withAnimation(.snappy) { authPhase = .idle }
     }
 
@@ -1580,7 +1629,7 @@ final class AppleIDStore: ObservableObject {
             if let lastStoreError, !lastStoreError.isEmpty {
                 lastError = lastStoreError
             }
-            statusMessage = "Signed in — tap Retry Store unlock (uses the same Apple ID trust). Or Sign Out and Sign In once."
+            statusMessage = "Signed in — Store needs a second Allow push. Open Unlock Store, allow the sign-in, then enter the code."
         }
     }
 
