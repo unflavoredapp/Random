@@ -49,13 +49,13 @@ final class AppNav: ObservableObject {
         go(.account)
     }
 
-    /// Cold-start / foreground nudge: send unsigned users straight to Account + login
-    /// so Store / FairPlay / Purchases work. Once per process lifetime (no sheet spam).
+    /// Cold-start / foreground nudge: land unsigned users on Account so they can sign in
+    /// when ready. Does **not** force the login sheet (that felt like a surprise popup).
     func nudgeAccountLoginIfNeeded() {
         guard !Self.didNudgeAccountLoginThisLaunch else { return }
         guard !AppleIDStore.shared.isSignedIn else { return }
         Self.didNudgeAccountLoginThisLaunch = true
-        goStoreLogin()
+        go(.account)
     }
 
     private static var didNudgeAccountLoginThisLaunch = false

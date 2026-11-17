@@ -417,8 +417,26 @@ struct AccountHomeView: View {
                     }
                 }
 
-                // Settings root (was LIBRARY / DEVICE → Settings push).
-                IPadnSettingsRootSections(statusMessage: $settingsStatus)
+                // Explicit two-step cards — never auto-popup over Account.
+                if !store.isSignedIn || store.authPhase == .awaitingTwoFactor {
+                    Section {
+                        Button {
+                            showIPadnLogin = true
+                        } label: {
+                            Label(
+                                store.authPhase == .awaitingTwoFactor
+                                    ? "Continue Apple ID verification…"
+                                    : "Sign in with Apple ID…",
+                                systemImage: "person.badge.key.fill"
+                            )
+                        }
+                        Text("Step 1 of 2 — Apple ID. You’ll get an Allow sheet and a 6-digit code. Store downloads are a separate Allow in step 2.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } header: {
+                        Text("Sign-in")
+                    }
+                }
 
                 if store.isSignedIn, store.storeNeedsVerification {
                     Section {
@@ -427,15 +445,21 @@ struct AccountHomeView: View {
                         } label: {
                             Label("Unlock Store downloads…", systemImage: "lock.open.fill")
                         }
-                        Text(store.statusMessage?.isEmpty == false
-                             ? store.statusMessage!
-                             : "Apple ID is signed in. Store still needs an Allow push + code for downloads.")
+                        Text("Step 2 of 2 — Store. Apple asks for a second Allow + code so purchases and silent downloads can unlock. This is normal, not a failed sign-in.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
+                        if let status = store.statusMessage, !status.isEmpty {
+                            Text(status)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     } header: {
                         Text("Store")
                     }
                 }
+
+                // Settings root (was LIBRARY / DEVICE → Settings push).
+                IPadnSettingsRootSections(statusMessage: $settingsStatus)
 
                 if store.isSignedIn {
                     Section {
@@ -474,8 +498,10 @@ struct AccountHomeView: View {
                 ) {
                     showIPadnLogin = false
                     nav.presentIPadnLogin = false
-                    // After Apple ID 2FA, open Store unlock if downloads still need a code.
-                    presentStoreUnlockIfNeeded()
+                    // User finished step 1 intentionally — offer step 2 Store unlock once.
+                    if store.isSignedIn, store.storeNeedsVerification {
+                        showStoreUnlock = true
+                    }
                 }
             }
             .sheet(isPresented: $showStoreUnlock) {
@@ -485,23 +511,12 @@ struct AccountHomeView: View {
             }
             .onAppear {
                 consumePendingAccountNav()
-                presentLoginIfAwaitingCode()
-                presentStoreUnlockIfNeeded()
             }
             .onChange(of: nav.accountPush) { _ in consumePendingAccountNav() }
             .onChange(of: nav.openAccountScreen) { _ in consumePendingAccountNav() }
             .onChange(of: nav.presentIPadnLogin) { open in
+                // Explicit nav from Search / gates — still user-driven, not cold-start spam.
                 if open { showIPadnLogin = true }
-            }
-            .onChange(of: store.authPhase) { phase in
-                if phase == .awaitingTwoFactor {
-                    presentLoginIfAwaitingCode()
-                } else if phase == .idle {
-                    presentStoreUnlockIfNeeded()
-                }
-            }
-            .onChange(of: store.storeNeedsVerification) { needs in
-                if needs { presentStoreUnlockIfNeeded() }
             }
         }
     }
@@ -512,24 +527,6 @@ struct AccountHomeView: View {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return candidates.first
-    }
-
-    /// Re-open the login sheet at the code step when Allow/2FA is pending but the sheet was dismissed.
-    private func presentLoginIfAwaitingCode() {
-        guard store.authPhase == .awaitingTwoFactor else { return }
-        // Signed-in Store unlock owns its own sheet — don't reopen full Sign In.
-        if store.isSignedIn, store.storeNeedsVerification { return }
-        showIPadnLogin = true
-        nav.presentIPadnLogin = true
-    }
-
-    /// Second popup: Apple ID already signed in, but Store still needs Allow push + code.
-    private func presentStoreUnlockIfNeeded() {
-        guard store.isSignedIn, store.storeNeedsVerification else { return }
-        // Don't stack over an in-flight Apple ID password/2FA sheet.
-        guard store.authPhase != .authenticating, store.authPhase != .verifying else { return }
-        guard !showIPadnLogin else { return }
-        showStoreUnlock = true
     }
 
     private func consumePendingAccountNav() {

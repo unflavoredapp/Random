@@ -68,6 +68,9 @@ struct IPadnVerificationStep: View {
     let issue: String?
     var submitTitle = "Verify & Sign In"
     var sent = true
+    /// e.g. "Step 1 of 2 · Apple ID" — explains why Allow may appear twice.
+    var stepLabel: String? = nil
+    var footnote: String? = nil
     var resend: (() -> Void)? = nil
     let submit: () -> Void
     var changeAccount: (() -> Void)? = nil
@@ -87,6 +90,12 @@ struct IPadnVerificationStep: View {
                 .foregroundStyle(TetherlessPalette.accent)
                 .padding(.top, 12)
                 .accessibilityHidden(true)
+            if let stepLabel, !stepLabel.isEmpty {
+                Text(stepLabel.uppercased())
+                    .font(.caption.weight(.semibold))
+                    .kerning(0.8)
+                    .foregroundStyle(TetherlessPalette.accent)
+            }
             Text("Two-Factor Authentication")
                 .font(.title.weight(.bold))
                 .foregroundStyle(.white)
@@ -97,6 +106,13 @@ struct IPadnVerificationStep: View {
                 .foregroundStyle(.white.opacity(0.55))
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
+            if let footnote, !footnote.isEmpty {
+                Text(footnote)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.4))
+                    .multilineTextAlignment(.center)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             IPadnVerificationCodeField(code: $code, disabled: busy) { _ in submit() }
                 .padding(.vertical, 6)
             if busy {
@@ -216,6 +232,8 @@ struct IPadnLoginView: View {
                         busy: busy,
                         issue: failure,
                         submitTitle: "Verify & Sign In",
+                        stepLabel: "Step 1 of 2 · Apple ID",
+                        footnote: "If Store downloads still need access after this, you’ll get a second Allow sheet — that’s step 2, not a failed login.",
                         resend: resendCode,
                         submit: submit,
                         changeAccount: {
@@ -315,6 +333,10 @@ struct IPadnLoginView: View {
                      : "This session expired. Enter the current password for this account.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                Text("Sign-in is two steps: Apple ID Allow (1), then Store downloads Allow (2) if needed.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.4))
                     .multilineTextAlignment(.center)
             }
             .padding(.top, 12)
@@ -481,6 +503,8 @@ struct IPadnStoreUnlockSheet: View {
                         issue: failure ?? store.lastError,
                         submitTitle: "Unlock Store",
                         sent: true,
+                        stepLabel: "Step 2 of 2 · Store downloads",
+                        footnote: "Apple ID is already signed in. This second Allow unlocks purchases and silent downloads — separate from step 1.",
                         resend: { Task { await sendAllowPush(force: true) } },
                         submit: { submit() },
                         changeAccount: {
@@ -489,14 +513,14 @@ struct IPadnStoreUnlockSheet: View {
                         }
                     )
 
-                    Text(store.statusMessage?.isEmpty == false
-                         ? store.statusMessage!
-                         : "Apple ID is signed in. Store downloads need a second Allow push — tap Allow, then enter the 6-digit code.")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.45))
-                        .multilineTextAlignment(.center)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.horizontal, 8)
+                    if let status = store.statusMessage, !status.isEmpty {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.45))
+                            .multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.horizontal, 8)
+                    }
 
                     Button {
                         Task { await sendAllowPush(force: true) }
