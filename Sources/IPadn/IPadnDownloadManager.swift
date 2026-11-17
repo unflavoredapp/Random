@@ -103,7 +103,11 @@ struct IPadnDownloadJob: Codable, Identifiable, Equatable {
 
     var fileURL: URL? {
         guard let localFilename else { return nil }
-        return IPadnDownloadStorage.packagesDir.appendingPathComponent(localFilename)
+        let enc = DecryptCompanionHandoff.encryptedIPADirectory().appendingPathComponent(localFilename)
+        if FileManager.default.fileExists(atPath: enc.path) { return enc }
+        let pkg = IPadnDownloadStorage.packagesDir.appendingPathComponent(localFilename)
+        if FileManager.default.fileExists(atPath: pkg.path) { return pkg }
+        return enc
     }
 }
 
@@ -496,7 +500,9 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                     url: job.storeURL,
                     externalVersionId: job.externalVersionId ?? ""
                 )
-                let dest = IPadnDownloadStorage.packagesDir
+                // Hold App Store encrypted IPA in durable EncryptedIPAs temp so FairPlay
+                // can capture the stamped URL (App Group / Documents), not ephemeral tmp.
+                let dest = DecryptCompanionHandoff.encryptedIPADirectory()
                     .appendingPathComponent("\(id.uuidString)_\(job.bundleID.isEmpty ? "app" : job.bundleID).ipa")
 
                 // iPadn Account login session only — no Store Access remint / anisette stack.
@@ -533,6 +539,10 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                         try? FileManager.default.removeItem(at: dest)
                         try FileManager.default.copyItem(at: result.url, to: dest)
                     }
+                    DecryptCompanionHandoff.publishEncryptedIPAPath(
+                        dest.path,
+                        bundleID: job.bundleID.isEmpty ? (result.item.bundleID) : job.bundleID
+                    )
                     let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? Int64) ?? 0
                     guard let i = self.jobs.firstIndex(where: { $0.id == id }) else { return }
                     self.jobs[i].localFilename = dest.lastPathComponent

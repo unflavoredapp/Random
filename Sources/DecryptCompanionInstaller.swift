@@ -21,6 +21,11 @@ enum DecryptCompanionInstaller {
         displayName: String,
         progress: ((String) -> Void)? = nil
     ) async throws -> String {
+        // Re-stamp the encrypted IPA temp URL so FairPlay / companion can capture it.
+        if FileManager.default.fileExists(atPath: encryptedIPA.path) {
+            DecryptCompanionHandoff.publishEncryptedIPAPath(encryptedIPA.path, bundleID: "")
+            progress?("Stamped encrypted IPA for FairPlay: \(encryptedIPA.path)")
+        }
         return try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
             try DecryptCompanionPackager.buildCompanionIPA(
                 embedding: encryptedIPA,

@@ -838,11 +838,11 @@ final class DeviceDecryptService: ObservableObject {
             publishDecryptProgress("Pinning store build \(pinned)…")
         }
 
-        let tmpDir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("tetherless-silent", isDirectory: true)
-        try? FileManager.default.createDirectory(at: tmpDir, withIntermediateDirectories: true)
+        // Hold the encrypted Store IPA in a durable folder (not ephemeral tmp) so
+        // FairPlay / companion can re-open the stamped URL after download.
         let tag = pinned.isEmpty ? "\(adam)" : "\(adam)_\(pinned)"
-        let dest = tmpDir.appendingPathComponent("\(bundleID.isEmpty ? "app" : bundleID)_\(tag).ipa")
+        let dest = DecryptCompanionHandoff.encryptedIPADirectory()
+            .appendingPathComponent("\(bundleID.isEmpty ? "app" : bundleID)_\(tag).ipa")
 
         do {
             let result = try await purchaseAndDownloadWithStoreRefresh(
@@ -931,8 +931,8 @@ final class DeviceDecryptService: ObservableObject {
         }
     }
 
-    /// After Store download: require a live App Store install, embed it into the companion.
-    /// FairPlay mremap needs the live path (EmbeddedPayload-only almost always EPERMs).
+    /// After Store download: keep the encrypted IPA in durable temp, stamp its URL for
+    /// FairPlay, prefer live-install embed when present, otherwise embed the retained IPA.
     private func handoffStoreIPAToCompanion(
         ipa: URL,
         displayName: String,
@@ -940,36 +940,61 @@ final class DeviceDecryptService: ObservableObject {
         bundleID: String? = nil
     ) async throws {
         let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
-        // Visible keys step before any companion packaging (also enforced inside installAndOpen).
         _ = try FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
             self?.publishDecryptProgress(msg)
         }
-        publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
-        // Refresh install inventory so the packager can stamp hostLiveInstallPath —
-        // companion FairPlay needs the live Store path (foulplay/FairPlayed pattern).
-        _ = await DeviceLibrary.shared.refreshAwaiting()
+
         let resolvedBid = (bundleID?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
             $0.isEmpty ? nil : $0
-        } ?? Self.bundleIDFromStoreIPA(ipa)
-        // Prefer embedding the live install when present — EmbeddedPayload-only mremap
-        // almost always EPERMs even after Media & Purchases ack (keys are on-device, but
-        // fairplayd resolves SC_Info next to the *input* binary path).
-        if let bid = resolvedBid,
-           let live = await resolveInstalledAppURL(bundleID: bid) {
-            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
+        } ?? Self.bundleIDFromStoreIPA(ipa) ?? ""
+
+        // Always retain + stamp the encrypted Store IPA path for FairPlay capture.
+        let retained = try DecryptCompanionHandoff.retainEncryptedIPA(
+            ipa,
+            bundleID: resolvedBid,
+            displayName: displayName
+        )
+        publishDecryptProgress("Encrypted IPA held for FairPlay: \(retained.lastPathComponent)")
+        publishDecryptProgress("Temp URL: \(retained.path)")
+
+        publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
+        _ = await DeviceLibrary.shared.refreshAwaiting()
+
+        // Prefer live App Store install for mremap when the app is already on-device.
+        if !resolvedBid.isEmpty,
+           let live = await resolveInstalledAppURL(bundleID: resolvedBid) {
+            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: resolvedBid)
             publishDecryptProgress("Live App Store install ready for FairPlay: \(live.lastPathComponent)")
+            do {
+                let companionID = try await DecryptCompanionInstaller.installAndOpen(
+                    embeddingInstalledApp: live,
+                    displayName: displayName
+                ) { [weak self] msg in
+                    Task { @MainActor in self?.publishDecryptProgress(msg) }
+                }
+                markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
+                return
+            } catch {
+                publishDecryptProgress(
+                    "Live-install companion failed (\(error.localizedDescription)) — embedding retained IPA…"
+                )
+            }
+        }
+
+        // No live install (or live embed failed): companion embeds the stamped encrypted IPA.
+        do {
             let companionID = try await DecryptCompanionInstaller.installAndOpen(
-                embeddingInstalledApp: live,
+                embedding: retained,
                 displayName: displayName
             ) { [weak self] msg in
                 Task { @MainActor in self?.publishDecryptProgress(msg) }
             }
             markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
-            return
+        } catch {
+            throw DecryptError(
+                "Couldn't install the companion with this IPA (\(error.localizedDescription)). Create a 7-day Apple ID certificate under Account › Settings › Installation › Certificate, trust it under Settings › General › VPN & Device Management, then retry. Encrypted IPA kept at \(retained.path)."
+            )
         }
-        throw FairPlayDecryptError.noInstalledApp(
-            "\(displayName) isn’t installed from the App Store on this iPhone. FairPlay companion decrypt needs that live install (same as fouldecrypt/FairPlayed). Install it under your Apple ID, Pair → refresh Installed, then tap Get again."
-        )
     }
 
     /// Peek CFBundleIdentifier from a Store IPA zip without extracting the whole archive.
