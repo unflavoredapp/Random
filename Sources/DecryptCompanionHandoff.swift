@@ -159,15 +159,37 @@ enum DecryptCompanionHandoff {
         publishHostSnapshot()
     }
 
-    /// Durable folder for App Store encrypted IPAs (Documents + App Group when available).
-    /// Pure filesystem path — safe from sync nonisolated callers (e.g. `IPadnDownloadJob.fileURL`).
+    /// Bundled encrypted IPA name inside the companion `.app` (readable without App Group).
+    nonisolated static let bundledEncryptedIPAName = "EncryptedSource.ipa"
+
+    /// Durable folder for App Store encrypted IPAs.
+    /// Prefer App Group so the companion can re-open the stamped URL; Documents-only
+    /// paths are host-private and caused “No live install / stamped IPA” → EmbeddedPayload EPERM.
     nonisolated static func encryptedIPADirectory() -> URL {
         if let root = sharedContainerURL {
             let dir = root.appendingPathComponent(encryptedIPADirName, isDirectory: true)
             try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            // Best-effort migrate leftover host-Documents copies into the group.
+            let legacy = AppPaths.documents.appendingPathComponent("encrypted-ipas", isDirectory: true)
+            if FileManager.default.fileExists(atPath: legacy.path),
+               let items = try? FileManager.default.contentsOfDirectory(at: legacy, includingPropertiesForKeys: nil) {
+                for item in items where item.pathExtension.lowercased() == "ipa" {
+                    let dest = dir.appendingPathComponent(item.lastPathComponent)
+                    if !FileManager.default.fileExists(atPath: dest.path) {
+                        try? FileManager.default.copyItem(at: item, to: dest)
+                    }
+                }
+            }
             return dir
         }
         return AppPaths.dir("encrypted-ipas")
+    }
+
+    /// True when EncryptedIPAs land in the App Group (companion-readable).
+    nonisolated static var encryptedIPADirectoryIsShared: Bool {
+        guard let root = sharedContainerURL else { return false }
+        let dir = encryptedIPADirectory()
+        return dir.path.hasPrefix(root.path)
     }
 
     /// Copy/move a Store download into the durable temp folder and stamp its URL for FairPlay.
@@ -252,7 +274,7 @@ enum DecryptCompanionHandoff {
         return (path, bid)
     }
 
-    /// Resolve stamped encrypted IPA URL (App Group / defaults / manifest).
+    /// Resolve stamped encrypted IPA URL (App Group / defaults / manifest / bundled).
     static func resolveEncryptedIPAURL(manifest: [String: Any]?) -> URL? {
         if let stamped = readEncryptedIPAPath() {
             return URL(fileURLWithPath: stamped.path)
@@ -260,8 +282,34 @@ enum DecryptCompanionHandoff {
         let path = ((manifest?["hostEncryptedIPAPath"] as? String)
             ?? (readHostSnapshot(fromManifest: nil)["hostEncryptedIPAPath"] as? String))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { return nil }
-        return URL(fileURLWithPath: path)
+        if !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+        // Companion-bundled copy — works even when App Group / host Documents path is invisible.
+        let bundled = Bundle.main.bundleURL.appendingPathComponent(bundledEncryptedIPAName)
+        if FileManager.default.fileExists(atPath: bundled.path) {
+            return bundled
+        }
+        // Last resort: any IPA left in the shared EncryptedIPAs folder.
+        if let root = sharedContainerURL {
+            let dir = root.appendingPathComponent(encryptedIPADirName, isDirectory: true)
+            if let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
+                let bid = ((manifest?["bundleID"] as? String)
+                    ?? (readHostSnapshot(fromManifest: nil)["bundleID"] as? String))?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                if !bid.isEmpty,
+                   let match = items.first(where: {
+                       $0.pathExtension.lowercased() == "ipa"
+                           && $0.lastPathComponent.localizedCaseInsensitiveContains(bid)
+                   }) {
+                    return match
+                }
+                if let any = items.first(where: { $0.pathExtension.lowercased() == "ipa" }) {
+                    return any
+                }
+            }
+        }
+        return nil
     }
 
     /// Live Store path published by the host packager (App Group / local fallback).

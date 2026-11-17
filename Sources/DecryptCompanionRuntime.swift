@@ -123,12 +123,15 @@ enum DecryptCompanionRuntime {
             return app
         }
 
-        if fpOpts.pathDiagnostics {
-            log("Advanced FairPlay · source=\(fpOpts.sourceMode.title) · retries=\(fpOpts.retryRounds)")
-            if let liveURL { log("Live path: \(liveURL.path)") }
-            if let stampedIPAURL { log("Stamped IPA: \(stampedIPAURL.path)") }
-            log("EmbeddedPayload: \(src.path)")
+        // Always log advanced source + path diagnostics for EPERM triage (screenshots).
+        log("Advanced FairPlay · source=\(fpOpts.sourceMode.title) · retries=\(fpOpts.retryRounds)")
+        if let liveURL { log("Live path: \(liveURL.path)") }
+        if let stampedIPAURL {
+            log("Stamped IPA: \(stampedIPAURL.path)")
+        } else {
+            log("Stamped IPA: (none readable — check App Group / EncryptedSource.ipa)")
         }
+        log("EmbeddedPayload: \(src.path)")
 
         let readRoot: URL
         switch fpOpts.sourceMode {
@@ -143,7 +146,7 @@ enum DecryptCompanionRuntime {
         case .stampedIPA:
             guard let stampedIPAURL else {
                 throw DecryptError(
-                    "Advanced FairPlay is set to Stamped IPA only, but no encrypted IPA temp URL was stamped. Re-run Get from TetherLess."
+                    "Advanced FairPlay is set to Stamped IPA only, but no encrypted IPA was stamped or bundled. Re-run Get from TetherLess."
                 )
             }
             readRoot = try unpackStampedIPA(stampedIPAURL)
@@ -151,6 +154,8 @@ enum DecryptCompanionRuntime {
             readRoot = src
             log("Using EmbeddedPayload only (advanced) — FairPlay may EPERM without live licenses.")
         case .automatic:
+            // Prefer live install (fairplayd-friendly), then full stamped/bundled IPA unpack
+            // (complete Mach-O tree), and only then slim EmbeddedPayload.
             if let liveURL {
                 readRoot = liveURL
                 log("Using live App Store install for FairPlay: \(liveURL.path)")
@@ -159,7 +164,7 @@ enum DecryptCompanionRuntime {
             } else {
                 readRoot = src
                 log("No live install / stamped IPA — FairPlay will try EmbeddedPayload (often EPERM).")
-                log("Re-run Get from TetherLess so the encrypted IPA temp URL is stamped.")
+                log("Re-run Get from TetherLess so EncryptedSource.ipa is bundled into the companion.")
             }
         }
 

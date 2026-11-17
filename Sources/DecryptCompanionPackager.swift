@@ -257,6 +257,16 @@ enum DecryptCompanionPackager {
             .first(where: { $0.pathExtension == "app" }) else {
             throw DecryptError("No Payload/*.app in the encrypted IPA to embed.")
         }
+        // Keep a companion-local copy of the full encrypted IPA so FairPlay can unpack it
+        // even when App Group / host Documents stamps are invisible (CARROT / TestFlight EPERM).
+        let bundled = companionApp.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+        try? fm.removeItem(at: bundled)
+        do {
+            try fm.copyItem(at: ipa, to: bundled)
+            progress?("Bundled EncryptedSource.ipa for FairPlay (\(ByteCountFormatter.string(fromByteCount: (try? fm.attributesOfItem(atPath: bundled.path)[.size] as? Int64) ?? 0, countStyle: .file)))")
+        } catch {
+            progress?("Could not bundle EncryptedSource.ipa (\(error.localizedDescription)) — will rely on App Group stamp.")
+        }
         return try stageEmbeddedPayload(from: srcApp, into: companionApp, sourceLabel: "full IPA", progress: progress)
     }
 
@@ -271,6 +281,16 @@ enum DecryptCompanionPackager {
         guard FileManager.default.fileExists(atPath: installedApp.path, isDirectory: &isDir),
               isDir.boolValue else {
             throw DecryptError("Installed app path missing: \(installedApp.lastPathComponent).")
+        }
+        // If Get already retained an encrypted IPA, bundle it so companion isn't stuck on
+        // EmbeddedPayload-only when the App Group stamp is host-private.
+        if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath() {
+            let src = URL(fileURLWithPath: stamped.path)
+            let bundled = companionApp.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+            try? FileManager.default.removeItem(at: bundled)
+            if (try? FileManager.default.copyItem(at: src, to: bundled)) != nil {
+                progress?("Bundled stamped EncryptedSource.ipa alongside live-install embed")
+            }
         }
         return try stageEmbeddedPayload(
             from: installedApp,
@@ -413,9 +433,22 @@ enum DecryptCompanionPackager {
                 DecryptCompanionHandoff.clearLiveInstallPath()
             }
         }
+        // Prefer App Group stamp; always record bundled EncryptedSource.ipa when present.
+        let bundledIPA = companionApp.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+        if FileManager.default.fileExists(atPath: bundledIPA.path) {
+            meta["bundledEncryptedIPA"] = DecryptCompanionHandoff.bundledEncryptedIPAName
+            progress?("Companion carries \(DecryptCompanionHandoff.bundledEncryptedIPAName) for FairPlay unpack")
+        }
         if let enc = DecryptCompanionHandoff.readEncryptedIPAPath() {
             meta["hostEncryptedIPAPath"] = enc.path
             progress?("Stamped encrypted IPA for FairPlay: \(enc.path)")
+            if !DecryptCompanionHandoff.encryptedIPADirectoryIsShared {
+                progress?(
+                    "Warning: encrypted IPA is outside App Group — companion will use bundled EncryptedSource.ipa / EmbeddedPayload."
+                )
+            }
+        } else if FileManager.default.fileExists(atPath: bundledIPA.path) {
+            meta["hostEncryptedIPAPath"] = bundledIPA.path
         }
         let fpOpts = FairPlayAdvancedOptions.Resolved.current
         for (k, v) in fpOpts.snapshotFields() {
