@@ -125,7 +125,7 @@ enum AppStoreDecryptGuide {
 
     nonisolated static var failureHint: String {
         let who = owningAppleIDDescription()
-        return "FairPlay needs \(who)’s decryption keys on this iPhone. Sign in once in the App Store (or Settings → your name → Media & Purchases) with that account, keep ownership of the app, then try again. That one-time step stores the keys — switching the active App Store account afterward is fine."
+        return "FairPlay needs \(who) enrolled on this iPhone (App Store / Media & Purchases) with ≥1 App Store app installed under that account. TetherLess decrypts on-device like fouldecrypt/FairPlayed — it cannot mint a jailbreak credential. Sign in once, Confirm keys, then retry."
     }
 
     /// Host email from standard defaults, App Group cache, or companion host snapshot.
