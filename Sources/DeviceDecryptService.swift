@@ -618,10 +618,23 @@ final class DeviceDecryptService: ObservableObject {
             }
 
             // 2) Live install embed only when Store isn’t available / package fetch failed.
+            // Same-device sandbox often can't read foreign FairPlay binaries (Flutter
+            // Runner.app) — prefer Account Store download when live embed finds no Mach-Os.
             if let installed = await resolveInstalledAppURL(bundleID: app.bundleID) {
                 publishDecryptProgress("Embedding installed \(app.name) into companion…")
-                try await decryptFromInstalledPath(installed, displayName: app.name)
-                return
+                do {
+                    try await decryptFromInstalledPath(installed, displayName: app.name)
+                    return
+                } catch {
+                    let text = error.localizedDescription
+                    if text.localizedCaseInsensitiveContains("mach-o")
+                        || text.localizedCaseInsensitiveContains("no mach-os") {
+                        throw DecryptError(
+                            "Couldn’t read Mach-Os from the live \(app.name) install (sandbox). Sign in under Account so Get can download the Store IPA and embed EncryptedSource.ipa, then retry. (\(text))"
+                        )
+                    }
+                    throw error
+                }
             }
 
             throw FairPlayDecryptError.noInstalledApp(
@@ -976,28 +989,18 @@ final class DeviceDecryptService: ObservableObject {
         publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
         _ = await DeviceLibrary.shared.refreshAwaiting()
 
-        // Prefer live App Store install for mremap when the app is already on-device.
+        // Stamp live install for FairPlay mremap only — do NOT slim-copy from the live
+        // container first. Same-device sandbox often can't see foreign FairPlay binaries
+        // (Cake Wallet Runner.app → “No Mach-O binaries found”), which aborted Get before
+        // the companion was installed. Always embed the retained Store IPA + EncryptedSource.
         if !resolvedBid.isEmpty,
            let live = await resolveInstalledAppURL(bundleID: resolvedBid) {
             DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: resolvedBid)
-            publishDecryptProgress("Live App Store install ready for FairPlay: \(live.lastPathComponent)")
-            do {
-                let companionID = try await DecryptCompanionInstaller.installAndOpen(
-                    embeddingInstalledApp: live,
-                    displayName: displayName
-                ) { [weak self] msg in
-                    Task { @MainActor in self?.publishDecryptProgress(msg) }
-                }
-                markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
-                return
-            } catch {
-                publishDecryptProgress(
-                    "Live-install companion failed (\(error.localizedDescription)) — embedding retained IPA…"
-                )
-            }
+            publishDecryptProgress("Live App Store install stamped for FairPlay: \(live.lastPathComponent)")
+        } else {
+            DecryptCompanionHandoff.clearLiveInstallPath()
         }
 
-        // No live install (or live embed failed): companion embeds the stamped encrypted IPA.
         do {
             let companionID = try await DecryptCompanionInstaller.installAndOpen(
                 embedding: retained,
@@ -1007,6 +1010,27 @@ final class DeviceDecryptService: ObservableObject {
             }
             markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
         } catch {
+            // Last resort: try live-install embed if IPA packaging failed for another reason.
+            if !resolvedBid.isEmpty,
+               let live = await resolveInstalledAppURL(bundleID: resolvedBid) {
+                publishDecryptProgress(
+                    "IPA companion failed (\(error.localizedDescription)) — trying live-install embed…"
+                )
+                do {
+                    let companionID = try await DecryptCompanionInstaller.installAndOpen(
+                        embeddingInstalledApp: live,
+                        displayName: displayName
+                    ) { [weak self] msg in
+                        Task { @MainActor in self?.publishDecryptProgress(msg) }
+                    }
+                    markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
+                    return
+                } catch {
+                    throw DecryptError(
+                        "Couldn't install the companion (\(error.localizedDescription)). Create a 7-day Apple ID certificate under Account › Settings › Installation › Certificate, trust it under Settings › General › VPN & Device Management, then retry. Encrypted IPA kept at \(retained.path)."
+                    )
+                }
+            }
             throw DecryptError(
                 "Couldn't install the companion with this IPA (\(error.localizedDescription)). Create a 7-day Apple ID certificate under Account › Settings › Installation › Certificate, trust it under Settings › General › VPN & Device Management, then retry. Encrypted IPA kept at \(retained.path)."
             )

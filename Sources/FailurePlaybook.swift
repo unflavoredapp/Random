@@ -89,10 +89,10 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-macho",
             title: "No Mach-O binaries found",
-            summary: "The companion couldn’t find executables in the embedded app. Re-run Get so the full encrypted IPA is retained and EncryptedSource.ipa is bundled into Tetherless Decrypt.",
-            matches: ["no mach-o binaries found", "no mach-o"],
-            actionTitle: "Open Downloads",
-            action: .openLibrary
+            summary: "Couldn’t see executables in the live install (common for Flutter apps like Cake Wallet). Sign in under Account, tap Get so the Store IPA embeds EncryptedSource.ipa into Tetherless Decrypt, delete any old companion, then retry.",
+            matches: ["no mach-o binaries found", "no mach-o", "no mach-os"],
+            actionTitle: "Open Account",
+            action: .openAppStoreSignIn
         ),
         FailurePlay(
             id: "fairplay-gate",

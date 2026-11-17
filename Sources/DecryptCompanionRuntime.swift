@@ -133,7 +133,7 @@ enum DecryptCompanionRuntime {
         }
         log("EmbeddedPayload: \(src.path)")
 
-        let readRoot: URL
+        var readRoot: URL
         switch fpOpts.sourceMode {
         case .liveInstall:
             guard let liveURL else {
@@ -175,7 +175,23 @@ enum DecryptCompanionRuntime {
             before = try FairPlayDecrypt.verifyApp(at: src)
         }
         if before.entries.isEmpty {
-            throw DecryptError("EmbeddedPayload has no Mach-Os — companion package is incomplete. Re-run decrypt from TetherLess.")
+            // Slim EmbeddedPayload may be empty when host sandbox couldn't copy Mach-Os;
+            // EncryptedSource.ipa still carries the full IPA for FairPlay.
+            let bundled = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+            if let stampedIPAURL {
+                log("No Mach-Os on live/embed audit — unpacking stamped encrypted IPA…")
+                readRoot = try unpackStampedIPA(stampedIPAURL)
+                before = try FairPlayDecrypt.verifyApp(at: readRoot)
+            } else if fm.fileExists(atPath: bundled.path) {
+                log("No Mach-Os on live/embed audit — unpacking bundled EncryptedSource.ipa…")
+                readRoot = try unpackStampedIPA(bundled)
+                before = try FairPlayDecrypt.verifyApp(at: readRoot)
+            }
+        }
+        if before.entries.isEmpty {
+            throw DecryptError(
+                "No Mach-Os found (EmbeddedPayload empty and no EncryptedSource.ipa). Delete Tetherless Decrypt, re-run Get from TetherLess so EncryptedSource.ipa is bundled, then open the companion again."
+            )
         }
         let usedLiveInstall = liveURL.map {
             readRoot.resolvingSymlinksInPath().standardizedFileURL
@@ -187,10 +203,16 @@ enum DecryptCompanionRuntime {
                 "Couldn't inspect FairPlay cryptids on EmbeddedPayload (\(before.unknown) unknown). Re-run Get from TetherLess after updating, then open Tetherless Decrypt again."
             )
         }
+        // Only fail-closed on slim EmbeddedPayload counts when EncryptedSource isn't available.
+        // With EncryptedSource.ipa, FairPlay unpacks the full IPA (TestFlight 3/4 slim was OK).
+        let hasBundledEncryptedSource = fm.fileExists(
+            atPath: Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName).path
+        )
         if !usedLiveInstall,
+           !hasBundledEncryptedSource,
            let expected = expectedEncryptedCount(), expected > 0, before.encrypted < expected, before.unknown == 0 {
             throw DecryptError(
-                "EmbeddedPayload is missing FairPlay binaries (\(before.encrypted) encrypted vs \(expected) in the full IPA). Re-run decrypt so the companion embeds every DRM Mach-O."
+                "EmbeddedPayload is missing FairPlay binaries (\(before.encrypted) encrypted vs \(expected) in the full IPA). Re-run Get so EncryptedSource.ipa is bundled."
             )
         }
 
@@ -202,7 +224,21 @@ enum DecryptCompanionRuntime {
 
         log("Copying app bundle…")
         // Seed Payload from EmbeddedPayload resources; Mach-Os are overwritten from readRoot.
-        try copyTree(from: src, to: destApp)
+        // When slim embed is empty (sandbox) but we unpacked EncryptedSource/stamped IPA,
+        // copy resources from that full tree so the export IPA isn't a hollow shell.
+        let seedRoot: URL = {
+            let usedIPA = ipaUnpackRoot != nil
+                && readRoot.path.hasPrefix((ipaUnpackRoot?.path ?? "") + "/")
+            if usedIPA {
+                let embedCount = (try? fm.contentsOfDirectory(at: src, includingPropertiesForKeys: nil))?.count ?? 0
+                if embedCount <= 2 { return readRoot }
+            }
+            return src
+        }()
+        if seedRoot != src {
+            log("Seeding export from unpacked encrypted IPA (EmbeddedPayload was sparse)…")
+        }
+        try copyTree(from: seedRoot, to: destApp)
 
         let verbose = fpOpts.verboseConsole
         let progressBridge: @Sendable (String) -> Void = { msg in

@@ -389,25 +389,50 @@ enum DecryptCompanionPackager {
         progress?(
             "EmbeddedPayload · \(slimAudit.entries.count) Mach-O(s) · \(slimAudit.encrypted) encrypted"
         )
+        let bundledIPA = companionApp.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+        let hasEncryptedSource = fm.fileExists(atPath: bundledIPA.path)
+            && ((try? fm.attributesOfItem(atPath: bundledIPA.path)[.size] as? Int64) ?? 0) > 1_000_000
+
         if slimAudit.entries.isEmpty {
-            throw DecryptError("No Mach-Os in \(name).app — cannot build companion EmbeddedPayload.")
+            // EncryptedSource.ipa is the real FairPlay input when App Groups are stripped.
+            // Allow an empty slim tree only when that full IPA is already bundled — otherwise
+            // the companion can never recover (Cake Wallet / Flutter Runner.app sandbox misses).
+            if hasEncryptedSource {
+                progress?(
+                    "EmbeddedPayload has no Mach-Os — companion will unpack EncryptedSource.ipa for FairPlay."
+                )
+            } else {
+                throw DecryptError("No Mach-Os in \(name).app — cannot build companion EmbeddedPayload.")
+            }
         }
         if let expected = sourceEncrypted, slimAudit.encrypted < expected {
-            throw DecryptError(
-                "Companion embed dropped FairPlay binaries (\(slimAudit.encrypted) encrypted vs \(expected) in \(sourceLabel)). Aborting."
-            )
-        }
-        if let expectedCount = sourceMachOCount, slimAudit.entries.count < expectedCount {
-            // Encrypted IPA full decrypt needs every Mach-O in EmbeddedPayload — don't
-            // silently ship a slim tree that will produce a fake PARTIAL later.
-            if !liveInstall, slimAudit.encrypted > 0 {
+            if hasEncryptedSource {
+                progress?(
+                    "Slim embed has \(slimAudit.encrypted)/\(expected) encrypted Mach-Os — EncryptedSource.ipa covers the rest for FairPlay."
+                )
+            } else {
                 throw DecryptError(
-                    "Companion embed dropped Mach-Os (\(slimAudit.entries.count)/\(expectedCount) from \(sourceLabel)). Re-run Get so the full encrypted IPA is stamped."
+                    "Companion embed dropped FairPlay binaries (\(slimAudit.encrypted) encrypted vs \(expected) in \(sourceLabel)). Aborting."
                 )
             }
-            progress?(
-                "Note: slim embed has \(slimAudit.entries.count)/\(expectedCount) Mach-Os (extras were already clear / non-DRM)."
-            )
+        }
+        if let expectedCount = sourceMachOCount, slimAudit.entries.count < expectedCount {
+            // Slim trees often drop Watch/App Clip / clear extras. With EncryptedSource.ipa
+            // bundled, FairPlay unpacks the full IPA — do NOT abort packaging (that blocked
+            // companion install: TestFlight 3/4, Flutter apps).
+            if hasEncryptedSource {
+                progress?(
+                    "Slim embed has \(slimAudit.entries.count)/\(expectedCount) Mach-Os from \(sourceLabel) — EncryptedSource.ipa is bundled for full FairPlay."
+                )
+            } else if !liveInstall, slimAudit.encrypted > 0 {
+                throw DecryptError(
+                    "Companion embed dropped Mach-Os (\(slimAudit.entries.count)/\(expectedCount) from \(sourceLabel)). Re-run Get so EncryptedSource.ipa is bundled."
+                )
+            } else {
+                progress?(
+                    "Note: slim embed has \(slimAudit.entries.count)/\(expectedCount) Mach-Os (extras were already clear / non-DRM)."
+                )
+            }
         }
 
         let embeddedBundleID: String? = {
@@ -449,8 +474,7 @@ enum DecryptCompanionPackager {
             }
         }
         // Prefer App Group stamp; always record bundled EncryptedSource.ipa when present.
-        let bundledIPA = companionApp.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
-        if FileManager.default.fileExists(atPath: bundledIPA.path) {
+        if hasEncryptedSource {
             meta["bundledEncryptedIPA"] = DecryptCompanionHandoff.bundledEncryptedIPAName
             progress?("Companion carries \(DecryptCompanionHandoff.bundledEncryptedIPAName) for FairPlay unpack")
         }
@@ -536,10 +560,13 @@ enum DecryptCompanionPackager {
             machos.insert(main, at: 0)
             progress?("Force-including main executable \(main.lastPathComponent)…")
         }
-        guard !machos.isEmpty else {
-            throw DecryptError("No Mach-Os found under \(src.lastPathComponent) for companion embed.")
+        if machos.isEmpty {
+            progress?(
+                "No Mach-Os visible under \(src.lastPathComponent) for slim embed — will rely on EncryptedSource.ipa if bundled."
+            )
+        } else {
+            progress?("Embedding \(machos.count) Mach-O file(s)…")
         }
-        progress?("Embedding \(machos.count) Mach-O file(s)…")
         var copied = 0
         var skipped: [String] = []
         for file in machos {
@@ -568,10 +595,23 @@ enum DecryptCompanionPackager {
             }
         }
         if copied == 0 {
-            let sample = skipped.prefix(4).joined(separator: ", ")
-            throw DecryptError(
-                "Slim embed copied 0 Mach-Os from \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))"). Refusing empty EmbeddedPayload."
-            )
+            // Live-install sandbox often can't copy foreign FairPlay binaries. Info.plist
+            // + EncryptedSource.ipa (bundled by the IPA embed path) still let FairPlay run.
+            // dest = EmbeddedPayload/<Name>/ → companion .app is two levels up.
+            let companionApp = dest.deletingLastPathComponent().deletingLastPathComponent()
+            let encryptedSource = companionApp.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+            let hasSource = fm.fileExists(atPath: encryptedSource.path)
+            if hasSource {
+                let sample = skipped.prefix(4).joined(separator: ", ")
+                progress?(
+                    "Slim embed copied 0 Mach-Os\(sample.isEmpty ? "" : " (skipped: \(sample))") — EncryptedSource.ipa will supply FairPlay binaries."
+                )
+            } else {
+                let sample = skipped.prefix(4).joined(separator: ", ")
+                throw DecryptError(
+                    "Slim embed copied 0 Mach-Os from \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))"). Refusing empty EmbeddedPayload."
+                )
+            }
         }
 
         // Copy every SC_Info directory tree (main + nested).
