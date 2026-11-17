@@ -363,6 +363,13 @@ enum DecryptCompanionPackager {
             )
         }
         if let expectedCount = sourceMachOCount, slimAudit.entries.count < expectedCount {
+            // Encrypted IPA full decrypt needs every Mach-O in EmbeddedPayload — don't
+            // silently ship a slim tree that will produce a fake PARTIAL later.
+            if !liveInstall, slimAudit.encrypted > 0 {
+                throw DecryptError(
+                    "Companion embed dropped Mach-Os (\(slimAudit.entries.count)/\(expectedCount) from \(sourceLabel)). Re-run Get so the full encrypted IPA is stamped."
+                )
+            }
             progress?(
                 "Note: slim embed has \(slimAudit.entries.count)/\(expectedCount) Mach-Os (extras were already clear / non-DRM)."
             )

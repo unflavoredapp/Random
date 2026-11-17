@@ -258,7 +258,14 @@ enum DecryptCompanionRuntime {
         if report.isPartial || !report.failed.isEmpty {
             let names = report.failed.prefix(6).joined(separator: ", ")
             throw FairPlayDecryptError.stillEncrypted(
-                "Companion DRM check failed — \(report.failed.count) required binary(ies) still encrypted: \(names)\(report.failed.count > 6 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
+                "Companion DRM check failed — \(report.failed.count) required binary(ies) still encrypted: \(names)\(report.failed.count > 6 ? "…" : ""). Full IPA decrypt refuses PARTIAL. \(AppStoreDecryptGuide.failureHint)"
+            )
+        }
+        // Encrypted IPA path stamps fullIPACoverage — leftover soft-fails (appex etc.) are not OK.
+        if report.fullIPACoverage, !report.softFailed.isEmpty {
+            let names = report.softFailed.prefix(6).joined(separator: ", ")
+            throw FairPlayDecryptError.stillEncrypted(
+                "Full IPA decrypt left \(report.softFailed.count) Mach-O(s) uncleared: \(names)\(report.softFailed.count > 6 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
             )
         }
         if before.encrypted > 0 && decN == 0 {
