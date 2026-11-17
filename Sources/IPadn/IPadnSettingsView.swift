@@ -342,7 +342,9 @@ private struct DecryptBackendsStatusRow: View {
             let order = (json["backends"] as? [String]) ?? []
             var out: [String] = ["Order: " + (order.isEmpty ? "(none)" : order.joined(separator: " → "))]
             if let status = json["status"] as? [String: Any] {
-                if (status["linuxOnly"] as? Bool) == true {
+                if let host = status["host"] as? String, !host.isEmpty {
+                    out.append("Host: \(host)" + ((status["macHost"] as? Bool) == true ? " (enroll+decrypt here)" : ""))
+                } else if (status["linuxOnly"] as? Bool) == true {
                     out.append("Linux-only (no JB / TrollStore / phone)")
                 }
                 if let cred = status["credential"] as? [String: Any] {
@@ -390,9 +392,9 @@ private struct FairPlayAdvancedSettingsSection: View {
         Section {
             DecryptBackendsStatusRow()
         } header: {
-            Text("Server · Linux FairPlay")
+            Text("Server · FairPlay host")
         } footer: {
-            Text("Site decrypt runs on Linux (fairplay-decrypt + unfairplay). Put a 16-byte credential.bin (or enrollment model) on the server — export once from an enrolled Mac with UnfairPlay. No jailbreak or TrollStore required.")
+            Text("Preferred: run the site on a rented Mac (FAIRPLAY_HOST=mac, DECRYPT_BACKENDS=unfairplay) so enroll + decrypt stay there. Linux hosts need a copied enrollment model / credential.bin. No jailbreak or TrollStore.")
         }
 
         Section {
