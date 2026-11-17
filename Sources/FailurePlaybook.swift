@@ -72,6 +72,29 @@ enum FailurePlaybook {
             action: .reauthStore
         ),
         FailurePlay(
+            id: "fairplay-eperm",
+            title: "FairPlay needs live install or stamped IPA",
+            summary: "Companion hit EPERM on EmbeddedPayload. Install this app from the App Store (same Apple ID), re-run Get so the encrypted IPA is stamped/bundled, then open Tetherless Decrypt again.",
+            matches: [
+                "eperm",
+                "embeddedpayload",
+                "no live install",
+                "stamped ipa",
+                "live path is stamped",
+                "operation not permitted",
+            ],
+            actionTitle: "Capture FairPlay keys",
+            action: .openAppStoreSignIn
+        ),
+        FailurePlay(
+            id: "fairplay-macho",
+            title: "No Mach-O binaries found",
+            summary: "The companion couldn’t find executables in the embedded app. Re-run Get so the full encrypted IPA is retained and EncryptedSource.ipa is bundled into Tetherless Decrypt.",
+            matches: ["no mach-o binaries found", "no mach-o"],
+            actionTitle: "Open Downloads",
+            action: .openLibrary
+        ),
+        FailurePlay(
             id: "fairplay-gate",
             title: "App Store Media & Purchases sign-in needed",
             summary: "Capture FairPlay keys once: open App Store / Media & Purchases with the same Apple ID, return here, confirm, then retry the download.",
@@ -85,6 +108,7 @@ enum FailurePlaybook {
                 "media & purchases",
                 "confirming fairplay keys",
                 "fairplay keys ready",
+                "never stored media",
             ],
             actionTitle: "Capture FairPlay keys",
             action: .openAppStoreSignIn
@@ -92,8 +116,8 @@ enum FailurePlaybook {
         FailurePlay(
             id: "cryptid",
             title: "FairPlay still encrypted (cryptid)",
-            summary: "iOS never stored Media & Purchases keys for this Apple ID. Open the key capture sheet, sign in once, confirm, then retry.",
-            matches: ["cryptid", "fairplay", "still encrypted", "decryption keys"],
+            summary: "Required Mach-Os still report cryptid ≠ 0 after decrypt. Confirm FairPlay keys for this Apple ID, install the app from the App Store if needed, then retry Get.",
+            matches: ["cryptid", "still encrypted", "decryption keys", "full ipa decrypt left"],
             actionTitle: "Capture FairPlay keys",
             action: .openAppStoreSignIn
         ),

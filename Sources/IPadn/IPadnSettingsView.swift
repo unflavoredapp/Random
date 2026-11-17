@@ -351,7 +351,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Temp paths")
         } footer: {
-            Text("Store Get holds the encrypted IPA under EncryptedIPAs and stamps its URL for FairPlay. Turn Keep off to delete that file after a successful clear export.")
+            Text("Store Get holds the encrypted IPA under App Group EncryptedIPAs when available (companion-readable), and always bundles EncryptedSource.ipa into Tetherless Decrypt. Turn Keep off to delete the stamped file after a successful clear export.")
         }
 
         Section {

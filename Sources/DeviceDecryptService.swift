@@ -958,6 +958,13 @@ final class DeviceDecryptService: ObservableObject {
         DecryptCompanionHandoff.publishHostSnapshot()
         publishDecryptProgress("Encrypted IPA held for FairPlay: \(retained.lastPathComponent)")
         publishDecryptProgress("Temp URL: \(retained.path)")
+        if DecryptCompanionHandoff.encryptedIPADirectoryIsShared {
+            publishDecryptProgress("Encrypted IPA is in App Group (companion-readable).")
+        } else {
+            publishDecryptProgress(
+                "App Group unavailable — companion will carry EncryptedSource.ipa inside Tetherless Decrypt."
+            )
+        }
         if fpOpts.pathDiagnostics {
             publishDecryptProgress(
                 "Advanced FairPlay · \(fpOpts.sourceMode.title) · retries \(fpOpts.retryRounds)"
