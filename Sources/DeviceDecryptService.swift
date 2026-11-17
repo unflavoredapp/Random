@@ -931,8 +931,8 @@ final class DeviceDecryptService: ObservableObject {
         }
     }
 
-    /// Download path only: embed the Store IPA into the companion, sign, install, open.
-    /// No in-app FairPlay fallback — decrypt runs inside the companion.
+    /// After Store download: require a live App Store install, embed it into the companion.
+    /// FairPlay mremap needs the live path (EmbeddedPayload-only almost always EPERMs).
     private func handoffStoreIPAToCompanion(
         ipa: URL,
         displayName: String,
@@ -946,32 +946,30 @@ final class DeviceDecryptService: ObservableObject {
         }
         publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
         // Refresh install inventory so the packager can stamp hostLiveInstallPath —
-        // companion FairPlay needs the live Store path when the app is already on-device.
+        // companion FairPlay needs the live Store path (foulplay/FairPlayed pattern).
         _ = await DeviceLibrary.shared.refreshAwaiting()
-        // Pre-resolve + publish live path via App Group before packaging. FairPlay
-        // binaries often EPERM on open under the host, so the packager must stamp by
-        // path existence alone — and the companion re-reads this App Group value.
         let resolvedBid = (bundleID?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
             $0.isEmpty ? nil : $0
         } ?? Self.bundleIDFromStoreIPA(ipa)
+        // Prefer embedding the live install when present — EmbeddedPayload-only mremap
+        // almost always EPERMs even after Media & Purchases ack (keys are on-device, but
+        // fairplayd resolves SC_Info next to the *input* binary path).
         if let bid = resolvedBid,
            let live = await resolveInstalledAppURL(bundleID: bid) {
             DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
             publishDecryptProgress("Live App Store install ready for FairPlay: \(live.lastPathComponent)")
-        }
-        do {
             let companionID = try await DecryptCompanionInstaller.installAndOpen(
-                embedding: ipa,
+                embeddingInstalledApp: live,
                 displayName: displayName
             ) { [weak self] msg in
                 Task { @MainActor in self?.publishDecryptProgress(msg) }
             }
             markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
-        } catch {
-            throw DecryptError(
-                "Couldn't install the companion with this IPA (\(error.localizedDescription)). Create a 7-day Apple ID certificate under Account › Settings › Installation › Certificate, trust it under Settings › General › VPN & Device Management, then retry."
-            )
+            return
         }
+        throw FairPlayDecryptError.noInstalledApp(
+            "\(displayName) isn’t installed from the App Store on this iPhone. FairPlay companion decrypt needs that live install (same as fouldecrypt/FairPlayed). Install it under your Apple ID, Pair → refresh Installed, then tap Get again."
+        )
     }
 
     /// Peek CFBundleIdentifier from a Store IPA zip without extracting the whole archive.
