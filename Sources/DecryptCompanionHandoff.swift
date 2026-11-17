@@ -58,6 +58,9 @@ enum DecryptCompanionHandoff {
 
     private static let liveInstallPathKey = "companion.hostLiveInstallPath"
     private static let liveInstallBundleKey = "companion.hostLiveInstallBundleID"
+    private static let encryptedIPAPathKey = "companion.hostEncryptedIPAPath"
+    private static let encryptedIPABundleKey = "companion.hostEncryptedIPABundleID"
+    static let encryptedIPADirName = "EncryptedIPAs"
 
     /// Snapshot the host Apple ID / FairPlay gate state into a plist-safe dictionary.
     /// Calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
@@ -103,6 +106,18 @@ enum DecryptCompanionHandoff {
            !bid.isEmpty {
             snap["bundleID"] = bid
         }
+        // Durable temp Store IPA path — FairPlay / companion can re-open this encrypted package.
+        if let path = (suite?.string(forKey: encryptedIPAPathKey) ?? local.string(forKey: encryptedIPAPathKey))?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !path.isEmpty {
+            snap["hostEncryptedIPAPath"] = path
+        }
+        if let bid = (suite?.string(forKey: encryptedIPABundleKey) ?? local.string(forKey: encryptedIPABundleKey))?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !bid.isEmpty,
+           snap["bundleID"] == nil {
+            snap["bundleID"] = bid
+        }
         return snap
     }
 
@@ -138,6 +153,102 @@ enum DecryptCompanionHandoff {
         publishHostSnapshot()
     }
 
+    /// Durable folder for App Store encrypted IPAs (Documents + App Group when available).
+    static func encryptedIPADirectory() -> URL {
+        if let root = sharedContainerURL {
+            let dir = root.appendingPathComponent(encryptedIPADirName, isDirectory: true)
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            return dir
+        }
+        return AppPaths.dir("encrypted-ipas")
+    }
+
+    /// Copy/move a Store download into the durable temp folder and stamp its URL for FairPlay.
+    @discardableResult
+    static func retainEncryptedIPA(
+        _ source: URL,
+        bundleID: String,
+        displayName: String
+    ) throws -> URL {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: source.path) else {
+            throw DecryptError("Encrypted IPA missing at \(source.lastPathComponent).")
+        }
+        let bid = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let safeBid = (bid.isEmpty ? "app" : bid)
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "..", with: "_")
+        let safeName = displayName
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "..", with: "_")
+        let fileName = "\(safeBid)_\(safeName.isEmpty ? "store" : safeName).ipa"
+        let dest = encryptedIPADirectory().appendingPathComponent(fileName)
+        if source.standardizedFileURL == dest.standardizedFileURL {
+            publishEncryptedIPAPath(dest.path, bundleID: bid)
+            return dest
+        }
+        try? fm.removeItem(at: dest)
+        do {
+            try fm.copyItem(at: source, to: dest)
+        } catch {
+            // Same-volume move is fine when copy fails (e.g. already in our temp dir).
+            try fm.moveItem(at: source, to: dest)
+        }
+        publishEncryptedIPAPath(dest.path, bundleID: bid)
+        return dest
+    }
+
+    static func publishEncryptedIPAPath(_ path: String, bundleID: String) {
+        let p = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bid = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !p.isEmpty else {
+            clearEncryptedIPAPath()
+            return
+        }
+        suite?.set(p, forKey: encryptedIPAPathKey)
+        local.set(p, forKey: encryptedIPAPathKey)
+        if !bid.isEmpty {
+            suite?.set(bid, forKey: encryptedIPABundleKey)
+            local.set(bid, forKey: encryptedIPABundleKey)
+        }
+        publishHostSnapshot()
+    }
+
+    static func clearEncryptedIPAPath() {
+        suite?.removeObject(forKey: encryptedIPAPathKey)
+        local.removeObject(forKey: encryptedIPAPathKey)
+        suite?.removeObject(forKey: encryptedIPABundleKey)
+        local.removeObject(forKey: encryptedIPABundleKey)
+        publishHostSnapshot()
+    }
+
+    static func readEncryptedIPAPath() -> (path: String, bundleID: String)? {
+        let path = (suite?.string(forKey: encryptedIPAPathKey)
+            ?? local.string(forKey: encryptedIPAPathKey)
+            ?? (suite?.dictionary(forKey: "companion.hostSnapshot")?["hostEncryptedIPAPath"] as? String)
+            ?? (local.dictionary(forKey: "companion.hostSnapshot")?["hostEncryptedIPAPath"] as? String))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { return nil }
+        let bid = (suite?.string(forKey: encryptedIPABundleKey)
+            ?? local.string(forKey: encryptedIPABundleKey)
+            ?? (suite?.dictionary(forKey: "companion.hostSnapshot")?["bundleID"] as? String)
+            ?? (local.dictionary(forKey: "companion.hostSnapshot")?["bundleID"] as? String))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return (path, bid)
+    }
+
+    /// Resolve stamped encrypted IPA URL (App Group / defaults / manifest).
+    static func resolveEncryptedIPAURL(manifest: [String: Any]?) -> URL? {
+        if let stamped = readEncryptedIPAPath() {
+            return URL(fileURLWithPath: stamped.path)
+        }
+        let path = ((manifest?["hostEncryptedIPAPath"] as? String)
+            ?? (readHostSnapshot(fromManifest: nil)["hostEncryptedIPAPath"] as? String))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { return nil }
+        return URL(fileURLWithPath: path)
+    }
+
     /// Live Store path published by the host packager (App Group / local fallback).
     static func readLiveInstallPath() -> (path: String, bundleID: String)? {
         let path = (suite?.string(forKey: liveInstallPathKey)
@@ -161,7 +272,7 @@ enum DecryptCompanionHandoff {
         var out: [String: Any] = [:]
         for key in [
             "hostSignedIn", "hostStoreReady", "hostFairPlayAck", "hostEmailHint", "hostEmail",
-            "hostSnapshotAt", "hostLiveInstallPath", "bundleID"
+            "hostSnapshotAt", "hostLiveInstallPath", "hostEncryptedIPAPath", "bundleID"
         ] {
             if let v = manifest[key] { out[key] = v }
         }

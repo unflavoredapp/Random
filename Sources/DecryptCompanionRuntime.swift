@@ -95,17 +95,38 @@ enum DecryptCompanionRuntime {
         }
 
         // FairPlayed / foulplay: fairplayd resolves SC_Info on the *input* path.
-        // Host stamps the live App Store install into App Group + manifest — use it
-        // for mremap. EmbeddedPayload-only reads often EPERM even when keys exist.
+        // Prefer: (1) live App Store install, (2) host-stamped encrypted IPA unpacked
+        // from durable temp, (3) EmbeddedPayload.
         let liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(manifest: man)
+        var ipaUnpackRoot: URL?
+        defer {
+            if let ipaUnpackRoot {
+                try? fm.removeItem(at: ipaUnpackRoot)
+            }
+        }
         let readRoot: URL
         if let liveURL {
             readRoot = liveURL
             log("Using live App Store install for FairPlay: \(liveURL.path)")
+        } else if let ipaURL = DecryptCompanionHandoff.resolveEncryptedIPAURL(manifest: man) {
+            log("Using stamped encrypted IPA for FairPlay: \(ipaURL.path)")
+            let unpack = fm.temporaryDirectory
+                .appendingPathComponent("tl-ipa-\(UUID().uuidString)", isDirectory: true)
+            try fm.createDirectory(at: unpack, withIntermediateDirectories: true)
+            try fm.unzipItem(at: ipaURL, to: unpack)
+            let payload = unpack.appendingPathComponent("Payload", isDirectory: true)
+            let app = try fm.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
+                .first(where: { $0.pathExtension == "app" })
+            guard let app else {
+                throw DecryptError("Stamped encrypted IPA has no Payload/*.app — re-run Get from TetherLess.")
+            }
+            ipaUnpackRoot = unpack
+            readRoot = app
+            log("Unpacked encrypted IPA → \(app.lastPathComponent)")
         } else {
             readRoot = src
-            log("No live install path stamped — FairPlay will try EmbeddedPayload (often EPERM).")
-            log("Install \(name) from the App Store on this iPhone, then re-run Get from TetherLess.")
+            log("No live install / stamped IPA — FairPlay will try EmbeddedPayload (often EPERM).")
+            log("Re-run Get from TetherLess so the encrypted IPA temp URL is stamped.")
         }
 
         // Fail-closed DRM checks stay silent in the console (TetherlessiOS-style log).

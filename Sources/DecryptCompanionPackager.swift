@@ -401,10 +401,14 @@ enum DecryptCompanionPackager {
                 DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: embeddedBundleID)
             } else {
                 progress?(
-                    "No live App Store install for \(embeddedBundleID) — install that app from the App Store on this iPhone before decrypt, or FairPlay may EPERM on EmbeddedPayload alone."
+                    "No live App Store install for \(embeddedBundleID) — FairPlay will use stamped encrypted IPA / EmbeddedPayload."
                 )
                 DecryptCompanionHandoff.clearLiveInstallPath()
             }
+        }
+        if let enc = DecryptCompanionHandoff.readEncryptedIPAPath() {
+            meta["hostEncryptedIPAPath"] = enc.path
+            progress?("Stamped encrypted IPA for FairPlay: \(enc.path)")
         }
         // Host readiness only — never passwords / PET / store session JSON.
         for (k, v) in DecryptCompanionHandoff.hostSnapshot() {
