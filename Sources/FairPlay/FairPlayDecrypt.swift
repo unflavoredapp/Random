@@ -460,33 +460,33 @@ enum FairPlayDecrypt {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(sourceApp.lastPathComponent).")
         }
         report.scanned = binaries.count
-        // Don't pre-open every binary for cryptid counts — that re-hangs on install paths.
-        // Count after we know the list, with a short timeout per file.
+
+        // Fast path: short cryptid probes (0.6s). If every probe fails/times out, still
+        // stage SINFs for the full Mach-O list so FairPlay can proceed (CARROT / Flutter).
         var encryptedBins: [URL] = []
         var encCount = 0
-        for url in binaries {
-            if let n = withTimeout(seconds: 3, work: {
-                Int(url.path.withCString { fp_count_encrypted_slices($0) })
-            }), n > 0 {
-                encCount += n
-                encryptedBins.append(url)
+        let liveSource = isLiveAppStoreInstall(sourceApp)
+        if !liveSource {
+            for url in binaries {
+                if let n = withTimeout(seconds: 0.6, work: {
+                    Int(url.path.withCString { fp_count_encrypted_slices($0) })
+                }), n > 0 {
+                    encCount += n
+                    encryptedBins.append(url)
+                }
             }
         }
         report.encryptedBefore = encCount
 
         // buddy3 `stage_folder_sinfs`: copy root .sinf next to every encrypted Mach-O
         // (`…/SC_Info/<exe>.sinf`) so fairplayd can resolve licenses without a live install.
-        if !isLiveAppStoreInstall(sourceApp), !encryptedBins.isEmpty {
-            let perBinary = stageSinfsForEncryptedBinaries(encryptedBins, in: sourceApp)
+        if !liveSource {
+            let stageTargets = encryptedBins.isEmpty ? binaries : encryptedBins
+            let perBinary = stageSinfsForEncryptedBinaries(stageTargets, in: sourceApp)
             report.sinfsReplicated += perBinary
             if perBinary > 0 {
                 detail?("Staged \(perBinary) per-binary SINF license(s)…")
             }
-        }
-
-        progress?("Decrypting \(binaries.count) Mach-O file(s)…")
-        if encCount > 0 {
-            detail?("(\(encCount) encrypted slice(s) to clear)")
         }
 
         let ordered = prioritizeBinaries(binaries, app: sourceApp)
@@ -494,16 +494,23 @@ enum FairPlayDecrypt {
             throw FairPlayDecryptError.failed("No Mach-O binaries found.")
         }
 
-        // Serial decrypt — companion quiet console keeps only result tags.
-        for (index, file) in ordered.enumerated() {
-            pauseIfMemoryPressure(progress: detail)
-            let r = role(of: file, under: sourceApp, app: sourceApp)
+        progress?("Decrypting \(ordered.count) Mach-O file(s)…")
+        if encCount > 0 {
+            detail?("(\(encCount) encrypted slice(s) to clear)")
+        }
+
+        // Main first (serial), then frameworks/appex in parallel for speed.
+        let mainFiles = ordered.filter { role(of: $0, under: sourceApp, app: sourceApp) == .main }
+        let otherFiles = ordered.filter { role(of: $0, under: sourceApp, app: sourceApp) != .main }
+        let total = ordered.count
+
+        func absorb(
+            file: URL,
+            role r: FairPlayBinaryRole,
+            outcome: DecryptOneOutcome,
+            budget: TimeInterval
+        ) throws {
             let rel = relativePath(file, under: sourceApp)
-            let budget: TimeInterval = (r == .main) ? 180 : 90
-            let outcome = decryptOneWithTimeout(
-                file: file, sourceApp: sourceApp, destApp: destApp,
-                index: index, total: ordered.count, role: r, timeout: budget
-            )
             switch outcome {
             case .timedOut:
                 progress?("[FAILED]    \(rel) (timeout \(Int(budget))s)")
@@ -550,6 +557,31 @@ enum FairPlayDecrypt {
                         "Couldn't decrypt the main executable (\(rel)). \(AppStoreDecryptGuide.failureHint)"
                     )
                 }
+            }
+        }
+
+        for (index, file) in mainFiles.enumerated() {
+            pauseIfMemoryPressure(progress: detail)
+            let budget: TimeInterval = 180
+            let outcome = decryptOneWithTimeout(
+                file: file, sourceApp: sourceApp, destApp: destApp,
+                index: index, total: total, role: .main, timeout: budget
+            )
+            try absorb(file: file, role: .main, outcome: outcome, budget: budget)
+        }
+
+        if !otherFiles.isEmpty {
+            detail?("Fast-decrypting \(otherFiles.count) framework/extension Mach-O(s)…")
+            let parallelResults = decryptSecondaryMachOsParallel(
+                files: otherFiles,
+                sourceApp: sourceApp,
+                destApp: destApp,
+                total: total,
+                indexBase: mainFiles.count,
+                detail: detail
+            )
+            for item in parallelResults {
+                try absorb(file: item.file, role: item.role, outcome: item.outcome, budget: item.budget)
             }
         }
 
@@ -1128,13 +1160,39 @@ enum FairPlayDecrypt {
         var seen = Set<String>()
         let liveInstall = isLiveAppStoreInstall(root)
 
-        /// Probe Mach-O magic. On live App Store installs `open()`/`pread` of FairPlay
-        /// binaries can hang or fail in-sandbox (Flutter `Runner.app` hit this as
-        /// “No Mach-O binaries found”) — treat timeout / open-fail as “assume binary”
-        /// for known executable candidates so decrypt can proceed.
+        /// Fast Mach-O probe: read magic locally first (no fpcore hang). Fall back to a
+        /// short `fp_is_macho` only when the header can't be read (live EPERM).
         enum MachOProbe { case yes, no, unknown }
 
+        func fastMagicProbe(_ url: URL) -> MachOProbe {
+            guard let fh = try? FileHandle(forReadingFrom: url) else { return .unknown }
+            defer { try? fh.close() }
+            let data: Data
+            if #available(iOS 13.4, *) {
+                guard let d = try? fh.read(upToCount: 4), d.count == 4 else { return .unknown }
+                data = d
+            } else {
+                let d = fh.readData(ofLength: 4)
+                guard d.count == 4 else { return .unknown }
+                data = d
+            }
+            let mag = data.withUnsafeBytes { $0.load(as: UInt32.self) }
+            // MH_MAGIC / MH_CIGAM / MH_MAGIC_64 / MH_CIGAM_64 / FAT_MAGIC / FAT_CIGAM
+            let known: Set<UInt32> = [
+                0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe,
+                0xcafebabe, 0xbebafeca,
+            ]
+            return known.contains(mag) ? .yes : .no
+        }
+
         func probeMachO(_ url: URL) -> MachOProbe {
+            switch fastMagicProbe(url) {
+            case .yes: return .yes
+            case .no: return .no
+            case .unknown:
+                break
+            }
+            // Header unreadable — short fpcore probe (1s), never the old 4s hang.
             let box = TimeoutBox<Bool?>()
             let sem = DispatchSemaphore(value: 0)
             DispatchQueue.global(qos: .userInitiated).async {
@@ -1142,7 +1200,7 @@ enum FairPlayDecrypt {
                 box.value = ok
                 sem.signal()
             }
-            if sem.wait(timeout: .now() + 4) == .timedOut {
+            if sem.wait(timeout: .now() + 1) == .timedOut {
                 return .unknown
             }
             switch box.value {
@@ -1159,10 +1217,8 @@ enum FairPlayDecrypt {
             let path = url.standardizedFileURL.path
             guard !seen.contains(path) else { return }
             // Live App Store installs: `open()` of FairPlay binaries often fails (EPERM) or
-            // hangs. `fp_is_macho` returns false on open-fail — same as “not a Mach-O” —
-            // which emptied Runner.app for Flutter apps (Cake Wallet). Trusted candidates
-            // (CFBundleExecutable, frameworks, Flutter seeds) are included without a magic
-            // read so we neither hang per-file nor drop the main binary.
+            // hangs. Trusted candidates (CFBundleExecutable, frameworks, Flutter seeds,
+            // SC_Info siblings) are included without a magic read.
             if trustIfUnreadable && liveInstall {
                 seen.insert(path)
                 out.append(url)
@@ -1172,19 +1228,46 @@ enum FairPlayDecrypt {
             case .yes:
                 break
             case .no:
-                // On live installs open-fail looks like “not Mach-O”. Keep trusted paths.
+                // Open-fail / wrong magic on IPA trees — keep trusted executable paths
+                // (CARROT Weather hit “No Mach-O binaries found” when magic false-negatived).
                 if trustIfUnreadable {
                     progress?("Assuming Mach-O (unreadable for magic check): \(url.lastPathComponent)")
                     break
                 }
                 return
             case .unknown:
-                // Timeout — keep CFBundleExecutable / .dylib / Flutter paths.
                 guard trustIfUnreadable || liveInstall else { return }
                 progress?("Assuming Mach-O (magic check blocked): \(url.lastPathComponent)")
             }
             seen.insert(path)
             out.append(url)
+        }
+
+        /// Seed candidates from SC_Info/*.sinf → sibling binary (FairPlayed / foulplay layout).
+        func collectFromSCInfo(in container: URL) {
+            guard let en = fm.enumerator(
+                at: container,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) else { return }
+            var budget = 80
+            for case let url as URL in en {
+                guard budget > 0 else { break }
+                if url.lastPathComponent != "SC_Info" { continue }
+                let isDir = (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false
+                guard isDir else { continue }
+                budget -= 1
+                guard let sins = try? fm.contentsOfDirectory(
+                    at: url,
+                    includingPropertiesForKeys: nil,
+                    options: [.skipsHiddenFiles]
+                ) else { continue }
+                let parent = url.deletingLastPathComponent()
+                for sinf in sins where sinf.pathExtension.lowercased() == "sinf" {
+                    let name = sinf.deletingPathExtension().lastPathComponent
+                    consider(parent.appendingPathComponent(name), trustIfUnreadable: true)
+                }
+            }
         }
 
         /// FairPlayed walks every regular file; we target Frameworks via Info.plist
@@ -1235,6 +1318,11 @@ enum FairPlayDecrypt {
         ] {
             consider(root.appendingPathComponent(rel), trustIfUnreadable: true)
         }
+        // Basename fallback when Info.plist is missing/stale (CARROT Weather-style shells).
+        consider(
+            root.appendingPathComponent(root.deletingPathExtension().lastPathComponent),
+            trustIfUnreadable: true
+        )
 
         // Loose dylibs / binaries at app root (Unity `factory`, Flutter `Runner`, …).
         // Always trust extensionless root binaries — FairPlay IPA copies are not "live
@@ -1249,6 +1337,9 @@ enum FairPlayDecrypt {
                 }
             }
         }
+
+        progress?("SC_Info licenses…")
+        _ = withTimeout(seconds: 4, work: { collectFromSCInfo(in: root); return true })
 
         progress?("Frameworks…")
         // Bound Frameworks listing — Flutter apps ship many frameworks; give more budget.
@@ -1287,11 +1378,20 @@ enum FairPlayDecrypt {
         progress?("Skipping App Clips (optional · avoids install-path hang)…")
 
         if out.isEmpty {
-            // Absolute last resort: force-include CFBundleExecutable even if exists-check raced.
+            // Absolute last resort: force-include CFBundleExecutable / basename even if
+            // exists-check raced, plus any SC_Info sibling we can still name.
             if let main = bundleExecutableURL(in: root) {
                 progress?("Force-including main executable \(main.lastPathComponent)…")
                 out.append(main)
+            } else {
+                let fallback = root.appendingPathComponent(root.deletingPathExtension().lastPathComponent)
+                var isDir: ObjCBool = false
+                if fm.fileExists(atPath: fallback.path, isDirectory: &isDir), !isDir.boolValue {
+                    progress?("Force-including basename executable \(fallback.lastPathComponent)…")
+                    out.append(fallback)
+                }
             }
+            _ = withTimeout(seconds: 3, work: { collectFromSCInfo(in: root); return true })
         }
         if out.isEmpty {
             throw FairPlayDecryptError.failed("No Mach-O binaries found in \(root.lastPathComponent).")
@@ -1304,6 +1404,57 @@ enum FairPlayDecrypt {
         case ok(FairPlayDecryptReport)
         case threw(Error)
         case timedOut
+    }
+
+    private struct ParallelDecryptItem {
+        let file: URL
+        let role: FairPlayBinaryRole
+        let outcome: DecryptOneOutcome
+        let budget: TimeInterval
+        let index: Int
+    }
+
+    /// Decrypt non-main Mach-Os with bounded parallelism (2–3 workers) after main is clear.
+    /// Collects outcomes under a lock, then the caller absorbs them serially.
+    private static func decryptSecondaryMachOsParallel(
+        files: [URL],
+        sourceApp: URL,
+        destApp: URL,
+        total: Int,
+        indexBase: Int,
+        detail: ((String) -> Void)?
+    ) -> [ParallelDecryptItem] {
+        guard !files.isEmpty else { return [] }
+        // Cap concurrency — mremap is memory-heavy; 3 keeps Flutter apps moving without Jetsam.
+        let maxWorkers = min(3, max(1, files.count))
+        detail?("Parallel FairPlay workers: \(maxWorkers)")
+        let gate = DispatchSemaphore(value: maxWorkers)
+        let lock = NSLock()
+        var items: [ParallelDecryptItem] = []
+        let group = DispatchGroup()
+
+        for (offset, file) in files.enumerated() {
+            group.enter()
+            DispatchQueue.global(qos: .userInitiated).async {
+                defer { group.leave() }
+                gate.wait()
+                defer { gate.signal() }
+                pauseIfMemoryPressure(progress: nil)
+                let r = role(of: file, under: sourceApp, app: sourceApp)
+                let budget: TimeInterval = (r == .framework || r == .appex) ? 90 : 60
+                let outcome = decryptOneWithTimeout(
+                    file: file, sourceApp: sourceApp, destApp: destApp,
+                    index: indexBase + offset, total: total, role: r, timeout: budget
+                )
+                lock.lock()
+                items.append(ParallelDecryptItem(
+                    file: file, role: r, outcome: outcome, budget: budget, index: offset
+                ))
+                lock.unlock()
+            }
+        }
+        group.wait()
+        return items.sorted { $0.index < $1.index }
     }
 
     /// Runs `decryptOne` against an isolated staging `.app` so a timed-out worker cannot
