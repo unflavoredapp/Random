@@ -173,8 +173,9 @@ enum FairPlaySelfHeal {
                         }
                         continue
                     }
-                    throw FairPlayDecryptError.mainExecutableFailed(
-                        "Couldn't decrypt after self-heal (licenseOrKeys). \(FairPlayFailureClass.licenseOrKeys.userMessage)"
+                    // Don't surface "self-heal" jargon — keys guidance is the actionable fix.
+                    throw FairPlayDecryptError.missingLicense(
+                        FairPlayFailureClass.licenseOrKeys.userMessage
                     )
 
                 case .stillEncrypted:

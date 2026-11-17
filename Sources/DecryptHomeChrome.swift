@@ -595,10 +595,12 @@ struct DecryptAppStoreSignInHint: View {
                 Image(systemName: "checkmark.circle.fill")
                     .foregroundStyle(TetherlessPalette.success)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("App Store sign-in noted")
+                    Text("FairPlay keys ready")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text(email.isEmpty ? "Keys should be on this device for your Store account." : "Marked for \(email). You can reopen the App Store anytime if decrypt still fails after download.")
+                    Text(email.isEmpty
+                         ? "Media & Purchases sign-in noted — companion decrypt can proceed."
+                         : "Noted for \(email). Companion handoff will show this before packaging.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)

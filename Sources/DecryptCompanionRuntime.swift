@@ -426,10 +426,26 @@ struct DecryptCompanionRoot: View {
                 get: { errorText != nil },
                 set: { if !$0 { errorText = nil } }
             )) {
+                if Self.isLicenseOrKeysFailure(errorText) {
+                    Button("Open App Store") {
+                        AppStoreDecryptGuide.openAppStore()
+                    }
+                    Button("Open Settings") {
+                        AppStoreDecryptGuide.openSystemSettings()
+                    }
+                }
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(errorText ?? "")
             }
+    }
+
+    private static func isLicenseOrKeysFailure(_ text: String?) -> Bool {
+        let t = (text ?? "").lowercased()
+        return t.contains("media & purchases")
+            || t.contains("decryption keys")
+            || t.contains("fairplay needs")
+            || t.contains("license")
     }
 }
 

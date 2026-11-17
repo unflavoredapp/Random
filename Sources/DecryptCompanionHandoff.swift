@@ -82,9 +82,15 @@ enum DecryptCompanionHandoff {
             "hostFairPlayAck": AppStoreDecryptGuide.isAcknowledged(email: email),
             "hostEmailHint": hint,
             "hostSnapshotAt": ISO8601DateFormatter().string(from: Date()),
-            // Explicit: no secrets.
+            // Explicit: no secrets (password / PET / session never stored).
             "secrets": false,
         ]
+        // Full email for companion FairPlay failure copy (UserDefaults + App Group).
+        if !email.isEmpty {
+            snap["hostEmail"] = email
+            suite?.set(email, forKey: "tetherless.appleid.activeEmailCache")
+            local.set(email, forKey: "tetherless.appleid.activeEmailCache")
+        }
         // Carry the last stamped live Store path so the companion can FairPlay-mremap
         // even when LS/MI inside the companion sandbox can't resolve the app.
         if let path = (suite?.string(forKey: liveInstallPathKey) ?? local.string(forKey: liveInstallPathKey))?
