@@ -275,6 +275,86 @@ struct IPadnSettingsView: View {
     }
 }
 
+/// Compact Phone Worker controls for FairPlay settings (server queue backend #1).
+private struct PhoneDecryptWorkerInline: View {
+    @ObservedObject private var worker = PhoneDecryptWorker.shared
+
+    var body: some View {
+        Toggle(isOn: Binding(
+            get: { worker.enabled },
+            set: { worker.applyEnabled($0) }
+        )) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Phone Worker")
+                Text(worker.status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        SecureField("DECRYPT_WORKER_TOKEN", text: $worker.workerToken)
+            .textInputAutocapitalization(.never)
+            .autocorrectionDisabled()
+            .font(.footnote.monospaced())
+            .disabled(!worker.enabled)
+        if let err = worker.lastError, !err.isEmpty {
+            Text(err)
+                .font(.caption2)
+                .foregroundStyle(.orange)
+        }
+    }
+}
+
+/// Shows which FairPlay backends the site reports as configured.
+private struct DecryptBackendsStatusRow: View {
+    @State private var lines: [String] = ["Tap Refresh"]
+    @State private var busy = false
+
+    var body: some View {
+        ForEach(lines, id: \.self) { line in
+            Text(line)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+        Button(busy ? "Refreshing…" : "Refresh backend status") {
+            Task { await refresh() }
+        }
+        .disabled(busy)
+        .task { await refresh() }
+    }
+
+    private func refresh() async {
+        busy = true
+        defer { busy = false }
+        do {
+            let base = DecryptClient.siteBase
+            guard !base.isEmpty, let url = URL(string: base + "api/decrypt/backends") else {
+                lines = ["No site base configured"]
+                return
+            }
+            let (data, resp) = try await URLSession.shared.data(from: url)
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard code < 400,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                lines = ["HTTP \(code)"]
+                return
+            }
+            let order = (json["backends"] as? [String]) ?? []
+            var out: [String] = ["Order: " + (order.isEmpty ? "(none)" : order.joined(separator: " → "))]
+            if let status = json["status"] as? [String: Any] {
+                for key in ["fairplay-decrypt", "ipadecrypt", "ipa-decrypter", "unfaird", "phone"] {
+                    guard let row = status[key] as? [String: Any] else { continue }
+                    let ready = (row["ready"] as? Bool) == true
+                    out.append("\(ready ? "✓" : "·") \(key)")
+                }
+            }
+            lines = out
+        } catch {
+            lines = [error.localizedDescription]
+        }
+    }
+}
+
 /// Advanced FairPlay decrypt controls — source path, verbose console, retries, IPA retention.
 private struct FairPlayAdvancedSettingsSection: View {
     @AppStorage(FairPlayAdvancedOptions.sourceModeKey) private var sourceModeRaw =
@@ -292,6 +372,22 @@ private struct FairPlayAdvancedSettingsSection: View {
     }
 
     var body: some View {
+        Section {
+            PhoneDecryptWorkerInline()
+        } header: {
+            Text("Server queue · Phone Worker")
+        } footer: {
+            Text("One of four FairPlay backends: this iPhone claims site/Telegram jobs. Others (fairplay-decrypt, ipadecrypt, ipa-decrypter, unfaird) run on the server — see server/fairplay-backends.md.")
+        }
+
+        Section {
+            DecryptBackendsStatusRow()
+        } header: {
+            Text("Server FairPlay backends")
+        } footer: {
+            Text("Reads GET /api/decrypt/backends from your site. Configure DECRYPT_BACKENDS on the server.")
+        }
+
         Section {
             Picker("Decrypt source", selection: $sourceModeRaw) {
                 ForEach(FairPlayAdvancedOptions.SourceMode.allCases) { mode in

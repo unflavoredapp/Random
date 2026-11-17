@@ -22,8 +22,9 @@ const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
+const fairplayBackends = require("./fairplayBackends");
 
-const BUILD = "tetherless-phone-worker-1";
+const BUILD = "tetherless-fairplay-backends-1";
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME || process.env.DECRYPT_BOT || "TetherLessDecryptBot").replace(/^@/, "");
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN || "";
 const WORKER_TOKEN = process.env.DECRYPT_WORKER_TOKEN || "";
@@ -85,7 +86,9 @@ function create({ db /*, secret */ }) {
   }
 
   /**
-   * Called from site.js runDecrypt. Parks until an iPhone worker uploads a clear IPA.
+   * Called from site.js runDecrypt.
+   * Tries configured FairPlay backends (fairplay-decrypt / ipadecrypt /
+   * ipa-decrypter / unfaird) then falls back to the iPhone Phone Worker.
    */
   async function request(url, dir, say, tryCache, vreq, job) {
     if (!validUrl(url)) throw new Error("Paste an App Store link.");
@@ -93,7 +96,43 @@ function create({ db /*, secret */ }) {
       const hit = tryCache();
       if (hit) return hit;
     }
-    return enqueue(() => waitForWorker({ url, dir, say, vreq: vreq || "", job }));
+    return enqueue(async () => {
+      const order = fairplayBackends.configuredBackends();
+      const wantPhone = order.includes("phone");
+      if (job) job.backends = order.slice();
+
+      // Remote / CLI backends first (anything except phone).
+      try {
+        const remote = await fairplayBackends.tryRemoteBackends({
+          url,
+          dir,
+          say,
+          vreq: vreq || "",
+        });
+        if (remote && remote.file) {
+          if (job) {
+            job.msg = "Clear IPA from FairPlay backend…";
+            job.worker = false;
+            job.backend = remote.backend || "remote";
+          }
+          return { file: remote.file, name: remote.name || "App" };
+        }
+      } catch (e) {
+        if (!wantPhone) throw e;
+        say(
+          "Remote FairPlay backends failed — falling back to iPhone worker… (" +
+            (e.message || e).toString().slice(0, 100) +
+            ")"
+        );
+      }
+
+      if (!wantPhone) {
+        throw new Error(
+          "No FairPlay backend produced an IPA. Configure DECRYPT_BACKENDS and tool env vars (see server/fairplay-backends.md)."
+        );
+      }
+      return waitForWorker({ url, dir, say, vreq: vreq || "", job });
+    });
   }
 
   function waitForWorker({ url, dir, say, vreq, job }) {
@@ -225,6 +264,36 @@ function create({ db /*, secret */ }) {
   }
 
   function attachWorkerRoutes(web, { jsonBody, fail }) {
+    // SideStore-style anisette server list for Store Access (client rotates on HTTP 403).
+    web.get("/api/store/anisette-servers", (_req, res) => {
+      const env = String(process.env.ANISETTE_SERVERS || process.env.ANISETTE_SERVER || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const defaults = ["https://ani.jkcoxson.com", "https://ani.sidestore.io"];
+      const seen = new Set();
+      const servers = [];
+      for (const s of [...env, ...defaults]) {
+        const key = s.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        servers.push(s);
+      }
+      return res.json({ ok: true, servers, build: BUILD });
+    });
+
+    // Public-ish status for configured FairPlay backends (no secrets).
+    web.get("/api/decrypt/backends", (_req, res) => {
+      const fp = fairplayBackends.backendStatus();
+      return res.json({
+        ok: true,
+        backends: fp.backends,
+        status: fp,
+        workerConfigured: !!WORKER_TOKEN,
+        build: BUILD,
+      });
+    });
+
     web.post("/api/decrypt/worker/claim", jsonBody, (req, res) => {
       const auth = authWorker(req);
       if (!auth.ok) return fail(res, 401, auth.error);
@@ -443,18 +512,24 @@ function create({ db /*, secret */ }) {
 
   // Admin stubs — GramJS userbot login removed; bot uses TELEGRAM_BOT_TOKEN.
   async function status() {
+    const fp = fairplayBackends.backendStatus();
+    const wantsPhone = fp.backends.includes("phone");
+    let error = "";
+    if (!BOT_TOKEN) {
+      error =
+        "Set TELEGRAM_BOT_TOKEN (optional). Decrypt queue uses DECRYPT_BACKENDS — see server/fairplay-backends.md.";
+    } else if (wantsPhone && !WORKER_TOKEN) {
+      error = "Set DECRYPT_WORKER_TOKEN and enable Phone Worker in the iOS app (or drop phone from DECRYPT_BACKENDS).";
+    }
     return {
       lib: true,
-      mode: "phone-worker",
+      mode: fp.backends.join("+") || "phone",
       authed: !!BOT_TOKEN,
       who: BOT_TOKEN ? { name: "Bot API", username: BOT_USERNAME } : {},
       workerConfigured: !!WORKER_TOKEN,
       waiting: queueLen(),
-      error: !BOT_TOKEN
-        ? "Set TELEGRAM_BOT_TOKEN (and optional TELEGRAM_BOT_USERNAME) on the server. Phone worker needs DECRYPT_WORKER_TOKEN."
-        : !WORKER_TOKEN
-          ? "Set DECRYPT_WORKER_TOKEN and enable Phone Worker in the iOS app."
-          : "",
+      fairplay: fp,
+      error,
       bot: BOT_USERNAME,
       build: BUILD,
     };
