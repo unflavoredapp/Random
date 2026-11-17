@@ -936,7 +936,7 @@ struct DecryptView: View {
 
 // MARK: - Store trust piggyback (Decrypt tab)
 
-/// Store often needs a second Allow/SMS code after Apple ID 2FA — offer Submit Code here.
+/// Store often needs a second Allow push + code after Apple ID 2FA.
 private struct DecryptStoreTrustHint: View {
     let retryApp: DecryptApp
     @ObservedObject private var store = AppleIDStore.shared
@@ -947,7 +947,7 @@ private struct DecryptStoreTrustHint: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Apple ID may be signed in while Store still needs its own Allow / text code. Enter it below, or open Unlock Store.")
+            Text("Apple ID may be signed in while Store still needs a second Allow push. Open Unlock Store, tap Allow, then enter the code.")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.55))
                 .fixedSize(horizontal: false, vertical: true)
@@ -993,7 +993,7 @@ private struct DecryptStoreTrustHint: View {
                             DeviceDecryptService.shared.decryptFromSearch(retryApp)
                         } else {
                             localError = store.statusMessage ?? store.lastError
-                                ?? "Enter the Store Allow / text code, then Submit Code."
+                                ?? "Open Unlock Store for the Allow push, then enter the code."
                             showUnlockSheet = true
                         }
                     }

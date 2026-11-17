@@ -307,7 +307,7 @@ struct DecryptOwnedStoreAppsSection: View {
     }
 }
 
-/// Store may need a second Allow/SMS code after Apple ID 2FA.
+/// Store may need a second Allow push + code after Apple ID 2FA.
 private struct OwnedStoreTrustHint: View {
     var onRetry: () async -> Void
     @ObservedObject private var store = AppleIDStore.shared
@@ -318,7 +318,7 @@ private struct OwnedStoreTrustHint: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("If Apple ID signed in but purchases stay locked, enter the Store Allow / text code here.")
+            Text("If Apple ID signed in but purchases stay locked, open Unlock Store for a second Allow push.")
                 .font(.caption2)
                 .foregroundStyle(.white.opacity(0.5))
                 .fixedSize(horizontal: false, vertical: true)
