@@ -708,14 +708,27 @@ final class AppleIDStore: ObservableObject {
     /// Re-run GrandSlam password SRP so Apple opens a 2FA challenge (pending DSID/idms for SMS).
     /// - Parameter forStoreSMS: Skip Mac trusted-device push so the texted code stays usable for MZFinance.
     private func openGSATwoFactorChallenge(forStoreSMS: Bool = false) async throws {
-        guard let account = activeAccount else {
-            throw AppleAuthError.message("Sign in under Account first.")
-        }
-        guard let password = passwordForAccount(id: account.id), !password.isEmpty else {
-            throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Account.")
+        // Step 1 Store login hits 2FA *before* an account is active — use draft + pending
+        // Keychain password so MacBook Allow can fire on this iPhone.
+        let email: String
+        let password: String
+        if let account = activeAccount,
+           let saved = passwordForAccount(id: account.id), !saved.isEmpty {
+            email = account.email
+            password = saved
+        } else {
+            let draft = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !draft.isEmpty, draft.contains("@") else {
+                throw AppleAuthError.message("Enter your Apple ID under Account first.")
+            }
+            guard let pending = pendingSignInPassword(), !pending.isEmpty else {
+                throw AppleAuthError.message("Missing Apple ID password — enter it again under Account.")
+            }
+            email = draft
+            password = pending
         }
         _ = try await GSAAuthClient.shared.authenticate(
-            email: account.email,
+            email: email,
             password: password,
             requestTrustedDevicePush: !forStoreSMS
         )
@@ -787,23 +800,33 @@ final class AppleIDStore: ObservableObject {
                 // fire the trusted-device push so Store can get a fresh Allow code.
                 do {
                     try await openGSATwoFactorChallenge(forStoreSMS: false)
-                    storefrontNeedsRefresh = true
-                    if let session = try? await ensureStorefrontSession(forceRefresh: true), session.isUsable {
-                        storeNeedsVerification = false
-                        authPhase = .idle
-                        statusMessage = "Store access ready — free & purchased downloads unlocked"
-                        return
+                    // Only remint Store when an account is already active. Mid Step-1 login
+                    // has draft credentials only — remint would throw “Sign in under Account first”.
+                    if isSignedIn {
+                        storefrontNeedsRefresh = true
+                        if let session = try? await ensureStorefrontSession(forceRefresh: true), session.isUsable {
+                            storeNeedsVerification = false
+                            authPhase = .idle
+                            statusMessage = "Store access ready — free & purchased downloads unlocked"
+                            return
+                        }
+                        if storefrontSession()?.isUsable == true {
+                            clearStoreVerificationIfSessionUsable()
+                            authPhase = .idle
+                            statusMessage = "Store access ready — free & purchased downloads unlocked"
+                            return
+                        }
                     }
-                    if storefrontSession()?.isUsable == true {
-                        clearStoreVerificationIfSessionUsable()
-                        authPhase = .idle
-                        statusMessage = "Store access ready — free & purchased downloads unlocked"
-                    } else if keepStoreSheet {
+                    if keepStoreSheet {
                         storeNeedsVerification = true
                         authPhase = .idle
                         statusMessage = "Couldn't mint Store from trust alone — tap Send again, then enter the Allow code."
+                    } else if gsa.twoFactorCodeAlreadySent {
+                        // Step 1 mid-login: Allow already pushed — show code entry.
+                        finishWaitingForCode()
                     } else {
-                        authPhase = .idle
+                        authPhase = .awaitingTwoFactor
+                        statusMessage = twoFactorPromptMessage()
                     }
                     return
                 } catch AppleAuthError.needsTwoFactor {

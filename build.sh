@@ -97,11 +97,21 @@ run_soft xcodebuild -list -project "$PROJECT"
 # Resolve SwiftPM deps (ZIPFoundation, OpenSSL, Vapor). Archive re-resolves if this hiccups.
 # Keep SwiftPM on the pinned Vapor / swift-crypto graph from project.pbxproj.
 # This avoids the newer CryptoExtras graph that was failing in the simulator compile.
-rm -rf "$DERIVED" 2>/dev/null || true
+# Preserve DerivedData across CI runs (GitHub Actions cache) unless CLEAN_DERIVED=1.
+if [ "${CLEAN_DERIVED:-0}" = "1" ]; then
+  echo "==> CLEAN_DERIVED=1 — wiping $DERIVED"
+  rm -rf "$DERIVED" 2>/dev/null || true
+fi
+mkdir -p "$DERIVED"
 run_soft xcodebuild -project "$PROJECT" -scheme "$SCHEME" -resolvePackageDependencies \
   -derivedDataPath "$DERIVED" -skipPackagePluginValidation
 
 # Archive, fully unsigned.
+# Skip `clean` when DerivedData is warm (CI cache) — full clean adds ~10+ minutes.
+ARCHIVE_ACTION="archive"
+if [ "${CLEAN_DERIVED:-0}" = "1" ] || [ "${FORCE_XCODE_CLEAN:-0}" = "1" ]; then
+  ARCHIVE_ACTION="clean archive"
+fi
 run xcodebuild \
   -project "$PROJECT" \
   -scheme "$SCHEME" \
@@ -113,7 +123,7 @@ run xcodebuild \
   -skipMacroValidation -skipPackagePluginValidation \
   ONLY_ACTIVE_ARCH=NO \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" CODE_SIGN_ENTITLEMENTS="" DEVELOPMENT_TEAM="" \
-  clean archive
+  $ARCHIVE_ACTION
 
 APP_PATH="$(ls -d "$ARCHIVE"/Products/Applications/*.app 2>/dev/null | head -n1)"
 [ -n "$APP_PATH" ] || { echo "ERROR: no .app inside $ARCHIVE"; dump_errors 1; exit 1; }

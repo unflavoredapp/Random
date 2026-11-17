@@ -58,6 +58,25 @@ jobs:
             ${{ env.ROOT }}/IDeviceKit/.build/IDevice.xcframework
           key: idevice-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Native/Device/source.json', '**/Native/Device/ksign_pairing.rs', '**/.github/scripts/build_device_native.py') }}
 
+      - name: Cargo registry cache (Rust deps for idevice)
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Native/Device/source.json', '**/Native/Device/ksign_pairing.rs') }}
+          restore-keys: |
+            cargo-v1-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Xcode DerivedData / SwiftPM cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ${{ env.ROOT }}/build/DerivedData
+          key: xcode-dd-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/Project.pbxproj', '**/Package.resolved', '**/Package.swift', 'Sources/**/*.swift', 'build.sh') }}
+          restore-keys: |
+            xcode-dd-v1-${{ runner.os }}-${{ runner.arch }}-
+
       - name: Make build script executable
         working-directory: ${{ env.ROOT }}
         run: chmod +x ./build.sh
@@ -69,6 +88,8 @@ jobs:
           SCHEME: Tetherless
           CONFIG: Release
           ADHOC_ENTITLEMENTS: ${{ inputs.adhoc_entitlements == false && '0' || '1' }}
+          # Keep DerivedData warm from cache — set CLEAN_DERIVED=1 to force a full wipe.
+          CLEAN_DERIVED: '0'
         run: ./build.sh
 
       - name: Locate IPA
