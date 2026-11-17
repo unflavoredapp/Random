@@ -13,7 +13,7 @@ enum FairPlayKeyGateError: LocalizedError {
         switch self {
         case .notAcknowledged(let email):
             let who = email.isEmpty ? "your Apple Account" : email
-            return "Before companion decrypt, capture FairPlay keys for \(who): open App Store / Media & Purchases, sign in once on this iPhone, then confirm in Get FairPlay keys."
+            return "Before companion decrypt, capture FairPlay keys for \(who): open App Store Account Settings (or Media & Purchases), sign in once as that Apple ID, then tap Confirm keys in TetherLess."
         }
     }
 }

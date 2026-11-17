@@ -646,8 +646,8 @@ struct DecryptAppStoreSignInHint: View {
                     .foregroundStyle(.white)
                 if case .confirmSignIn(let e, let hints) = keys.phase {
                     Text(hints > 0
-                         ? "Found \(hints) license folder(s). Confirm you signed in as \(e)."
-                         : "Confirm you signed in to Media & Purchases as \(e).")
+                         ? "Saw \(hints) license folder(s). Confirm App Store showed \(e)."
+                         : "If App Store Account Settings showed \(e), tap Confirm — a missing SC_Info scan is normal.")
                         .font(.subheadline)
                         .foregroundStyle(.white.opacity(0.62))
                         .fixedSize(horizontal: false, vertical: true)

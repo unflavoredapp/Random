@@ -38,11 +38,23 @@ enum AppStoreDecryptGuide {
     }
 
     /// Best entry for FairPlay key capture: App Store account sheet (`itms-ui://`).
+    /// Prefer account / purchase history so the user authenticates as the decrypt Apple ID.
     static func openAppStoreAccountSheet() {
         openCascade([
             "itms-ui://",
             "itms-apps://apps.apple.com/account",
+            "itms-apps://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/purchaseHistory",
             "itms-apps://apps.apple.com",
+            "https://apps.apple.com/account",
+        ])
+    }
+
+    /// Purchase History often re-auths Media & Purchases for the active Apple ID.
+    static func openPurchaseHistory() {
+        openCascade([
+            "itms-apps://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/purchaseHistory",
+            "itms-ui://",
+            "itms-apps://apps.apple.com/account",
             "https://apps.apple.com/account",
         ])
     }
