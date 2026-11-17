@@ -275,7 +275,7 @@ struct IPadnSettingsView: View {
     }
 }
 
-/// Compact Phone Worker controls for FairPlay settings (server queue backend #1).
+/// Compact Phone Worker controls — opt-in only when DECRYPT_BACKENDS includes phone.
 private struct PhoneDecryptWorkerInline: View {
     @ObservedObject private var worker = PhoneDecryptWorker.shared
 
@@ -285,7 +285,7 @@ private struct PhoneDecryptWorkerInline: View {
             set: { worker.applyEnabled($0) }
         )) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Phone Worker")
+                Text("Phone Worker (opt-in)")
                 Text(worker.status)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -342,6 +342,9 @@ private struct DecryptBackendsStatusRow: View {
             let order = (json["backends"] as? [String]) ?? []
             var out: [String] = ["Order: " + (order.isEmpty ? "(none)" : order.joined(separator: " → "))]
             if let status = json["status"] as? [String: Any] {
+                if (status["linuxOnly"] as? Bool) == true {
+                    out.append("Linux-only (no JB / TrollStore / phone)")
+                }
                 if let cred = status["credential"] as? [String: Any] {
                     let ready = (cred["ready"] as? Bool) == true
                     if ready {
@@ -350,7 +353,11 @@ private struct DecryptBackendsStatusRow: View {
                         out.append("✗ credential.bin — \((cred["error"] as? String) ?? "missing")")
                     }
                 }
-                for key in ["fairplay-decrypt", "ipadecrypt", "ipa-decrypter", "unfaird", "phone"] {
+                if let model = status["enrollmentModel"] as? [String: Any] {
+                    let ready = (model["ready"] as? Bool) == true
+                    out.append(ready ? "✓ enrollment model" : "· enrollment model")
+                }
+                for key in ["fairplay-decrypt", "unfairplay", "ipadecrypt", "ipa-decrypter", "unfaird", "phone"] {
                     guard let row = status[key] as? [String: Any] else { continue }
                     let ready = (row["ready"] as? Bool) == true
                     out.append("\(ready ? "✓" : "·") \(key)")
@@ -383,9 +390,9 @@ private struct FairPlayAdvancedSettingsSection: View {
         Section {
             DecryptBackendsStatusRow()
         } header: {
-            Text("Server · credential.bin")
+            Text("Server · Linux FairPlay")
         } footer: {
-            Text("Site decrypt defaults to fairplay-decrypt with a forced 16-byte credential.bin on the server (FAIRPLAY_CREDENTIAL_BIN). Phone Worker is opt-in only.")
+            Text("Site decrypt runs on Linux (fairplay-decrypt + unfairplay). Put a 16-byte credential.bin (or enrollment model) on the server — export once from an enrolled Mac with UnfairPlay. No jailbreak or TrollStore required.")
         }
 
         Section {
@@ -393,7 +400,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Optional · Phone Worker")
         } footer: {
-            Text("Only used when DECRYPT_BACKENDS includes phone. Prefer credential.bin on the server for correct offline decrypt.")
+            Text("Not needed for Linux-only decrypt. Only used when DECRYPT_BACKENDS explicitly includes phone.")
         }
 
         Section {

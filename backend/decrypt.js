@@ -87,8 +87,9 @@ function create({ db /*, secret */ }) {
 
   /**
    * Called from site.js runDecrypt.
-   * Tries configured FairPlay backends (fairplay-decrypt / ipadecrypt /
-   * ipa-decrypter / unfaird) then falls back to the iPhone Phone Worker.
+   * Default: Linux FairPlay tools (fairplay-decrypt / unfairplay; optional
+   * ipadecrypt / ipa-decrypter). Phone Worker / unfaird only if listed in
+   * DECRYPT_BACKENDS (not needed without jailbreak / TrollStore).
    */
   async function request(url, dir, say, tryCache, vreq, job) {
     if (!validUrl(url)) throw new Error("Paste an App Store link.");
@@ -516,19 +517,20 @@ function create({ db /*, secret */ }) {
     const wantsPhone = fp.backends.includes("phone");
     const cred = fp.credential || {};
     let error = "";
-    if (fp.requireCredential && !cred.ready) {
+    const model = fp.enrollmentModel || {};
+    if (fp.requireCredential && !cred.ready && !model.ready) {
       error =
         cred.error ||
-        "Set FAIRPLAY_CREDENTIAL_BIN to a valid 16-byte credential.bin (fairplay-decrypt).";
+        "Set FAIRPLAY_CREDENTIAL_BIN (16 bytes) and/or FAIRPLAY_ENROLLMENT_MODEL on Linux (export once via UnfairPlay on an enrolled Mac — no jailbreak).";
     } else if (wantsPhone && !WORKER_TOKEN) {
       error = "Set DECRYPT_WORKER_TOKEN and enable Phone Worker in the iOS app (or drop phone from DECRYPT_BACKENDS).";
     } else if (!BOT_TOKEN) {
       error =
-        "TELEGRAM_BOT_TOKEN optional. Decrypt defaults to credential.bin (fairplay-decrypt) — see server/fairplay-backends.md.";
+        "TELEGRAM_BOT_TOKEN optional. Decrypt defaults to Linux fairplay-decrypt+unfairplay — see server/fairplay-backends.md.";
     }
     return {
       lib: true,
-      mode: fp.backends.join("+") || "fairplay-decrypt",
+      mode: fp.backends.join("+") || "fairplay-decrypt+unfairplay",
       authed: !!BOT_TOKEN,
       who: BOT_TOKEN ? { name: "Bot API", username: BOT_USERNAME } : {},
       workerConfigured: !!WORKER_TOKEN,

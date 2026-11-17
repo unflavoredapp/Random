@@ -544,18 +544,25 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
       web.get("/admin/telegram", auth, async (req, res) => {
         const s = await T.status();
         const fp = s.fairplay || {};
-        const order = Array.isArray(fp.backends) ? fp.backends.join(" → ") : (s.mode || "phone");
+        const order = Array.isArray(fp.backends) ? fp.backends.join(" → ") : (s.mode || "fairplay-decrypt+unfairplay");
+        const linuxOnly = fp.linuxOnly !== false;
         const state = s.authed
           ? `Own bot <b>@${esc(s.bot || s.who.username || "")}</b> is configured. Jobs use FairPlay backends: <code class="k">${esc(order)}</code>.`
           : (s.error ? esc(s.error) : "Set <code class=\"k\">TELEGRAM_BOT_TOKEN</code> on the server (optional for site queue).");
         const cred = fp.credential || {};
+        const model = fp.enrollmentModel || {};
         const credLine = cred.ready
-          ? `credential.bin OK (<code class="k">${esc(cred.path || "")}</code> · 16 bytes).`
-          : `credential.bin required — ${esc(cred.error || "set FAIRPLAY_CREDENTIAL_BIN")}.`;
-        const worker = s.workerConfigured
-          ? "Phone Worker token configured (<code class=\"k\">DECRYPT_WORKER_TOKEN</code>) — opt-in only."
-          : "Phone Worker optional; default backend is <code class=\"k\">fairplay-decrypt</code> + credential.bin.";
-        const readyBits = ["fairplay-decrypt", "ipadecrypt", "ipa-decrypter", "unfaird", "phone"]
+          ? `credential.bin OK (<code class="k">${esc(cred.path || "")}</code> · 16 bytes) on Linux.`
+          : `credential.bin — ${esc(cred.error || "set FAIRPLAY_CREDENTIAL_BIN")} (Mac UnfairPlay export → Linux; no jailbreak).`;
+        const modelLine = model.ready
+          ? `enrollment model OK (<code class="k">${esc(model.path || "")}</code>).`
+          : `enrollment model optional (<code class="k">FAIRPLAY_ENROLLMENT_MODEL</code>).`;
+        const worker = linuxOnly
+          ? "Linux-only mode — no Phone Worker / unfaird / jailbreak / TrollStore required."
+          : (s.workerConfigured
+            ? "Phone Worker token configured (<code class=\"k\">DECRYPT_WORKER_TOKEN</code>) — opt-in."
+            : "Phone Worker listed in backends but token missing.");
+        const readyBits = ["fairplay-decrypt", "unfairplay", "ipadecrypt", "ipa-decrypter", "unfaird", "phone"]
           .map((k) => {
             const row = fp[k];
             if (!row) return "";
@@ -566,12 +573,13 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
         res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'; script-src 'unsafe-inline'" });
         res.type("html").send(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><meta name="color-scheme" content="dark"><title>Telegram \u00b7 Admin</title><style>${TCSS}</style></head><body><div class="w"><div class="lay">${menu("/admin/telegram")}<main class="main">
 <h1>Telegram decrypt bot</h1>
-<div class="box"><span class="dot${cred.ready ? " ok" : ""}"></span>${state}
+<div class="box"><span class="dot${cred.ready || model.ready ? " ok" : ""}"></span>${state}
 <p class="mm">${credLine}</p>
+<p class="mm">${modelLine}</p>
 <p class="mm">${worker}</p>
 <p class="mm">Backends: ${readyBits || "—"}</p>
-<p class="mm">Build ${esc(s.build || "")} \u00b7 mode ${esc(s.mode || "fairplay-decrypt")} \u00b7 waiting ${esc(String(s.waiting || 0))}</p>
-<p class="mm">Default: <code class=\"k\">DECRYPT_BACKENDS=fairplay-decrypt</code> with a 16-byte <code class=\"k\">credential.bin</code>. Docs: <code class=\"k\">server/fairplay-backends.md</code>.</p>
+<p class="mm">Build ${esc(s.build || "")} \u00b7 mode ${esc(s.mode || "fairplay-decrypt+unfairplay")} \u00b7 waiting ${esc(String(s.waiting || 0))}</p>
+<p class="mm">Default: <code class=\"k\">DECRYPT_BACKENDS=fairplay-decrypt,unfairplay</code> on Linux. Docs: <code class=\"k\">server/fairplay-backends.md</code>.</p>
 <p class="mm">Create a bot with <b>@BotFather</b>, set <code class=\"k\">TELEGRAM_BOT_TOKEN</code>, optional <code class=\"k\">TELEGRAM_BOT_USERNAME</code> / <code class=\"k\">TELEGRAM_ALLOWED_IDS</code>.</p></div>
 </main></div></div></body></html>`);
       });
