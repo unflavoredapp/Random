@@ -516,59 +516,102 @@ struct DecryptPickIPACard: View {
 }
 
 
-/// One-time App Store sign-in requirement for decrypt keys on this device.
+/// One-time App Store sign-in — redirects with the active session, then shows keys grabbed.
 struct DecryptAppStoreSignInHint: View {
     /// Compact layout for decrypt-failure callouts.
     var compact: Bool = false
     @ObservedObject private var store = AppleIDStore.shared
-    @State private var ackTick = false
+    @ObservedObject private var keys = FairPlayKeysFetcher.shared
 
     private var email: String { store.email }
-    private var acknowledged: Bool {
-        _ = ackTick
-        return AppStoreDecryptGuide.isAcknowledged(email: email)
-    }
 
     var body: some View {
-        if compact {
-            compactBody
-        } else if !acknowledged || email.isEmpty {
-            fullBody
-        } else {
-            acknowledgedBody
+        Group {
+            if compact {
+                compactBody
+            } else {
+                switch keys.phase {
+                case .grabbed:
+                    grabbedBody
+                case .waitingForReturn:
+                    waitingBody
+                default:
+                    if !email.isEmpty, AppStoreDecryptGuide.isAcknowledged(email: email) {
+                        grabbedBody
+                    } else {
+                        fullBody
+                    }
+                }
+            }
         }
+        .onAppear { keys.refreshFromAck() }
+        .onChange(of: store.email) { _ in keys.refreshFromAck() }
+        .animation(.easeInOut(duration: 0.2), value: keys.phase)
     }
 
     private var fullBody: some View {
         GlassCard(corner: 22) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 10) {
-                    Image(systemName: "info.circle.fill")
+                    Image(systemName: "key.fill")
                         .font(.title3)
                         .foregroundStyle(TetherlessPalette.accent)
-                    Text("One-time App Store sign-in")
+                    Text("Get FairPlay keys")
                         .font(.headline.weight(.semibold))
                         .foregroundStyle(.white)
                 }
-                Text("To decrypt an app you own, the Apple ID you use in TetherLess must have been signed in to this iPhone’s App Store at least once — open the App Store app (or Settings → your name → Media & Purchases) and sign in with it one time.")
+                Text("TetherLess uses your signed-in Apple ID session. Tap Get keys to open the App Store — sign in once with that account (Media & Purchases). When you return, we’ll mark the keys grabbed for companion decrypt.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.62))
                     .fixedSize(horizontal: false, vertical: true)
-                Text("This is a one-time step per Apple ID: iOS stores that account’s decryption keys the first time it signs in and keeps them, so afterward you can switch your active App Store account back and decrypting still works. The account also has to own the app.")
+                Text("iOS stores the keys on this iPhone; afterward you can switch the active App Store account. The account still has to own the app.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.55))
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Without that one-time App Store sign-in, decrypting fails after download because iOS has no keys yet.")
-                    .font(.caption)
-                    .foregroundStyle(.white.opacity(0.45))
-                    .fixedSize(horizontal: false, vertical: true)
 
                 if !email.isEmpty {
-                    Text("Active Store account: \(email)")
+                    Text("Session: \(email)")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(TetherlessPalette.accent.opacity(0.9))
                 }
-                actionButtons(showAck: !email.isEmpty)
+                fetchButtons
+                if let banner = keys.banner {
+                    Text(banner)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.55))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    private var waitingBody: some View {
+        GlassCard(corner: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .tint(TetherlessPalette.accent)
+                    Text("Waiting for App Store…")
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.white)
+                }
+                Text(keys.banner
+                     ?? "Sign in with \(email.isEmpty ? "your Apple ID" : email), then return to TetherLess — we’ll grab the keys for this session.")
+                    .font(.subheadline)
+                    .foregroundStyle(.white.opacity(0.62))
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    keys.markGrabbedManually()
+                } label: {
+                    Text("I’ve signed in — grab keys now")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 11)
+                        .background(.white.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
             }
         }
     }
@@ -576,67 +619,92 @@ struct DecryptAppStoreSignInHint: View {
     private var compactBody: some View {
         VStack(alignment: .leading, spacing: 10) {
             if !email.isEmpty {
-                Text("Active Store account: \(email)")
+                Text("Session: \(email)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(TetherlessPalette.accent.opacity(0.9))
             }
-            Text(AppStoreDecryptGuide.failureHint)
-                .font(.caption)
-                .foregroundStyle(.white.opacity(0.65))
-                .fixedSize(horizontal: false, vertical: true)
-            actionButtons(showAck: !email.isEmpty)
+            if case .grabbed = keys.phase {
+                Label("Keys grabbed for this session", systemImage: "checkmark.seal.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.success)
+            } else if case .waitingForReturn = keys.phase {
+                Label("Waiting for App Store return…", systemImage: "arrow.triangle.2.circlepath")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            } else {
+                Text(AppStoreDecryptGuide.failureHint)
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.65))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            fetchButtons
         }
         .padding(.top, 4)
     }
 
-    private var acknowledgedBody: some View {
+    private var grabbedBody: some View {
         GlassCard(corner: 18) {
             HStack(spacing: 10) {
-                Image(systemName: "checkmark.circle.fill")
+                Image(systemName: "checkmark.seal.fill")
                     .foregroundStyle(TetherlessPalette.success)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("FairPlay keys ready")
+                    Text("Keys grabbed")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
                     Text(email.isEmpty
-                         ? "Media & Purchases sign-in noted — companion decrypt can proceed."
-                         : "Noted for \(email). Companion handoff will show this before packaging.")
+                         ? "FairPlay keys ready for companion decrypt."
+                         : "Grabbed for \(email). Companion handoff will confirm this before packaging.")
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 4)
-                Button("Open") { AppStoreDecryptGuide.openAppStore() }
+                Button("Refresh") { keys.startFetchFromSession() }
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(TetherlessPalette.accent)
             }
         }
     }
 
-    private func actionButtons(showAck: Bool) -> some View {
+    private var fetchButtons: some View {
         VStack(spacing: 8) {
-            Button { AppStoreDecryptGuide.openAppStore() } label: {
-                Label("Open App Store", systemImage: "bag.fill")
-                    .font(.body.weight(.semibold))
+            Button {
+                keys.startFetchFromSession(preferSettings: false)
+            } label: {
+                Label(
+                    keys.isWaiting ? "Reopen App Store" : "Get keys from App Store",
+                    systemImage: "bag.fill"
+                )
+                .font(.body.weight(.semibold))
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(TetherlessPalette.accent, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(email.isEmpty && !store.isSignedIn)
+
+            Button {
+                keys.startFetchFromSession(preferSettings: true)
+            } label: {
+                Text("Open Media & Purchases (Settings)")
+                    .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
-                    .padding(.vertical, 12)
-                    .background(TetherlessPalette.accent, in: Capsule())
+                    .padding(.vertical, 11)
+                    .background(.white.opacity(0.10), in: Capsule())
+                    .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
             }
             .buttonStyle(.plain)
 
-            if showAck {
+            if !keys.isGrabbed, !email.isEmpty, !keys.isWaiting {
                 Button {
-                    AppStoreDecryptGuide.setAcknowledged(true, email: email)
-                    ackTick.toggle()
+                    keys.markGrabbedManually()
                 } label: {
-                    Text("I’ve signed in on this iPhone")
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white)
+                    Text("Already signed in — mark keys grabbed")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
                         .frame(maxWidth: .infinity)
-                        .padding(.vertical, 11)
-                        .background(.white.opacity(0.10), in: Capsule())
-                        .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
                 }
                 .buttonStyle(.plain)
             }

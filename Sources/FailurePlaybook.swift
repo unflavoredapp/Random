@@ -107,9 +107,9 @@ enum FailurePlaybook {
     static func run(_ play: FailurePlay) async {
         switch play.action {
         case .openAppStoreSignIn:
-            // Force the Decrypt ack sheet again after a real Media & Purchases sign-in.
+            // Redirect with the active session; grab keys automatically on return.
             AppStoreDecryptGuide.setAcknowledged(false, email: AppleIDStore.shared.email)
-            AppStoreDecryptGuide.openAppStore()
+            FairPlayKeysFetcher.shared.startFetchFromSession()
         case .acknowledgeFairPlay:
             let email = AppleIDStore.shared.email
             if email.isEmpty {
@@ -117,7 +117,7 @@ enum FailurePlaybook {
                 AppNav.shared.goAccount()
                 return
             }
-            AppStoreDecryptGuide.setAcknowledged(true, email: email)
+            FairPlayKeysFetcher.shared.markGrabbedManually()
         case .reauthStore:
             // Silent remint — do not wipe the account or force a full login.
             // Dead passwordTokens are reminted from the saved Keychain password.
