@@ -866,12 +866,16 @@ final class DeviceDecryptService: ObservableObject {
                 externalVersionId: pinned.isEmpty ? nil : pinned,
                 version: version
             )
+            // Cookie jar may have refreshed during download — keep it for the next Get.
+            AppleIDStore.shared.mergeStoreCookies(from: account)
+            AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
             try await handoffStoreIPAToCompanion(
                 ipa: result.url,
                 displayName: displayName,
                 downloadedVersion: result.item.displayVersion,
                 bundleID: bundleID
             )
+            AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
         } catch {
             let detail = error.localizedDescription
             // Installed companion embed only — no remint / backend IPA fallback.
@@ -883,6 +887,7 @@ final class DeviceDecryptService: ObservableObject {
                 publishDecryptProgress(detail)
                 try FairPlayKeyGate.requireReady()
                 try await decryptFromInstalledPath(installed, displayName: displayName)
+                AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
                 return
             }
             let lower = detail.lowercased()
@@ -891,8 +896,15 @@ final class DeviceDecryptService: ObservableObject {
                     "App Store download timed out. Check Wi‑Fi and retry Get — you usually don’t need to sign in again."
                 )
             }
+            // Keep a still-green session — don't tell the user to Sign Out for the next app.
+            if AppleIDStore.shared.storefrontSession()?.isUsable == true {
+                AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
+                throw DecryptError(
+                    "App Store download failed (\(detail)). Stay signed in and retry Get."
+                )
+            }
             throw DecryptError(
-                "App Store download failed (\(detail)). Sign in again under Account if needed."
+                "App Store download failed (\(detail)). Unlock Store under Account if needed — you usually don’t need a full Sign Out."
             )
         }
     }
@@ -935,6 +947,7 @@ final class DeviceDecryptService: ObservableObject {
                 downloadedVersion: "",
                 bundleID: bundleID
             )
+            AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
         } catch {
             let text = error.localizedDescription
             lastError = text

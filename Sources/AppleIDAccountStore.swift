@@ -763,8 +763,12 @@ final class AppleIDStore: ObservableObject {
 
         func finishWaitingForCode() {
             refreshTwoFactorChannelFromGSA()
-            if forStoreUnlock || storeNeedsVerification || isSignedIn {
-                storeNeedsVerification = forStoreUnlock || storeNeedsVerification || isSignedIn
+            // Never demote a green Store session just because Apple ID is signed in —
+            // that forced Unlock Store / re-login between Gets of different apps.
+            if storefrontSession()?.isUsable == true {
+                clearStoreVerificationIfSessionUsable()
+            } else if forStoreUnlock || storeNeedsVerification {
+                storeNeedsVerification = true
             }
             authPhase = keepStoreSheet ? .idle : .awaitingTwoFactor
             statusMessage = twoFactorPromptMessage()
@@ -783,7 +787,11 @@ final class AppleIDStore: ObservableObject {
                         statusMessage = "Store access ready — free & purchased downloads unlocked"
                         return
                     }
-                    if keepStoreSheet {
+                    if storefrontSession()?.isUsable == true {
+                        clearStoreVerificationIfSessionUsable()
+                        authPhase = .idle
+                        statusMessage = "Store access ready — free & purchased downloads unlocked"
+                    } else if keepStoreSheet {
                         storeNeedsVerification = true
                         authPhase = .idle
                         statusMessage = "Couldn't mint Store from trust alone — tap Send again, then enter the Allow code."
@@ -808,7 +816,10 @@ final class AppleIDStore: ObservableObject {
             finishWaitingForCode()
         } catch {
             refreshTwoFactorChannelFromGSA()
-            if keepStoreSheet {
+            if storefrontSession()?.isUsable == true {
+                clearStoreVerificationIfSessionUsable()
+                authPhase = .idle
+            } else if keepStoreSheet {
                 storeNeedsVerification = true
                 authPhase = .idle
             } else {
@@ -1120,7 +1131,23 @@ final class AppleIDStore: ObservableObject {
     }
 
     func noteStoreNeedsVerification() {
+        // Owned/DAAP / soft errors must not demote a still-usable passwordToken —
+        // that made the next Get look like a full Sign Out → Sign In.
+        if storefrontSession()?.isUsable == true {
+            storeNeedsVerification = false
+            return
+        }
         storeNeedsVerification = true
+    }
+
+    /// After a successful Get / unlock — keep Apple ID + Store green for the next app.
+    func clearStoreVerificationIfSessionUsable() {
+        guard storefrontSession()?.isUsable == true else { return }
+        storeNeedsVerification = false
+        storefrontNeedsRefresh = false
+        if lastError.map(Self.isSoftStoreNoise) == true {
+            lastError = nil
+        }
     }
 
     /// Ensure a usable storefront session for silent buy/download.
@@ -1206,13 +1233,19 @@ final class AppleIDStore: ObservableObject {
             lastError = error
         }
 
-        // Soft-restore only when we were not force-refreshing. After invalidate / 403
-        // remint, recycling a structurally “usable” dead passwordToken leaves Settings
-        // green while downloads keep failing.
-        if !forceRefresh, let existing = prior, existing.isUsable {
-            storefrontNeedsRefresh = false
-            storeNeedsVerification = false
-            return existing
+        // Prefer a still-usable prior token over bouncing to Unlock Store / Sign In.
+        // needsTwoFactor on background remint is not proof the existing passwordToken is dead.
+        if let existing = prior, existing.isUsable {
+            if let ase = lastError as? AppStoreClientError, case .needsTwoFactor = ase {
+                storefrontNeedsRefresh = false
+                storeNeedsVerification = false
+                return existing
+            }
+            if !forceRefresh {
+                storefrontNeedsRefresh = false
+                storeNeedsVerification = false
+                return existing
+            }
         }
 
         if let lastError {
@@ -1425,6 +1458,20 @@ final class AppleIDStore: ObservableObject {
         guard let header, !header.isEmpty else { return }
         guard let existing = storefrontSession(), existing.isUsable else { return }
         persistStoreSession(existing.mergingCookies(header))
+    }
+
+    /// After a successful Get — keep the in-flight Store session (and cookie jar) for the next app.
+    func mergeStoreCookies(from account: StorefrontSession) {
+        guard account.isUsable else { return }
+        if let existing = storefrontSession(), existing.isUsable,
+           existing.passwordToken == account.passwordToken {
+            let merged = account.cookieHeader.map { existing.mergingCookies($0) } ?? existing
+            persistStoreSession(merged)
+        } else {
+            persistStoreSession(account)
+        }
+        storeNeedsVerification = false
+        storefrontNeedsRefresh = false
     }
 
     func activatePreferredSigningCertificate() {
