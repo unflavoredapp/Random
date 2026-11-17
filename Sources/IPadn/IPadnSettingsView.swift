@@ -2,7 +2,7 @@
 // Brand: Tetherless · https://tetherless.dev
 //  IPadnSettingsView.swift
 //  English Settings — structure from mengangs/ipadn SettingsView (GPL-2.0).
-//  Account › Settings uses this only; the legacy TetherLess Settings chrome is not shown.
+//  Account embeds the root sections inline; subpages still push from there.
 //
 
 import SwiftUI
@@ -53,74 +53,10 @@ struct IPadnSettingsView: View {
     @State private var clearCache = false
     @State private var statusMessage: String?
 
-    private var appVersion: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? Theme.appVersion
-    }
-
     var body: some View {
         Form {
             if page == .root {
-                Section {
-                    pageLink(.downloads, "arrow.down.circle")
-                    pageLink(.follow, "bell")
-                    pageLink(.appearance, "paintbrush")
-                    pageLink(.lock, "lock")
-                    pageLink(.sources, "clock.arrow.circlepath")
-                    NavigationLink {
-                        IPadnInstallationSettingsView()
-                    } label: {
-                        Label("Installation settings", systemImage: "arrow.down.app")
-                    }
-                    pageLink(.maintenance, "wrench.and.screwdriver")
-                }
-
-                Section {
-                    Toggle("Pro mode", isOn: $proMode.animation())
-                } footer: {
-                    Text(proMode
-                         ? "Package contents and device identifiers are available in download task details."
-                         : "Turn on to browse package contents and inspect device identifiers.")
-                }
-
-                Section {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .center, spacing: 14) {
-                            TetherlessAppIconView(size: 52)
-                            VStack(alignment: .leading, spacing: 3) {
-                                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                                    Text(TetherlessBrand.name).font(.headline)
-                                    Text(appVersion).font(.subheadline).foregroundStyle(.secondary)
-                                }
-                                Text("Search, download, sign, and install — branded at tetherless.dev.")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        Text(TetherlessBrand.ascii)
-                            .font(.system(size: 6.5, weight: .medium, design: .monospaced))
-                            .foregroundStyle(TetherlessPalette.accent)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Link(TetherlessBrand.siteDisplay, destination: TetherlessBrand.siteURL)
-                            .font(.caption.weight(.semibold))
-                    }
-                    .padding(.vertical, 2)
-
-                    Button {
-                        statusMessage = "You're on the latest build available for this install (\(appVersion))."
-                    } label: {
-                        Text("Check for Updates")
-                    }
-
-                    Toggle("Check for updates automatically", isOn: $appUpdateCheck)
-
-                    Link("tetherless.dev", destination: TetherlessBrand.siteURL)
-                    if let url = URL(string: "https://github.com/mengangs/ipadn") {
-                        Link("Open-source Store login (GPL-2.0)", destination: url)
-                    }
-                }
-
+                IPadnSettingsRootSections(statusMessage: $statusMessage)
             }
 
             if page == .downloads {
@@ -300,14 +236,6 @@ struct IPadnSettingsView: View {
         }
     }
 
-    private func pageLink(_ page: Page, _ symbol: String) -> some View {
-        NavigationLink {
-            IPadnSettingsView(page: page)
-        } label: {
-            Label(page.title, systemImage: symbol)
-        }
-    }
-
     private func applyDownloadPrefs() {
         IPadnDownloadManager.shared.applySettings(
             maxConcurrent: maxConcurrentDownloads,
@@ -338,5 +266,88 @@ struct IPadnSettingsView: View {
         useSignerCache = true
         applyDownloadPrefs()
         statusMessage = "Settings restored to defaults."
+    }
+}
+
+/// Root Settings rows shared by Account (inline) and the pushed Settings page.
+struct IPadnSettingsRootSections: View {
+    @Binding var statusMessage: String?
+
+    @AppStorage("ipadn.settings.proMode") private var proMode = false
+    @AppStorage("ipadn.settings.appUpdateCheck") private var appUpdateCheck = true
+
+    private var appVersion: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? Theme.appVersion
+    }
+
+    var body: some View {
+        Section {
+            pageLink(.downloads, "arrow.down.circle")
+            pageLink(.follow, "bell")
+            pageLink(.appearance, "paintbrush")
+            pageLink(.lock, "lock")
+            pageLink(.sources, "clock.arrow.circlepath")
+            NavigationLink {
+                IPadnInstallationSettingsView()
+            } label: {
+                Label("Installation settings", systemImage: "arrow.down.app")
+            }
+            pageLink(.maintenance, "wrench.and.screwdriver")
+        }
+
+        Section {
+            Toggle("Pro mode", isOn: $proMode.animation())
+        } footer: {
+            Text(proMode
+                 ? "Package contents and device identifiers are available in download task details."
+                 : "Turn on to browse package contents and inspect device identifiers.")
+        }
+
+        Section {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 14) {
+                    TetherlessAppIconView(size: 52)
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(TetherlessBrand.name).font(.headline)
+                            Text(appVersion).font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Text("Search, download, sign, and install — branded at tetherless.dev.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Text(TetherlessBrand.ascii)
+                    .font(.system(size: 6.5, weight: .medium, design: .monospaced))
+                    .foregroundStyle(TetherlessPalette.accent)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                Link(TetherlessBrand.siteDisplay, destination: TetherlessBrand.siteURL)
+                    .font(.caption.weight(.semibold))
+            }
+            .padding(.vertical, 2)
+
+            Button {
+                statusMessage = "You're on the latest build available for this install (\(appVersion))."
+            } label: {
+                Text("Check for Updates")
+            }
+
+            Toggle("Check for updates automatically", isOn: $appUpdateCheck)
+
+            Link("tetherless.dev", destination: TetherlessBrand.siteURL)
+            if let url = URL(string: "https://github.com/mengangs/ipadn") {
+                Link("Open-source Store login (GPL-2.0)", destination: url)
+            }
+        }
+    }
+
+    private func pageLink(_ page: IPadnSettingsView.Page, _ symbol: String) -> some View {
+        NavigationLink {
+            IPadnSettingsView(page: page)
+        } label: {
+            Label(page.title, systemImage: symbol)
+        }
     }
 }

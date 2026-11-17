@@ -381,67 +381,69 @@ struct AccountHomeView: View {
     @State private var path = NavigationPath()
     @State private var showIPadnLogin = false
     @State private var appleIDExpanded = true
+    @State private var settingsStatus: String?
 
     var body: some View {
         NavigationStack(path: $path) {
-            IPadnBlurNavScroll(title: "Account") {
-                EmptyView()
-            } content: {
-                profileCard
+            Form {
+                Section {
+                    profileCard
+                }
 
-                DisclosureGroup(isExpanded: $appleIDExpanded) {
-                    accountRows
-                        .padding(.top, 8)
-                } label: {
-                    HStack(spacing: 10) {
-                        Image(systemName: "person.crop.circle.fill")
-                            .font(.title3)
-                            .foregroundStyle(TetherlessPalette.accent)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Apple ID")
-                                .font(.body.weight(.semibold))
-                                .foregroundStyle(.white)
-                            if store.isSignedIn {
-                                Text(store.email)
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.45))
-                                    .lineLimit(1)
-                            } else {
-                                Text("Sign in to sync purchases")
-                                    .font(.caption)
-                                    .foregroundStyle(.white.opacity(0.45))
+                Section {
+                    DisclosureGroup(isExpanded: $appleIDExpanded) {
+                        accountRows
+                    } label: {
+                        HStack(spacing: 10) {
+                            Image(systemName: "person.crop.circle.fill")
+                                .font(.title3)
+                                .foregroundStyle(TetherlessPalette.accent)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Apple ID")
+                                    .font(.body.weight(.semibold))
+                                if store.isSignedIn {
+                                    Text(store.email)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                } else {
+                                    Text("Sign in to sync purchases")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
                 }
-                .tint(.white.opacity(0.55))
-                .padding(.vertical, 4)
 
-                sectionHeader("Library")
-                navRow(.purchasedTab, title: "Purchased", symbol: "bag.fill")
-                navRow(.downloadsTab, title: "Downloads & installation", symbol: "arrow.down.circle.fill")
-                pushRow(.library, title: "Apps on this device", symbol: "iphone")
-                pushRow(.files, title: "Files", symbol: "folder.fill")
-
-                sectionHeader("Device")
-                pushRow(.settings, title: "Settings", symbol: "gearshape.fill")
+                // Settings root (was LIBRARY / DEVICE → Settings push).
+                IPadnSettingsRootSections(statusMessage: $settingsStatus)
 
                 if store.isSignedIn {
-                    Button(role: .destructive) {
-                        store.signOut()
-                    } label: {
-                        Text("Sign Out")
-                            .font(.body.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
-                            .foregroundStyle(.red)
-                            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                    Section {
+                        Button(role: .destructive) {
+                            store.signOut()
+                        } label: {
+                            Text("Sign Out")
+                                .frame(maxWidth: .infinity, alignment: .center)
+                        }
                     }
-                    .buttonStyle(.plain)
-                    .padding(.top, 8)
                 }
             }
-            .background(Theme.bg.ignoresSafeArea())
+            .navigationTitle("Account")
+            .navigationBarTitleDisplayMode(.large)
+            // Keep Form rows above the floating tab bar.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Color.clear.frame(height: 100)
+            }
+            .alert("Settings", isPresented: Binding(
+                get: { settingsStatus != nil },
+                set: { if !$0 { settingsStatus = nil } }
+            )) {
+                Button("OK", role: .cancel) { settingsStatus = nil }
+            } message: {
+                Text(settingsStatus ?? "")
+            }
             .navigationDestination(for: AppAccountPush.self) { dest in
                 accountDestination(dest)
             }
@@ -490,12 +492,17 @@ struct AccountHomeView: View {
 
     private func consumePendingAccountNav() {
         if let dest = nav.accountPush {
-            path.append(dest)
+            // Settings live on Account root now — pop to root instead of pushing a duplicate.
+            if dest == .settings {
+                path = NavigationPath()
+            } else {
+                path.append(dest)
+            }
             nav.accountPush = nil
         }
         if nav.openAccountScreen {
             nav.openAccountScreen = false
-            path.append(AppAccountPush.settings)
+            path = NavigationPath()
         }
         if nav.presentIPadnLogin {
             showIPadnLogin = true
@@ -507,16 +514,15 @@ struct AccountHomeView: View {
             ZStack {
                 Circle()
                     .fill(LinearGradient(
-                        colors: [Color.white.opacity(0.35), Color.white.opacity(0.12)],
+                        colors: [Color.primary.opacity(0.22), Color.primary.opacity(0.08)],
                         startPoint: .top, endPoint: .bottom))
                 if store.isSignedIn {
                     Text(String(store.email.prefix(1)).uppercased())
                         .font(.system(size: 22, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
                 } else {
                     Image(systemName: "person.fill")
                         .font(.title2)
-                        .foregroundStyle(.white.opacity(0.55))
+                        .foregroundStyle(.secondary)
                 }
             }
             .frame(width: 60, height: 60)
@@ -524,14 +530,13 @@ struct AccountHomeView: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(store.isSignedIn ? "Apple Account" : "Sign in to your Apple Account")
                     .font(.title3.weight(.semibold))
-                    .foregroundStyle(.white)
                 Text("Sync purchases and download apps you’re licensed to use")
                     .font(.subheadline)
-                    .foregroundStyle(.white.opacity(0.45))
+                    .foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder private var accountRows: some View {
@@ -540,12 +545,7 @@ struct AccountHomeView: View {
                 showIPadnLogin = true
             } label: {
                 Label("Sign in to Apple Account", systemImage: "plus")
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 12)
             }
-            .buttonStyle(.plain)
         } else {
             ForEach(store.accounts) { account in
                 Button {
@@ -554,12 +554,11 @@ struct AccountHomeView: View {
                     HStack(spacing: 12) {
                         Text(String(account.email.prefix(1)).uppercased())
                             .font(.caption.weight(.bold))
-                            .foregroundStyle(.white)
                             .frame(width: 36, height: 36)
-                            .background(Color.white.opacity(0.12), in: Circle())
+                            .background(Color.primary.opacity(0.08), in: Circle())
                         Text(account.email)
-                            .foregroundStyle(.white)
                             .lineLimit(1)
+                            .foregroundStyle(.primary)
                         Spacer()
                         if account.id == store.activeAccountID {
                             Image(systemName: "checkmark")
@@ -567,68 +566,19 @@ struct AccountHomeView: View {
                                 .foregroundStyle(TetherlessPalette.accent)
                         }
                     }
-                    .padding(.vertical, 8)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
             Text("Tap to switch the download account.")
                 .font(.caption)
-                .foregroundStyle(.white.opacity(0.35))
+                .foregroundStyle(.secondary)
             Button {
                 showIPadnLogin = true
             } label: {
                 Label("Add account", systemImage: "plus")
-                    .foregroundStyle(.white)
             }
-            .buttonStyle(.plain)
-            .padding(.vertical, 8)
         }
-    }
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title)
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(.white.opacity(0.4))
-            .textCase(.uppercase)
-            .padding(.top, 4)
-    }
-
-    private enum QuickLink { case purchasedTab, downloadsTab }
-
-    private func navRow(_ link: QuickLink, title: String, symbol: String) -> some View {
-        Button {
-            switch link {
-            case .purchasedTab: AppNav.shared.goPurchased()
-            case .downloadsTab: AppNav.shared.goDownloads()
-            }
-        } label: {
-            Label(title, systemImage: symbol)
-                .font(.body.weight(.medium))
-                .foregroundStyle(.white)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 12)
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func pushRow(_ dest: AppAccountPush, title: String, symbol: String) -> some View {
-        Button {
-            path.append(dest)
-        } label: {
-            HStack {
-                Label(title, systemImage: symbol)
-                    .font(.body.weight(.medium))
-                    .foregroundStyle(.white)
-                Spacer()
-                Image(systemName: "chevron.forward")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(.white.opacity(0.35))
-            }
-            .padding(.vertical, 12)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
     }
 
     @ViewBuilder private func accountDestination(_ dest: AppAccountPush) -> some View {
@@ -646,6 +596,7 @@ struct AccountHomeView: View {
                 .navigationTitle("Apps on this device")
                 .navigationBarTitleDisplayMode(.inline)
         case .settings:
+            // Settings are inline on Account; keep destination for older deep links.
             IPadnSettingsView()
         case .installation:
             IPadnInstallationSettingsView()
