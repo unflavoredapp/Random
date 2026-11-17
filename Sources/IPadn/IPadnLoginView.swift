@@ -469,3 +469,111 @@ struct IPadnLoginView: View {
         }
     }
 }
+
+// MARK: - Second-step Store unlock (after Apple ID 2FA)
+
+/// Shown when Apple ID is signed in but MZFinance still needs its own Allow push + code.
+/// Restores the Store Access trusted-device flow removed with the iPadn Settings migration (#111).
+struct IPadnStoreUnlockSheet: View {
+    var onUnlocked: (() -> Void)? = nil
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var store = AppleIDStore.shared
+    @State private var code = ""
+    @State private var busy = false
+    @State private var failure: String?
+    @State private var didRequestPush = false
+
+    private var accountLabel: String {
+        let email = store.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return email.isEmpty ? "your Apple Account" : email
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 18) {
+                    IPadnVerificationStep(
+                        account: accountLabel,
+                        code: $code,
+                        busy: busy,
+                        issue: failure ?? store.lastError,
+                        submitTitle: "Unlock Store",
+                        sent: true,
+                        resend: { Task { await sendAllowPush() } },
+                        submit: { submit() },
+                        changeAccount: {
+                            store.clearPendingTwoFactorUI()
+                            dismiss()
+                        }
+                    )
+
+                    Text(store.statusMessage?.isEmpty == false
+                         ? store.statusMessage!
+                         : "Apple ID is signed in. Store downloads need a second Allow push — tap Allow, then enter the 6-digit code.")
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.45))
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.horizontal, 8)
+
+                    Button {
+                        Task { await sendAllowPush() }
+                    } label: {
+                        Label("Send Allow to devices again", systemImage: "iphone.radiowaves.left.and.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(TetherlessPalette.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(busy || store.isBusy || store.storeConnecting)
+                }
+                .padding(20)
+            }
+            .background(Theme.bg.ignoresSafeArea())
+            .navigationTitle("Unlock Store")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+            .task {
+                guard !didRequestPush else { return }
+                didRequestPush = true
+                await sendAllowPush()
+            }
+        }
+        .presentationDetents([.medium, .large])
+    }
+
+    private func sendAllowPush() async {
+        busy = true
+        failure = nil
+        defer { busy = false }
+        await store.requestTrustedDevicePush(forStoreUnlock: true)
+        if let err = store.lastError, !err.isEmpty {
+            failure = err
+        }
+    }
+
+    private func submit() {
+        let digits = code.filter(\.isNumber)
+        guard digits.count == 6 else { return }
+        busy = true
+        failure = nil
+        Task {
+            defer { busy = false }
+            do {
+                _ = try await store.submitStoreVerificationCode(digits)
+                code = ""
+                onUnlocked?()
+                dismiss()
+            } catch {
+                failure = store.lastError ?? error.localizedDescription
+                code = ""
+            }
+        }
+    }
+}
