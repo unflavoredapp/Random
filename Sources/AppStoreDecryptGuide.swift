@@ -37,6 +37,40 @@ enum AppStoreDecryptGuide {
         open(urlString: "itms-apps://apps.apple.com", fallback: "https://apps.apple.com")
     }
 
+    /// Best entry for FairPlay key capture: App Store account sheet (`itms-ui://`).
+    static func openAppStoreAccountSheet() {
+        openCascade([
+            "itms-ui://",
+            "itms-apps://apps.apple.com/account",
+            "itms-apps://apps.apple.com",
+            "https://apps.apple.com/account",
+        ])
+    }
+
+    /// Settings → Apple Account → Media & Purchases (with public fallbacks).
+    static func openMediaAndPurchases() {
+        openCascade([
+            "settings-navigation://com.apple.Settings.AppleAccount/STORE_SERVICE",
+            "App-prefs:root=APPLE_ACCOUNT&path=STORE_SERVICE",
+            "prefs:root=APPLE_ACCOUNT&path=STORE_SERVICE",
+            UIApplication.openSettingsURLString,
+        ])
+    }
+
+    private static func openCascade(_ urls: [String]) {
+        func tryNext(_ index: Int) {
+            guard index < urls.count else { return }
+            guard let url = URL(string: urls[index]) else {
+                tryNext(index + 1)
+                return
+            }
+            UIApplication.shared.open(url) { ok in
+                if !ok { tryNext(index + 1) }
+            }
+        }
+        tryNext(0)
+    }
+
     /// Opens a specific App Store product page (https or itms-apps) so the user can install with their own Apple ID.
     static func openAppStoreListing(_ storeURL: String) {
         let trimmed = storeURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -74,8 +108,7 @@ enum AppStoreDecryptGuide {
 
     /// Opens iOS Settings (best public entry for Apple Account / Media & Purchases).
     static func openSystemSettings() {
-        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
-        UIApplication.shared.open(url)
+        openMediaAndPurchases()
     }
 
     nonisolated static var failureHint: String {

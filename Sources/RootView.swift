@@ -120,6 +120,13 @@ struct RootView: View {
                 .environmentObject(session)
                 .preferredColorScheme(theme.colorScheme)
         }
+        .sheet(isPresented: Binding(
+            get: { nav.presentFairPlayKeysCapture },
+            set: { nav.presentFairPlayKeysCapture = $0 }
+        )) {
+            FairPlayKeysCaptureSheet()
+                .preferredColorScheme(theme.colorScheme)
+        }
         .onOpenURL { url in
             handleAirShareDeepLink(url)
         }

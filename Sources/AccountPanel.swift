@@ -14,6 +14,8 @@ final class AppNav: ObservableObject {
     @Published var accountPush: AppAccountPush?
     /// Present iPadn Store login sheet (Account / Settings / Search).
     @Published var presentIPadnLogin = false
+    /// Present FairPlay keys capture sheet (Search / gate failures).
+    @Published var presentFairPlayKeysCapture = false
     private init() {}
 
     func go(_ tab: Int) {
