@@ -160,12 +160,37 @@ enum DecryptCompanionHandoff {
         guard let manifest else { return [:] }
         var out: [String: Any] = [:]
         for key in [
-            "hostSignedIn", "hostStoreReady", "hostFairPlayAck", "hostEmailHint",
+            "hostSignedIn", "hostStoreReady", "hostFairPlayAck", "hostEmailHint", "hostEmail",
             "hostSnapshotAt", "hostLiveInstallPath", "bundleID"
         ] {
             if let v = manifest[key] { out[key] = v }
         }
+        // Seed companion defaults so FairPlay failure copy names the owning Apple ID.
+        if let email = (out["hostEmail"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !email.isEmpty {
+            local.set(email, forKey: "tetherless.appleid.activeEmailCache")
+            suite?.set(email, forKey: "tetherless.appleid.activeEmailCache")
+        }
         return out
+    }
+
+    /// Resolve the live App Store `.app` the host stamped for FairPlay mremap.
+    /// Prefer App Group / defaults, then companion EmbeddedPayload `manifest.plist`.
+    static func resolveLiveInstallURL(manifest: [String: Any]?) -> URL? {
+        if let stamped = readLiveInstallPath() {
+            let url = URL(fileURLWithPath: stamped.path)
+            if FileManager.default.fileExists(atPath: url.path) {
+                return url.resolvingSymlinksInPath().standardizedFileURL
+            }
+        }
+        let path = ((manifest?["hostLiveInstallPath"] as? String)
+            ?? (readHostSnapshot(fromManifest: nil)["hostLiveInstallPath"] as? String))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !path.isEmpty else { return nil }
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return url.resolvingSymlinksInPath().standardizedFileURL
     }
 
     /// Remember a companion that installed but may still need Trust before it opens.

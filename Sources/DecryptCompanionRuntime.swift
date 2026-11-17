@@ -89,19 +89,42 @@ enum DecryptCompanionRuntime {
         DecryptCompanionController.shared.statusTitle = "Decrypting…"
         log("Found embedded app: \(name)")
         let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
-        _ = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
+        let snap = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
+        if let hint = snap["hostEmailHint"] as? String, !hint.isEmpty {
+            log("Host session \(hint)")
+        }
+
+        // FairPlayed / foulplay: fairplayd resolves SC_Info on the *input* path.
+        // Host stamps the live App Store install into App Group + manifest — use it
+        // for mremap. EmbeddedPayload-only reads often EPERM even when keys exist.
+        let liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(manifest: man)
+        let readRoot: URL
+        if let liveURL {
+            readRoot = liveURL
+            log("Using live App Store install for FairPlay: \(liveURL.path)")
+        } else {
+            readRoot = src
+            log("No live install path stamped — FairPlay will try EmbeddedPayload (often EPERM).")
+            log("Install \(name) from the App Store on this iPhone, then re-run Get from TetherLess.")
+        }
 
         // Fail-closed DRM checks stay silent in the console (TetherlessiOS-style log).
-        let before = try FairPlayDecrypt.verifyApp(at: src)
+        // Live App Store installs often refuse cryptid probes — fall back to embed audit for counts.
+        var before = try FairPlayDecrypt.verifyApp(at: readRoot)
+        if before.entries.isEmpty {
+            before = try FairPlayDecrypt.verifyApp(at: src)
+        }
         if before.entries.isEmpty {
             throw DecryptError("EmbeddedPayload has no Mach-Os — companion package is incomplete. Re-run decrypt from TetherLess.")
         }
-        if before.encrypted == 0 && before.unknown > 0 && before.clear == 0 && before.plain == 0 {
+        if liveURL == nil,
+           before.encrypted == 0 && before.unknown > 0 && before.clear == 0 && before.plain == 0 {
             throw DecryptError(
                 "Couldn't inspect FairPlay cryptids on EmbeddedPayload (\(before.unknown) unknown). Re-run Get from TetherLess after updating, then open Tetherless Decrypt again."
             )
         }
-        if let expected = expectedEncryptedCount(), expected > 0, before.encrypted < expected, before.unknown == 0 {
+        if liveURL == nil,
+           let expected = expectedEncryptedCount(), expected > 0, before.encrypted < expected, before.unknown == 0 {
             throw DecryptError(
                 "EmbeddedPayload is missing FairPlay binaries (\(before.encrypted) encrypted vs \(expected) in the full IPA). Re-run decrypt so the companion embeds every DRM Mach-O."
             )
@@ -114,11 +137,9 @@ enum DecryptCompanionRuntime {
         try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
 
         log("Copying app bundle…")
+        // Seed Payload from EmbeddedPayload resources; Mach-Os are overwritten from readRoot.
         try copyTree(from: src, to: destApp)
 
-        // FairPlayed happy path: one-shot decrypt from EmbeddedPayload (SINF staging
-        // happens inside decryptMachOs). No self-heal / live-install retry loop —
-        // host already confirmed Media & Purchases keys before opening companion.
         let progressBridge: @Sendable (String) -> Void = { msg in
             // Lean console: only Mach-O count / [DECRYPTED] / [plain] / [FAILED].
             if msg.hasPrefix("[DECRYPTED]")
@@ -132,24 +153,35 @@ enum DecryptCompanionRuntime {
         let report: FairPlayDecryptReport
         do {
             report = try FairPlayDecrypt.decryptMachOs(
-                readingFrom: src,
+                readingFrom: readRoot,
                 writingTo: destApp,
                 quietConsole: true,
                 progress: progressBridge
             )
         } catch let fp as FairPlayDecryptError {
-            // Keys miss → Media & Purchases guidance (no retry / heal loop).
+            // Keys / EPERM miss — if we already used live path, surface Media & Purchases.
+            // If we only had EmbeddedPayload, push the install-first guidance.
             switch fp {
             case .missingLicense:
                 throw fp
             case .mainExecutableFailed(let detail)
                 where FairPlayFailureClass.current(fromLogs: [detail]) == .licenseOrKeys:
+                if liveURL == nil {
+                    throw FairPlayDecryptError.missingLicense(
+                        "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone (same Apple ID), re-run Get from TetherLess so the live path is stamped, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
+                    )
+                }
                 throw FairPlayDecryptError.missingLicense(FairPlayFailureClass.licenseOrKeys.userMessage)
             default:
                 throw fp
             }
         } catch {
             if FairPlayFailureClass.current(fromLogs: [error.localizedDescription]) == .licenseOrKeys {
+                if liveURL == nil {
+                    throw FairPlayDecryptError.missingLicense(
+                        "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone, re-run Get from TetherLess, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
+                    )
+                }
                 throw FairPlayDecryptError.missingLicense(FairPlayFailureClass.licenseOrKeys.userMessage)
             }
             throw error
