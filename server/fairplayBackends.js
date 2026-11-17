@@ -11,16 +11,17 @@
  *   5. unfaird        — jailbroken-device daemon (LAN fallback)
  *
  * Env:
- *   DECRYPT_BACKENDS=phone,fairplay-decrypt,ipadecrypt,ipa-decrypter,unfaird
- *   FAIRPLAY_DECRYPT_BIN=/usr/local/bin/decrypt.py   (or python -m path)
+ *   DECRYPT_BACKENDS=fairplay-decrypt   (default — credential.bin required)
+ *   FAIRPLAY_CREDENTIAL_BIN=/var/lib/tetherless/credential.bin   (required, exactly 16 bytes)
+ *   FAIRPLAY_DECRYPT_BIN=/usr/local/bin/decrypt.py
  *   FAIRPLAY_DECRYPT_PYTHON=python3
- *   FAIRPLAY_CREDENTIAL_BIN=/var/lib/tetherless/credential.bin
- *   FAIRPLAY_IPATOOL_BIN=ipatool   (optional pre-download for fairplay-decrypt)
+ *   FAIRPLAY_IPATOOL_BIN=ipatool
+ *   FAIRPLAY_REQUIRE_CREDENTIAL=1       (default on — refuse jobs without a valid credential.bin)
  *   IPADECRYPT_BIN=ipadecrypt
  *   IPA_DECRYPTER_URL=http://127.0.0.1:8787
- *   IPA_DECRYPTER_TOKEN=           (optional Bearer)
+ *   IPA_DECRYPTER_TOKEN=
  *   UNFAIRD_URL=http://192.168.1.20:6347
- *   UNFAIRD_TOKEN=                 (optional)
+ *   UNFAIRD_TOKEN=
  *
  * This module shells out / HTTP-calls those tools — it does not embed their crypto.
  */
@@ -32,10 +33,52 @@ const https = require("https");
 const http = require("http");
 const { URL } = require("url");
 
-const DEFAULT_BACKENDS = ["phone"];
+/** Default: credential.bin offline path only — no silent phone fallback. */
+const DEFAULT_BACKENDS = ["fairplay-decrypt"];
+const DEFAULT_CREDENTIAL_PATH = "/var/lib/tetherless/credential.bin";
+
+function requireCredential() {
+  const raw = String(process.env.FAIRPLAY_REQUIRE_CREDENTIAL ?? "1").trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "no" && raw !== "off";
+}
+
+function credentialPath() {
+  const fromEnv = String(process.env.FAIRPLAY_CREDENTIAL_BIN || "").trim();
+  if (fromEnv) return fromEnv;
+  if (fs.existsSync(DEFAULT_CREDENTIAL_PATH)) return DEFAULT_CREDENTIAL_PATH;
+  return fromEnv || DEFAULT_CREDENTIAL_PATH;
+}
+
+/** @returns {{ ok: true, path: string, bytes: number } | { ok: false, error: string, path: string }} */
+function validateCredentialBin() {
+  const p = credentialPath();
+  if (!p) {
+    return { ok: false, path: "", error: "FAIRPLAY_CREDENTIAL_BIN is not set." };
+  }
+  if (!fs.existsSync(p)) {
+    return { ok: false, path: p, error: `credential.bin missing at ${p}` };
+  }
+  let st;
+  try {
+    st = fs.statSync(p);
+  } catch (e) {
+    return { ok: false, path: p, error: e.message || String(e) };
+  }
+  if (!st.isFile()) {
+    return { ok: false, path: p, error: `${p} is not a file` };
+  }
+  if (st.size !== 16) {
+    return {
+      ok: false,
+      path: p,
+      error: `credential.bin must be exactly 16 bytes (got ${st.size}) — remint with fairplay-decrypt credential-retrieval`,
+    };
+  }
+  return { ok: true, path: p, bytes: 16 };
+}
 
 function configuredBackends() {
-  const raw = String(process.env.DECRYPT_BACKENDS || "phone")
+  const raw = String(process.env.DECRYPT_BACKENDS || "fairplay-decrypt")
     .split(",")
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
@@ -52,14 +95,21 @@ function configuredBackends() {
 
 function backendStatus() {
   const backends = configuredBackends();
+  const cred = validateCredentialBin();
   return {
     backends,
-    phone: { ready: true, note: "iPhone Phone Worker (DECRYPT_WORKER_TOKEN)" },
+    requireCredential: requireCredential(),
+    credential: cred.ok
+      ? { ready: true, path: cred.path, bytes: cred.bytes }
+      : { ready: false, path: cred.path, error: cred.error },
+    phone: { ready: true, note: "iPhone Phone Worker (DECRYPT_WORKER_TOKEN) — opt-in via DECRYPT_BACKENDS" },
     "fairplay-decrypt": {
-      ready: !!(process.env.FAIRPLAY_CREDENTIAL_BIN && fs.existsSync(process.env.FAIRPLAY_CREDENTIAL_BIN)),
+      ready: cred.ok,
       bin: process.env.FAIRPLAY_DECRYPT_BIN || "decrypt.py",
-      credential: process.env.FAIRPLAY_CREDENTIAL_BIN || "",
-      note: "Needs FAIRPLAY_CREDENTIAL_BIN + FAIRPLAY_DECRYPT_BIN (or python decrypt.py)",
+      credential: cred.path || "",
+      note: cred.ok
+        ? "credential.bin OK (16 bytes)"
+        : cred.error || "Needs valid 16-byte FAIRPLAY_CREDENTIAL_BIN",
     },
     ipadecrypt: {
       ready: !!which(process.env.IPADECRYPT_BIN || "ipadecrypt"),
@@ -189,6 +239,20 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
   const backends = configuredBackends().filter((b) => b !== "phone" && !skip.includes(b));
   if (!backends.length) return null;
 
+  // Force a correct credential.bin whenever fairplay-decrypt is in the chain
+  // (or when FAIRPLAY_REQUIRE_CREDENTIAL is on — default).
+  const needsCred =
+    requireCredential() || backends.includes("fairplay-decrypt");
+  if (needsCred) {
+    const cred = validateCredentialBin();
+    if (!cred.ok) {
+      throw new Error(
+        `FairPlay credential.bin required: ${cred.error} — mint once with fairplay-decrypt credential-retrieval and set FAIRPLAY_CREDENTIAL_BIN.`
+      );
+    }
+    say(`Using credential.bin (${cred.bytes} bytes)…`);
+  }
+
   const errors = [];
   for (const backend of backends) {
     try {
@@ -222,10 +286,11 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
 }
 
 async function runFairplayDecrypt({ url, dir, say, vreq }) {
-  const cred = process.env.FAIRPLAY_CREDENTIAL_BIN || "";
-  if (!cred || !fs.existsSync(cred)) {
-    throw new Error("FAIRPLAY_CREDENTIAL_BIN missing (16-byte credential.bin)");
+  const credCheck = validateCredentialBin();
+  if (!credCheck.ok) {
+    throw new Error(credCheck.error || "credential.bin invalid");
   }
+  const cred = credCheck.path;
   const enc = path.join(dir, "encrypted-source.ipa");
   const out = path.join(dir, "fairplay-decrypt-out.ipa");
   try {
@@ -253,7 +318,7 @@ async function runFairplayDecrypt({ url, dir, say, vreq }) {
 
   const py = process.env.FAIRPLAY_DECRYPT_PYTHON || "python3";
   const bin = process.env.FAIRPLAY_DECRYPT_BIN || "";
-  say("fairplay-decrypt decrypting…");
+  say(`fairplay-decrypt decrypting with credential.bin…`);
   if (bin && bin.endsWith(".py")) {
     await runCmd(py, [bin, enc, out, "--credential", cred], { cwd: dir });
   } else if (bin && which(bin)) {
@@ -439,4 +504,8 @@ module.exports = {
   backendStatus,
   tryRemoteBackends,
   adamFromStoreUrl,
+  validateCredentialBin,
+  credentialPath,
+  requireCredential,
+  DEFAULT_CREDENTIAL_PATH,
 };

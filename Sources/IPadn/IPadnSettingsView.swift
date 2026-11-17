@@ -342,6 +342,14 @@ private struct DecryptBackendsStatusRow: View {
             let order = (json["backends"] as? [String]) ?? []
             var out: [String] = ["Order: " + (order.isEmpty ? "(none)" : order.joined(separator: " → "))]
             if let status = json["status"] as? [String: Any] {
+                if let cred = status["credential"] as? [String: Any] {
+                    let ready = (cred["ready"] as? Bool) == true
+                    if ready {
+                        out.append("✓ credential.bin (16 bytes)")
+                    } else {
+                        out.append("✗ credential.bin — \((cred["error"] as? String) ?? "missing")")
+                    }
+                }
                 for key in ["fairplay-decrypt", "ipadecrypt", "ipa-decrypter", "unfaird", "phone"] {
                     guard let row = status[key] as? [String: Any] else { continue }
                     let ready = (row["ready"] as? Bool) == true
@@ -373,19 +381,19 @@ private struct FairPlayAdvancedSettingsSection: View {
 
     var body: some View {
         Section {
-            PhoneDecryptWorkerInline()
+            DecryptBackendsStatusRow()
         } header: {
-            Text("Server queue · Phone Worker")
+            Text("Server · credential.bin")
         } footer: {
-            Text("One of four FairPlay backends: this iPhone claims site/Telegram jobs. Others (fairplay-decrypt, ipadecrypt, ipa-decrypter, unfaird) run on the server — see server/fairplay-backends.md.")
+            Text("Site decrypt defaults to fairplay-decrypt with a forced 16-byte credential.bin on the server (FAIRPLAY_CREDENTIAL_BIN). Phone Worker is opt-in only.")
         }
 
         Section {
-            DecryptBackendsStatusRow()
+            PhoneDecryptWorkerInline()
         } header: {
-            Text("Server FairPlay backends")
+            Text("Optional · Phone Worker")
         } footer: {
-            Text("Reads GET /api/decrypt/backends from your site. Configure DECRYPT_BACKENDS on the server.")
+            Text("Only used when DECRYPT_BACKENDS includes phone. Prefer credential.bin on the server for correct offline decrypt.")
         }
 
         Section {
