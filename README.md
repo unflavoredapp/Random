@@ -1,17 +1,12 @@
 <!-- Brand: Tetherless · https://tetherless.dev -->
-<pre align="center">
-_____           _     _                     _
-|_   _|  ___   | |_  | |__    ___    _ __  | |  ___    ___   ___
-  | |   / _ \  | __| | '_ \  / _ \  | '__| | | / _ \  / __| / __|
-  | |   |  __/ | |_  | | | | |  __/ | |    | | |  __/ \__ \ \__ \
-  |_|   \___|   \__| |_| |_| \___|  |_|    |_| \___|  |___/ |___/
-</pre>
 
 <p align="center">
-  <img src="docs/assets/tetherless-icon.png" width="148" alt="Tetherless app icon" />
+  <img src="docs/assets/tetherless-icon.png" width="128" alt="Tetherless app icon" />
 </p>
 
-<h1 align="center">Tetherless</h1>
+<p align="center">
+  <img src="docs/assets/tetherless-ascii.png" width="680" alt="Tetherless" />
+</p>
 
 <p align="center">
   <strong>On-device sideloading — pair, sign, install. No computer required.</strong><br />
@@ -19,6 +14,19 @@ _____           _     _                     _
   · Bundle ID <code>dev.tetherless.app</code>
   · v3.7
 </p>
+
+<details>
+<summary>Plain-text ASCII wordmark</summary>
+
+```
+ _____    _   _               _
+|_   _|__| |_| |__   ___ _ __| | ___  ___ ___
+  | |/ _ \ __| '_ \ / _ \ '__| |/ _ \/ __/ __|
+  | |  __/ |_| | | |  __/ |  | |  __/\__ \__ \
+  |_|\___|\__|_| |_|\___|_|  |_|\___||___/___/
+```
+
+</details>
 
 ---
 
@@ -29,7 +37,7 @@ Tetherless ships a glassmorphism shell over the existing signing and install sta
 - **Purple → teal** full-bleed gradient background
 - **Glass cards** and capsule controls with soft material blur
 - **Floating tab bar** — Search · Downloads · Purchased · Account. Pair / Files / Library live under Account.
-- Gradient **app icon** (no-cable mark) matching the UI palette
+- **App icon** — Mach-O connector + cable on a full-bleed orange→cyan field
 
 Backends (TrustCore signing, OTA, native install) are unchanged under the new chrome.
 
