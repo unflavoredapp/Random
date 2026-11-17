@@ -410,6 +410,13 @@ enum DecryptCompanionPackager {
             meta["hostEncryptedIPAPath"] = enc.path
             progress?("Stamped encrypted IPA for FairPlay: \(enc.path)")
         }
+        let fpOpts = FairPlayAdvancedOptions.Resolved.current
+        for (k, v) in fpOpts.snapshotFields() {
+            meta[k] = v
+        }
+        if fpOpts.pathDiagnostics {
+            progress?("Advanced FairPlay · \(fpOpts.sourceMode.title) · retries \(fpOpts.retryRounds)")
+        }
         // Host readiness only — never passwords / PET / store session JSON.
         for (k, v) in DecryptCompanionHandoff.hostSnapshot() {
             meta[k] = v
