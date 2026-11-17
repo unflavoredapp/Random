@@ -95,20 +95,18 @@ enum DecryptCompanionRuntime {
         }
 
         // FairPlayed / foulplay: fairplayd resolves SC_Info on the *input* path.
-        // Prefer: (1) live App Store install, (2) host-stamped encrypted IPA unpacked
-        // from durable temp, (3) EmbeddedPayload.
+        // Advanced source mode (host-stamped) can force live / stamped IPA / embed.
+        let fpOpts = FairPlayAdvancedOptions.Resolved.from(snapshot: snap)
         let liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(manifest: man)
+        let stampedIPAURL = DecryptCompanionHandoff.resolveEncryptedIPAURL(manifest: man)
         var ipaUnpackRoot: URL?
         defer {
             if let ipaUnpackRoot {
                 try? fm.removeItem(at: ipaUnpackRoot)
             }
         }
-        let readRoot: URL
-        if let liveURL {
-            readRoot = liveURL
-            log("Using live App Store install for FairPlay: \(liveURL.path)")
-        } else if let ipaURL = DecryptCompanionHandoff.resolveEncryptedIPAURL(manifest: man) {
+
+        func unpackStampedIPA(_ ipaURL: URL) throws -> URL {
             log("Using stamped encrypted IPA for FairPlay: \(ipaURL.path)")
             let unpack = fm.temporaryDirectory
                 .appendingPathComponent("tl-ipa-\(UUID().uuidString)", isDirectory: true)
@@ -121,12 +119,48 @@ enum DecryptCompanionRuntime {
                 throw DecryptError("Stamped encrypted IPA has no Payload/*.app — re-run Get from TetherLess.")
             }
             ipaUnpackRoot = unpack
-            readRoot = app
             log("Unpacked encrypted IPA → \(app.lastPathComponent)")
-        } else {
+            return app
+        }
+
+        if fpOpts.pathDiagnostics {
+            log("Advanced FairPlay · source=\(fpOpts.sourceMode.title) · retries=\(fpOpts.retryRounds)")
+            if let liveURL { log("Live path: \(liveURL.path)") }
+            if let stampedIPAURL { log("Stamped IPA: \(stampedIPAURL.path)") }
+            log("EmbeddedPayload: \(src.path)")
+        }
+
+        let readRoot: URL
+        switch fpOpts.sourceMode {
+        case .liveInstall:
+            guard let liveURL else {
+                throw DecryptError(
+                    "Advanced FairPlay is set to Live install only, but no live App Store path was stamped. Install \(name) from the App Store, re-run Get, or switch source mode to Automatic."
+                )
+            }
+            readRoot = liveURL
+            log("Using live App Store install for FairPlay: \(liveURL.path)")
+        case .stampedIPA:
+            guard let stampedIPAURL else {
+                throw DecryptError(
+                    "Advanced FairPlay is set to Stamped IPA only, but no encrypted IPA temp URL was stamped. Re-run Get from TetherLess."
+                )
+            }
+            readRoot = try unpackStampedIPA(stampedIPAURL)
+        case .embeddedPayload:
             readRoot = src
-            log("No live install / stamped IPA — FairPlay will try EmbeddedPayload (often EPERM).")
-            log("Re-run Get from TetherLess so the encrypted IPA temp URL is stamped.")
+            log("Using EmbeddedPayload only (advanced) — FairPlay may EPERM without live licenses.")
+        case .automatic:
+            if let liveURL {
+                readRoot = liveURL
+                log("Using live App Store install for FairPlay: \(liveURL.path)")
+            } else if let stampedIPAURL {
+                readRoot = try unpackStampedIPA(stampedIPAURL)
+            } else {
+                readRoot = src
+                log("No live install / stamped IPA — FairPlay will try EmbeddedPayload (often EPERM).")
+                log("Re-run Get from TetherLess so the encrypted IPA temp URL is stamped.")
+            }
         }
 
         // Fail-closed DRM checks stay silent in the console (TetherlessiOS-style log).
@@ -138,13 +172,17 @@ enum DecryptCompanionRuntime {
         if before.entries.isEmpty {
             throw DecryptError("EmbeddedPayload has no Mach-Os — companion package is incomplete. Re-run decrypt from TetherLess.")
         }
-        if liveURL == nil,
+        let usedLiveInstall = liveURL.map {
+            readRoot.resolvingSymlinksInPath().standardizedFileURL
+                == $0.resolvingSymlinksInPath().standardizedFileURL
+        } ?? false
+        if !usedLiveInstall,
            before.encrypted == 0 && before.unknown > 0 && before.clear == 0 && before.plain == 0 {
             throw DecryptError(
                 "Couldn't inspect FairPlay cryptids on EmbeddedPayload (\(before.unknown) unknown). Re-run Get from TetherLess after updating, then open Tetherless Decrypt again."
             )
         }
-        if liveURL == nil,
+        if !usedLiveInstall,
            let expected = expectedEncryptedCount(), expected > 0, before.encrypted < expected, before.unknown == 0 {
             throw DecryptError(
                 "EmbeddedPayload is missing FairPlay binaries (\(before.encrypted) encrypted vs \(expected) in the full IPA). Re-run decrypt so the companion embeds every DRM Mach-O."
@@ -161,12 +199,17 @@ enum DecryptCompanionRuntime {
         // Seed Payload from EmbeddedPayload resources; Mach-Os are overwritten from readRoot.
         try copyTree(from: src, to: destApp)
 
+        let verbose = fpOpts.verboseConsole
         let progressBridge: @Sendable (String) -> Void = { msg in
-            // Lean console: only Mach-O count / [DECRYPTED] / [plain] / [FAILED].
-            if msg.hasPrefix("[DECRYPTED]")
+            // Lean console by default; verbose advanced mode surfaces retries / SINF / paths.
+            let keep = verbose
+                || msg.hasPrefix("[DECRYPTED]")
                 || msg.hasPrefix("[plain]")
                 || msg.hasPrefix("[FAILED]")
-                || (msg.hasPrefix("Decrypting ") && msg.contains("Mach-O file")) {
+                || (msg.hasPrefix("Decrypting ") && msg.contains("Mach-O file"))
+                || msg.localizedCaseInsensitiveContains("retry")
+                || msg.localizedCaseInsensitiveContains("staged")
+            if keep {
                 progress?(msg)
                 Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
             }
@@ -176,7 +219,8 @@ enum DecryptCompanionRuntime {
             report = try FairPlayDecrypt.decryptMachOs(
                 readingFrom: readRoot,
                 writingTo: destApp,
-                quietConsole: true,
+                quietConsole: !verbose,
+                options: fpOpts,
                 progress: progressBridge
             )
         } catch let fp as FairPlayDecryptError {
@@ -187,7 +231,7 @@ enum DecryptCompanionRuntime {
                 throw fp
             case .mainExecutableFailed(let detail)
                 where FairPlayFailureClass.current(fromLogs: [detail]) == .licenseOrKeys:
-                if liveURL == nil {
+                if !usedLiveInstall {
                     throw FairPlayDecryptError.missingLicense(
                         "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone (same Apple ID), re-run Get from TetherLess so the live path is stamped, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
                     )
@@ -198,7 +242,7 @@ enum DecryptCompanionRuntime {
             }
         } catch {
             if FairPlayFailureClass.current(fromLogs: [error.localizedDescription]) == .licenseOrKeys {
-                if liveURL == nil {
+                if !usedLiveInstall {
                     throw FairPlayDecryptError.missingLicense(
                         "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone, re-run Get from TetherLess, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
                     )
@@ -264,6 +308,11 @@ enum DecryptCompanionRuntime {
         DecryptCompanionController.shared.exportSentToHost = published
         if published {
             DecryptCompanionHandoff.openHostForClearIPAImport()
+        }
+        // Advanced: optionally drop the durable encrypted IPA after a clear export.
+        if !fpOpts.keepEncryptedIPA {
+            DecryptCompanionHandoff.purgeRetainedEncryptedIPA()
+            log("Dropped stamped encrypted IPA (Keep encrypted IPA is off).")
         }
         return outIPA
     }

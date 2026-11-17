@@ -10,12 +10,13 @@ import UserNotifications
 
 struct IPadnSettingsView: View {
     enum Page: Hashable {
-        case root, downloads, follow, appearance, lock, sources, maintenance
+        case root, downloads, fairplay, follow, appearance, lock, sources, maintenance
 
         var title: String {
             switch self {
             case .root: return "Settings"
             case .downloads: return "Downloads"
+            case .fairplay: return "FairPlay Decrypt"
             case .follow: return "Following"
             case .appearance: return "Appearance & Icon"
             case .lock: return "App Lock"
@@ -57,6 +58,10 @@ struct IPadnSettingsView: View {
         Form {
             if page == .root {
                 IPadnSettingsRootSections(statusMessage: $statusMessage)
+            }
+
+            if page == .fairplay {
+                FairPlayAdvancedSettingsSection()
             }
 
             if page == .downloads {
@@ -264,8 +269,102 @@ struct IPadnSettingsView: View {
         proMode = false
         appUpdateCheck = true
         useSignerCache = true
+        FairPlayAdvancedOptions.resetToDefaults()
         applyDownloadPrefs()
         statusMessage = "Settings restored to defaults."
+    }
+}
+
+/// Advanced FairPlay decrypt controls — source path, verbose console, retries, IPA retention.
+private struct FairPlayAdvancedSettingsSection: View {
+    @AppStorage(FairPlayAdvancedOptions.sourceModeKey) private var sourceModeRaw =
+        FairPlayAdvancedOptions.SourceMode.automatic.rawValue
+    @AppStorage(FairPlayAdvancedOptions.verboseKey) private var verboseConsole = false
+    @AppStorage(FairPlayAdvancedOptions.keepEncryptedIPAKey) private var keepEncryptedIPA = true
+    @AppStorage(FairPlayAdvancedOptions.retryRoundsKey) private var retryRounds =
+        FairPlayAdvancedOptions.defaultRetryRounds
+    @AppStorage(FairPlayAdvancedOptions.pathDiagnosticsKey) private var pathDiagnostics = false
+    @AppStorage(FairPlayAdvancedOptions.requireAllFrameworksKey) private var requireAllFrameworks = false
+
+    private var sourceMode: FairPlayAdvancedOptions.SourceMode {
+        FairPlayAdvancedOptions.SourceMode(rawValue: sourceModeRaw) ?? .automatic
+    }
+
+    var body: some View {
+        Section {
+            Picker("Decrypt source", selection: $sourceModeRaw) {
+                ForEach(FairPlayAdvancedOptions.SourceMode.allCases) { mode in
+                    Text(mode.title).tag(mode.rawValue)
+                }
+            }
+            Text(sourceMode.detail)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Source")
+        } footer: {
+            Text("Automatic is best for most apps. Live install only helps when EmbeddedPayload hits FairPlay EPERM (e.g. Roblox).")
+        }
+
+        Section {
+            Stepper("Targeted retries: \(max(3, min(8, retryRounds == 0 ? 5 : retryRounds)))", value: $retryRounds, in: 3...8)
+            Toggle("Verbose FairPlay console", isOn: $verboseConsole)
+            Toggle("Show path diagnostics", isOn: $pathDiagnostics)
+            Toggle("Require all frameworks", isOn: $requireAllFrameworks)
+        } header: {
+            Text("Decrypt engine")
+        } footer: {
+            Text("Verbose logs retries and SINF staging in Tetherless Decrypt. Require all frameworks turns optional framework soft-fails into hard failures (no PARTIAL IPA).")
+        }
+
+        Section {
+            Toggle("Keep encrypted IPA after decrypt", isOn: $keepEncryptedIPA)
+            if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath() {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Stamped encrypted IPA")
+                        .font(.subheadline.weight(.semibold))
+                    Text(stamped.path)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                .padding(.vertical, 2)
+                Button("Clear stamped IPA path", role: .destructive) {
+                    DecryptCompanionHandoff.purgeRetainedEncryptedIPA()
+                }
+            } else {
+                Text("No stamped encrypted IPA yet — run Get on an App Store app.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+            if let live = DecryptCompanionHandoff.readLiveInstallPath() {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Stamped live install")
+                        .font(.subheadline.weight(.semibold))
+                    Text(live.path)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+                .padding(.vertical, 2)
+            }
+        } header: {
+            Text("Temp paths")
+        } footer: {
+            Text("Store Get holds the encrypted IPA under EncryptedIPAs and stamps its URL for FairPlay. Turn Keep off to delete that file after a successful clear export.")
+        }
+
+        Section {
+            Button("Reset FairPlay advanced defaults") {
+                FairPlayAdvancedOptions.resetToDefaults()
+                sourceModeRaw = FairPlayAdvancedOptions.SourceMode.automatic.rawValue
+                verboseConsole = false
+                keepEncryptedIPA = true
+                retryRounds = FairPlayAdvancedOptions.defaultRetryRounds
+                pathDiagnostics = false
+                requireAllFrameworks = false
+            }
+        }
     }
 }
 
@@ -283,6 +382,7 @@ struct IPadnSettingsRootSections: View {
     var body: some View {
         Section {
             pageLink(.downloads, "arrow.down.circle")
+            pageLink(.fairplay, "lock.open")
             pageLink(.follow, "bell")
             pageLink(.appearance, "paintbrush")
             pageLink(.lock, "lock")

@@ -954,8 +954,16 @@ final class DeviceDecryptService: ObservableObject {
             bundleID: resolvedBid,
             displayName: displayName
         )
+        let fpOpts = FairPlayAdvancedOptions.Resolved.current
+        DecryptCompanionHandoff.publishHostSnapshot()
         publishDecryptProgress("Encrypted IPA held for FairPlay: \(retained.lastPathComponent)")
         publishDecryptProgress("Temp URL: \(retained.path)")
+        if fpOpts.pathDiagnostics {
+            publishDecryptProgress(
+                "Advanced FairPlay · \(fpOpts.sourceMode.title) · retries \(fpOpts.retryRounds)"
+                + (fpOpts.verboseConsole ? " · verbose" : "")
+            )
+        }
 
         publishDecryptProgress("Building Tetherless Decrypt companion for \(label)…")
         _ = await DeviceLibrary.shared.refreshAwaiting()

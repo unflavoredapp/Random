@@ -428,10 +428,15 @@ enum FairPlayDecrypt {
         readingFrom sourceApp: URL,
         writingTo destApp: URL,
         quietConsole: Bool = false,
+        options: FairPlayAdvancedOptions.Resolved = .current,
         progress: ((String) -> Void)? = nil
     ) throws -> FairPlayDecryptReport {
         var report = FairPlayDecryptReport()
-        let detail: ((String) -> Void)? = quietConsole ? nil : progress
+        // Verbose advanced mode keeps detail lines even when quietConsole is set for lean UI.
+        let detail: ((String) -> Void)? = (quietConsole && !options.verboseConsole) ? nil : progress
+        if options.pathDiagnostics {
+            detail?("FairPlay source=\(options.sourceMode.rawValue) · retries=\(options.retryRounds)")
+        }
         // Never write decrypted binaries (or SINF staging) into a live App Store container.
         if isLiveAppStoreInstall(destApp) {
             throw FairPlayDecryptError.failed(
@@ -509,6 +514,8 @@ enum FairPlayDecrypt {
                             "Timed out decrypting the main executable (\(rel)). \(AppStoreDecryptGuide.failureHint)"
                         )
                     }
+                } else if options.requireAllFrameworks {
+                    report.failed.append(rel)
                 } else {
                     report.softFailed.append(rel)
                 }
@@ -517,6 +524,8 @@ enum FairPlayDecrypt {
                 if r.isRequired {
                     if r == .main { throw error }
                     report.failed.append(rel)
+                } else if options.requireAllFrameworks {
+                    report.failed.append(rel)
                 } else {
                     report.softFailed.append(rel)
                 }
@@ -524,7 +533,11 @@ enum FairPlayDecrypt {
                 report.decrypted.append(contentsOf: mini.decrypted)
                 report.plain.append(contentsOf: mini.plain)
                 report.failed.append(contentsOf: mini.failed)
-                report.softFailed.append(contentsOf: mini.softFailed)
+                if options.requireAllFrameworks {
+                    report.failed.append(contentsOf: mini.softFailed)
+                } else {
+                    report.softFailed.append(contentsOf: mini.softFailed)
+                }
                 if mini.decrypted.contains(rel) {
                     progress?("[DECRYPTED] \(rel)")
                 } else if mini.plain.contains(rel) {
@@ -546,6 +559,7 @@ enum FairPlayDecrypt {
             sourceApp: sourceApp,
             destApp: destApp,
             report: &report,
+            backoff: options.retryBackoffSeconds,
             progress: detail
         )
 
@@ -665,15 +679,17 @@ enum FairPlayDecrypt {
         return items.first { $0.pathExtension.lowercased() == "sinf" }
     }
 
-    /// buddy3 verify loop: up to 5 rounds, only binaries that still show cryptid ≠ 0.
+    /// buddy3 verify loop default: 5 rounds, only binaries that still show cryptid ≠ 0.
     private static let verifyRetryBackoffSeconds: [TimeInterval] = [0.10, 0.25, 0.50, 1.0, 2.0]
 
     private static func verifyWithTargetedRetries(
         sourceApp: URL,
         destApp: URL,
         report: inout FairPlayDecryptReport,
+        backoff: [TimeInterval] = verifyRetryBackoffSeconds,
         progress: ((String) -> Void)?
     ) throws {
+        let schedule = backoff.isEmpty ? verifyRetryBackoffSeconds : backoff
         let probeRoot = FileManager.default.fileExists(atPath: destApp.path) ? destApp : sourceApp
         var stillEncrypted = stillEncryptedRequired(under: probeRoot, report: report)
         guard !stillEncrypted.isEmpty else {
@@ -686,10 +702,10 @@ enum FairPlayDecrypt {
         }
 
         progress?(
-            "\(stillEncrypted.count) binary(ies) still encrypted — targeted retries (up to \(verifyRetryBackoffSeconds.count) rounds)…"
+            "\(stillEncrypted.count) binary(ies) still encrypted — targeted retries (up to \(schedule.count) rounds)…"
         )
 
-        for (round, delay) in verifyRetryBackoffSeconds.enumerated() {
+        for (round, delay) in schedule.enumerated() {
             guard !stillEncrypted.isEmpty else { break }
             if delay > 0 {
                 Thread.sleep(forTimeInterval: delay)
@@ -702,7 +718,7 @@ enum FairPlayDecrypt {
                     progress?("Re-staged \(restaged) SINF(s) before retry \(round + 1)…")
                 }
             }
-            progress?("Retry \(round + 1)/\(verifyRetryBackoffSeconds.count): \(stillEncrypted.count) file(s)…")
+            progress?("Retry \(round + 1)/\(schedule.count): \(stillEncrypted.count) file(s)…")
 
             var recovered: [String] = []
             for (i, rel) in stillEncrypted.enumerated() {
@@ -732,12 +748,12 @@ enum FairPlayDecrypt {
             let probe = FileManager.default.fileExists(atPath: destApp.path) ? destApp : sourceApp
             stillEncrypted = stillEncryptedRequired(under: probe, report: report)
             if stillEncrypted.isEmpty {
-                progress?("Retry \(round + 1)/\(verifyRetryBackoffSeconds.count) recovered everything.")
+                progress?("Retry \(round + 1)/\(schedule.count) recovered everything.")
                 break
             }
             let recoveredCount = recovered.count
             progress?(
-                "Retry \(round + 1)/\(verifyRetryBackoffSeconds.count): \(recoveredCount) recovered; \(stillEncrypted.count) remain."
+                "Retry \(round + 1)/\(schedule.count): \(recoveredCount) recovered; \(stillEncrypted.count) remain."
             )
         }
 

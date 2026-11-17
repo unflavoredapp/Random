@@ -88,6 +88,10 @@ enum DecryptCompanionHandoff {
             // Explicit: no secrets (password / PET / session never stored).
             "secrets": false,
         ]
+        // Advanced FairPlay controls for the companion (source mode, verbose, retries).
+        for (k, v) in FairPlayAdvancedOptions.Resolved.current.snapshotFields() {
+            snap[k] = v
+        }
         // Full email for companion FairPlay failure copy (UserDefaults + App Group).
         if !email.isEmpty {
             snap["hostEmail"] = email
@@ -222,6 +226,14 @@ enum DecryptCompanionHandoff {
         publishHostSnapshot()
     }
 
+    /// Delete the stamped EncryptedIPAs file (advanced: Keep encrypted IPA off) and clear the stamp.
+    static func purgeRetainedEncryptedIPA() {
+        if let stamped = readEncryptedIPAPath() {
+            try? FileManager.default.removeItem(at: URL(fileURLWithPath: stamped.path))
+        }
+        clearEncryptedIPAPath()
+    }
+
     static func readEncryptedIPAPath() -> (path: String, bundleID: String)? {
         let path = (suite?.string(forKey: encryptedIPAPathKey)
             ?? local.string(forKey: encryptedIPAPathKey)
@@ -272,7 +284,9 @@ enum DecryptCompanionHandoff {
         var out: [String: Any] = [:]
         for key in [
             "hostSignedIn", "hostStoreReady", "hostFairPlayAck", "hostEmailHint", "hostEmail",
-            "hostSnapshotAt", "hostLiveInstallPath", "hostEncryptedIPAPath", "bundleID"
+            "hostSnapshotAt", "hostLiveInstallPath", "hostEncryptedIPAPath", "bundleID",
+            "fpSourceMode", "fpVerbose", "fpKeepEncryptedIPA", "fpRetryRounds",
+            "fpPathDiagnostics", "fpRequireAllFrameworks",
         ] {
             if let v = manifest[key] { out[key] = v }
         }
