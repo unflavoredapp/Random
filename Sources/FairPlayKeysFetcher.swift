@@ -34,12 +34,24 @@ final class FairPlayKeysFetcher: ObservableObject {
         case seedApp
     }
 
+    /// One App Store install visible for the active session (installd / history).
+    struct LicenseEntry: Equatable, Identifiable {
+        var id: String { bundleID }
+        var name: String
+        var bundleID: String
+        var version: String
+        var hasSCInfo: Bool
+        /// Short path tail for debugging (last 2 components), empty when unknown.
+        var pathTail: String
+    }
+
     /// Open-source-style readiness snapshot (install + SC_Info), not a credential.
     struct Readiness: Equatable {
         var storeApps: Int
         var scInfoHits: Int
+        var licenses: [LicenseEntry]
 
-        static let empty = Readiness(storeApps: 0, scInfoHits: 0)
+        static let empty = Readiness(storeApps: 0, scInfoHits: 0, licenses: [])
     }
 
     enum Phase: Equatable {
@@ -58,6 +70,9 @@ final class FairPlayKeysFetcher: ObservableObject {
     @Published var verifyLines: [String] = []
     /// Last readiness probe (also shown while idle after a scan).
     @Published private(set) var lastReadiness: Readiness = .empty
+    /// App Store licenses / installs visible for this session (detail for the capture sheet).
+    @Published private(set) var sessionLicenses: [LicenseEntry] = []
+    @Published private(set) var licensesScanning = false
 
     private var foregroundObserver: NSObjectProtocol?
     private var openedAt: Date?
@@ -105,6 +120,7 @@ final class FairPlayKeysFetcher: ObservableObject {
             if case .confirmSignIn = phase { return }
             if case .redirecting = phase { return }
             phase = .idle
+            sessionLicenses = []
             return
         }
         switch phase {
@@ -115,12 +131,29 @@ final class FairPlayKeysFetcher: ObservableObject {
         }
         if AppStoreDecryptGuide.isAcknowledged(email: email) {
             let at = grabbedAt(email: email) ?? Date()
-            let readiness = storedReadiness(email: email)
+            var readiness = storedReadiness(email: email)
+            // Keep any live license list we already probed this session.
+            if readiness.licenses.isEmpty, !sessionLicenses.isEmpty {
+                readiness.licenses = sessionLicenses
+                readiness.storeApps = max(readiness.storeApps, sessionLicenses.count)
+                readiness.scInfoHits = max(readiness.scInfoHits, sessionLicenses.filter(\.hasSCInfo).count)
+            }
             lastReadiness = readiness
             if case .grabbed(let current, _, _) = phase, current == email { return }
             phase = .grabbed(email: email, at: at, readiness: readiness)
         } else if case .grabbed = phase {
             phase = .idle
+        }
+    }
+
+    /// Refresh the on-device App Store license list for the capture sheet (does not change phase).
+    func refreshSessionLicenses() {
+        Task { @MainActor in
+            licensesScanning = true
+            defer { licensesScanning = false }
+            let readiness = await probeReadiness()
+            lastReadiness = readiness
+            sessionLicenses = readiness.licenses
         }
     }
 
@@ -336,39 +369,55 @@ final class FairPlayKeysFetcher: ObservableObject {
         await refreshDeviceLibraryBounded(seconds: 2.5)
 
         let storeApps = DeviceLibrary.shared.apps.filter(\.isAppStore)
-        var candidates: [(bundleID: String, path: String?)] = storeApps.map {
-            ($0.bundleID, $0.installPath)
+        struct Candidate {
+            var bundleID: String
+            var name: String
+            var version: String
+            var path: String?
+        }
+        var candidates: [Candidate] = storeApps.map {
+            Candidate(bundleID: $0.bundleID, name: $0.name, version: $0.version, path: $0.installPath)
         }
         if candidates.isEmpty {
             candidates = DecryptClient.shared.history.compactMap { app in
                 let b = app.bundle.trimmingCharacters(in: .whitespacesAndNewlines)
-                return b.isEmpty ? nil : (b, nil)
+                guard !b.isEmpty else { return nil }
+                return Candidate(
+                    bundleID: b,
+                    name: app.name.isEmpty ? b : app.name,
+                    version: app.version,
+                    path: nil
+                )
             }
         }
 
         var seen = Set<String>()
-        var hits = 0
-        var visible = 0
+        var licenses: [LicenseEntry] = []
         for item in candidates where seen.insert(item.bundleID).inserted {
-            guard visible < 24 else { break }
-            // Prefer installd Path (open-source foulplay / FairPlayed pattern).
+            guard licenses.count < 40 else { break }
+            let live: URL?
             if let path = item.path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
-                visible += 1
-                let live = FairPlayDecrypt.installedAppURL(bundleID: item.bundleID, knownPath: path)
+                live = FairPlayDecrypt.installedAppURL(bundleID: item.bundleID, knownPath: path)
                     ?? URL(fileURLWithPath: path)
-                if scInfoExists(beside: live) { hits += 1 }
-                continue
+            } else {
+                live = FairPlayDecrypt.installedAppURL(bundleID: item.bundleID)
             }
-            if let live = FairPlayDecrypt.installedAppURL(bundleID: item.bundleID) {
-                visible += 1
-                if scInfoExists(beside: live) { hits += 1 }
-            }
+            let hasSC = live.map { scInfoExists(beside: $0) } ?? false
+            licenses.append(LicenseEntry(
+                name: item.name,
+                bundleID: item.bundleID,
+                version: item.version,
+                hasSCInfo: hasSC,
+                pathTail: pathTail(live)
+            ))
         }
 
-        // Count store apps from DeviceLibrary even when SC_Info isn’t host-readable.
-        let storeCount = max(storeApps.count, visible)
-        let readiness = Readiness(storeApps: storeCount, scInfoHits: hits)
+        // Also include library apps we skipped if candidate list came from history only.
+        let storeCount = max(storeApps.count, licenses.count)
+        let hits = licenses.filter(\.hasSCInfo).count
+        let readiness = Readiness(storeApps: storeCount, scInfoHits: hits, licenses: licenses)
         lastReadiness = readiness
+        sessionLicenses = licenses
         return readiness
     }
 
@@ -376,6 +425,12 @@ final class FairPlayKeysFetcher: ObservableObject {
         let sc = appURL.appendingPathComponent("SC_Info", isDirectory: true)
         var isDir: ObjCBool = false
         return FileManager.default.fileExists(atPath: sc.path, isDirectory: &isDir) && isDir.boolValue
+    }
+
+    private func pathTail(_ url: URL?) -> String {
+        guard let url else { return "" }
+        let parts = url.path.split(separator: "/").suffix(2).map(String.init)
+        return parts.joined(separator: "/")
     }
 
     /// Await DeviceLibrary refresh at most `seconds`; keep cache on timeout/failure.
@@ -419,7 +474,8 @@ final class FairPlayKeysFetcher: ObservableObject {
         let key = email.lowercased()
         return Readiness(
             storeApps: UserDefaults.standard.integer(forKey: Self.storeAppsPrefix + key),
-            scInfoHits: UserDefaults.standard.integer(forKey: Self.hintsPrefix + key)
+            scInfoHits: UserDefaults.standard.integer(forKey: Self.hintsPrefix + key),
+            licenses: sessionLicenses
         )
     }
 }
