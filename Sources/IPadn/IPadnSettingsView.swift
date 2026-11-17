@@ -304,6 +304,40 @@ private struct PhoneDecryptWorkerInline: View {
     }
 }
 
+/// Override `as_site_base` so Store/Telegram decrypt jobs hit a Mac (or other) FairPlay host.
+private struct FairPlayDecryptHostField: View {
+    @AppStorage("as_site_base") private var siteBase = ""
+    @State private var draft = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            TextField("https://mac-host.example/", text: $draft)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .keyboardType(.URL)
+                .font(.footnote.monospaced())
+                .onAppear { draft = siteBase }
+            HStack {
+                Button("Save host") {
+                    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    siteBase = trimmed
+                    draft = trimmed
+                }
+                .buttonStyle(.bordered)
+                Button("Use tetherless.dev") {
+                    siteBase = ""
+                    draft = ""
+                }
+                .buttonStyle(.bordered)
+            }
+            Text(siteBase.isEmpty ? "Using default tetherless.dev" : "Override: \(siteBase)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+        }
+    }
+}
+
 /// Shows which FairPlay backends the site reports as configured.
 private struct DecryptBackendsStatusRow: View {
     @State private var lines: [String] = ["Tap Refresh"]
@@ -391,10 +425,11 @@ private struct FairPlayAdvancedSettingsSection: View {
     var body: some View {
         Section {
             DecryptBackendsStatusRow()
+            FairPlayDecryptHostField()
         } header: {
             Text("Server · FairPlay host")
         } footer: {
-            Text("Preferred: run the site on a rented Mac (FAIRPLAY_HOST=mac, DECRYPT_BACKENDS=unfairplay) so enroll + decrypt stay there. Linux hosts need a copied enrollment model / credential.bin. No jailbreak or TrollStore.")
+            Text("Preferred: run the site on a rented Apple Silicon Mac (FAIRPLAY_HOST=mac, DECRYPT_BACKENDS=unfairplay) with UnfairPlay enrolled. Set Decrypt site URL only if that Mac (or another host) serves the TetherLess site API. Leave blank for tetherless.dev. No jailbreak or TrollStore.")
         }
 
         Section {
@@ -402,7 +437,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Optional · Phone Worker")
         } footer: {
-            Text("Not needed for Linux-only decrypt. Only used when DECRYPT_BACKENDS explicitly includes phone.")
+            Text("Not needed for Mac/Linux offline decrypt. Only used when DECRYPT_BACKENDS explicitly includes phone.")
         }
 
         Section {
