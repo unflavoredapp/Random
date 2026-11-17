@@ -511,26 +511,6 @@ final class AppleIDStore: ObservableObject {
         pendingStoreAuthCode = digits
         pendingStoreSession = nil
 
-        // Prefer finishing via iPadn MZFinance (password+code) when we still have the pending password.
-        let pendingPW = Keychain.getSessionSecret(Self.passwordPrefix + "pending")
-            ?? Keychain.getSecret(Self.passwordPrefix + "pending")
-            ?? ""
-        let pendingEmail = draftEmail.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if !pendingPW.isEmpty, !pendingEmail.isEmpty {
-            do {
-                try await signInViaIPadnStore(email: pendingEmail, password: pendingPW, code: digits)
-                return
-            } catch AppStoreClientError.needsTwoFactor {
-                // Wrong / burned code — stay on 2FA UI.
-                lastError = "That code didn’t unlock Store. Tap Resend or enter a fresh code."
-                authPhase = .awaitingTwoFactor
-                return
-            } catch {
-                // Fall through to GSA + Store piggyback.
-            }
-        }
-
-
         var pw = Keychain.getSessionSecret(Self.passwordPrefix + "pending")
             ?? Keychain.getSecret(Self.passwordPrefix + "pending")
             ?? ""
@@ -551,49 +531,69 @@ final class AppleIDStore: ObservableObject {
             return
         }
 
-        // 1) Best case: MZFinance accepts the same digits (SMS-style OTPs).
-        // HSA2 Allow-sheet codes often do NOT — they’re for AuthKit / MacBook Pro sign-in.
-        // Never block portal on that failure; complete the first trust, then mint Store
-        // password-only from the warm session (no second text).
-        statusMessage = "Trying Store with the same code…"
-        do {
-            pendingStoreSession = try await authenticateStoreWithRetries(
-                email: email,
-                password: pw,
-                authCode: digits
-            )
-        } catch {
-            pendingStoreSession = nil
+        let gsaPending = GSAAuthClient.shared.hasPendingTwoFactor
+
+        // Path A — Store-first sign-in (iPadn MZFinance). That flow sets awaitingTwoFactor
+        // without starting GrandSlam. Never fall through to GSA submitTwoFactor or we hit
+        // missingPendingAuth ("Start Apple ID sign-in again… Store unlock also failed").
+        if !gsaPending {
+            statusMessage = "Unlocking Store with verification code…"
+            do {
+                try await signInViaIPadnStore(email: email, password: pw, code: digits)
+                return
+            } catch AppStoreClientError.needsTwoFactor {
+                lastError = "That code didn’t unlock Store. Tap Resend or enter a fresh code."
+                authPhase = .awaitingTwoFactor
+                statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
+                return
+            } catch {
+                // One more direct MZFinance attempt with the same credentials.
+                do {
+                    let store = try await authenticateStoreWithRetries(
+                        email: email,
+                        password: pw,
+                        authCode: digits
+                    )
+                    await finishRealSignInWithStoreOnly(email: email, password: pw, store: store)
+                    return
+                } catch AppStoreClientError.needsTwoFactor {
+                    lastError = "That code didn’t unlock Store. Tap Resend or enter a fresh code."
+                } catch {
+                    lastError = error.localizedDescription
+                        + " Try Resend for a fresh code, or Sign Out / Sign In."
+                }
+                authPhase = .awaitingTwoFactor
+                statusMessage = "Allow this sign-in on a trusted device, then enter the 6-digit code."
+                return
+            }
         }
 
-        statusMessage = pendingStoreSession?.isUsable == true
-            ? "Store unlocked — finishing Apple ID…"
-            : "Finishing Apple ID trust — Store will unlock next…"
-
+        // Path B — GrandSlam trusted-device / SMS challenge is live.
+        // Submit GSA FIRST. HSA2 Allow-sheet codes are for AuthKit; burning them on
+        // MZFinance first used to invalidate the pending challenge (missingPendingAuth).
+        statusMessage = "Finishing Apple ID trust…"
         do {
             let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
-            // Keep Allow/SMS digits for PET+code / password+code Store mint after GSA.
             await finishRealSignIn(session: session, password: pw)
         } catch {
-            if let storeOnly = pendingStoreSession, storeOnly.isUsable {
-                await finishRealSignInWithStoreOnly(
+            // Recovery: if MZFinance still accepts the digits, finish Store-only.
+            do {
+                let store = try await authenticateStoreWithRetries(
                     email: email,
                     password: pw,
-                    store: storeOnly
+                    authCode: digits
                 )
-                lastError = nil
-                statusMessage = "Signed in · free & purchased downloads ready"
-            } else {
-                // Surface Store unlock failure when portal 2FA also failed — don't look signed-in.
-                if pendingStoreSession == nil {
-                    lastError = error.localizedDescription
-                        + " Store unlock with that code also failed — try Resend, or Sign Out / Sign In."
-                } else {
-                    lastError = error.localizedDescription
+                if store.isUsable {
+                    await finishRealSignInWithStoreOnly(email: email, password: pw, store: store)
+                    return
                 }
-                statusMessage = twoFactorPromptMessage()
-                authPhase = .awaitingTwoFactor
+            } catch {
+                // Keep the original GSA error below.
             }
+            lastError = error.localizedDescription
+                + " Try Resend, or Sign Out / Sign In."
+            statusMessage = twoFactorPromptMessage()
+            authPhase = .awaitingTwoFactor
         }
     }
 
