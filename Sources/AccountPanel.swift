@@ -36,7 +36,8 @@ final class AppNav: ObservableObject {
     func goPair() { goAccount(.pair) }
     func goFiles() { goAccount(.files) }
     func goLibrary() { goAccount(.library) }
-    func goSettings() { goAccount(.settings) }
+    /// Settings live inline on Account — land on the tab root (no nested Settings push).
+    func goSettings() { goAccount(nil) }
     func goInstallation() { goAccount(.installation) }
     func goSearch() { go(.search) }
     func goDownloads() { go(.downloads) }
