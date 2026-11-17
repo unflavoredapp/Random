@@ -257,17 +257,35 @@ enum DecryptCompanionPackager {
             .first(where: { $0.pathExtension == "app" }) else {
             throw DecryptError("No Payload/*.app in the encrypted IPA to embed.")
         }
-        // Keep a companion-local copy of the full encrypted IPA so FairPlay can unpack it
-        // even when App Group / host Documents stamps are invisible (CARROT / TestFlight EPERM).
+        // Free Apple ID certs strip App Groups — host Documents stamps are invisible to the
+        // companion (Roblox/CARROT/TestFlight EPERM screenshots). Always embed the IPA.
+        try Self.bundleEncryptedSourceIPA(ipa, into: companionApp, progress: progress)
+        return try stageEmbeddedPayload(from: srcApp, into: companionApp, sourceLabel: "full IPA", progress: progress)
+    }
+
+    /// Copy the Store IPA into the companion `.app` as `EncryptedSource.ipa` (required when App Group is stripped).
+    private static func bundleEncryptedSourceIPA(
+        _ ipa: URL,
+        into companionApp: URL,
+        progress: ((String) -> Void)?
+    ) throws {
+        let fm = FileManager.default
         let bundled = companionApp.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
         try? fm.removeItem(at: bundled)
         do {
             try fm.copyItem(at: ipa, to: bundled)
-            progress?("Bundled EncryptedSource.ipa for FairPlay (\(ByteCountFormatter.string(fromByteCount: (try? fm.attributesOfItem(atPath: bundled.path)[.size] as? Int64) ?? 0, countStyle: .file)))")
         } catch {
-            progress?("Could not bundle EncryptedSource.ipa (\(error.localizedDescription)) — will rely on App Group stamp.")
+            throw DecryptError(
+                "Couldn't bundle EncryptedSource.ipa for FairPlay (\(error.localizedDescription)). Free certs can't use App Group stamps — re-run Get with enough free storage."
+            )
         }
-        return try stageEmbeddedPayload(from: srcApp, into: companionApp, sourceLabel: "full IPA", progress: progress)
+        let bytes = (try? fm.attributesOfItem(atPath: bundled.path)[.size] as? Int64) ?? 0
+        guard bytes > 1_000_000 else {
+            throw DecryptError("EncryptedSource.ipa is too small (\(bytes) bytes) — Store download looks incomplete. Retry Get.")
+        }
+        progress?(
+            "Bundled EncryptedSource.ipa for FairPlay (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))) — companion can unpack without App Group."
+        )
     }
 
     /// Slim-embed a live `/Bundle/Application/…/*.app` install into EmbeddedPayload.
@@ -282,14 +300,11 @@ enum DecryptCompanionPackager {
               isDir.boolValue else {
             throw DecryptError("Installed app path missing: \(installedApp.lastPathComponent).")
         }
-        // If Get already retained an encrypted IPA, bundle it so companion isn't stuck on
-        // EmbeddedPayload-only when the App Group stamp is host-private.
+        // Live-install embed still needs EncryptedSource.ipa when App Group is stripped.
         if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath() {
             let src = URL(fileURLWithPath: stamped.path)
-            let bundled = companionApp.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
-            try? FileManager.default.removeItem(at: bundled)
-            if (try? FileManager.default.copyItem(at: src, to: bundled)) != nil {
-                progress?("Bundled stamped EncryptedSource.ipa alongside live-install embed")
+            if FileManager.default.fileExists(atPath: src.path) {
+                try? Self.bundleEncryptedSourceIPA(src, into: companionApp, progress: progress)
             }
         }
         return try stageEmbeddedPayload(
