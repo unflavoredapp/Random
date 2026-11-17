@@ -1241,10 +1241,22 @@ enum FairPlayDecrypt {
 
         func consider(_ url: URL?, trustIfUnreadable: Bool = false) {
             guard let url else { return }
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return }
             let path = url.standardizedFileURL.path
             guard !seen.contains(path) else { return }
+            var isDir: ObjCBool = false
+            let exists = fm.fileExists(atPath: url.path, isDirectory: &isDir)
+            if !exists {
+                // Same-device sandbox often hides other apps' FairPlay binaries from
+                // fileExists (Flutter Runner.app → empty scan). Still trust named seeds
+                // on live installs so FairPlay can mremap; packaging should prefer IPA.
+                if trustIfUnreadable && liveInstall {
+                    progress?("Trusting live path (sandbox hid fileExists): \(url.lastPathComponent)")
+                    seen.insert(path)
+                    out.append(url)
+                }
+                return
+            }
+            guard !isDir.boolValue else { return }
             // Live App Store installs: `open()` of FairPlay binaries often fails (EPERM) or
             // hangs. Trusted candidates (CFBundleExecutable, frameworks, Flutter seeds,
             // SC_Info siblings) are included without a magic read.
@@ -1467,11 +1479,26 @@ enum FairPlayDecrypt {
                 progress?("Force-including main executable \(main.lastPathComponent)…")
                 out.append(main)
             } else {
-                let fallback = root.appendingPathComponent(root.deletingPathExtension().lastPathComponent)
-                var isDir: ObjCBool = false
-                if fm.fileExists(atPath: fallback.path, isDirectory: &isDir), !isDir.boolValue {
-                    progress?("Force-including basename executable \(fallback.lastPathComponent)…")
+                // bundleExecutableURL requires fileExists — synthesize from Info.plist /
+                // basename when sandbox hides the live binary (Cake Wallet Runner.app).
+                let infoURL = root.appendingPathComponent("Info.plist")
+                let info = withTimeout(seconds: 5) {
+                    NSDictionary(contentsOf: infoURL) as? [String: Any]
+                } ?? nil
+                let exeName = (info?["CFBundleExecutable"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                let candidates = [
+                    exeName.flatMap { $0.isEmpty ? nil : root.appendingPathComponent($0) },
+                    root.appendingPathComponent("Runner"),
+                    root.appendingPathComponent(root.deletingPathExtension().lastPathComponent),
+                ].compactMap { $0 }
+                for fallback in candidates {
+                    let path = fallback.standardizedFileURL.path
+                    guard !seen.contains(path) else { continue }
+                    progress?("Force-including executable path \(fallback.lastPathComponent)…")
+                    seen.insert(path)
                     out.append(fallback)
+                    break
                 }
             }
             _ = withTimeout(seconds: 3, work: { collectFromSCInfo(in: root); return true })
