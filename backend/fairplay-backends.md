@@ -1,93 +1,97 @@
 # FairPlay decrypt backends
 
-TetherLess decrypt jobs (`POST /api/decrypt`) can run through one or more backends.
-Order is controlled by `DECRYPT_BACKENDS` (comma-separated). The first backend that
-produces a clear IPA wins; failures fall through to the next.
+TetherLess decrypt jobs (`POST /api/decrypt`) run through backends listed in
+`DECRYPT_BACKENDS`. **Default is `fairplay-decrypt` only** — a valid 16-byte
+`credential.bin` is required so offline decrypt stays correct.
 
 ```bash
-# Example: try Linux offline tools, then unfaird, then the iPhone worker
-DECRYPT_BACKENDS=fairplay-decrypt,ipadecrypt,ipa-decrypter,unfaird,phone
-```
-
-Default is `phone` (existing Phone Worker).
-
-Status: `GET /api/decrypt/backends` and Admin → Telegram decrypt bot.
-
----
-
-## 1. `phone` — iPhone Phone Worker
-
-On-device FairPlay via TetherLess (unchanged).
-
-```bash
-DECRYPT_WORKER_TOKEN=shared-secret
-```
-
-In the app: **Account → Settings → FairPlay Decrypt → Phone Worker** — same token, keep the app open.
-
----
-
-## 2. `fairplay-decrypt` — [EthanArbuckle/fairplay-decrypt](https://github.com/EthanArbuckle/fairplay-decrypt)
-
-Linux/macOS CLI. Needs a 16-byte `credential.bin` (mint once from a jailbroken device).
-
-```bash
+# Default (forced credential.bin path)
+DECRYPT_BACKENDS=fairplay-decrypt
+FAIRPLAY_REQUIRE_CREDENTIAL=1
 FAIRPLAY_CREDENTIAL_BIN=/var/lib/tetherless/credential.bin
 FAIRPLAY_DECRYPT_BIN=/opt/fairplay-decrypt/decrypt.py
 FAIRPLAY_DECRYPT_PYTHON=python3
-# Optional: download encrypted IPA when job dir has no encrypted-source.ipa
 FAIRPLAY_IPATOOL_BIN=ipatool
 ```
 
-Install the repo on the server, create a venv, pip install requirements, mint credential once.
+Optional extras (explicit opt-in):
+
+```bash
+DECRYPT_BACKENDS=fairplay-decrypt,ipadecrypt,ipa-decrypter,unfaird,phone
+```
+
+Status: `GET /api/decrypt/backends` and Admin → Telegram decrypt bot.
+
+Jobs **refuse to start** when `FAIRPLAY_REQUIRE_CREDENTIAL=1` (default) and
+`credential.bin` is missing or not exactly **16 bytes**.
 
 ---
 
-## 3. `ipadecrypt` — [londek/ipadecrypt](https://github.com/londek/ipadecrypt)
+## 1. `fairplay-decrypt` (default) — [EthanArbuckle/fairplay-decrypt](https://github.com/EthanArbuckle/fairplay-decrypt)
 
-All-in-one CLI (download + decrypt).
+1. Mint once from a jailbroken device (`credential-retrieval` → `credential.bin`).
+2. Put the file on the server and point `FAIRPLAY_CREDENTIAL_BIN` at it.
+3. Install the Python decryptor; set `FAIRPLAY_DECRYPT_BIN`.
+4. Provide `ipatool` (or drop `encrypted-source.ipa` into the job dir).
+
+```bash
+# Validate size
+wc -c /var/lib/tetherless/credential.bin   # must print: 16 …
+```
+
+---
+
+## 2. `ipadecrypt` — [londek/ipadecrypt](https://github.com/londek/ipadecrypt)
 
 ```bash
 IPADECRYPT_BIN=/usr/local/bin/ipadecrypt
 ```
 
-Bootstrap credentials on the host once (`ipadecrypt` docs). Jobs call:
-
-`ipadecrypt decrypt <store-url> --output <dir>/ipadecrypt-out.ipa --no-on-device`
+Still subject to `FAIRPLAY_REQUIRE_CREDENTIAL` when that flag is on (keeps the
+account credential story consistent). Prefer minting with fairplay-decrypt and
+keeping one `credential.bin` as source of truth.
 
 ---
 
-## 4. `ipa-decrypter` — [ac0d3r/ipa-decrypter](https://github.com/ac0d3r/ipa-decrypter)
-
-HTTP server (Docker). Upload credentials in its admin UI; TetherLess queues jobs against it.
+## 3. `ipa-decrypter` — [ac0d3r/ipa-decrypter](https://github.com/ac0d3r/ipa-decrypter)
 
 ```bash
 IPA_DECRYPTER_URL=http://127.0.0.1:8787
-IPA_DECRYPTER_TOKEN=   # optional Bearer
+IPA_DECRYPTER_TOKEN=
 ```
 
-Expects `POST /api/jobs` `{ "url" }` → `{ "id" }`, poll `GET /api/jobs/:id`, download when done.
+Upload the same `credential.bin` in its admin UI for each Apple ID.
 
 ---
 
-## 5. `unfaird` — jailbroken device daemon
-
-LAN fallback used by ipa-decrypter-style stacks (default port **6347**).
+## 4. `unfaird` — jailbroken LAN daemon
 
 ```bash
 UNFAIRD_URL=http://192.168.1.20:6347
-UNFAIRD_TOKEN=   # optional
 ```
 
-Health: `GET /health`. Decrypt: `POST /decrypt` with `{ "url", "adamId?" }` — IPA bytes or JSON with `downloadUrl`.
+Opt-in fallback only — not the default.
+
+---
+
+## 5. `phone` — iPhone Phone Worker
+
+On-device FairPlay via TetherLess. **Not default.** Add `phone` to
+`DECRYPT_BACKENDS` only if you want the iPhone to claim leftover jobs.
+
+```bash
+DECRYPT_WORKER_TOKEN=shared-secret
+```
+
+App: **Account → Settings → FairPlay Decrypt → Phone Worker**.
 
 ---
 
 ## App ↔ server flow
 
 1. App / Telegram / site → `POST /api/decrypt` `{ url }`
-2. Server tries backends in `DECRYPT_BACKENDS` order
-3. Clear IPA lands in the job dir → same cache / `/api/ipa/file/:up` path as today
-4. App downloads clear IPA → Sign → Install
+2. Server verifies `credential.bin` (16 bytes) when required
+3. Tries backends in order → clear IPA → `/api/ipa/file/:up`
+4. App downloads → Sign → Install
 
-Device-channel Gets (companion FairPlay on this iPhone) are unchanged and do not use these backends.
+Device-channel Gets (companion FairPlay on this iPhone) are unchanged.

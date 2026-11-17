@@ -514,16 +514,21 @@ function create({ db /*, secret */ }) {
   async function status() {
     const fp = fairplayBackends.backendStatus();
     const wantsPhone = fp.backends.includes("phone");
+    const cred = fp.credential || {};
     let error = "";
-    if (!BOT_TOKEN) {
+    if (fp.requireCredential && !cred.ready) {
       error =
-        "Set TELEGRAM_BOT_TOKEN (optional). Decrypt queue uses DECRYPT_BACKENDS — see server/fairplay-backends.md.";
+        cred.error ||
+        "Set FAIRPLAY_CREDENTIAL_BIN to a valid 16-byte credential.bin (fairplay-decrypt).";
     } else if (wantsPhone && !WORKER_TOKEN) {
       error = "Set DECRYPT_WORKER_TOKEN and enable Phone Worker in the iOS app (or drop phone from DECRYPT_BACKENDS).";
+    } else if (!BOT_TOKEN) {
+      error =
+        "TELEGRAM_BOT_TOKEN optional. Decrypt defaults to credential.bin (fairplay-decrypt) — see server/fairplay-backends.md.";
     }
     return {
       lib: true,
-      mode: fp.backends.join("+") || "phone",
+      mode: fp.backends.join("+") || "fairplay-decrypt",
       authed: !!BOT_TOKEN,
       who: BOT_TOKEN ? { name: "Bot API", username: BOT_USERNAME } : {},
       workerConfigured: !!WORKER_TOKEN,
