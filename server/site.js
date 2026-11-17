@@ -1359,7 +1359,7 @@ function mountSite(web, d0) {
               filename: `${(payload.name || "App").replace(/[^\w.-]+/g, "_")}.ipa`,
               contentType: "application/octet-stream",
             });
-            form.append("caption", `${payload.name || "App"} ${payload.ver || ""} · decrypted on-device`.trim());
+            form.append("caption", `${payload.name || "App"} ${payload.ver || ""} · FairPlay decrypt`.trim());
             await new Promise((resolve, reject) => {
               form.submit(`https://api.telegram.org/bot${process.env.TELEGRAM_BOT_TOKEN}/sendDocument`, (err, res) => {
                 if (err) return reject(err);

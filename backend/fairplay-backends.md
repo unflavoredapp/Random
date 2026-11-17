@@ -27,6 +27,12 @@ export UNFAIRPLAY_MODEL_DIR="$HOME/unfairplay/models"
 export FAIRPLAY_IPATOOL_BIN=ipatool
 # FAIRPLAY_REQUIRE_CREDENTIAL defaults off on Mac
 
+# Optional: your own Telegram decrypt bot (BotFather → TELEGRAM_BOT_TOKEN).
+# Same Mac process polls the bot; paste apps.apple.com links → UnfairPlay → IPA back in chat.
+# export TELEGRAM_BOT_TOKEN=...
+# export TELEGRAM_BOT_USERNAME=YourDecryptBot
+# export TELEGRAM_ALLOWED_IDS=123456789   # your numeric chat id(s); omit = open to anyone
+
 # 4) Run the TetherLess Node site on THIS Mac (same process as production)
 # Then in the iOS app: Account → Settings → FairPlay Decrypt → Decrypt site URL
 # set to https://YOUR-MAC-HOST/  (HTTPS required for App Transport; or keep tetherless.dev
