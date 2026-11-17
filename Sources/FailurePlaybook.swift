@@ -74,17 +74,27 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-gate",
             title: "App Store Media & Purchases sign-in needed",
-            summary: "Sign in once in the App Store (or Settings → your name → Media & Purchases) with the same Apple ID, then tap I’ve signed in on this iPhone and retry the download.",
-            matches: ["before silent download", "before companion decrypt", "i’ve signed in on this iphone", "i've signed in on this iphone", "media & purchases", "confirming fairplay keys", "fairplay keys ready"],
-            actionTitle: "I’ve signed in on this iPhone",
-            action: .acknowledgeFairPlay
+            summary: "Capture FairPlay keys once: open App Store / Media & Purchases with the same Apple ID, return here, confirm, then retry the download.",
+            matches: [
+                "before silent download",
+                "before companion decrypt",
+                "capture fairplay keys",
+                "get fairplay keys",
+                "i’ve signed in on this iphone",
+                "i've signed in on this iphone",
+                "media & purchases",
+                "confirming fairplay keys",
+                "fairplay keys ready",
+            ],
+            actionTitle: "Capture FairPlay keys",
+            action: .openAppStoreSignIn
         ),
         FailurePlay(
             id: "cryptid",
             title: "FairPlay still encrypted (cryptid)",
-            summary: "iOS never stored Media & Purchases keys for this Apple ID. Sign in once in the App Store (Media & Purchases), then tap I’ve signed in on this iPhone.",
+            summary: "iOS never stored Media & Purchases keys for this Apple ID. Open the key capture sheet, sign in once, confirm, then retry.",
             matches: ["cryptid", "fairplay", "still encrypted", "decryption keys"],
-            actionTitle: "Open App Store sign-in",
+            actionTitle: "Capture FairPlay keys",
             action: .openAppStoreSignIn
         ),
         FailurePlay(
@@ -107,8 +117,9 @@ enum FailurePlaybook {
     static func run(_ play: FailurePlay) async {
         switch play.action {
         case .openAppStoreSignIn:
-            // Redirect with the active session; grab keys automatically on return.
+            // Clear stale ack and open the capture sheet → App Store / Media & Purchases.
             AppStoreDecryptGuide.setAcknowledged(false, email: AppleIDStore.shared.email)
+            FairPlayKeysFetcher.shared.presentCaptureSheet()
             FairPlayKeysFetcher.shared.startFetchFromSession()
         case .acknowledgeFairPlay:
             let email = AppleIDStore.shared.email
@@ -117,6 +128,7 @@ enum FailurePlaybook {
                 AppNav.shared.goAccount()
                 return
             }
+            FairPlayKeysFetcher.shared.presentCaptureSheet()
             FairPlayKeysFetcher.shared.markGrabbedManually()
         case .reauthStore:
             // Silent remint — do not wipe the account or force a full login.

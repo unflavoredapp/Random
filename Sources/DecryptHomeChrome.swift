@@ -516,7 +516,7 @@ struct DecryptPickIPACard: View {
 }
 
 
-/// One-time App Store sign-in — redirects with the active session, then shows keys grabbed.
+/// One-time App Store sign-in — guided capture sheet with verify + confirm.
 struct DecryptAppStoreSignInHint: View {
     /// Compact layout for decrypt-failure callouts.
     var compact: Bool = false
@@ -533,7 +533,9 @@ struct DecryptAppStoreSignInHint: View {
                 switch keys.phase {
                 case .grabbed:
                     grabbedBody
-                case .waitingForReturn:
+                case .confirmSignIn:
+                    confirmBody
+                case .waitingForReturn, .redirecting, .verifying:
                     waitingBody
                 default:
                     if !email.isEmpty, AppStoreDecryptGuide.isAcknowledged(email: email) {
@@ -560,7 +562,7 @@ struct DecryptAppStoreSignInHint: View {
                         .font(.headline.weight(.semibold))
                         .foregroundStyle(.white)
                 }
-                Text("TetherLess uses your signed-in Apple ID session. Tap Get keys to open the App Store — sign in once with that account (Media & Purchases). When you return, we’ll mark the keys grabbed for companion decrypt.")
+                Text("Open App Store account or Media & Purchases with your session Apple ID. When you return, TetherLess verifies on-device license folders and asks you to confirm before companion decrypt.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.62))
                     .fixedSize(horizontal: false, vertical: true)
@@ -591,25 +593,83 @@ struct DecryptAppStoreSignInHint: View {
                 HStack(spacing: 10) {
                     ProgressView()
                         .tint(TetherlessPalette.accent)
-                    Text("Waiting for App Store…")
+                    Text(waitingTitle)
                         .font(.headline.weight(.semibold))
                         .foregroundStyle(.white)
                 }
                 Text(keys.banner
-                     ?? "Sign in with \(email.isEmpty ? "your Apple ID" : email), then return to TetherLess — we’ll grab the keys for this session.")
+                     ?? "Sign in with \(email.isEmpty ? "your Apple ID" : email), then return — we’ll verify and ask you to confirm.")
                     .font(.subheadline)
                     .foregroundStyle(.white.opacity(0.62))
                     .fixedSize(horizontal: false, vertical: true)
+                if !keys.verifyLines.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(keys.verifyLines.enumerated()), id: \.offset) { _, line in
+                            Text("· \(line)")
+                                .font(.caption)
+                                .foregroundStyle(.white.opacity(0.5))
+                        }
+                    }
+                }
                 Button {
-                    keys.markGrabbedManually()
+                    keys.presentCaptureSheet()
                 } label: {
-                    Text("I’ve signed in — grab keys now")
+                    Text("Open capture sheet")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
                         .frame(maxWidth: .infinity)
                         .padding(.vertical, 11)
                         .background(.white.opacity(0.10), in: Capsule())
                         .overlay(Capsule().strokeBorder(.white.opacity(0.16), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                if case .waitingForReturn = keys.phase {
+                    Button {
+                        keys.markGrabbedManually()
+                    } label: {
+                        Text("I’ve signed in — verify now")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+
+    private var confirmBody: some View {
+        GlassCard(corner: 22) {
+            VStack(alignment: .leading, spacing: 12) {
+                Label("Confirm key capture", systemImage: "checkmark.shield")
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                if case .confirmSignIn(let e, let hints) = keys.phase {
+                    Text(hints > 0
+                         ? "Found \(hints) license folder(s). Confirm you signed in as \(e)."
+                         : "Confirm you signed in to Media & Purchases as \(e).")
+                        .font(.subheadline)
+                        .foregroundStyle(.white.opacity(0.62))
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Button {
+                    keys.confirmGrabbed()
+                } label: {
+                    Text("Confirm keys grabbed")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(TetherlessPalette.accent, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                Button {
+                    keys.presentCaptureSheet()
+                } label: {
+                    Text("Open capture sheet")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.plain)
             }
@@ -627,8 +687,12 @@ struct DecryptAppStoreSignInHint: View {
                 Label("Keys grabbed for this session", systemImage: "checkmark.seal.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(TetherlessPalette.success)
-            } else if case .waitingForReturn = keys.phase {
-                Label("Waiting for App Store return…", systemImage: "arrow.triangle.2.circlepath")
+            } else if case .confirmSignIn = keys.phase {
+                Label("Confirm key capture", systemImage: "checkmark.shield")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(TetherlessPalette.accent)
+            } else if keys.isWaiting {
+                Label("Capturing FairPlay keys…", systemImage: "arrow.triangle.2.circlepath")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(TetherlessPalette.accent)
             } else {
@@ -651,29 +715,51 @@ struct DecryptAppStoreSignInHint: View {
                     Text("Keys grabbed")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.white)
-                    Text(email.isEmpty
-                         ? "FairPlay keys ready for companion decrypt."
-                         : "Grabbed for \(email). Companion handoff will confirm this before packaging.")
+                    Text(grabbedDetail)
                         .font(.caption)
                         .foregroundStyle(.white.opacity(0.5))
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 4)
-                Button("Refresh") { keys.startFetchFromSession() }
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(TetherlessPalette.accent)
+                Button("Refresh") {
+                    keys.presentCaptureSheet()
+                    keys.startFetchFromSession()
+                }
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(TetherlessPalette.accent)
             }
+        }
+    }
+
+    private var grabbedDetail: String {
+        if case .grabbed(let e, _, let hints) = keys.phase {
+            let base = e.isEmpty
+                ? "FairPlay keys ready for companion decrypt."
+                : "Grabbed for \(e)."
+            return hints > 0 ? "\(base) \(hints) license folder(s) seen." : base
+        }
+        return email.isEmpty
+            ? "FairPlay keys ready for companion decrypt."
+            : "Grabbed for \(email). Companion handoff will confirm this before packaging."
+    }
+
+    private var waitingTitle: String {
+        switch keys.phase {
+        case .redirecting: return "Opening App Store…"
+        case .verifying: return "Verifying keys…"
+        default: return "Waiting for App Store…"
         }
     }
 
     private var fetchButtons: some View {
         VStack(spacing: 8) {
             Button {
+                keys.presentCaptureSheet()
                 keys.startFetchFromSession(preferSettings: false)
             } label: {
                 Label(
-                    keys.isWaiting ? "Reopen App Store" : "Get keys from App Store",
-                    systemImage: "bag.fill"
+                    keys.isWaiting ? "Reopen capture" : "Get keys",
+                    systemImage: "key.fill"
                 )
                 .font(.body.weight(.semibold))
                 .foregroundStyle(.white)
@@ -685,9 +771,10 @@ struct DecryptAppStoreSignInHint: View {
             .disabled(email.isEmpty && !store.isSignedIn)
 
             Button {
+                keys.presentCaptureSheet()
                 keys.startFetchFromSession(preferSettings: true)
             } label: {
-                Text("Open Media & Purchases (Settings)")
+                Text("Open Media & Purchases")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)
@@ -697,11 +784,22 @@ struct DecryptAppStoreSignInHint: View {
             }
             .buttonStyle(.plain)
 
-            if !keys.isGrabbed, !email.isEmpty, !keys.isWaiting {
+            if case .confirmSignIn = keys.phase {
                 Button {
+                    keys.confirmGrabbed()
+                } label: {
+                    Text("Confirm keys grabbed")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(TetherlessPalette.accent)
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.plain)
+            } else if !keys.isGrabbed, !email.isEmpty, !keys.isWaiting {
+                Button {
+                    keys.presentCaptureSheet()
                     keys.markGrabbedManually()
                 } label: {
-                    Text("Already signed in — mark keys grabbed")
+                    Text("Already signed in — verify & confirm")
                         .font(.caption.weight(.semibold))
                         .foregroundStyle(.white.opacity(0.7))
                         .frame(maxWidth: .infinity)

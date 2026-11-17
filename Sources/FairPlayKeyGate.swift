@@ -13,7 +13,7 @@ enum FairPlayKeyGateError: LocalizedError {
         switch self {
         case .notAcknowledged(let email):
             let who = email.isEmpty ? "your Apple Account" : email
-            return "Before companion decrypt, sign in once to the App Store (Media & Purchases) with \(who) on this iPhone, then tap “I’ve signed in on this iPhone” under Decrypt. That stores FairPlay keys iOS needs."
+            return "Before companion decrypt, capture FairPlay keys for \(who): open App Store / Media & Purchases, sign in once on this iPhone, then confirm in Get FairPlay keys."
         }
     }
 }
@@ -34,6 +34,8 @@ enum FairPlayKeyGate {
         }
         let email = email ?? AppleIDStore.shared.email
         guard AppStoreDecryptGuide.isAcknowledged(email: email) else {
+            // Surface the capture sheet so the user can finish Media & Purchases without hunting.
+            FairPlayKeysFetcher.shared.presentCaptureSheet()
             throw FairPlayKeyGateError.notAcknowledged(email)
         }
     }
