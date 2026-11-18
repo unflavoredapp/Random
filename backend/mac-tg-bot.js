@@ -18,7 +18,7 @@ const { spawn, spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
 const ipaCache = require("./mac-tg-ipa-cache");
 const urlLog = require("./mac-tg-url-log");
-const { renderProgressBanner } = require("./mac-tg-progress-banner");
+const { renderProgressBanner, renderDownloadThumb } = require("./mac-tg-progress-banner");
 
 const API_ROOT = String(process.env.TELEGRAM_API_ROOT || "https://api.telegram.org").replace(/\/+$/, "");
 const LOCAL_API =
@@ -371,6 +371,25 @@ function fetchStoreIcon(storeUrl) {
   return lookupStoreApp(storeUrl).iconPath || "";
 }
 
+/**
+ * Telegram document thumbnail: app icon + white download arrow (done-card art).
+ * Falls back to plain store icon if sharp thumb render fails.
+ */
+async function buildIpaDocumentThumb(storeUrl) {
+  const iconPath = storeUrl ? fetchStoreIcon(storeUrl) : "";
+  const dest = path.join(
+    os.tmpdir(),
+    `delvek-ipa-thumb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
+  );
+  const rendered = await renderDownloadThumb({
+    iconPath: iconPath || "",
+    dest,
+    size: 320,
+  });
+  if (rendered && fs.existsSync(rendered)) return rendered;
+  return iconPath || "";
+}
+
 function sendPhotoBotApi(chatId, photoPath, caption, replyMarkup) {
   const abs = path.resolve(photoPath);
   // --form-string keeps newlines/HTML in captions (plain -F breaks them).
@@ -466,16 +485,19 @@ function createProgressCard(chatId) {
     return bannerPath;
   }
 
-  async function makeBanner(stage, pct) {
+  async function makeBanner(stage, pct, { done } = {}) {
     return renderProgressBanner({
       name,
       // Card copy = cruel sideloading roast (real stage stays in logs).
-      stage: cruelReminder(pct, stage || lastStage),
-      pct,
+      stage: done
+        ? "IPA ready. Sideloading skill: zero."
+        : cruelReminder(pct, stage || lastStage),
+      pct: done ? 100 : pct,
       iconPath,
       dest: bannerFile(),
       tag: "delvek",
       brand: "DELVEK",
+      done: !!done,
     });
   }
 
@@ -598,8 +620,20 @@ function createProgressCard(chatId) {
         bannerPath = "";
       }
     },
-    /** Drop the live card once the IPA (with caption) is sent — no duplicate meta post. */
+    /**
+     * Morph to download-arrow “done” art briefly, then drop the card so only
+     * the IPA document (same arrow thumb) remains in chat.
+     */
     async finish() {
+      try {
+        const img = await makeBanner("Done", 100, { done: true });
+        if (img && messageId && hasPhoto) {
+          await editMessageMediaBotApi(chatId, messageId, img, "");
+          await new Promise((r) => setTimeout(r, 900));
+        }
+      } catch {
+        /* ignore — still clear */
+      }
       await this.clear();
     },
     async fail(err) {
@@ -1338,7 +1372,7 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   if (entry.diskPath && fs.existsSync(entry.diskPath)) {
     await card.setStage("Uploading…", 76);
     const fileName = displayIpaFileName(entry.fileName || path.basename(entry.diskPath));
-    const thumbPath = entry.storeUrl ? fetchStoreIcon(entry.storeUrl) : "";
+    const thumbPath = await buildIpaDocumentThumb(entry.storeUrl || "");
     const caption = buildCaption({
       bid: entry.bid,
       version: entry.version,
@@ -1458,7 +1492,7 @@ async function deliverResult(chatId, result, opts = {}) {
   const fileName = buildIpaFileName({ name, version });
   const caption = buildCaption({ bid, version, minIos, storeUrl });
   const markup = resultKeyboard();
-  const thumbPath = storeUrl ? fetchStoreIcon(storeUrl) : "";
+  const thumbPath = await buildIpaDocumentThumb(storeUrl);
   const adam = ipaCache.adamFromStoreUrl(storeUrl) || "";
 
   // Durable Mac copy used if Telegram file_id ever expires (prefer hardlink).
