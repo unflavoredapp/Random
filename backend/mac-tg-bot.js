@@ -648,10 +648,13 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     console.log(`[job] uploading via Premium session (${mb} MB) → ${peer}`);
     if (card) await card.setStage("Uploading…", 76);
     else await say(`uploading via Premium → ${peer} (${mb} MB)…`);
-    // Stage via Premium (≤4 GB cloud), bare file — then the *bot* re-sends so
-    // the IPA appears from IPA Agent, not as your outgoing purple bubble.
-    const prem = await sendDocumentPremium(chatId, filePath, fileName, "", {
+    // Stage via Premium WITH caption + Patch/Get VIP first (never bare — if bot
+    // re-send fails the user still sees the classic IPA look). Then the bot
+    // copyMessage’s it so the final document is from IPA Agent.
+    const markup = extras.replyMarkup || resultKeyboard();
+    const prem = await sendDocumentPremium(chatId, filePath, fileName, caption || "", {
       thumbPath: extras.thumbPath,
+      replyMarkup: markup,
       onProgress: (t) => {
         say(t);
       },
@@ -660,34 +663,31 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
       const stagedId = Number(prem.message_id);
       let copied = null;
       for (let attempt = 0; attempt < 3; attempt++) {
-        if (attempt) {
-          await new Promise((r) => setTimeout(r, 700 * attempt));
-        }
+        if (attempt) await new Promise((r) => setTimeout(r, 900 * attempt));
         copied = await tgApi("copyMessage", {
           chat_id: chatId,
           from_chat_id: chatId,
           message_id: stagedId,
           caption: caption || undefined,
           parse_mode: caption ? "HTML" : undefined,
-          reply_markup: extras.replyMarkup || undefined,
+          reply_markup: markup,
         }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
-        if (copied && copied.ok && copied.result) break;
+        if (copied && copied.ok && copied.result) {
+          await tgApi("deleteMessage", { chat_id: chatId, message_id: stagedId }).catch(() => {});
+          console.log("[job] bot produced IPA via copyMessage", copied.result.message_id);
+          return {
+            ok: true,
+            premium: true,
+            bot_resent: true,
+            message_id: copied.result.message_id,
+            chat_id: String(chatId),
+            result: copied.result,
+          };
+        }
       }
-      if (copied && copied.ok && copied.result) {
-        // Remove your staging upload so only the bot's IPA remains.
-        await tgApi("deleteMessage", { chat_id: chatId, message_id: stagedId }).catch(() => {});
-        console.log("[job] bot produced IPA via copyMessage", copied.result.message_id);
-        return {
-          ok: true,
-          premium: true,
-          bot_resent: true,
-          message_id: copied.result.message_id,
-          chat_id: String(chatId),
-          result: copied.result,
-        };
-      }
+      // Keep Premium message — it already has caption + Patch/Get VIP.
       console.warn(
-        "[job] bot copyMessage failed, leaving Premium staging message:",
+        "[job] bot copyMessage failed; keeping Premium IPA with caption/buttons:",
         (copied && copied.description) || "unknown"
       );
       return {
