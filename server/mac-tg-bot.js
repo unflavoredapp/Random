@@ -8,18 +8,33 @@
  *   source /users/client/.tetherless-mac.env
  *   node server/mac-tg-bot.js
  *
+ * Large IPA delivery (Premium does NOT raise Bot API limits):
+ *   • Cloud api.telegram.org → ~50 MB
+ *   • Local Bot API (TELEGRAM_API_ROOT) → up to 2000 MB via file://
+ *   • Premium user MTProto (TELEGRAM_API_ID + session) → up to 4 GB
+ *
  * App Store links → ipatool download + UnfairPlay.
  * TestFlight / any encrypted IPA → send the .ipa here, or drop it in the drop folder.
  */
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const http = require("http");
 const https = require("https");
 const { spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
 
-const TG_DOC_MAX = 49 * 1024 * 1024;
-const TG_GETFILE_MAX = 20 * 1024 * 1024; // Bot API download limit
+const API_ROOT = String(process.env.TELEGRAM_API_ROOT || "https://api.telegram.org").replace(/\/+$/, "");
+const LOCAL_API =
+  process.env.TELEGRAM_LOCAL_API === "1" ||
+  /localhost|127\.0\.0\.1/i.test(API_ROOT);
+const TG_DOC_MAX = Math.max(
+  1,
+  Number(process.env.TELEGRAM_UPLOAD_MAX_MB || (LOCAL_API ? 2000 : 50))
+) * 1024 * 1024;
+const TG_GETFILE_MAX = LOCAL_API
+  ? Math.max(TG_DOC_MAX, 4 * 1024 * 1024 * 1024)
+  : 20 * 1024 * 1024;
 
 const BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const BOT_USERNAME = String(process.env.TELEGRAM_BOT_USERNAME || "TetherLessDecryptBot").replace(/^@/, "");
@@ -29,6 +44,7 @@ const ALLOWED = String(process.env.TELEGRAM_ALLOWED_IDS || "")
   .filter(Boolean);
 const WORK = process.env.MAC_TG_WORK_DIR || path.join(os.tmpdir(), "tetherless-mac-tg");
 const DROP = process.env.MAC_TG_DROP_DIR || path.join(os.homedir(), "tetherless-drop");
+const PREMIUM_UPLOAD = path.join(__dirname, "mac-tg-premium-upload.py");
 
 if (!BOT_TOKEN) {
   console.error("Set TELEGRAM_BOT_TOKEN in ~/.tetherless-mac.env");
@@ -38,13 +54,20 @@ if (!BOT_TOKEN) {
 fs.mkdirSync(WORK, { recursive: true });
 fs.mkdirSync(DROP, { recursive: true });
 
-function tgApi(method, body) {
+function apiUrl(method) {
+  return `${API_ROOT}/bot${BOT_TOKEN}/${method}`;
+}
+
+function httpJson(url, body) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body || {});
-    const req = https.request(
+    const u = new URL(url);
+    const lib = u.protocol === "http:" ? http : https;
+    const req = lib.request(
       {
-        hostname: "api.telegram.org",
-        path: `/bot${BOT_TOKEN}/${method}`,
+        hostname: u.hostname,
+        port: u.port || (u.protocol === "http:" ? 80 : 443),
+        path: u.pathname + u.search,
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -69,32 +92,93 @@ function tgApi(method, body) {
   });
 }
 
-function sendDocument(chatId, filePath, caption) {
-  const stat = fs.statSync(filePath);
-  if (stat.size > TG_DOC_MAX) {
-    return Promise.resolve({
-      ok: false,
-      description: `IPA is ${(stat.size / 1024 / 1024).toFixed(1)} MB — Telegram bots cap ~50 MB. Saved on Mac: ${filePath}`,
-      tooLarge: true,
-      bytes: stat.size,
-    });
+function tgApi(method, body) {
+  return httpJson(apiUrl(method), body);
+}
+
+function sanitizeFilePart(s) {
+  return String(s || "")
+    .replace(/[^\w.+-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 60) || "App";
+}
+
+function readIpaMeta(ipaPath) {
+  const meta = { name: "", bid: "", version: "", minIos: "" };
+  try {
+    const listed = spawnSync("unzip", ["-Z1", ipaPath], { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+    const plistRel = String(listed.stdout || "")
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => /^Payload\/[^/]+\.app\/Info\.plist$/i.test(l));
+    if (!plistRel) return meta;
+    const raw = spawnSync("unzip", ["-p", ipaPath, plistRel], { encoding: "buffer", maxBuffer: 4 * 1024 * 1024 });
+    if (raw.status !== 0 || !raw.stdout || !raw.stdout.length) return meta;
+    const tmp = path.join(WORK, `plist-${Date.now()}.plist`);
+    fs.writeFileSync(tmp, raw.stdout);
+    const json = spawnSync("plutil", ["-convert", "json", "-o", "-", tmp], { encoding: "utf8", maxBuffer: 4 * 1024 * 1024 });
+    try {
+      fs.rmSync(tmp, { force: true });
+    } catch {
+      /* ignore */
+    }
+    if (json.status !== 0) return meta;
+    const p = JSON.parse(json.stdout || "{}");
+    meta.name = String(p.CFBundleDisplayName || p.CFBundleName || "").slice(0, 80);
+    meta.bid = String(p.CFBundleIdentifier || "").slice(0, 120);
+    meta.version = String(p.CFBundleShortVersionString || p.CFBundleVersion || "").slice(0, 40);
+    meta.minIos = String(p.MinimumOSVersion || "").slice(0, 20);
+  } catch {
+    /* best-effort */
   }
-  const r = spawnSync(
-    "curl",
-    [
-      "-sS",
-      "-X",
-      "POST",
-      `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`,
+  return meta;
+}
+
+function buildIpaFileName({ name, version }) {
+  const n = sanitizeFilePart(name);
+  const v = version ? `_v${sanitizeFilePart(version)}` : "";
+  return `${n}${v}-Tetherless.ipa`;
+}
+
+function buildCaption({ name, bid, version, minIos, storeUrl, mb }) {
+  const lines = [];
+  if (bid) lines.push(`📁 <code>${escapeHtml(bid)}</code>`);
+  const verBits = [];
+  if (version) verBits.push(`Version: ${escapeHtml(version)}`);
+  if (minIos) verBits.push(`${escapeHtml(minIos)}+`);
+  if (verBits.length) lines.push(`⚙️ ${verBits.join(" · ")}`);
+  if (storeUrl) lines.push(`🔗 <a href="${escapeHtml(storeUrl)}">App Store Link</a>`);
+  if (!lines.length) lines.push(`<b>${escapeHtml(name || "App")}</b> · ${mb} MB · Tetherless`);
+  else lines.push(`📦 ${mb} MB · Tetherless`);
+  return lines.join("\n");
+}
+
+function escapeHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function sendDocumentBotApi(chatId, filePath, fileName, caption) {
+  const abs = path.resolve(filePath);
+  const args = ["-sS", "-X", "POST", apiUrl("sendDocument"), "-F", `chat_id=${chatId}`, "-F", `parse_mode=HTML`];
+  if (caption) {
+    args.push("-F", `caption=${caption}`);
+  }
+  // Local Bot API: pass file:// so uploads can exceed 50 MB (up to ~2000 MB).
+  if (LOCAL_API) {
+    args.push("-F", `document=file://${abs}`);
+  } else {
+    args.push(
       "-F",
-      `chat_id=${chatId}`,
-      "-F",
-      `caption=${caption || ""}`,
-      "-F",
-      `document=@${filePath};type=application/octet-stream;filename=${path.basename(filePath).replace(/[^\w.-]+/g, "_") || "App.ipa"}`,
-    ],
-    { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }
-  );
+      `document=@${abs};type=application/octet-stream;filename=${fileName}`
+    );
+  }
+  // When using file://, still set a display name via an attach if supported — local API
+  // keeps the basename; copy to nicely named path before calling when possible.
+  const r = spawnSync("curl", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
   if (r.error) return Promise.reject(r.error);
   if (r.status !== 0) {
     return Promise.resolve({
@@ -109,11 +193,97 @@ function sendDocument(chatId, filePath, caption) {
   }
 }
 
+function premiumUploadConfigured() {
+  return !!(
+    process.env.TELEGRAM_API_ID &&
+    process.env.TELEGRAM_API_HASH &&
+    (process.env.TELEGRAM_SESSION || process.env.TELEGRAM_SESSION_STRING) &&
+    fs.existsSync(PREMIUM_UPLOAD)
+  );
+}
+
+function sendDocumentPremium(chatId, filePath, fileName, caption) {
+  const env = {
+    ...process.env,
+    TG_UPLOAD_CHAT_ID: String(chatId),
+    TG_UPLOAD_FILE: path.resolve(filePath),
+    TG_UPLOAD_FILENAME: fileName,
+    TG_UPLOAD_CAPTION: caption || "",
+  };
+  const r = spawnSync("python3", [PREMIUM_UPLOAD], {
+    encoding: "utf8",
+    maxBuffer: 8 * 1024 * 1024,
+    env,
+  });
+  if (r.error) return { ok: false, description: String(r.error.message || r.error) };
+  const out = String(r.stdout || "").trim();
+  const err = String(r.stderr || "").trim();
+  if (r.status !== 0) {
+    return { ok: false, description: (err || out || `premium upload exit ${r.status}`).slice(0, 300) };
+  }
+  try {
+    return JSON.parse(out || "{}");
+  } catch {
+    return { ok: true, description: out.slice(0, 200) };
+  }
+}
+
+async function sendDocument(chatId, filePath, fileName, caption) {
+  const stat = fs.statSync(filePath);
+  const mb = (stat.size / 1024 / 1024).toFixed(1);
+
+  // Premium user MTProto for big IPAs (up to 4 GB). Bot API cloud stays ~50 MB;
+  // local Bot API can take ≤2000 MB without a user session.
+  const forcePremium = process.env.TELEGRAM_PREMIUM_UPLOAD === "1";
+  const overCloud = stat.size > 49 * 1024 * 1024;
+  const needPremium = forcePremium || (overCloud && !LOCAL_API) || stat.size > TG_DOC_MAX;
+  if (premiumUploadConfigured() && needPremium) {
+    if (stat.size > 4 * 1024 * 1024 * 1024) {
+      return {
+        ok: false,
+        description: `IPA is ${mb} MB — over Telegram Premium’s 4 GB document cap. Saved: ${filePath}`,
+        tooLarge: true,
+      };
+    }
+    console.log(`[job] uploading via Premium user MTProto (${mb} MB)…`);
+    const prem = sendDocumentPremium(chatId, filePath, fileName, caption);
+    if (prem && prem.ok) return prem;
+    console.warn("[job] premium upload failed:", prem && prem.description);
+    // Fall through to Bot API / local API when premium fails.
+  }
+
+  if (stat.size > TG_DOC_MAX) {
+    const hint = premiumUploadConfigured()
+      ? "Premium upload failed and file exceeds Bot API limit."
+      : LOCAL_API
+        ? `Local Bot API cap is ~${Math.round(TG_DOC_MAX / 1024 / 1024)} MB.`
+        : "Cloud Bot API caps ~50 MB (Telegram Premium does not raise bot uploads). Set TELEGRAM_API_ROOT to a local Bot API (2 GB) or TELEGRAM_API_ID/HASH/SESSION for Premium user upload (4 GB).";
+    return {
+      ok: false,
+      description: `IPA is ${mb} MB — ${hint} Saved on Mac: ${filePath}`,
+      tooLarge: true,
+      bytes: stat.size,
+    };
+  }
+
+  return sendDocumentBotApi(chatId, filePath, fileName, caption);
+}
+
 function downloadTelegramFile(filePathOnTg, dest) {
   return new Promise((resolve, reject) => {
-    const url = `https://api.telegram.org/file/bot${BOT_TOKEN}/${filePathOnTg}`;
+    const url = LOCAL_API
+      ? // Local Bot API may return absolute paths from getFile.
+        (filePathOnTg.startsWith("/")
+          ? null
+          : `${API_ROOT}/file/bot${BOT_TOKEN}/${filePathOnTg}`)
+      : `${API_ROOT}/file/bot${BOT_TOKEN}/${filePathOnTg}`;
+    if (!url && filePathOnTg.startsWith("/")) {
+      fs.copyFile(filePathOnTg, dest, (err) => (err ? reject(err) : resolve(dest)));
+      return;
+    }
     const file = fs.createWriteStream(dest);
-    https
+    const lib = String(url).startsWith("http:") ? http : https;
+    lib
       .get(url, (res) => {
         if (res.statusCode !== 200) {
           reject(new Error(`Telegram file HTTP ${res.statusCode}`));
@@ -132,29 +302,31 @@ function chatAllowed(chatId) {
   return ALLOWED.includes(String(chatId));
 }
 
-function isStoreUrl(u) {
-  return /^https:\/\/(?:apps|itunes)\.apple\.com\//i.test(String(u || "").trim());
+function isStoreUrl(t) {
+  return /^https:\/\/(?:apps|itunes)\.apple\.com\//i.test(String(t || "").trim());
 }
 
-function isTestFlightUrl(u) {
-  return /^https:\/\/testflight\.apple\.com\//i.test(String(u || "").trim());
+function isTestFlightUrl(t) {
+  return /testflight\.apple\.com/i.test(String(t || ""));
 }
 
 function startScreenText() {
   const st = fairplayBackends.backendStatus();
-  const modelOk = !!(st.enrollmentModel && st.enrollmentModel.ready);
-  const unfairOk = !!(st.unfairplay && st.unfairplay.ready);
+  const uf = st.unfairplay && st.unfairplay.ready ? "ready" : "missing";
+  const model = st.enrollmentModel && st.enrollmentModel.ready ? "ready" : "missing";
+  const up = premiumUploadConfigured()
+    ? "Premium user ≤4 GB"
+    : LOCAL_API
+      ? `local Bot API ≤${Math.round(TG_DOC_MAX / 1024 / 1024)} MB`
+      : "cloud Bot API ≤50 MB";
   return (
-    `*Tetherless Decrypt*\n` +
-    `FairPlay IPA decrypt on this host.\n\n` +
-    `*App Store*\n` +
-    `Paste an \`apps.apple.com\` link.\n\n` +
-    `*TestFlight*\n` +
-    `Invite links can’t be fetched by ipatool. Send the encrypted \`.ipa\` here (≤20 MB), or copy it to:\n` +
-    `\`${DROP}\`\n` +
-    `then send: \`decrypt YourApp.ipa\`\n\n` +
-    `*Status*\n` +
-    `UnfairPlay: ${unfairOk ? "ready" : "missing"} · Model: ${modelOk ? "ready" : "missing"} · Host: ${st.host || "?"}`
+    `*Tetherless*\n` +
+    `Decrypt App Store / TestFlight IPAs on this Mac.\n\n` +
+    `• unfairplay: \`${uf}\`\n` +
+    `• enrollment model: \`${model}\`\n` +
+    `• host: \`${st.host || "mac"}\`\n` +
+    `• upload: \`${up}\`\n\n` +
+    `Send an App Store link, or a \`.ipa\` / \`decrypt App.ipa\` from \`${DROP}\`.`
   );
 }
 
@@ -189,9 +361,8 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
   try {
     await tgApi("sendMessage", { chat_id: chatId, text: "Queued on Tetherless…" });
     const say = (t) => console.log("[job]", t);
-    // Point unfairplay at the local encrypted IPA (skip ipatool) via tryRemoteBackends dir.
     const result = await fairplayBackends.tryRemoteBackends({
-      url: "https://apps.apple.com/app/id0", // placeholder; file already in dir
+      url: "https://apps.apple.com/app/id0",
       dir,
       say,
       vreq: "",
@@ -199,7 +370,7 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
-    await deliverResult(chatId, result, label);
+    await deliverResult(chatId, result, { label });
   } finally {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -223,7 +394,7 @@ async function decryptStoreUrl(chatId, link, vreq) {
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
-    await deliverResult(chatId, result);
+    await deliverResult(chatId, result, { storeUrl: link, versionHint: vreq });
   } finally {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -233,21 +404,37 @@ async function decryptStoreUrl(chatId, link, vreq) {
   }
 }
 
-async function deliverResult(chatId, result, label) {
+async function deliverResult(chatId, result, opts = {}) {
+  const ipaMeta = readIpaMeta(result.file);
+  const name = opts.label || ipaMeta.name || result.name || "App";
+  const version = opts.versionHint || ipaMeta.version || "";
+  const bid = ipaMeta.bid || "";
+  const minIos = ipaMeta.minIos || "";
+  const storeUrl = opts.storeUrl || "";
   const mb = (fs.statSync(result.file).size / 1024 / 1024).toFixed(1);
-  const name = label || result.name || "App";
-  const caption = `${name} · ${mb} MB · Tetherless`.trim();
+  const fileName = buildIpaFileName({ name, version });
+  const caption = buildCaption({ name, bid, version, minIos, storeUrl, mb });
+
   const keepDir = path.join(WORK, "out");
   fs.mkdirSync(keepDir, { recursive: true });
-  const keep = path.join(keepDir, `${Date.now()}-${String(name).replace(/[^\w.-]+/g, "_")}.ipa`);
+  const keep = path.join(keepDir, fileName);
+  try {
+    fs.rmSync(keep, { force: true });
+  } catch {
+    /* ignore */
+  }
   fs.copyFileSync(result.file, keep);
-  const sent = await sendDocument(chatId, keep, caption);
+
+  const sent = await sendDocument(chatId, keep, fileName, caption);
   if (!sent || !sent.ok) {
     const why = (sent && sent.description) || "Telegram attach failed";
     console.warn("[job] sendDocument:", why);
     await tgApi("sendMessage", {
       chat_id: chatId,
-      text: `Decrypted (${mb} MB) but Telegram upload failed: ${String(why).slice(0, 180)}\nSaved on Mac: ${keep}`,
+      text:
+        `Decrypted (${mb} MB) but Telegram upload failed:\n${String(why).slice(0, 400)}\n\n` +
+        `Saved on Mac:\n\`${keep}\``,
+      parse_mode: "Markdown",
     });
   } else {
     console.log("[job] sent IPA to Telegram:", keep);
@@ -309,7 +496,7 @@ async function handleCallback(cq) {
         "1. Install the beta on a device / export the personalized encrypted IPA\n" +
         "2. Send that \`.ipa\` to this chat (≤20 MB via Telegram), *or*\n" +
         `3. Copy it to \`${DROP}\` and send: \`decrypt App.ipa\`\n\n` +
-        "Invite links (\`testflight.apple.com\`) can’t be downloaded with ipatool.",
+        "Invite links (`testflight.apple.com`) can’t be downloaded with ipatool.",
       parse_mode: "Markdown",
     });
     return;
@@ -320,7 +507,8 @@ async function handleCallback(cq) {
       "*How it works*\n" +
       "• App Store link → download encrypted IPA → UnfairPlay decrypt → IPA back here\n" +
       "• TestFlight / custom IPA → upload or drop folder → same decrypt\n" +
-      "• Optional: \`version: 1.2.3\` after a store link for an older build",
+      "• Optional: `version: 1.2.3` after a store link for an older build\n" +
+      "• Large IPAs: local Bot API (2 GB) or Premium user session (4 GB)",
     parse_mode: "Markdown",
   });
 }
@@ -333,7 +521,6 @@ async function handleMessage(msg) {
     return;
   }
 
-  // Document upload (TestFlight / encrypted IPA)
   const doc = msg.document;
   const docName = (doc && doc.file_name) || "";
   if (doc && /\.ipa$/i.test(docName)) {
@@ -342,7 +529,7 @@ async function handleMessage(msg) {
       await tgApi("sendMessage", {
         chat_id: chatId,
         text:
-          `That IPA is ${((doc.file_size || 0) / 1024 / 1024).toFixed(1)} MB — Telegram only lets bots download ≤20 MB.\n` +
+          `That IPA is ${((doc.file_size || 0) / 1024 / 1024).toFixed(1)} MB — Telegram only lets bots download ≤20 MB on cloud API.\n` +
           `Copy it to \`${DROP}\` on the Mac and send: \`decrypt ${doc.file_name || "App.ipa"}\``,
         parse_mode: "Markdown",
       });
@@ -378,7 +565,6 @@ async function handleMessage(msg) {
     return;
   }
 
-  // Local drop: decrypt App.ipa
   if (/^decrypt\s+/i.test(text) || (/^[\w./-]+\.ipa$/i.test(text) && !/^https?:/i.test(text))) {
     const ipaPath = resolveDropPath(text);
     await withBusy(chatId, async () => {
@@ -446,6 +632,7 @@ async function boot() {
   console.log(
     `Tetherless TG bot @${BOT_USERNAME} · host=${st.host} · unfairplay=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
   );
+  console.log(`API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${premiumUploadConfigured()}`);
   console.log(`Drop folder for TestFlight IPAs: ${DROP}`);
   console.log("Start from desktop Terminal so ipatool Keychain works. Ctrl+C to stop.");
   setInterval(() => {

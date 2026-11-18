@@ -40,6 +40,11 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 #   node ~/tetherless/server/mac-tg-bot.js
 # App Store link → decrypt. TestFlight → send .ipa or drop into ~/tetherless-drop
 # and message: decrypt App.ipa
+# Replies look like AppAssassin (Name_vX.Y-Tetherless.ipa + bundle / version / store link).
+# Big IPAs: Telegram Premium does NOT raise Bot API (~50 MB). Use Premium *user* MTProto:
+#   python3 -m pip install --user pyrogram tgcrypto
+#   python3 ~/tetherless/server/mac-tg-session-setup.py
+#   # add TELEGRAM_API_ID / HASH / SESSION / TELEGRAM_PREMIUM_UPLOAD=1 to .tetherless-mac.env
 #
 # If login Keychain password is unknown (MacDuty padlock dialogs), use a dedicated
 # keychain instead (macOS cannot unlock without a password):
