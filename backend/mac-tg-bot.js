@@ -235,33 +235,8 @@ function resultKeyboard() {
   return { inline_keyboard: [siteLinkButtons()] };
 }
 
-/**
- * Done sharp-card buttons: Download puts the IPA behind this same card
- * (editMessageMedia photo→document — no second bubble).
- * callback_data must stay ≤64 bytes (`dl:` + short token).
- */
-function doneCardKeyboard(downloadToken) {
-  const rows = [];
-  if (downloadToken) {
-    rows.push([{ text: "⬇️ Download", callback_data: `dl:${downloadToken}` }]);
-  }
-  rows.push(siteLinkButtons());
-  return { inline_keyboard: rows };
-}
-
-/** In-memory IPA handoff for Download taps on the done card (disk / file_id). */
+/** Legacy Download-button tokens (pre card→IPA auto-finish). */
 const pendingDownloads = new Map();
-
-function mintDownloadToken(payload) {
-  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`.slice(0, 16);
-  pendingDownloads.set(token, { ...payload, at: Date.now() });
-  // Drop stale tokens (1h) so the map can't grow without bound.
-  const cutoff = Date.now() - 60 * 60 * 1000;
-  for (const [k, v] of pendingDownloads) {
-    if (!v || (v.at && v.at < cutoff)) pendingDownloads.delete(k);
-  }
-  return token;
-}
 
 /**
  * Force Patch/Get VIP onto a bot-owned message.
@@ -587,6 +562,9 @@ function createProgressCard(chatId) {
     get storeUrl() {
       return storeUrl;
     },
+    get messageId() {
+      return messageId;
+    },
     async start(link, hintName) {
       storeUrl = link || "";
       const meta = link ? lookupStoreApp(link) : { name: "", iconPath: "" };
@@ -652,64 +630,21 @@ function createProgressCard(chatId) {
       }
     },
     /**
-     * Morph to download-arrow done art and KEEP the card.
-     * IPA is not auto-sent — user taps ⬇️ Download IPA on this card.
-     * @param {object} [ready] diskPath / fileId / caption / fileName for the tap
+     * Release the progress photo without deleting it (after it became the IPA).
      */
-    async finishReady(ready = {}) {
-      const caption = ready.caption || "";
-      try {
-        const img = await makeBanner("Done", 100, { done: true });
-        if (img && messageId && hasPhoto) {
-          // Mint after we know messageId so Download can edit THIS card in-place.
-          const token = mintDownloadToken({
-            chatId: String(chatId),
-            cardMessageId: Number(messageId) || 0,
-            diskPath: ready.diskPath || "",
-            fileId: ready.fileId || "",
-            fileName: ready.fileName || "",
-            caption,
-            storeUrl: ready.storeUrl || storeUrl || "",
-            adam: ready.adam || "",
-            version: ready.version || "",
-            bid: ready.bid || "",
-            name: ready.name || name || "",
-            minIos: ready.minIos || "",
-            bytes: ready.bytes || 0,
-          });
-          const markup = doneCardKeyboard(token);
-          let edited = await editMessageMediaBotApi(chatId, messageId, img, caption, markup);
-          if (!(edited && edited.ok)) {
-            await new Promise((r) => setTimeout(r, 400));
-            edited = await editMessageMediaBotApi(chatId, messageId, img, caption, markup);
-          }
-          if (!(edited && edited.ok)) {
-            // Media edit failed — still try markup + caption so Download works.
-            if (caption) {
-              await tgApi("editMessageCaption", {
-                chat_id: chatId,
-                message_id: messageId,
-                caption,
-                parse_mode: "HTML",
-                reply_markup: markup,
-              }).catch(() => {});
-            } else {
-              await tgApi("editMessageReplyMarkup", {
-                chat_id: chatId,
-                message_id: messageId,
-                reply_markup: markup,
-              }).catch(() => {});
-            }
-          }
-          return true;
+    release() {
+      messageId = 0;
+      hasPhoto = false;
+      if (bannerPath) {
+        try {
+          fs.rmSync(bannerPath, { force: true });
+        } catch {
+          /* ignore */
         }
-      } catch (e) {
-        console.warn("[job] finishReady failed:", String((e && e.message) || e).slice(0, 160));
+        bannerPath = "";
       }
-      // No live photo card — fall back to sending the IPA document directly.
-      return false;
     },
-    /** @deprecated Prefer finishReady — kept for fail-path callers that just need clear. */
+    /** Drop the live card (used when a new IPA bubble replaced it). */
     async finish() {
       await this.clear();
     },
@@ -1474,31 +1409,12 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   const card = createProgressCard(chatId);
   if (!quiet) {
     await card.start(entry.storeUrl || "", entry.name || "App");
-    await card.setStage("Ready…", 96);
+    await card.setStage("Sending…", 90);
   }
 
-  const kept = await card.finishReady({
-    diskPath: hasDisk ? entry.diskPath : "",
-    // Skip stale file_id when we must rename via disk on Download tap.
-    fileId: needsDelvekName && hasDisk ? "" : entry.fileId || "",
-    fileName,
-    caption,
-    storeUrl: entry.storeUrl || "",
-    adam: entry.adam || "",
-    version: entry.version || "",
-    bid: entry.bid || "",
-    name: entry.name || "",
-    minIos: entry.minIos || "",
-    bytes: entry.bytes || 0,
-  });
-  if (kept) {
-    console.log("[cache] hit done-card", entry.adam, entry.version || "latest");
-    return true;
-  }
-
-  // Card missing — send document so cache still delivers.
   const pending = {
     diskPath: hasDisk ? entry.diskPath : "",
+    // Skip stale file_id when we must rename via disk.
     fileId: needsDelvekName && hasDisk ? "" : entry.fileId || "",
     fileName,
     caption,
@@ -1510,9 +1426,9 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     minIos: entry.minIos || "",
     bytes: entry.bytes || 0,
   };
-  const sent = await sendPendingDownload(chatId, pending);
+  const sent = await deliverIpaAsDocument(chatId, pending, { card });
   if (sent && sent.ok) {
-    await card.finish();
+    console.log("[cache] hit card→IPA", entry.adam, entry.version || "latest");
     return true;
   }
   await card.fail(premiumFailDescription((sent && sent.description) || "cache send failed"));
@@ -1605,7 +1521,7 @@ async function deliverResult(chatId, result, opts = {}) {
   const caption = buildCaption({ bid, version, minIos, storeUrl });
   const adam = ipaCache.adamFromStoreUrl(storeUrl) || "";
 
-  // Durable Mac copy — Download button sends this; no auto document bubble.
+  // Durable Mac copy for cache / re-send.
   const keep = ipaCache.diskPathFor(adam || "app", version || "latest", fileName);
   try {
     ipaCache.linkOrCopy(result.file, keep);
@@ -1629,7 +1545,10 @@ async function deliverResult(chatId, result, opts = {}) {
     console.log("[cache] stored disk-ready", adam, version || "latest", keep);
   }
 
-  const ready = {
+  if (card) await card.setStage("Uploading…", 92);
+
+  // Sharp card → IPA document (same message). Download-arrow thumb = native TG download.
+  const sent = await deliverIpaAsDocument(chatId, {
     diskPath: keep,
     fileName,
     caption,
@@ -1640,25 +1559,11 @@ async function deliverResult(chatId, result, opts = {}) {
     name,
     minIos,
     bytes,
-  };
+  }, { card });
 
-  if (card) {
-    const kept = await card.finishReady(ready);
-    if (kept) {
-      console.log("[job] done card ready — IPA waits on Download tap:", keep);
-      return;
-    }
-  }
-
-  // No progress card (or edit failed): send the document so the user still gets the IPA.
-  const thumbPath = await buildIpaDocumentThumb(storeUrl);
-  const sent = await sendDocument(chatId, keep, fileName, caption, {
-    thumbPath,
-    replyMarkup: resultKeyboard(),
-  });
   if (!sent || !sent.ok) {
     const why = (sent && sent.description) || "Telegram attach failed";
-    console.warn("[job] sendDocument:", why);
+    console.warn("[job] deliver IPA:", why);
     if (card) await card.fail(why);
     else {
       await tgApi("sendMessage", {
@@ -1669,35 +1574,15 @@ async function deliverResult(chatId, result, opts = {}) {
         parse_mode: "Markdown",
       });
     }
-  } else {
-    const doc = sent.result && sent.result.document;
-    console.log("[job] sent IPA to Telegram (no card):", keep);
-    if (adam && doc && doc.file_id) {
-      ipaCache.put({
-        adam,
-        version,
-        bid,
-        name,
-        minIos,
-        storeUrl,
-        fileName,
-        caption,
-        fileId: doc.file_id || "",
-        fileUniqueId: doc.file_unique_id || "",
-        messageId: (sent.result && sent.result.message_id) || 0,
-        fromChatId: String(chatId),
-        bytes,
-        diskPath: keep,
-      });
-    }
   }
 }
 
 /**
- * Download tap: put the IPA behind the done card (same message → document).
- * Only opens a new bubble if in-place edit can't take the file (size / API).
+ * Finish delivery: sharp progress card disappears into the IPA document
+ * (editMessageMedia photo→document on the same message — download-arrow thumb).
+ * Opens a new bubble only when in-place edit can't take the file.
  */
-async function sendPendingDownload(chatId, pending, { cardMessageId } = {}) {
+async function deliverIpaAsDocument(chatId, pending, { card, cardMessageId } = {}) {
   if (!pending) return { ok: false, description: "expired" };
   const fileName = displayIpaFileName(pending.fileName || path.basename(pending.diskPath || "App.ipa"));
   const caption =
@@ -1709,17 +1594,14 @@ async function sendPendingDownload(chatId, pending, { cardMessageId } = {}) {
       storeUrl: pending.storeUrl,
     });
   const markup = resultKeyboard();
-  const cardMid = Number(cardMessageId || pending.cardMessageId || 0) || 0;
+  const cardMid =
+    Number(cardMessageId || pending.cardMessageId || (card && card.messageId) || 0) || 0;
   const disk = pending.diskPath && fs.existsSync(pending.diskPath) ? pending.diskPath : "";
-  const bytes =
-    pending.bytes ||
-    (disk ? fs.statSync(disk).size : 0);
+  const bytes = pending.bytes || (disk ? fs.statSync(disk).size : 0);
   const thumbPath = await buildIpaDocumentThumb(pending.storeUrl || "");
 
-  // Prefer editing the sharp card into the IPA document (one message).
   const canEditInPlace =
-    cardMid &&
-    (pending.fileId || (disk && (LOCAL_API || bytes <= TG_DOC_MAX)));
+    cardMid && (pending.fileId || (disk && (LOCAL_API || bytes <= TG_DOC_MAX)));
 
   if (canEditInPlace) {
     const edited = await editMessageToDocumentBotApi(chatId, cardMid, disk, fileName, caption, {
@@ -1729,7 +1611,7 @@ async function sendPendingDownload(chatId, pending, { cardMessageId } = {}) {
     });
     if (edited && edited.ok) {
       const doc = edited.result && edited.result.document;
-      console.log("[job] IPA behind Download — card→document", cardMid, fileName);
+      console.log("[job] sharp card → IPA document", cardMid, fileName);
       if (pending.adam) {
         ipaCache.put({
           adam: pending.adam,
@@ -1749,6 +1631,8 @@ async function sendPendingDownload(chatId, pending, { cardMessageId } = {}) {
         });
       }
       await attachIpaChrome(chatId, cardMid, { caption, replyMarkup: markup });
+      // Message is now the IPA — don't delete it.
+      if (card && typeof card.release === "function") card.release();
       return { ok: true, result: edited.result, inPlace: true };
     }
     console.warn(
@@ -1761,7 +1645,8 @@ async function sendPendingDownload(chatId, pending, { cardMessageId } = {}) {
   if (pending.fileId) {
     const r = await sendIpaByFileId(chatId, pending.fileId, caption, markup);
     if (r && r.ok) {
-      if (cardMid) {
+      if (card) await card.finish();
+      else if (cardMid) {
         await tgApi("deleteMessage", { chat_id: chatId, message_id: cardMid }).catch(() => {});
       }
       return r;
@@ -1772,9 +1657,11 @@ async function sendPendingDownload(chatId, pending, { cardMessageId } = {}) {
   const sent = await sendDocument(chatId, disk, fileName, caption, {
     thumbPath,
     replyMarkup: markup,
+    card: null, // don't double-drive the progress card during upload
   });
   if (sent && sent.ok) {
-    if (cardMid) {
+    if (card) await card.finish();
+    else if (cardMid) {
       await tgApi("deleteMessage", { chat_id: chatId, message_id: cardMid }).catch(() => {});
     }
     const doc = sent.result && sent.result.document;
@@ -1799,6 +1686,11 @@ async function sendPendingDownload(chatId, pending, { cardMessageId } = {}) {
     }
   }
   return sent || { ok: false, description: "upload failed" };
+}
+
+/** @deprecated name — kept for legacy dl: callbacks */
+async function sendPendingDownload(chatId, pending, opts) {
+  return deliverIpaAsDocument(chatId, pending, opts);
 }
 
 function resolveDropPath(name) {
@@ -1908,8 +1800,9 @@ async function handleCallback(cq) {
       callback_query_id: cq.id,
       text: "Loading IPA…",
     }).catch(() => {});
+    // Legacy ⬇️ Download on old done cards — same card→document finish.
     await withWorker(chatId, async () => {
-      const sent = await sendPendingDownload(chatId, pending, { cardMessageId });
+      const sent = await deliverIpaAsDocument(chatId, pending, { cardMessageId });
       if (!sent || !sent.ok) {
         const why = premiumFailDescription((sent && sent.description) || "send failed");
         await tgApi("sendMessage", {
