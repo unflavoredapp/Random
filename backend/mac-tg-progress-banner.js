@@ -1,9 +1,9 @@
-// Brand: Tetherless · https://tetherless.dev
+// Brand: DELvEK · https://delvek.net
 "use strict";
 /**
- * Tetherless progress card via `sharp`.
+ * DELvEK progress card via `sharp`.
  *
- * Left: TETHERLESS · app name · stage · #tag
+ * Left: DELVEK · app name · stage · #tag
  * Right: blurred wash · large centered app icon with iOS Home Screen–style
  *        circular download progress (ring + % inside). No status pills / bars.
  */
@@ -33,11 +33,11 @@ function sanitize(s, max) {
 
 function sharpTag(tag) {
   return (
-    String(tag || "tetherless")
+    String(tag || "delvek")
       .toLowerCase()
       .replace(/^#/, "")
       .replace(/[^a-z0-9_]+/g, "")
-      .slice(0, 24) || "tetherless"
+      .slice(0, 24) || "delvek"
   );
 }
 
@@ -56,8 +56,8 @@ function leftPanelSvg({ brand, title, stage, hash, W, H }) {
   <text x="56" y="150" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="60" font-weight="700">${title}</text>
   <text x="56" y="214" fill="#d7dbe6" font-family="Arial, Helvetica, sans-serif" font-size="28">${stage}</text>
   <text x="56" y="268" fill="#6cb6ff" font-family="Arial, Helvetica, sans-serif" font-size="28">${hash}</text>
-  <text x="56" y="${H - 36}" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">tetherless.dev</text>
-  <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@tetherless</text>
+  <text x="56" y="${H - 36}" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">delvek.net</text>
+  <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@DELvEKBot</text>
 </svg>`);
 }
 
@@ -85,13 +85,11 @@ function arcPath(cx, cy, r, pct) {
 /**
  * iOS Home Screen download overlay:
  * lightly dimmed squircle · dark circular lens · white progress ring · % in center.
- * No status chip / no bottom bar / no percentage pill.
  */
 function homescreenOverlaySvg({ pct, S }) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
   const cx = S / 2;
   const cy = S / 2;
-  // Ring sits near the outer edge of the icon, like SpringBoard downloads.
   const ringR = Math.round(S * 0.42);
   const stroke = Math.max(10, Math.round(S * 0.055));
   const lensR = Math.round(ringR - stroke * 0.15);
@@ -106,11 +104,8 @@ function homescreenOverlaySvg({ pct, S }) {
       <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}"/>
     </clipPath>
   </defs>
-  <!-- Soft full-icon dim (SpringBoard downloading) -->
   <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="rgba(0,0,0,0.28)" clip-path="url(#squircle)"/>
-  <!-- Dark circular lens behind ring + % -->
   <circle cx="${cx}" cy="${cy}" r="${lensR}" fill="rgba(0,0,0,0.48)"/>
-  <!-- Track + progress ring -->
   <path d="${track}" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="${stroke}" stroke-linecap="round"/>
   ${
     prog
@@ -133,7 +128,7 @@ function placeholderIconSvg(S) {
     </linearGradient>
   </defs>
   <rect width="${S}" height="${S}" rx="${r}" ry="${r}" fill="url(#g)"/>
-  <text x="${S / 2}" y="${S / 2 + Math.round(S * 0.08)}" text-anchor="middle" fill="#e8f0ff" font-family="Arial, Helvetica, sans-serif" font-size="${Math.round(S * 0.28)}" font-weight="700">T</text>
+  <text x="${S / 2}" y="${S / 2 + Math.round(S * 0.08)}" text-anchor="middle" fill="#e8f0ff" font-family="Arial, Helvetica, sans-serif" font-size="${Math.round(S * 0.28)}" font-weight="700">D</text>
 </svg>`);
 }
 
@@ -157,13 +152,12 @@ async function renderProgressBanner({
 
   const W = 1200;
   const H = 630;
-  // Large icon, centered in the right half of the card.
   const S = 480;
   const title = sanitize(name || "App", 26);
   const progress = sanitize(stage || "Working...", 28);
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
   const hash = `#${sharpTag(tag)}`;
-  const brandLabel = sanitize(brand || "TETHERLESS", 18).toUpperCase();
+  const brandLabel = sanitize(brand || "DELVEK", 18).toUpperCase();
 
   const rightLeft = Math.round(W * 0.46);
   const rightWidth = W - rightLeft;
@@ -175,7 +169,6 @@ async function renderProgressBanner({
 
     const layers = [];
 
-    // Right-side blurred wash from app icon
     if (iconPath && fs.existsSync(iconPath)) {
       const blurBuf = await sharp(iconPath)
         .resize(W, H, { fit: "cover" })
@@ -194,7 +187,6 @@ async function renderProgressBanner({
       layers.push({ input: masked, left: 0, top: 0 });
     }
 
-    // Squircle icon + Home Screen circular progress
     const corner = Math.round(S * 0.223);
     let iconBase;
     if (iconPath && fs.existsSync(iconPath)) {
@@ -219,7 +211,6 @@ async function renderProgressBanner({
       .toBuffer();
     layers.push({ input: withRing, left: iconLeft, top: iconTop });
 
-    // Left copy only — no LIVE / UPDATING pills
     layers.push({
       input: leftPanelSvg({
         brand: brandLabel,
