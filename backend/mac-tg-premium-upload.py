@@ -67,15 +67,26 @@ async def main() -> None:
     async with app:
         # Send as the Premium user into the same private chat the bot uses.
         # HTML caption matches Bot API parse_mode=HTML from mac-tg-bot.js.
-        await app.send_document(
-            chat_id=int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id,
+        target = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
+        msg = await app.send_document(
+            chat_id=target,
             document=path,
             file_name=filename,
             caption=caption[:1024] if caption else None,
             parse_mode="html",
             force_document=True,
         )
-    print(json.dumps({"ok": True, "filename": filename}))
+    # message_id lets the bot copyMessage later (instant cloud re-send).
+    print(
+        json.dumps(
+            {
+                "ok": True,
+                "filename": filename,
+                "message_id": getattr(msg, "id", None),
+                "chat_id": chat_id,
+            }
+        )
+    )
 
 
 if __name__ == "__main__":

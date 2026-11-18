@@ -13,6 +13,10 @@
  *   • Local Bot API (TELEGRAM_API_ROOT) → up to 2000 MB via file://
  *   • Premium user MTProto (TELEGRAM_API_ID + session) → up to 4 GB
  *
+ * Telegram cloud cache: after the first decrypt we keep Telegram's file_id (+ a
+ * local copy). The next request for the same app/version re-sends by file_id —
+ * no UnfairPlay — so it feels instant.
+ *
  * App Store links → ipatool download + UnfairPlay.
  * TestFlight / any encrypted IPA → send the .ipa here, or drop it in the drop folder.
  */
@@ -23,6 +27,7 @@ const http = require("http");
 const https = require("https");
 const { spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
+const ipaCache = require("./mac-tg-ipa-cache");
 
 const API_ROOT = String(process.env.TELEGRAM_API_ROOT || "https://api.telegram.org").replace(/\/+$/, "");
 const LOCAL_API =
@@ -247,7 +252,18 @@ async function sendDocument(chatId, filePath, fileName, caption) {
     }
     console.log(`[job] uploading via Premium user MTProto (${mb} MB)…`);
     const prem = sendDocumentPremium(chatId, filePath, fileName, caption);
-    if (prem && prem.ok) return prem;
+    if (prem && prem.ok) {
+      return {
+        ...prem,
+        premium: true,
+        message_id: prem.message_id,
+        chat_id: prem.chat_id || chatId,
+        result: {
+          message_id: prem.message_id,
+          document: null,
+        },
+      };
+    }
     console.warn("[job] premium upload failed:", prem && prem.description);
     // Fall through to Bot API / local API when premium fails.
   }
@@ -325,8 +341,10 @@ function startScreenText() {
     `• unfairplay: \`${uf}\`\n` +
     `• enrollment model: \`${model}\`\n` +
     `• host: \`${st.host || "mac"}\`\n` +
-    `• upload: \`${up}\`\n\n` +
-    `Send an App Store link, or a \`.ipa\` / \`decrypt App.ipa\` from \`${DROP}\`.`
+    `• upload: \`${up}\`\n` +
+    `• cloud cache: \`${ipaCache.list().length} IPA(s)\` in \`${ipaCache.CACHE_DIR}\`\n\n` +
+    `Send an App Store link, or a \`.ipa\` / \`decrypt App.ipa\` from \`${DROP}\`.\n` +
+    `Repeat links re-send from Telegram cloud (instant). /cache lists saved IPAs.`
   );
 }
 
@@ -380,7 +398,70 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
   }
 }
 
+async function sendCachedEntry(chatId, entry, { quiet } = {}) {
+  if (!entry) return false;
+  if (!quiet) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: "Cached on Tetherless — sending from Telegram cloud…",
+    });
+  }
+  // Premium-user uploads: copyMessage from the original chat (no re-upload).
+  if (entry.messageId && entry.fromChatId) {
+    const r = await tgApi("copyMessage", {
+      chat_id: chatId,
+      from_chat_id: entry.fromChatId,
+      message_id: entry.messageId,
+    });
+    if (r && r.ok) {
+      console.log("[cache] hit copyMessage", entry.adam, entry.version || "latest");
+      return true;
+    }
+    console.warn("[cache] copyMessage failed:", (r && r.description) || "unknown");
+  }
+  if (entry.fileId) {
+    const r = await tgApi("sendDocument", {
+      chat_id: chatId,
+      document: entry.fileId,
+      caption: entry.caption || undefined,
+      parse_mode: entry.caption ? "HTML" : undefined,
+    });
+    if (r && r.ok) {
+      console.log("[cache] hit file_id", entry.adam, entry.version || "latest");
+      return true;
+    }
+    console.warn("[cache] file_id send failed:", (r && r.description) || "unknown");
+  }
+  // Fallback: re-upload from Mac disk cache (still skips decrypt).
+  if (entry.diskPath && fs.existsSync(entry.diskPath)) {
+    const fileName = entry.fileName || path.basename(entry.diskPath);
+    const sent = await sendDocument(chatId, entry.diskPath, fileName, entry.caption || "");
+    if (sent && sent.ok) {
+      const doc = sent.result && sent.result.document;
+      if (doc && doc.file_id) {
+        ipaCache.put({
+          ...entry,
+          fileId: doc.file_id,
+          fileUniqueId: doc.file_unique_id || "",
+        });
+      }
+      console.log("[cache] hit disk re-upload", entry.diskPath);
+      return true;
+    }
+  }
+  if (entry.adam) ipaCache.remove(entry.adam, entry.version || "latest");
+  return false;
+}
+
+async function trySendCached(chatId, storeUrl, vreq) {
+  const entry = ipaCache.getByStoreUrl(storeUrl, vreq);
+  if (!entry) return false;
+  return sendCachedEntry(chatId, entry);
+}
+
 async function decryptStoreUrl(chatId, link, vreq) {
+  if (await trySendCached(chatId, link, vreq)) return;
+
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
   try {
     await tgApi("sendMessage", { chat_id: chatId, text: "Queued on Tetherless…" });
@@ -411,13 +492,14 @@ async function deliverResult(chatId, result, opts = {}) {
   const bid = ipaMeta.bid || "";
   const minIos = ipaMeta.minIos || "";
   const storeUrl = opts.storeUrl || "";
-  const mb = (fs.statSync(result.file).size / 1024 / 1024).toFixed(1);
+  const bytes = fs.statSync(result.file).size;
+  const mb = (bytes / 1024 / 1024).toFixed(1);
   const fileName = buildIpaFileName({ name, version });
   const caption = buildCaption({ name, bid, version, minIos, storeUrl, mb });
+  const adam = ipaCache.adamFromStoreUrl(storeUrl) || "";
 
-  const keepDir = path.join(WORK, "out");
-  fs.mkdirSync(keepDir, { recursive: true });
-  const keep = path.join(keepDir, fileName);
+  // Durable Mac copy used if Telegram file_id ever expires.
+  const keep = ipaCache.diskPathFor(adam || "app", version || "latest", fileName);
   try {
     fs.rmSync(keep, { force: true });
   } catch {
@@ -429,6 +511,21 @@ async function deliverResult(chatId, result, opts = {}) {
   if (!sent || !sent.ok) {
     const why = (sent && sent.description) || "Telegram attach failed";
     console.warn("[job] sendDocument:", why);
+    // Still index the disk copy so a later Premium/local upload can finish the cache.
+    if (adam) {
+      ipaCache.put({
+        adam,
+        version,
+        bid,
+        name,
+        minIos,
+        storeUrl,
+        fileName,
+        caption,
+        bytes,
+        diskPath: keep,
+      });
+    }
     await tgApi("sendMessage", {
       chat_id: chatId,
       text:
@@ -437,7 +534,33 @@ async function deliverResult(chatId, result, opts = {}) {
       parse_mode: "Markdown",
     });
   } else {
+    const doc = sent.result && sent.result.document;
     console.log("[job] sent IPA to Telegram:", keep);
+    if (adam) {
+      const viaPremium = !!(sent.premium && sent.message_id);
+      ipaCache.put({
+        adam,
+        version,
+        bid,
+        name,
+        minIos,
+        storeUrl,
+        fileName,
+        caption,
+        fileId: (doc && doc.file_id) || "",
+        fileUniqueId: (doc && doc.file_unique_id) || "",
+        messageId: viaPremium ? Number(sent.message_id) || 0 : (sent.result && sent.result.message_id) || 0,
+        fromChatId: viaPremium ? String(sent.chat_id || chatId) : String(chatId),
+        bytes,
+        diskPath: keep,
+      });
+      console.log(
+        "[cache] stored",
+        adam,
+        version || "latest",
+        doc && doc.file_id ? "file_id" : viaPremium ? "copyMessage" : "disk-only"
+      );
+    }
   }
 }
 
@@ -524,6 +647,11 @@ async function handleMessage(msg) {
   const doc = msg.document;
   const docName = (doc && doc.file_name) || "";
   if (doc && /\.ipa$/i.test(docName)) {
+    // Premium/cache echo: our clear IPA uploads come back as user documents — don't re-decrypt.
+    if (/-Tetherless\.ipa$/i.test(docName)) {
+      // If we somehow got a bot-visible file_id here, refresh cache for that adam later.
+      return;
+    }
     if (!doc.file_id) return;
     if (doc.file_size && doc.file_size > TG_GETFILE_MAX) {
       await tgApi("sendMessage", {
@@ -562,6 +690,31 @@ async function handleMessage(msg) {
 
   if (/^\/status\b/i.test(text)) {
     await sendStart(chatId);
+    return;
+  }
+
+  if (/^\/cache\b/i.test(text)) {
+    const items = ipaCache.list().slice(0, 30);
+    if (!items.length) {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: "Cloud cache is empty — decrypt an App Store link once to store it.",
+      });
+      return;
+    }
+    const lines = items.map((it, i) => {
+      const mb = it.bytes ? `${(it.bytes / 1024 / 1024).toFixed(1)} MB` : "?";
+      const cloud = it.fileId ? "☁️" : "💾";
+      return `${i + 1}. ${cloud} *${(it.name || "App").replace(/[*_`]/g, "")}* · v${it.version || "?"} · ${mb}`;
+    });
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text:
+        `*Tetherless cloud cache* (${items.length})\n` +
+        `☁️ = Telegram file\\_id · 💾 = Mac disk only\n\n` +
+        lines.join("\n"),
+      parse_mode: "Markdown",
+    });
     return;
   }
 
@@ -626,6 +779,7 @@ async function boot() {
       { command: "start", description: "Tetherless start screen" },
       { command: "help", description: "How decrypt works" },
       { command: "status", description: "Backend / model status" },
+      { command: "cache", description: "List cloud-cached IPAs" },
     ],
   }).catch(() => {});
   const st = fairplayBackends.backendStatus();
@@ -633,6 +787,7 @@ async function boot() {
     `Tetherless TG bot @${BOT_USERNAME} · host=${st.host} · unfairplay=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
   );
   console.log(`API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${premiumUploadConfigured()}`);
+  console.log(`IPA cloud cache: ${ipaCache.CACHE_DIR} (${ipaCache.list().length} entries)`);
   console.log(`Drop folder for TestFlight IPAs: ${DROP}`);
   console.log("Start from desktop Terminal so ipatool Keychain works. Ctrl+C to stop.");
   setInterval(() => {

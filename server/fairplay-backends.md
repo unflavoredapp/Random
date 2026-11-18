@@ -45,6 +45,8 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 #   python3 -m pip install --user pyrogram tgcrypto
 #   python3 ~/tetherless/server/mac-tg-session-setup.py
 #   # add TELEGRAM_API_ID / HASH / SESSION / TELEGRAM_PREMIUM_UPLOAD=1 to .tetherless-mac.env
+# Cloud cache: first decrypt stores Telegram file_id / message under ~/tetherless-ipa-cache.
+# Same App Store link again → instant re-send (no UnfairPlay). /cache lists entries.
 #
 # If login Keychain password is unknown (MacDuty padlock dialogs), use a dedicated
 # keychain instead (macOS cannot unlock without a password):
