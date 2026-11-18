@@ -1,48 +1,30 @@
 // Brand: Tetherless · https://tetherless.dev
 "use strict";
 /**
- * Tetherless progress card for Telegram — URSA-inspired layout, our branding.
+ * Tetherless progress card — URSA-inspired layout via `sharp` (no ImageMagick).
  *
- * Left: TETHERLESS · app name · stage + VIP pill · #tag · tetherless.dev
- * Right: blurred icon wash · sharp rounded icon with % overlay · LIVE badge
- *
- * Uses ImageMagick (`convert`). Works on MacDuty + Linux hosts.
+ * Left: TETHERLESS · app name · stage + LIVE · #tag
+ * Right: blurred wash · sharp rounded icon with live % overlay + bar
  */
 const fs = require("fs");
 const path = require("path");
-const { spawnSync } = require("child_process");
 
-function whichConvert() {
-  const r = spawnSync("which", ["convert"], { encoding: "utf8" });
-  if (r.status === 0 && String(r.stdout || "").trim()) return String(r.stdout).trim();
-  return "";
-}
-
-function pickFont(bold) {
-  const candidates = bold
-    ? [
-        "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-        "/Library/Fonts/Arial Bold.ttf",
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-      ]
-    : [
-        "/System/Library/Fonts/Supplemental/Arial.ttf",
-        "/Library/Fonts/Arial.ttf",
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-      ];
-  for (const f of candidates) {
-    if (fs.existsSync(f)) return f;
+function loadSharp() {
+  try {
+    return require("sharp");
+  } catch {
+    try {
+      return require(path.join(__dirname, "node_modules", "sharp"));
+    } catch {
+      return null;
+    }
   }
-  return "";
 }
 
 function sanitize(s, max) {
   return String(s || "")
     .replace(/…/g, "...")
-    .replace(/[\r\n\t]+/g, " ")
+    .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]))
     .replace(/[^\x20-\x7E]+/g, "")
     .trim()
     .slice(0, max || 40);
@@ -58,172 +40,78 @@ function sharpTag(tag) {
   );
 }
 
-function runConvert(args) {
-  const r = spawnSync("convert", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
-  return r.status === 0;
+function escapeXml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function leftPanelSvg({ brand, title, stage, hash, W, H }) {
+  const pillX = 56 + Math.min(340, stage.length * 15);
+  return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="leftFade" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#080a10" stop-opacity="0.92"/>
+      <stop offset="70%" stop-color="#080a10" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#080a10" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="${Math.round(W * 0.58)}" height="${H}" fill="url(#leftFade)"/>
+  <text x="56" y="72" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" letter-spacing="2">${brand}</text>
+  <text x="56" y="150" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="60" font-weight="700">${title}</text>
+  <text x="56" y="214" fill="#d7dbe6" font-family="Arial, Helvetica, sans-serif" font-size="28">${stage}</text>
+  <rect x="${pillX}" y="186" rx="22" ry="22" width="100" height="40" fill="#f5c542"/>
+  <text x="${pillX + 50}" y="214" text-anchor="middle" fill="#111111" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">LIVE</text>
+  <text x="56" y="268" fill="#6cb6ff" font-family="Arial, Helvetica, sans-serif" font-size="28">${hash}</text>
+  <text x="56" y="${H - 36}" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">tetherless.dev</text>
+  <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@tetherless</text>
+</svg>`);
+}
+
+function iconOverlaySvg({ pct, chip, S }) {
+  const p = Math.max(0, Math.min(100, pct));
+  const barW = Math.round((S - 100) * (p / 100));
+  const chipText = escapeXml(String(chip || "LIVE").slice(0, 14).toUpperCase());
+  return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="round">
+      <rect x="0" y="0" width="${S}" height="${S}" rx="72" ry="72"/>
+    </clipPath>
+  </defs>
+  <rect x="0" y="0" width="${S}" height="${S}" rx="72" ry="72" fill="rgba(0,0,0,0.32)" clip-path="url(#round)"/>
+  <rect x="${Math.round(S * 0.14)}" y="${Math.round(S * 0.34)}" width="${Math.round(S * 0.72)}" height="${Math.round(S * 0.38)}" rx="36" ry="36" fill="rgba(0,0,0,0.72)"/>
+  <text x="${S / 2}" y="${S / 2 + 18}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="${Math.round(S * 0.24)}" font-weight="700">${p}%</text>
+  <rect x="50" y="${S - 56}" width="${S - 100}" height="18" rx="9" ry="9" fill="rgba(255,255,255,0.28)"/>
+  <rect x="50" y="${S - 56}" width="${Math.max(10, barW)}" height="18" rx="9" ry="9" fill="#5ec8ff"/>
+  <rect x="0" y="0" width="${S}" height="${S}" rx="72" ry="72" fill="none" stroke="#5ec8ff" stroke-width="6"/>
+  <rect x="${S - 250}" y="18" rx="26" ry="26" width="232" height="48" fill="#2f6bff"/>
+  <text x="${S - 134}" y="50" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">${chipText}</text>
+</svg>`);
+}
+
+function placeholderIconSvg(S) {
+  return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a2740"/>
+      <stop offset="100%" stop-color="#0a1020"/>
+    </linearGradient>
+  </defs>
+  <rect width="${S}" height="${S}" fill="url(#g)"/>
+  <text x="${S / 2}" y="${S / 2 + 20}" text-anchor="middle" fill="#6cb6ff" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="700">T</text>
+</svg>`);
 }
 
 /**
- * Build rounded icon with dark glass + big % overlay inside the sharp art.
+ * Render progress banner JPEG with sharp.
+ * @returns {Promise<string>} dest path on success, "" on failure
  */
-function buildIconWithPct({ iconPath, pct, fontBold, dest, size }) {
-  const S = size || 420;
-  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-  const tmp = `${dest}.tmp.png`;
-  const mask = `${dest}.mask.png`;
-  const glass = `${dest}.glass.png`;
-  const label = `${dest}.label.png`;
-
-  const cleanupLocal = () => {
-    for (const f of [tmp, mask, glass, label]) {
-      try {
-        fs.rmSync(f, { force: true });
-      } catch {
-        /* ignore */
-      }
-    }
-  };
-
-  try {
-    // Base art (or brand placeholder)
-    if (iconPath && fs.existsSync(iconPath)) {
-      if (
-        !runConvert([
-          iconPath,
-          "-resize",
-          `${S}x${S}^`,
-          "-gravity",
-          "center",
-          "-extent",
-          `${S}x${S}`,
-          tmp,
-        ])
-      ) {
-        return false;
-      }
-    } else if (
-      !runConvert([
-        "-size",
-        `${S}x${S}`,
-        "gradient:#1a2740-#0a1020",
-        "-fill",
-        "#6cb6ff",
-        "-gravity",
-        "center",
-        "-pointsize",
-        "48",
-        ...(fontBold ? ["-font", fontBold] : []),
-        "-annotate",
-        "+0+0",
-        "T",
-        tmp,
-      ])
-    ) {
-      return false;
-    }
-
-    // Full-card dim + dark pill behind % so it reads on light App Store icons
-    runConvert([
-      "-size",
-      `${S}x${S}`,
-      "xc:none",
-      "-fill",
-      "rgba(0,0,0,0.35)",
-      "-draw",
-      `rectangle 0,0 ${S},${S}`,
-      "-fill",
-      "rgba(0,0,0,0.72)",
-      "-draw",
-      `roundrectangle ${Math.round(S * 0.14)},${Math.round(S * 0.34)} ${Math.round(S * 0.86)},${Math.round(S * 0.72)} 36,36`,
-      glass,
-    ]);
-    runConvert([tmp, glass, "-compose", "Over", "-composite", tmp]);
-
-    // Big % centered inside the sharp icon
-    const pt = Math.round(S * 0.26);
-    runConvert([
-      "-size",
-      `${S}x${S}`,
-      "xc:none",
-      ...(fontBold ? ["-font", fontBold] : []),
-      "-fill",
-      "#ffffff",
-      "-pointsize",
-      String(pt),
-      "-gravity",
-      "center",
-      "-annotate",
-      "+0+0",
-      `${p}%`,
-      label,
-    ]);
-    runConvert([tmp, label, "-compose", "Over", "-composite", tmp]);
-
-    // Progress bar under the %
-    const barW = Math.round((S - 100) * (p / 100));
-    runConvert([
-      tmp,
-      "-fill",
-      "rgba(255,255,255,0.28)",
-      "-draw",
-      `roundrectangle 50,${S - 56} ${S - 50},${S - 38} 9,9`,
-      "-fill",
-      "#5ec8ff",
-      "-draw",
-      `roundrectangle 50,${S - 56} ${50 + Math.max(10, barW)},${S - 38} 9,9`,
-      tmp,
-    ]);
-
-    // Round + thin cyan border (URSA “sharp” icon frame)
-    runConvert([
-      "-size",
-      `${S}x${S}`,
-      "xc:none",
-      "-fill",
-      "white",
-      "-draw",
-      `roundrectangle 0,0 ${S - 1},${S - 1} 72,72`,
-      mask,
-    ]);
-    runConvert([
-      tmp,
-      mask,
-      "-alpha",
-      "Off",
-      "-compose",
-      "CopyOpacity",
-      "-composite",
-      tmp,
-    ]);
-    // Border ring
-    runConvert([
-      "-size",
-      `${S}x${S}`,
-      "xc:none",
-      "-fill",
-      "none",
-      "-stroke",
-      "#5ec8ff",
-      "-strokewidth",
-      "6",
-      "-draw",
-      `roundrectangle 3,3 ${S - 4},${S - 4} 70,70`,
-      mask,
-    ]);
-    runConvert([tmp, mask, "-compose", "Over", "-composite", dest]);
-    return fs.existsSync(dest);
-  } catch {
-    return false;
-  } finally {
-    cleanupLocal();
-  }
-}
-
-/**
- * Render progress banner JPEG.
- * @returns {string} dest path on success, "" on failure
- */
-function renderProgressBanner({
+async function renderProgressBanner({
   name,
   stage,
   pct,
@@ -232,281 +120,112 @@ function renderProgressBanner({
   tag,
   brand,
 } = {}) {
-  if (!whichConvert()) return "";
+  const sharp = loadSharp();
+  if (!sharp) return "";
   const out = path.resolve(dest || "");
   if (!out) return "";
 
   const W = 1200;
   const H = 630;
+  const S = 420;
   const title = sanitize(name || "App", 26);
-  const progress = sanitize(stage || "Working…", 28);
+  const progress = sanitize(stage || "Working...", 28);
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
   const hash = `#${sharpTag(tag)}`;
   const brandLabel = sanitize(brand || "TETHERLESS", 18).toUpperCase();
-  const font = pickFont(false);
-  const fontBold = pickFont(true) || font;
-  const tmpDir = path.dirname(out);
-  const stamp = `${process.pid}-${Date.now()}`;
-  const base = path.join(tmpDir, `tg-banner-${stamp}-base.png`);
-  const blurBg = path.join(tmpDir, `tg-banner-${stamp}-blur.png`);
-  const iconRound = path.join(tmpDir, `tg-banner-${stamp}-icon.png`);
-  const pillVip = path.join(tmpDir, `tg-banner-${stamp}-vip.png`);
-  const pillLive = path.join(tmpDir, `tg-banner-${stamp}-live.png`);
-  const work = path.join(tmpDir, `tg-banner-${stamp}-work.png`);
-
-  const cleanup = () => {
-    for (const f of [base, blurBg, iconRound, pillVip, pillLive, work]) {
-      try {
-        fs.rmSync(f, { force: true });
-      } catch {
-        /* ignore */
-      }
-    }
-  };
+  const chip = p >= 100 ? "DONE" : progress.toUpperCase().slice(0, 14) || "LIVE";
 
   try {
-    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.mkdirSync(path.dirname(out), { recursive: true });
 
-    // Split backdrop: dark left / icon-washed right
-    if (!runConvert(["-size", `${W}x${H}`, "xc:#0b0d14", base])) return "";
+    const layers = [];
+
+    // Right-side blurred wash from app icon
     if (iconPath && fs.existsSync(iconPath)) {
-      runConvert([
-        iconPath,
-        "-resize",
-        `${W}x${H}^`,
-        "-gravity",
-        "center",
-        "-extent",
-        `${W}x${H}`,
-        "-blur",
-        "0x28",
-        "-brightness-contrast",
-        "-25x-10",
-        blurBg,
-      ]);
-      if (fs.existsSync(blurBg)) {
-        // Keep left dark; composite blurred art on the right half
-        runConvert([
-          "-size",
-          `${W}x${H}`,
-          "xc:none",
-          "-fill",
-          "white",
-          "-draw",
-          `rectangle ${Math.round(W * 0.42)},0 ${W},${H}`,
-          path.join(tmpDir, `tg-banner-${stamp}-rmask.png`),
-        ]);
-        const rmask = path.join(tmpDir, `tg-banner-${stamp}-rmask.png`);
-        runConvert([
-          blurBg,
-          rmask,
-          "-alpha",
-          "Off",
-          "-compose",
-          "CopyOpacity",
-          "-composite",
-          blurBg,
-        ]);
-        runConvert([base, blurBg, "-compose", "Over", "-composite", work]);
-        try {
-          fs.rmSync(rmask, { force: true });
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-    if (!fs.existsSync(work)) fs.copyFileSync(base, work);
-
-    // Soft left vignette so text stays readable
-    runConvert([
-      work,
-      "-fill",
-      "rgba(8,10,16,0.72)",
-      "-draw",
-      `rectangle 0,0 ${Math.round(W * 0.55)},${H}`,
-      work,
-    ]);
-
-    const f = (file) => (file ? ["-font", file] : []);
-
-    // VIP-style pill next to stage (Tetherless accent)
-    runConvert([
-      "-size",
-      "110x44",
-      "xc:none",
-      "-fill",
-      "#f5c542",
-      "-draw",
-      "roundrectangle 0,0 109,43 22,22",
-      ...f(fontBold),
-      "-fill",
-      "#111111",
-      "-pointsize",
-      "22",
-      "-gravity",
-      "center",
-      "-annotate",
-      "+0+1",
-      "LIVE",
-      pillVip,
-    ]);
-
-    // Status chip top-right over icon (like URSA “NEW MOD”)
-    const chip = p >= 100 ? "DONE" : progress.toUpperCase().slice(0, 14) || "LIVE";
-    runConvert([
-      "-size",
-      "240x52",
-      "xc:none",
-      "-fill",
-      "#2f6bff",
-      "-draw",
-      "roundrectangle 0,0 239,51 26,26",
-      ...f(fontBold),
-      "-fill",
-      "#ffffff",
-      "-pointsize",
-      "20",
-      "-gravity",
-      "center",
-      "-annotate",
-      "+0+1",
-      chip,
-      pillLive,
-    ]);
-
-    // Left copy — no big % here; % lives inside the sharp icon
-    runConvert([
-      work,
-      ...f(fontBold),
-      "-fill",
-      "#9aa3b5",
-      "-pointsize",
-      "24",
-      "-gravity",
-      "Northwest",
-      "-annotate",
-      "+56+48",
-      brandLabel,
-      ...f(fontBold),
-      "-fill",
-      "#ffffff",
-      "-pointsize",
-      "64",
-      "-gravity",
-      "Northwest",
-      "-annotate",
-      "+56+100",
-      title,
-      ...f(font),
-      "-fill",
-      "#d7dbe6",
-      "-pointsize",
-      "30",
-      "-gravity",
-      "Northwest",
-      "-annotate",
-      "+56+190",
-      progress,
-      ...f(font),
-      "-fill",
-      "#6cb6ff",
-      "-pointsize",
-      "30",
-      "-gravity",
-      "Northwest",
-      "-annotate",
-      "+56+250",
-      hash,
-      ...f(font),
-      "-fill",
-      "#8a93a6",
-      "-pointsize",
-      "22",
-      "-gravity",
-      "Southwest",
-      "-annotate",
-      "+56+36",
-      "tetherless.dev",
-      ...f(font),
-      "-fill",
-      "#8a93a6",
-      "-pointsize",
-      "22",
-      "-gravity",
-      "Southeast",
-      "-annotate",
-      "+56+36",
-      "@tetherless",
-      work,
-    ]);
-
-    // Stage VIP pill (beside progress text)
-    if (fs.existsSync(pillVip)) {
-      runConvert([
-        work,
-        pillVip,
-        "-gravity",
-        "Northwest",
-        "-geometry",
-        `+${56 + Math.min(360, progress.length * 16)}+186`,
-        "-compose",
-        "Over",
-        "-composite",
-        work,
-      ]);
+      const blurBuf = await sharp(iconPath)
+        .resize(W, H, { fit: "cover" })
+        .blur(28)
+        .modulate({ brightness: 0.55, saturation: 0.85 })
+        .png()
+        .toBuffer();
+      // Mask to right half via SVG
+      const rightMask = Buffer.from(`<?xml version="1.0"?>
+<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+  <rect x="${Math.round(W * 0.4)}" y="0" width="${Math.round(W * 0.6)}" height="${H}" fill="white"/>
+</svg>`);
+      const masked = await sharp(blurBuf)
+        .composite([{ input: rightMask, blend: "dest-in" }])
+        .png()
+        .toBuffer();
+      layers.push({ input: masked, left: 0, top: 0 });
     }
 
-    // Sharp icon with dynamic % overlay
-    const iconOk = buildIconWithPct({
-      iconPath,
-      pct: p,
-      fontBold,
-      dest: iconRound,
-      size: 420,
+    // Sharp rounded icon + % overlay
+    let iconBase;
+    if (iconPath && fs.existsSync(iconPath)) {
+      iconBase = await sharp(iconPath)
+        .resize(S, S, { fit: "cover" })
+        .png()
+        .toBuffer();
+    } else {
+      iconBase = await sharp(placeholderIconSvg(S)).png().toBuffer();
+    }
+    const iconRoundMask = Buffer.from(`<?xml version="1.0"?>
+<svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
+  <rect width="${S}" height="${S}" rx="72" ry="72" fill="white"/>
+</svg>`);
+    const rounded = await sharp(iconBase)
+      .composite([{ input: iconRoundMask, blend: "dest-in" }])
+      .png()
+      .toBuffer();
+    const withPct = await sharp(rounded)
+      .composite([{ input: iconOverlaySvg({ pct: p, chip, S }), top: 0, left: 0 }])
+      .png()
+      .toBuffer();
+    layers.push({ input: withPct, left: W - S - 64, top: Math.round((H - S) / 2) });
+
+    // Left text panel SVG
+    layers.push({
+      input: leftPanelSvg({
+        brand: brandLabel,
+        title,
+        stage: progress,
+        hash,
+        W,
+        H,
+      }),
+      left: 0,
+      top: 0,
     });
-    if (iconOk && fs.existsSync(iconRound)) {
-      runConvert([
-        work,
-        iconRound,
-        "-gravity",
-        "East",
-        "-geometry",
-        "+64+8",
-        "-compose",
-        "Over",
-        "-composite",
-        work,
-      ]);
-    }
 
-    // LIVE / stage chip over icon corner
-    if (fs.existsSync(pillLive)) {
-      runConvert([
-        work,
-        pillLive,
-        "-gravity",
-        "Northeast",
-        "-geometry",
-        "+88+72",
-        "-compose",
-        "Over",
-        "-composite",
-        work,
-      ]);
-    }
+    await sharp({
+      create: {
+        width: W,
+        height: H,
+        channels: 3,
+        background: { r: 11, g: 13, b: 20 },
+      },
+    })
+      .composite(layers)
+      .jpeg({ quality: 90, mozjpeg: true })
+      .toFile(out);
 
-    if (!runConvert([work, "-quality", "90", out])) return "";
     if (!fs.existsSync(out) || fs.statSync(out).size < 800) return "";
     return out;
-  } catch {
+  } catch (e) {
+    console.warn("[banner] sharp render failed:", String((e && e.message) || e).slice(0, 160));
     return "";
-  } finally {
-    cleanup();
   }
+}
+
+function whichConvert() {
+  // Kept for status/debug — banners now prefer sharp.
+  return loadSharp() ? "sharp" : "";
 }
 
 module.exports = {
   renderProgressBanner,
   whichConvert,
   sharpTag,
+  loadSharp,
 };

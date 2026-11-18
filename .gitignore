@@ -3,3 +3,6 @@ IDeviceKit/
 .build/
 build/
 __pycache__/
+node_modules/
+server/node_modules/
+backend/node_modules/

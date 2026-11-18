@@ -433,7 +433,7 @@ function createProgressCard(chatId) {
     return bannerPath;
   }
 
-  function makeBanner(stage, pct) {
+  async function makeBanner(stage, pct) {
     return renderProgressBanner({
       name,
       stage: stage || lastStage || "Working…",
@@ -456,7 +456,7 @@ function createProgressCard(chatId) {
   }
 
   async function paintBanner(stage, pct) {
-    const img = makeBanner(stage, pct);
+    const img = await makeBanner(stage, pct);
     if (!img) {
       await paintText(progressCaption({ name, stage, pct }));
       return false;
@@ -571,7 +571,7 @@ function createProgressCard(chatId) {
     async fail(err) {
       lastStage = "Failed";
       lastPct = 0;
-      const img = makeBanner("Failed", 0);
+      const img = await makeBanner("Failed", 0);
       if (img && messageId && hasPhoto) {
         await editMessageMediaBotApi(
           chatId,
@@ -1476,14 +1476,23 @@ function resolveDropPath(name) {
 }
 
 let offset = 0;
-let busy = false;
 
-async function withBusy(chatId, fn) {
-  if (busy) {
-    await tgApi("sendMessage", { chat_id: chatId, text: "Busy — try again in a minute." });
-    return;
+/** Parallel decrypt workers (default 3). Set MAC_TG_WORKERS=1 for serial. */
+const MAX_WORKERS = Math.max(1, Math.min(8, Number(process.env.MAC_TG_WORKERS || 3) || 3));
+let activeWorkers = 0;
+const jobWaiters = [];
+
+async function withWorker(chatId, fn) {
+  if (activeWorkers >= MAX_WORKERS) {
+    const place = activeWorkers + jobWaiters.length + 1;
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: `Queued (#${place}) — ${activeWorkers}/${MAX_WORKERS} workers busy…`,
+    }).catch(() => {});
+    await new Promise((resolve) => jobWaiters.push(resolve));
   }
-  busy = true;
+  activeWorkers++;
+  console.log(`[job] worker start (${activeWorkers}/${MAX_WORKERS} active, ${jobWaiters.length} waiting)`);
   try {
     await fn();
   } catch (e) {
@@ -1491,7 +1500,10 @@ async function withBusy(chatId, fn) {
     console.warn("[job] failed:", err);
     await tgApi("sendMessage", { chat_id: chatId, text: "Failed: " + err }).catch(() => {});
   } finally {
-    busy = false;
+    activeWorkers--;
+    const next = jobWaiters.shift();
+    if (next) next();
+    console.log(`[job] worker done (${activeWorkers}/${MAX_WORKERS} active, ${jobWaiters.length} waiting)`);
   }
 }
 
@@ -1564,7 +1576,7 @@ async function handleMessage(msg) {
       });
       return;
     }
-    await withBusy(chatId, async () => {
+    await withWorker(chatId, async () => {
       const meta = await tgApi("getFile", { file_id: doc.file_id });
       if (!meta.ok || !meta.result || !meta.result.file_path) {
         throw new Error((meta.description || "getFile failed").slice(0, 160));
@@ -1601,7 +1613,7 @@ async function handleMessage(msg) {
 
   if (/^decrypt\s+/i.test(text) || (/^[\w./-]+\.ipa$/i.test(text) && !/^https?:/i.test(text))) {
     const ipaPath = resolveDropPath(text);
-    await withBusy(chatId, async () => {
+    await withWorker(chatId, async () => {
       await decryptLocalIpa(chatId, ipaPath, path.basename(ipaPath, ".ipa"));
     });
     return;
@@ -1631,7 +1643,7 @@ async function handleMessage(msg) {
 
   const verMatch = text.match(/\b(?:v|version)[:=\s]+([0-9][0-9A-Za-z._-]{0,29})\b/i);
   const vreq = verMatch ? verMatch[1] : "";
-  await withBusy(chatId, async () => {
+  await withWorker(chatId, async () => {
     await decryptStoreUrl(chatId, link, vreq);
   });
 }
@@ -1693,7 +1705,7 @@ async function boot() {
   }).catch(() => {});
   const st = fairplayBackends.backendStatus();
   console.log(
-    `Tetherless TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · host=${st.host} · decrypt=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
+    `Tetherless TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · host=${st.host} · workers=${MAX_WORKERS} · decrypt=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
   );
   console.log(
     `API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${preferPremiumUpload()} · peer=${premiumPeer() || "unset"}`
