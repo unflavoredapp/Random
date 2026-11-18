@@ -147,18 +147,9 @@ function buildIpaFileName({ name, version }) {
   return `${n}${v}-Tetherless.ipa`;
 }
 
-/** AppAssassin-style caption: name — Tetherless · bundle · version · store link. */
-function buildCaption({ name, bid, version, minIos, storeUrl }) {
-  const lines = [];
-  const title = `${name || "App"} — Tetherless`;
-  lines.push(`<b>${escapeHtml(title)}</b>`);
-  if (bid) lines.push(`📁 <code>${escapeHtml(bid)}</code>`);
-  const verBits = [];
-  if (version) verBits.push(`Version: ${escapeHtml(version)}`);
-  if (minIos) verBits.push(`${escapeHtml(minIos)}+`);
-  if (verBits.length) lines.push(`⚙️ ${verBits.join(" · ")}`);
-  if (storeUrl) lines.push(`🔗 <a href="${escapeHtml(storeUrl)}">App Store Link</a>`);
-  return lines.join("\n");
+/** Final IPA caption: keep empty — filename + Patch/Get VIP only (no duplicate meta post). */
+function buildCaption() {
+  return "";
 }
 
 function progressBar(pct, width = 12) {
@@ -167,33 +158,27 @@ function progressBar(pct, width = 12) {
   return "▓".repeat(filled) + "░".repeat(Math.max(0, width - filled));
 }
 
-function progressCaption({ name, stage, pct, detail }) {
+/** Live card only: Name — Tetherless / status / bar — nothing else. */
+function progressCaption({ name, stage, pct }) {
   const title = `${name || "App"} — Tetherless`;
-  const lines = [
+  return [
     `<b>${escapeHtml(title)}</b>`,
-    `${progressBar(pct)} <b>${Math.round(pct)}%</b>`,
-    `⏳ ${escapeHtml(stage || "Working…")}`,
-  ];
-  if (detail) lines.push(`<i>${escapeHtml(String(detail).slice(0, 120))}</i>`);
-  return lines.join("\n");
+    escapeHtml(stage || "Working…"),
+    progressBar(pct),
+  ].join("\n");
 }
 
-/** Inline buttons: Patch · Help · Get VIP (URL-only — works for Bot + Premium). */
-function resultKeyboard(storeUrl) {
+/** Final IPA buttons only: Patch · Get VIP. */
+function resultKeyboard() {
   const site = String(process.env.TETHERLESS_SITE_URL || "https://tetherless.dev").replace(/\/+$/, "");
   const patch = String(process.env.TETHERLESS_PATCH_URL || `${site}/`).replace(/\/+$/, "") || site;
-  const help = String(process.env.TETHERLESS_HELP_URL || `${site}/`).replace(/\/+$/, "") || site;
   const vip = String(process.env.TETHERLESS_VIP_URL || `${site}/vip`).replace(/\/+$/, "") || `${site}/vip`;
   return {
     inline_keyboard: [
       [
         { text: "🧩 Patch", url: patch },
-        { text: "❓ Help", url: help },
         { text: "⭐ Get VIP", url: vip },
       ],
-      storeUrl
-        ? [{ text: "🔗 App Store", url: storeUrl }]
-        : [{ text: "⭐ Tetherless", url: site }],
     ],
   };
 }
@@ -350,7 +335,7 @@ function createProgressCard(chatId) {
         hasPhoto = false;
       }
     },
-    async setStage(stage, pct, detail) {
+    async setStage(stage, pct) {
       const p = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
       const now = Date.now();
       const stageChanged = stage && stage !== lastStage;
@@ -358,37 +343,37 @@ function createProgressCard(chatId) {
       lastEdit = now;
       lastPct = p;
       if (stage) lastStage = stage;
-      console.log("[job]", stage || lastStage, `${p}%`, detail || "");
-      await paint(progressCaption({ name, stage: stage || lastStage, pct: p, detail }));
+      console.log("[job]", stage || lastStage, `${p}%`);
+      await paint(progressCaption({ name, stage: stage || lastStage, pct: p }));
     },
     /** Map backend say() lines into card stages. */
     async fromBackendLine(line) {
       const t = String(line || "");
-      if (/ipatool|download/i.test(t)) return this.setStage("Downloading…", 28, t);
-      if (/unfairplay|decrypt|FairPlay|model/i.test(t)) return this.setStage("Decrypting…", 55, t);
-      if (/produced|done/i.test(t)) return this.setStage("Decrypting…", 72, t);
-      if (/upload/i.test(t)) return this.setStage("Uploading…", 80, t);
-      return this.setStage(lastStage || "Working…", Math.max(lastPct, 12), t);
+      if (/ipatool|download/i.test(t)) return this.setStage("Downloading…", 28);
+      if (/unfairplay|decrypt|FairPlay|model/i.test(t)) return this.setStage("Decrypting…", 55);
+      if (/produced|done/i.test(t)) return this.setStage("Decrypting…", 72);
+      if (/upload/i.test(t)) return this.setStage("Uploading…", 80);
+      return this.setStage(lastStage || "Working…", Math.max(lastPct, 12));
     },
     async setUploadPct(pct) {
       const p = 75 + Math.round((Math.max(0, Math.min(100, pct)) / 100) * 24);
       return this.setStage("Uploading…", p);
     },
-    async finish(meta = {}) {
-      if (meta.name) name = meta.name;
-      const caption = buildCaption({
-        name,
-        bid: meta.bid || "",
-        version: meta.version || "",
-        minIos: meta.minIos || "",
-        storeUrl: meta.storeUrl || storeUrl,
-      });
-      await paint(caption, resultKeyboard(meta.storeUrl || storeUrl));
+    /** Remove the live card so the IPA is the only result message (no duplicate). */
+    async clear() {
+      if (!messageId) return;
+      await tgApi("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
+      messageId = 0;
+    },
+    async finish() {
+      await this.clear();
     },
     async fail(err) {
       const caption =
         `<b>${escapeHtml(name)} — Tetherless</b>\n` +
-        `❌ ${escapeHtml(String(err || "failed").slice(0, 200))}`;
+        `Failed\n` +
+        progressBar(0) +
+        `\n❌ ${escapeHtml(String(err || "failed").slice(0, 160))}`;
       await paint(caption);
     },
   };
@@ -637,7 +622,7 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
         ? async (t) => {
             const m = /(\d+)\s*%/.exec(String(t || ""));
             if (m) await card.setUploadPct(Number(m[1]));
-            else if (/upload/i.test(String(t || ""))) await card.setStage("Uploading…", 78, t);
+            else if (/upload/i.test(String(t || ""))) await card.setStage("Uploading…", 78);
           }
         : async () => {
             /* quiet — progress lives on the card */
@@ -654,7 +639,7 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     }
     const peer = premiumPeer() || "unset";
     console.log(`[job] uploading via Premium session (${mb} MB) → ${peer}`);
-    if (card) await card.setStage("Uploading…", 76, `${mb} MB`);
+    if (card) await card.setStage("Uploading…", 76);
     else await say(`uploading via Premium → ${peer} (${mb} MB)…`);
     const prem = await sendDocumentPremium(chatId, filePath, fileName, caption, {
       ...extras,
@@ -858,71 +843,50 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
 
 async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   if (!entry) return false;
-  const markup = resultKeyboard(entry.storeUrl || "");
+  const markup = resultKeyboard();
   const card = createProgressCard(chatId);
   if (!quiet) {
     await card.start(entry.storeUrl || "", entry.name || "App");
-    await card.setStage("Sending from cache…", 40);
+    await card.setStage("Sending…", 40);
   }
-  // Premium-user uploads: copyMessage from the original chat (no re-upload).
-  if (entry.messageId && entry.fromChatId) {
-    await card.setStage("Sending from Telegram cloud…", 70);
-    const r = await tgApi("copyMessage", {
-      chat_id: chatId,
-      from_chat_id: entry.fromChatId,
-      message_id: entry.messageId,
-      reply_markup: markup,
-    });
-    if (r && r.ok) {
-      console.log("[cache] hit copyMessage", entry.adam, entry.version || "latest");
-      await card.finish({
-        name: entry.name,
-        bid: entry.bid,
-        version: entry.version,
-        minIos: entry.minIos,
-        storeUrl: entry.storeUrl,
-      });
-      return true;
-    }
-    console.warn("[cache] copyMessage failed:", (r && r.description) || "unknown");
-  }
+  // Prefer file_id so we can attach Patch/Get VIP without old caption junk.
   if (entry.fileId) {
-    await card.setStage("Sending from Telegram cloud…", 70);
+    await card.setStage("Sending…", 70);
     const r = await tgApi("sendDocument", {
       chat_id: chatId,
       document: entry.fileId,
-      caption: entry.caption || undefined,
-      parse_mode: entry.caption ? "HTML" : undefined,
       reply_markup: markup,
     });
     if (r && r.ok) {
       console.log("[cache] hit file_id", entry.adam, entry.version || "latest");
-      await card.finish({
-        name: entry.name,
-        bid: entry.bid,
-        version: entry.version,
-        minIos: entry.minIos,
-        storeUrl: entry.storeUrl,
-      });
+      await card.clear();
       return true;
     }
     console.warn("[cache] file_id send failed:", (r && r.description) || "unknown");
+  }
+  // Premium-user uploads: copyMessage from the original chat (no re-upload).
+  if (entry.messageId && entry.fromChatId) {
+    await card.setStage("Sending…", 70);
+    const r = await tgApi("copyMessage", {
+      chat_id: chatId,
+      from_chat_id: entry.fromChatId,
+      message_id: entry.messageId,
+      caption: "",
+      reply_markup: markup,
+    });
+    if (r && r.ok) {
+      console.log("[cache] hit copyMessage", entry.adam, entry.version || "latest");
+      await card.clear();
+      return true;
+    }
+    console.warn("[cache] copyMessage failed:", (r && r.description) || "unknown");
   }
   // Fallback: re-upload from Mac disk cache (still skips decrypt).
   if (entry.diskPath && fs.existsSync(entry.diskPath)) {
     await card.setStage("Uploading…", 76);
     const fileName = entry.fileName || path.basename(entry.diskPath);
     const thumbPath = entry.storeUrl ? fetchStoreIcon(entry.storeUrl) : "";
-    const caption =
-      entry.caption ||
-      buildCaption({
-        name: entry.name,
-        bid: entry.bid,
-        version: entry.version,
-        minIos: entry.minIos,
-        storeUrl: entry.storeUrl,
-      });
-    const sent = await sendDocument(chatId, entry.diskPath, fileName, caption, {
+    const sent = await sendDocument(chatId, entry.diskPath, fileName, "", {
       thumbPath,
       replyMarkup: markup,
       card,
@@ -932,20 +896,14 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
       const viaPremium = !!(sent.premium && sent.message_id);
       ipaCache.put({
         ...entry,
-        caption,
+        caption: "",
         fileId: (doc && doc.file_id) || entry.fileId || "",
         fileUniqueId: (doc && doc.file_unique_id) || entry.fileUniqueId || "",
         messageId: viaPremium ? Number(sent.message_id) || 0 : entry.messageId || 0,
         fromChatId: viaPremium ? String(chatId) : entry.fromChatId || "",
       });
       console.log("[cache] hit disk re-upload", entry.diskPath);
-      await card.finish({
-        name: entry.name,
-        bid: entry.bid,
-        version: entry.version,
-        minIos: entry.minIos,
-        storeUrl: entry.storeUrl,
-      });
+      await card.clear();
       return true;
     }
     await card.fail(premiumFailDescription((sent && sent.description) || "upload failed"));
@@ -1026,8 +984,8 @@ async function deliverResult(chatId, result, opts = {}) {
   const bytes = fs.statSync(result.file).size;
   const mb = (bytes / 1024 / 1024).toFixed(1);
   const fileName = buildIpaFileName({ name, version });
-  const caption = buildCaption({ name, bid, version, minIos, storeUrl });
-  const markup = resultKeyboard(storeUrl);
+  const caption = buildCaption();
+  const markup = resultKeyboard();
   const thumbPath = storeUrl ? fetchStoreIcon(storeUrl) : "";
   const adam = ipaCache.adamFromStoreUrl(storeUrl) || "";
 
@@ -1040,7 +998,7 @@ async function deliverResult(chatId, result, opts = {}) {
   }
   fs.copyFileSync(result.file, keep);
 
-  if (card) await card.setStage("Uploading…", 78, `${mb} MB`);
+  if (card) await card.setStage("Uploading…", 78);
   const sent = await sendDocument(chatId, keep, fileName, caption, {
     thumbPath,
     replyMarkup: markup,
@@ -1102,9 +1060,7 @@ async function deliverResult(chatId, result, opts = {}) {
         doc && doc.file_id ? "file_id" : viaPremium ? "copyMessage" : "disk-only"
       );
     }
-    if (card) {
-      await card.finish({ name, bid, version, minIos, storeUrl });
-    }
+    if (card) await card.clear();
   }
 }
 
