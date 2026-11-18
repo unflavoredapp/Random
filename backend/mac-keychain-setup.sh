@@ -7,11 +7,12 @@
 # Keychain whose password you don't know. This script uses a NEW keychain
 # whose password YOU set (env or prompt once).
 #
-# Usage (desktop Terminal):
+# Usage (WebSSH / SSH — no desktop needed once dedicated keychain exists):
 #   export TETHERLESS_KEYCHAIN_PASSWORD='pick-a-strong-pass'
 #   zsh ~/tetherless/server/mac-keychain-setup.sh
-#   ipatool auth login          # if asked, use THAT password → Always Allow
+#   ipatool auth login          # use THAT password if prompted → Always Allow
 #   ipatool auth info
+#   zsh ~/tetherless/server/mac-ssh.sh start
 #
 set -euo pipefail
 
