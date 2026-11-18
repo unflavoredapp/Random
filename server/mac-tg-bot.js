@@ -1010,11 +1010,28 @@ async function decryptStoreUrl(chatId, link, vreq) {
   if (await trySendCached(chatId, link, vreq)) return;
 
   const card = createProgressCard(chatId);
-  await card.start(link);
-  await card.setStage("Fetching…", 8);
-
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
+  // Start Apple download / encrypted-cache hit while the progress card loads.
+  let prepError = null;
+  const prep = fairplayBackends
+    .ensureEncryptedSource({
+      url: link,
+      dir,
+      say: (t) => {
+        card.fromBackendLine(t);
+      },
+      vreq,
+    })
+    .catch((e) => {
+      prepError = e;
+    });
+
   try {
+    await card.start(link);
+    await card.setStage("Fetching…", 8);
+    await prep;
+    if (prepError) throw prepError;
+
     const say = (t) => {
       card.fromBackendLine(t);
     };
@@ -1069,14 +1086,13 @@ async function deliverResult(chatId, result, opts = {}) {
   const thumbPath = storeUrl ? fetchStoreIcon(storeUrl) : "";
   const adam = ipaCache.adamFromStoreUrl(storeUrl) || "";
 
-  // Durable Mac copy used if Telegram file_id ever expires.
+  // Durable Mac copy used if Telegram file_id ever expires (prefer hardlink).
   const keep = ipaCache.diskPathFor(adam || "app", version || "latest", fileName);
   try {
-    fs.rmSync(keep, { force: true });
+    ipaCache.linkOrCopy(result.file, keep);
   } catch {
-    /* ignore */
+    fs.copyFileSync(result.file, keep);
   }
-  fs.copyFileSync(result.file, keep);
 
   if (card) await card.setStage("Uploading…", 78);
   const sent = await sendDocument(chatId, keep, fileName, caption, {
@@ -1381,7 +1397,9 @@ async function boot() {
   console.log(
     `API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${preferPremiumUpload()} · peer=${premiumPeer() || "unset"}`
   );
-  console.log(`IPA cloud cache: ${ipaCache.CACHE_DIR} (${ipaCache.list().length} entries)`);
+  console.log(
+    `IPA cloud cache: ${ipaCache.CACHE_DIR} (${ipaCache.list().length} clear, ${ipaCache.listEncrypted().length} encrypted)`
+  );
   console.log(`Drop folder for TestFlight IPAs: ${DROP}`);
   console.log("WebSSH: zsh server/mac-ssh.sh start | status | logs | session");
   setInterval(() => {

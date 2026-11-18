@@ -13,12 +13,30 @@ const path = require("path");
 
 const CACHE_DIR =
   process.env.MAC_TG_IPA_CACHE_DIR || path.join(os.homedir(), "tetherless-ipa-cache");
+const ENC_DIR =
+  process.env.MAC_TG_ENC_CACHE_DIR || path.join(CACHE_DIR, "encrypted");
 const INDEX_PATH = path.join(CACHE_DIR, "index.json");
 
 function ensure() {
   fs.mkdirSync(CACHE_DIR, { recursive: true });
+  fs.mkdirSync(ENC_DIR, { recursive: true });
   if (!fs.existsSync(INDEX_PATH)) {
     fs.writeFileSync(INDEX_PATH, JSON.stringify({ version: 1, items: {} }, null, 2));
+  }
+}
+
+/** Prefer hardlink (instant); fall back to copy. */
+function linkOrCopy(src, dest) {
+  if (!src || !fs.existsSync(src)) throw new Error("linkOrCopy: missing source");
+  try {
+    fs.rmSync(dest, { force: true });
+  } catch {
+    /* ignore */
+  }
+  try {
+    fs.linkSync(src, dest);
+  } catch {
+    fs.copyFileSync(src, dest);
   }
 }
 
@@ -131,8 +149,85 @@ function diskPathFor(adam, version, fileName) {
   return path.join(CACHE_DIR, safe);
 }
 
+function encryptedDiskPath(adam, version) {
+  ensure();
+  const a = String(adam || "app").replace(/[^\w.-]+/g, "_") || "app";
+  const v = String(version || "latest").replace(/[^\w.-]+/g, "_") || "latest";
+  return path.join(ENC_DIR, `${a}_${v}.encrypted.ipa`);
+}
+
+/** Return path to a cached encrypted IPA (≥100 bytes), or "". */
+function getEncryptedPath(adam, version) {
+  if (!adam) return "";
+  const exact = encryptedDiskPath(adam, version);
+  if (fs.existsSync(exact) && fs.statSync(exact).size >= 100) return exact;
+  const ver = String(version || "").trim() || "latest";
+  if (ver !== "latest") return "";
+  // latest: pick newest adam_*.encrypted.ipa by mtime
+  let best = "";
+  let bestM = 0;
+  try {
+    for (const name of fs.readdirSync(ENC_DIR)) {
+      if (!name.startsWith(`${String(adam).replace(/[^\w.-]+/g, "_")}_`)) continue;
+      if (!name.endsWith(".encrypted.ipa")) continue;
+      const p = path.join(ENC_DIR, name);
+      try {
+        const st = fs.statSync(p);
+        if (st.size >= 100 && st.mtimeMs >= bestM) {
+          best = p;
+          bestM = st.mtimeMs;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return best;
+}
+
+/** Persist encrypted App Store IPA for reuse (skips ipatool next time). */
+function putEncrypted(adam, version, srcPath) {
+  if (!adam || !srcPath || !fs.existsSync(srcPath) || fs.statSync(srcPath).size < 100) {
+    return "";
+  }
+  const ver = String(version || "").trim() || "latest";
+  const dest = encryptedDiskPath(adam, ver);
+  linkOrCopy(srcPath, dest);
+  if (ver !== "latest") {
+    try {
+      linkOrCopy(srcPath, encryptedDiskPath(adam, "latest"));
+    } catch {
+      /* ignore */
+    }
+  }
+  return dest;
+}
+
+function listEncrypted() {
+  ensure();
+  const out = [];
+  try {
+    for (const name of fs.readdirSync(ENC_DIR)) {
+      if (!name.endsWith(".encrypted.ipa")) continue;
+      const p = path.join(ENC_DIR, name);
+      try {
+        const st = fs.statSync(p);
+        out.push({ path: p, name, bytes: st.size, mtimeMs: st.mtimeMs });
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return out.sort((a, b) => (b.mtimeMs || 0) - (a.mtimeMs || 0));
+}
+
 module.exports = {
   CACHE_DIR,
+  ENC_DIR,
   adamFromStoreUrl,
   get,
   getByStoreUrl,
@@ -140,4 +235,9 @@ module.exports = {
   remove,
   list,
   diskPathFor,
+  linkOrCopy,
+  encryptedDiskPath,
+  getEncryptedPath,
+  putEncrypted,
+  listEncrypted,
 };
