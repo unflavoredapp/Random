@@ -91,13 +91,28 @@ stop_pidfile() {
 
 cmd_pull() {
   cd "$REPO"
-  git fetch --quiet origin 2>/dev/null || true
-  if git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+  # Always land on origin/main so banner/bot fixes actually ship (feature
+  # branches left checked out kept serving the old pill progress card).
+  git fetch origin main 2>/dev/null || git fetch origin 2>/dev/null || true
+  local branch
+  branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo main)"
+  if [[ "$branch" != "main" ]]; then
+    echo "Switching $branch → main (progress card / bot updates live on main)"
+    git checkout main 2>/dev/null || git checkout -B main origin/main
+  fi
+  if git rev-parse --verify origin/main >/dev/null 2>&1; then
+    git merge --ff-only origin/main 2>/dev/null || git reset --hard origin/main
+  elif git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
     git pull --ff-only
   else
-    git pull origin "$(git rev-parse --abbrev-ref HEAD)" || git pull origin main
+    git pull origin main || true
   fi
-  echo "Repo: $REPO @ $(git rev-parse --short HEAD)"
+  echo "Repo: $REPO @ $(git rev-parse --short HEAD) ($(git rev-parse --abbrev-ref HEAD))"
+  if grep -q 'homescreenOverlaySvg' server/mac-tg-progress-banner.js 2>/dev/null; then
+    echo "Banner: homescreen-circle"
+  else
+    echo "WARN: banner still legacy — check git remote / pull"
+  fi
 }
 
 cmd_unlock() {
@@ -130,12 +145,18 @@ cmd_start() {
     echo "TELEGRAM_BOT_TOKEN missing in $ENV_FILE"
     exit 1
   fi
-  # Progress banners need sharp (URSA-style card). Install quietly if missing.
+  # Progress banners need sharp (Home Screen circle card). Install if missing.
   if [[ -f server/package.json ]]; then
     if [[ ! -d server/node_modules/sharp ]] || ! node -e "require('./server/node_modules/sharp')" 2>/dev/null; then
       echo "Installing server deps (sharp)…"
-      (cd server && npm install --omit=dev) || echo "npm install failed — banners will fall back to caption text"
+      (cd server && npm install --omit=dev) || echo "npm install failed — banners will fall back to prior card"
     fi
+  fi
+  # Public by default — lockdown only when TELEGRAM_LOCKDOWN=1.
+  if [[ "${TELEGRAM_LOCKDOWN:-}" == "1" ]]; then
+    echo "Access: lockdown (TELEGRAM_ALLOWED_IDS)"
+  else
+    echo "Access: public (anyone who messages)"
   fi
   nohup node server/mac-tg-bot.js >>"$BOT_LOG" 2>&1 &
   echo $! >"$BOT_PID"
@@ -144,6 +165,10 @@ cmd_start() {
     echo "Bot started (pid $(cat "$BOT_PID")) · workers=${MAC_TG_WORKERS:-3}"
     echo "Logs: tail -f $BOT_LOG"
     echo "Stop: zsh $REPO/server/mac-ssh.sh stop"
+    # Confirm the running tree has the circle banner (not the old pill card).
+    grep -q 'homescreenOverlaySvg' "$REPO/server/mac-tg-progress-banner.js" 2>/dev/null \
+      && echo "Banner: homescreen-circle OK" \
+      || echo "WARN: banner file looks legacy — pull may have failed"
   else
     echo "Bot failed to stay up — last log lines:"
     tail -n 40 "$BOT_LOG" || true
