@@ -55,6 +55,13 @@ async def main() -> None:
     try:
         from pyrogram import Client  # type: ignore
         from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup  # type: ignore
+        try:
+            from pyrogram import enums  # type: ignore
+
+            PARSE_HTML = enums.ParseMode.HTML
+        except Exception:
+            # Older pyrogram accepted the string; never pass lowercase "html".
+            PARSE_HTML = "HTML"
     except Exception:
         fail("Install pyrogram: python3 -m pip install --user pyrogram tgcrypto")
 
@@ -150,16 +157,37 @@ async def main() -> None:
             "chat_id": target,
             "document": path,
             "file_name": filename,
-            "caption": caption[:1024] if caption else None,
-            "parse_mode": "html",
             "force_document": True,
             "progress": progress,
         }
+        if caption.strip():
+            kwargs["caption"] = caption[:1024]
+            kwargs["parse_mode"] = PARSE_HTML
         if thumb and os.path.isfile(thumb):
             kwargs["thumb"] = thumb
         if reply_markup is not None:
             kwargs["reply_markup"] = reply_markup
-        msg = await app.send_document(**kwargs)
+        try:
+            msg = await app.send_document(**kwargs)
+        except Exception as e:
+            # File bytes may already be on Telegram; retry caption as plain text.
+            if "parse mode" in str(e).lower() and "caption" in kwargs:
+                plain = (
+                    caption.replace("<code>", "")
+                    .replace("</code>", "")
+                    .replace("<a href=\"", "")
+                    .replace("\">", " ")
+                    .replace("</a>", "")
+                    .replace("&amp;", "&")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&quot;", '"')
+                )
+                kwargs.pop("parse_mode", None)
+                kwargs["caption"] = plain[:1024]
+                msg = await app.send_document(**kwargs)
+            else:
+                raise
 
     emit(
         {
