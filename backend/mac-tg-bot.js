@@ -159,19 +159,13 @@ function buildCaption({ bid, version, minIos, storeUrl }) {
   return lines.join("\n");
 }
 
-function progressBar(pct, width = 12) {
-  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-  const filled = Math.round((p / 100) * width);
-  return "▓".repeat(filled) + "░".repeat(Math.max(0, width - filled));
-}
-
-/** Live card: Name — Tetherless / Downloading… / bar — nothing else. */
+/** Live card caption under the app icon: name + stage + numeric %. */
 function progressCaption({ name, stage, pct }) {
-  const title = `${name || "App"} — Tetherless`;
+  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
   return [
-    `<b>${escapeHtml(title)}</b>`,
-    escapeHtml(stage || "Working…"),
-    progressBar(pct),
+    `<b>${escapeHtml(name || "App")}</b>`,
+    `Tetherless`,
+    `${escapeHtml(stage || "Working…")} · <b>${p}%</b>`,
   ].join("\n");
 }
 
@@ -233,9 +227,10 @@ function lookupStoreApp(storeUrl) {
     const art = r.artworkUrl512 || r.artworkUrl100;
     if (art) {
       const dest = path.join(WORK, `icon-${adam}.jpg`);
-      const dl = spawnSync("curl", ["-fsSL", "-o", dest, String(art).replace("100x100", "256x256")], {
-        encoding: "utf8",
-      });
+      const artUrl = String(art)
+        .replace(/\/\d+x\d+bb(\.[a-z]+)?$/i, "/256x256bb$1")
+        .replace("100x100", "256x256");
+      const dl = spawnSync("curl", ["-fsSL", "-o", dest, artUrl], { encoding: "utf8" });
       if (dl.status === 0 && fs.existsSync(dest) && fs.statSync(dest).size > 100) {
         out.iconPath = dest;
       }
@@ -252,20 +247,25 @@ function fetchStoreIcon(storeUrl) {
 
 function sendPhotoBotApi(chatId, photoPath, caption, replyMarkup) {
   const abs = path.resolve(photoPath);
+  // --form-string keeps newlines/HTML in captions (plain -F breaks them).
   const args = [
     "-sS",
     "-X",
     "POST",
     apiUrl("sendPhoto"),
-    "-F",
+    "--form-string",
     `chat_id=${chatId}`,
-    "-F",
+    "--form-string",
     "parse_mode=HTML",
     "-F",
     `photo=@${abs};type=image/jpeg`,
   ];
-  if (caption) args.push("-F", `caption=${caption}`);
-  if (replyMarkup) args.push("-F", `reply_markup=${JSON.stringify(replyMarkup)}`);
+  if (caption) {
+    args.push("--form-string", `caption=${caption}`);
+  }
+  if (replyMarkup) {
+    args.push("--form-string", `reply_markup=${JSON.stringify(replyMarkup)}`);
+  }
   const r = spawnSync("curl", args, { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
   if (r.error) return Promise.reject(r.error);
   if (r.status !== 0) {
@@ -322,7 +322,9 @@ function createProgressCard(chatId) {
     async start(link, hintName) {
       storeUrl = link || "";
       const meta = link ? lookupStoreApp(link) : { name: "", iconPath: "" };
-      name = hintName || meta.name || "App";
+      // Prefer short App Store title (drop “- Play Music Offline” style suffixes for the card).
+      const rawName = hintName || meta.name || "App";
+      name = String(rawName).split(/\s+[—\-–]\s+/)[0].trim() || rawName;
       const caption = progressCaption({ name, stage: "Fetching…", pct: 4 });
       if (meta.iconPath && fs.existsSync(meta.iconPath)) {
         const sent = await sendPhotoBotApi(chatId, meta.iconPath, caption);
@@ -331,6 +333,9 @@ function createProgressCard(chatId) {
           hasPhoto = true;
           return;
         }
+        console.warn("[job] sendPhoto failed:", (sent && sent.description) || "unknown");
+      } else {
+        console.warn("[job] no store icon for progress card", link || "(none)");
       }
       const sent = await tgApi("sendMessage", {
         chat_id: chatId,
@@ -377,10 +382,10 @@ function createProgressCard(chatId) {
     },
     async fail(err) {
       const caption =
-        `<b>${escapeHtml(name)} — Tetherless</b>\n` +
-        `Failed\n` +
-        progressBar(0) +
-        `\n❌ ${escapeHtml(String(err || "failed").slice(0, 160))}`;
+        `<b>${escapeHtml(name)}</b>\n` +
+        `Tetherless\n` +
+        `Failed · <b>0%</b>\n` +
+        `❌ ${escapeHtml(String(err || "failed").slice(0, 160))}`;
       await paint(caption);
     },
   };
