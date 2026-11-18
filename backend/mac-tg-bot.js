@@ -1108,12 +1108,19 @@ function isTestFlightUrl(t) {
 }
 
 function startScreenText() {
-  // Minimal DELvEK start — no Mac/status/menu clutter; footer about links only.
+  // Single /start blurb — no status, no inline menu, no Mac ops text.
   return (
-    `*DELvEK*\n\n` +
-    `Paste an App Store link — it’s removed from chat.\n` +
-    `Send a \`.ipa\` anytime.\n\n` +
-    `[delvek.net](https://delvek.net)`
+    `Hi, I'm <b>DELvEK</b>, the decryption bot. I'm fully static and capable of decrypting ` +
+    `iOS, iPadOS, macOS, tvOS, and visionOS 26/27 apps, and I'm cute too!\n\n` +
+    `You can use me in this chat. Just send the App Store application link, and I'll provide the decrypted file.\n\n` +
+    `Mention me in any group or chat with:\n` +
+    `<code>@DELvEKBot &lt;App Store App Link&gt;</code>\n` +
+    `to get a download link.\n\n` +
+    `There are subscription options that allow you to decrypt TestFlight betas, apps up to 4 GB, ` +
+    `paid applications, older app versions, and select platforms - all without the 3 apps/day limit. ` +
+    `An HTTP API is also available for automation. Contact @mrzefie to subscribe, or if you have other questions.\n\n` +
+    `And for personal use, it's always free. Moreover, cached applications don't count towards your limit! ` +
+    `However, using multiple accounts or engaging in other suspicious activity will result in a ban of all associated accounts.`
   );
 }
 
@@ -1191,7 +1198,7 @@ async function sendStart(chatId) {
   await tgApi("sendMessage", {
     chat_id: chatId,
     text: startScreenText(),
-    parse_mode: "Markdown",
+    parse_mode: "HTML",
     disable_web_page_preview: true,
   });
 }
@@ -1754,13 +1761,13 @@ async function resolveBotIdentity() {
 
 async function boot() {
   await resolveBotIdentity();
-  await tgApi("setMyCommands", {
-    commands: [{ command: "start", description: "DELvEK" }],
-  }).catch(() => {});
-  // Drop old BotFather menu entries (help/status/cache) if Telegram cached them.
+  // Only /start — clear any cached help/status/cache commands + default menu.
   await tgApi("deleteMyCommands", {}).catch(() => {});
   await tgApi("setMyCommands", {
-    commands: [{ command: "start", description: "DELvEK" }],
+    commands: [{ command: "start", description: "Start DELvEK" }],
+  }).catch(() => {});
+  await tgApi("setChatMenuButton", {
+    menu_button: { type: "commands" },
   }).catch(() => {});
   const st = fairplayBackends.backendStatus();
   const bannerMode = (() => {
