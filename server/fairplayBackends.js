@@ -4,11 +4,12 @@
  * FairPlay decrypt backends for the site decrypt queue.
  *
  * Preferred: run this Node server on a rented/enrolled Mac (Apple Silicon) and
- * decrypt there with UnfairPlay — enroll once, every job stays on that Mac.
- * Optional: Linux host with a copied enrollment model / credential.bin.
+ * decrypt there with Tetherless (internal backend id: unfairplay) — enroll once,
+ * every job stays on that Mac. Optional: Linux host with a copied enrollment
+ * model / credential.bin.
  *
  * Backends (no jailbreak / TrollStore / Phone Worker required):
- *   1. unfairplay       — DrWhax/unfairplay (macOS arm64 or Linux; model or live Mac setup)
+ *   1. unfairplay       — Tetherless decrypt CLI (macOS arm64 or Linux; model or live Mac setup)
  *   2. fairplay-decrypt — EthanArbuckle CLI + 16-byte credential.bin
  *   3. ipadecrypt       — londek CLI
  *   4. ipa-decrypter    — ac0d3r HTTP/Docker
@@ -23,7 +24,7 @@
  *   FAIRPLAY_DECRYPT_BIN=…
  *   FAIRPLAY_IPATOOL_BIN=ipatool
  *   UNFAIRPLAY_BIN=unfairplay
- *   UNFAIRPLAY_MODEL_DIR=…          (optional; else Mac uses UnfairPlay’s default saved models)
+ *   UNFAIRPLAY_MODEL_DIR=…          (optional; else Mac uses default saved models)
  *   FAIRPLAY_ENROLLMENT_MODEL=…     (Linux copy of the model file)
  *
  * See server/fairplay-backends.md.
@@ -50,7 +51,7 @@ function hostMode() {
 }
 
 function defaultBackends() {
-  // Mac host: UnfairPlay can use the live enrollment / default model dir — no Linux hop.
+  // Mac host: Tetherless can use the live enrollment / default model dir — no Linux hop.
   return hostMode() === "mac" ? ["unfairplay"] : ["fairplay-decrypt", "unfairplay"];
 }
 
@@ -91,7 +92,7 @@ function validateCredentialBin() {
     return {
       ok: false,
       path: p,
-      error: `credential.bin must be exactly 16 bytes (got ${st.size}) — mint via UnfairPlay on an enrolled Mac`,
+      error: `credential.bin must be exactly 16 bytes (got ${st.size}) — mint via Tetherless decrypt on an enrolled Mac`,
     };
   }
   return { ok: true, path: p, bytes: 16 };
@@ -101,7 +102,7 @@ function homeDir() {
   return String(process.env.HOME || process.env.USERPROFILE || "").trim();
 }
 
-/** Local copies from MacDuty / UnfairPlay setup (never commit these files). */
+/** Local copies from MacDuty / Tetherless decrypt setup (never commit these files). */
 function localEnrollmentCandidates() {
   const home = homeDir();
   const out = [];
@@ -195,7 +196,7 @@ function unfairplayModelDirReady() {
   }
 }
 
-/** True when UnfairPlay can decrypt: explicit model, model dir, or Mac host (default saved models). */
+/** True when Tetherless decrypt can run: explicit model, model dir, or Mac host (default saved models). */
 function unfairplaySecretsReady() {
   return enrollmentModelReady() || unfairplayModelDirReady() || hostMode() === "mac";
 }
@@ -243,7 +244,7 @@ function backendStatus() {
           error: modelOk
             ? ""
             : host === "mac"
-              ? "Mac host — UnfairPlay will use its default saved model dir after local setup"
+              ? "Mac host — Tetherless will use its default saved model dir after local setup"
               : unfairplayModelDirReady()
                 ? ""
                 : `enrollment model missing at ${modelPath}`,
@@ -456,6 +457,18 @@ function stripAnsi(s) {
   return String(s || "").replace(/\u001b\[[0-9;]*m/g, "");
 }
 
+/** User-facing backend name (keep internal ids like unfairplay for env/config). */
+function brandBackend(name) {
+  const n = String(name || "").toLowerCase();
+  if (n === "unfairplay") return "Tetherless";
+  if (n === "fairplay-decrypt") return "Tetherless (credential)";
+  if (n === "ipadecrypt") return "Tetherless (ipadecrypt)";
+  if (n === "ipa-decrypter") return "Tetherless (remote)";
+  if (n === "unfaird") return "Tetherless (unfaird)";
+  if (n === "phone") return "Tetherless (phone)";
+  return name || "Tetherless";
+}
+
 /**
  * Try non-phone backends in order. Returns { file, name } or null to fall through to phone.
  * Throws only when a configured backend hard-fails and no further backends remain
@@ -466,14 +479,14 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
   if (!backends.length) return null;
 
   // fairplay-decrypt needs 16-byte credential.bin.
-  // unfairplay needs a model file/dir, or a Mac host with local UnfairPlay setup.
+  // unfairplay needs a model file/dir, or a Mac host with local Tetherless setup.
   const host = hostMode();
   const cred = validateCredentialBin();
   const modelOk = enrollmentModelReady() || unfairplayModelDirReady();
   const unfairOk = unfairplaySecretsReady();
   const wantsDecrypt = backends.includes("fairplay-decrypt");
   const wantsUnfairplay = backends.includes("unfairplay");
-  say(`FairPlay host mode: ${host}`);
+  say(`Tetherless host: ${host}`);
   if (wantsDecrypt && !cred.ok) {
     if (!(wantsUnfairplay && unfairOk)) {
       throw new Error(
@@ -482,17 +495,17 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
           `See server/fairplay-backends.md.`
       );
     }
-    say(`credential.bin missing for fairplay-decrypt — will try unfairplay…`);
+    say(`credential.bin missing — trying Tetherless decrypt…`);
   } else if (cred.ok) {
     say(`Using credential.bin (${cred.bytes} bytes)…`);
   }
   if (host === "mac" && wantsUnfairplay) {
-    say(`Mac host — UnfairPlay decrypt on this machine (no Linux mint hop)…`);
+    say(`Tetherless decrypt on this Mac…`);
   } else if (modelOk) {
-    say(`UnfairPlay enrollment model ready…`);
+    say(`Tetherless enrollment model ready…`);
   } else if (wantsUnfairplay && !wantsDecrypt && !unfairOk) {
     throw new Error(
-      `UnfairPlay needs a model (FAIRPLAY_ENROLLMENT_MODEL / UNFAIRPLAY_MODEL_DIR) or FAIRPLAY_HOST=mac with local setup. ` +
+      `Tetherless needs a model (FAIRPLAY_ENROLLMENT_MODEL / UNFAIRPLAY_MODEL_DIR) or FAIRPLAY_HOST=mac with local setup. ` +
         `See server/fairplay-backends.md.`
     );
   } else if (requireCredential() && !cred.ok && !unfairOk) {
@@ -504,8 +517,9 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
 
   const errors = [];
   for (const backend of backends) {
+    const label = brandBackend(backend);
     try {
-      say(`Trying FairPlay backend: ${backend}…`);
+      say(`Trying ${label}…`);
       let result = null;
       if (backend === "fairplay-decrypt") {
         result = await runFairplayDecrypt({ url, dir, say, vreq });
@@ -519,7 +533,7 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
         result = await runUnfaird({ url, dir, say, vreq });
       }
       if (result && result.file && fs.existsSync(result.file)) {
-        say(`Backend ${backend} produced IPA…`);
+        say(`${label} produced IPA…`);
         result.backend = backend;
         return result;
       }
@@ -527,11 +541,11 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
     } catch (e) {
       const msg = e && e.message ? e.message : String(e);
       errors.push(`${backend}: ${msg}`);
-      say(`Backend ${backend} failed — ${msg.slice(0, 120)}`);
+      say(`${label} failed — ${msg.slice(0, 120)}`);
     }
   }
   if (errors.length && !configuredBackends().includes("phone")) {
-    throw new Error("All FairPlay backends failed: " + errors.join(" | "));
+    throw new Error("All Tetherless decrypt backends failed: " + errors.join(" | "));
   }
   return null;
 }
@@ -572,15 +586,15 @@ async function runFairplayDecrypt({ url, dir, say, vreq }) {
 
 async function runUnfairplay({ url, dir, say, vreq }) {
   const bin = which(process.env.UNFAIRPLAY_BIN || "unfairplay");
-  if (!bin) throw new Error("unfairplay not found — set UNFAIRPLAY_BIN");
+  if (!bin) throw new Error("Tetherless decrypt binary not found — set UNFAIRPLAY_BIN");
 
-  // --model accepts a file or directory. On Mac, omit it to use UnfairPlay’s default saved models.
+  // --model accepts a file or directory. On Mac, omit it to use the default saved models.
   let modelArg = "";
   if (enrollmentModelReady()) modelArg = enrollmentModelPath();
   else if (unfairplayModelDirReady()) modelArg = unfairplayModelDir();
   else if (hostMode() !== "mac") {
     throw new Error(
-      `unfairplay needs FAIRPLAY_ENROLLMENT_MODEL or UNFAIRPLAY_MODEL_DIR (or FAIRPLAY_HOST=mac)`
+      `Tetherless needs FAIRPLAY_ENROLLMENT_MODEL or UNFAIRPLAY_MODEL_DIR (or FAIRPLAY_HOST=mac)`
     );
   }
 
@@ -596,14 +610,14 @@ async function runUnfairplay({ url, dir, say, vreq }) {
 
   const args = ["decrypt", "--input", enc, "--output", out, "--force"];
   if (modelArg) {
-    say(`unfairplay decrypt (--model ${modelArg})…`);
+    say(`Tetherless decrypt (--model ${modelArg})…`);
     args.push("--model", modelArg);
   } else {
-    say("unfairplay decrypt (Mac default model dir)…");
+    say("Tetherless decrypt (Mac default model dir)…");
   }
   await runCmd(bin, args, { cwd: dir });
   if (!fs.existsSync(out) || fs.statSync(out).size < 100) {
-    throw new Error("unfairplay produced no IPA");
+    throw new Error("Tetherless decrypt produced no IPA");
   }
   return { file: out, name: "App" };
 }

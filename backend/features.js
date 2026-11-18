@@ -545,9 +545,15 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
         const s = await T.status();
         const fp = s.fairplay || {};
         const host = fp.host || s.host || "linux";
-        const order = Array.isArray(fp.backends) ? fp.backends.join(" → ") : (s.mode || (host === "mac" ? "unfairplay" : "fairplay-decrypt+unfairplay"));
+        const brandOrder = (list) =>
+          (Array.isArray(list) ? list : String(list || "").split(/[+→,]/).map((x) => x.trim()).filter(Boolean))
+            .map((k) => (k === "unfairplay" ? "Tetherless" : k))
+            .join(" → ");
+        const order = brandOrder(
+          Array.isArray(fp.backends) ? fp.backends : (s.mode || (host === "mac" ? "unfairplay" : "fairplay-decrypt+unfairplay"))
+        );
         const state = s.authed
-          ? `Own bot <b>@${esc(s.bot || s.who.username || "")}</b> is configured. Jobs use FairPlay backends: <code class="k">${esc(order)}</code>.`
+          ? `Own bot <b>@${esc(s.bot || s.who.username || "")}</b> is configured. Jobs use Tetherless decrypt backends: <code class="k">${esc(order)}</code>.`
           : (s.error ? esc(s.error) : "Set <code class=\"k\">TELEGRAM_BOT_TOKEN</code> on the server (optional for site queue).");
         const cred = fp.credential || {};
         const model = fp.enrollmentModel || {};
@@ -557,11 +563,11 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
           : "Host: <code class=\"k\">linux</code> — needs copied enrollment model / credential.bin (or set <code class=\"k\">FAIRPLAY_HOST=mac</code> on a Mac box).";
         const credLine = cred.ready
           ? `credential.bin OK (<code class="k">${esc(cred.path || "")}</code> · 16 bytes).`
-          : `credential.bin — ${esc(cred.error || "optional on Mac unfairplay-only; set FAIRPLAY_CREDENTIAL_BIN for fairplay-decrypt")}.`;
+          : `credential.bin — ${esc(cred.error || "optional on Mac Tetherless-only; set FAIRPLAY_CREDENTIAL_BIN for fairplay-decrypt")}.`;
         const modelLine = model.ready
           ? `enrollment / model OK (<code class="k">${esc(model.path || "")}</code>).`
           : (host === "mac"
-            ? "Mac UnfairPlay default model dir after local <code class=\"k\">setup</code>."
+            ? "Mac Tetherless default model dir after local <code class=\"k\">setup</code>."
             : `enrollment model — ${esc(model.error || "set FAIRPLAY_ENROLLMENT_MODEL")}.`);
         const worker = !fp.backends || (!fp.backends.includes("phone") && !fp.backends.includes("unfaird"))
           ? "No Phone Worker / unfaird / jailbreak / TrollStore required."
@@ -572,7 +578,8 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
           .map((k) => {
             const row = fp[k];
             if (!row) return "";
-            return `${row.ready ? "✓" : "·"} ${k}`;
+            const label = k === "unfairplay" ? "Tetherless" : k;
+            return `${row.ready ? "✓" : "·"} ${label}`;
           })
           .filter(Boolean)
           .join(" &nbsp; ");

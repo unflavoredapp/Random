@@ -5,7 +5,7 @@
  *
  * First decrypt uploads the clear IPA once; we store Telegram's file_id (and a
  * local disk copy). Later requests for the same adam/version re-send by file_id
- * — no ipatool / UnfairPlay — so it feels instant.
+ * — no ipatool / re-decrypt — so it feels instant.
  */
 const fs = require("fs");
 const os = require("os");

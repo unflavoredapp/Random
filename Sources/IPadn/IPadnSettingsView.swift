@@ -429,7 +429,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Server · FairPlay host")
         } footer: {
-            Text("Preferred: run the site on a rented Apple Silicon Mac (FAIRPLAY_HOST=mac, DECRYPT_BACKENDS=unfairplay) with UnfairPlay enrolled. Set Decrypt site URL only if that Mac (or another host) serves the TetherLess site API. Leave blank for tetherless.dev. No jailbreak or TrollStore.")
+            Text("Preferred: run the site on a rented Apple Silicon Mac (FAIRPLAY_HOST=mac, DECRYPT_BACKENDS=unfairplay) with Tetherless enrolled. Set Decrypt site URL only if that Mac (or another host) serves the Tetherless site API. Leave blank for tetherless.dev. No jailbreak or TrollStore.")
         }
 
         Section {

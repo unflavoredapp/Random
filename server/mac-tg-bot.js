@@ -2,7 +2,7 @@
 // Brand: Tetherless · https://tetherless.dev
 "use strict";
 /**
- * Tetherless Telegram → UnfairPlay decrypt bot (Mac host).
+ * Tetherless Telegram decrypt bot (Mac host).
  *
  * WebSSH only (dedicated keychain — no Mac desktop):
  *   zsh server/mac-ssh.sh start
@@ -15,9 +15,9 @@
  *
  * Telegram cloud cache: after the first decrypt we keep Telegram's file_id (+ a
  * local copy). The next request for the same app/version re-sends by file_id —
- * no UnfairPlay — so it feels instant.
+ * instant, no re-decrypt.
  *
- * App Store links → ipatool download + UnfairPlay.
+ * App Store links → ipatool download + Tetherless decrypt.
  * TestFlight / any encrypted IPA → send the .ipa here, or drop it in the drop folder.
  */
 const fs = require("fs");
@@ -804,7 +804,7 @@ function startScreenText() {
   return (
     `*Tetherless*\n` +
     `Decrypt App Store / TestFlight IPAs on this Mac.\n\n` +
-    `• unfairplay: \`${uf}\`\n` +
+    `• decrypt: \`${uf}\`\n` +
     `• enrollment model: \`${model}\`\n` +
     `• host: \`${st.host || "mac"}\`\n` +
     `• upload: \`${up}\`\n` +
@@ -1228,7 +1228,7 @@ async function handleCallback(cq) {
     chat_id: chatId,
     text:
       "*How it works*\n" +
-      "• App Store link → download encrypted IPA → UnfairPlay decrypt → IPA back here\n" +
+      "• App Store link → download encrypted IPA → Tetherless decrypt → IPA back here\n" +
       "• TestFlight / custom IPA → upload or drop folder → same decrypt\n" +
       "• Optional: `version: 1.2.3` after a store link for an older build\n" +
       "• Large IPAs: local Bot API (2 GB) or Premium user session (4 GB)",
@@ -1392,7 +1392,7 @@ async function boot() {
   }).catch(() => {});
   const st = fairplayBackends.backendStatus();
   console.log(
-    `Tetherless TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · host=${st.host} · unfairplay=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
+    `Tetherless TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · host=${st.host} · decrypt=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
   );
   console.log(
     `API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${preferPremiumUpload()} · peer=${premiumPeer() || "unset"}`
