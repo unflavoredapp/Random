@@ -41,7 +41,17 @@ function sharpTag(tag) {
   );
 }
 
-function leftPanelSvg({ brand, title, stage, hash, W, H }) {
+/** Credit block under #tag: icon slot + "Made by Tetherless.Dev". */
+const CREDIT_ICON = 72;
+const CREDIT_ICON_LEFT = 56;
+const CREDIT_ICON_TOP = 290;
+
+function leftPanelSvg({ brand, title, stage, hash, W, H, creditIconLeft, creditIconTop, creditIconSize }) {
+  const ix = creditIconLeft != null ? creditIconLeft : CREDIT_ICON_LEFT;
+  const iy = creditIconTop != null ? creditIconTop : CREDIT_ICON_TOP;
+  const isz = creditIconSize != null ? creditIconSize : CREDIT_ICON;
+  const creditCx = ix + isz / 2;
+  const creditTy = iy + isz + 28;
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -56,9 +66,22 @@ function leftPanelSvg({ brand, title, stage, hash, W, H }) {
   <text x="56" y="150" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="60" font-weight="700">${title}</text>
   <text x="56" y="214" fill="#d7dbe6" font-family="Arial, Helvetica, sans-serif" font-size="28">${stage}</text>
   <text x="56" y="268" fill="#6cb6ff" font-family="Arial, Helvetica, sans-serif" font-size="28">${hash}</text>
+  <text x="${creditCx}" y="${creditTy}" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="600">Made by Tetherless.Dev</text>
   <text x="56" y="${H - 36}" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">delvek.net</text>
   <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@DELvEKBot</text>
 </svg>`);
+}
+
+function resolveTetherlessIcon() {
+  const candidates = [
+    path.join(__dirname, "assets", "tetherless-icon.png"),
+    path.join(__dirname, "..", "docs", "assets", "tetherless-icon.png"),
+    path.join(__dirname, "..", "Assets.xcassets", "AppIcon.appiconset", "icon-1024.png"),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return "";
 }
 
 /** Polar → cartesian for SVG arc (angles in degrees, 0 = top, clockwise). */
@@ -211,6 +234,12 @@ async function renderProgressBanner({
       .toBuffer();
     layers.push({ input: withRing, left: iconLeft, top: iconTop });
 
+    const creditIconPath = resolveTetherlessIcon();
+    const creditSize = CREDIT_ICON;
+    const creditLeft = CREDIT_ICON_LEFT;
+    const creditTop = CREDIT_ICON_TOP;
+
+    // Left copy (includes "Made by Tetherless.Dev" under the icon slot).
     layers.push({
       input: leftPanelSvg({
         brand: brandLabel,
@@ -219,10 +248,31 @@ async function renderProgressBanner({
         hash,
         W,
         H,
+        creditIconLeft: creditLeft,
+        creditIconTop: creditTop,
+        creditIconSize: creditSize,
       }),
       left: 0,
       top: 0,
     });
+
+    // Tetherless mark under #tag — after the fade so it stays visible.
+    if (creditIconPath) {
+      const creditCorner = Math.round(creditSize * 0.22);
+      const creditBase = await sharp(creditIconPath)
+        .resize(creditSize, creditSize, { fit: "cover" })
+        .png()
+        .toBuffer();
+      const creditMask = Buffer.from(`<?xml version="1.0"?>
+<svg width="${creditSize}" height="${creditSize}" xmlns="http://www.w3.org/2000/svg">
+  <rect width="${creditSize}" height="${creditSize}" rx="${creditCorner}" ry="${creditCorner}" fill="white"/>
+</svg>`);
+      const creditRounded = await sharp(creditBase)
+        .composite([{ input: creditMask, blend: "dest-in" }])
+        .png()
+        .toBuffer();
+      layers.push({ input: creditRounded, left: creditLeft, top: creditTop });
+    }
 
     await sharp({
       create: {

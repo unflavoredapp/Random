@@ -137,7 +137,19 @@ function readIpaMeta(ipaPath) {
 function buildIpaFileName({ name, version }) {
   const n = sanitizeFilePart(name);
   const v = version ? `_v${sanitizeFilePart(version)}` : "";
-  return `${n}${v}-DELvEK.ipa`;
+  return `${n}${v}-[DELvEK.NeT].ipa`;
+}
+
+/** Rewrite legacy Tetherless / DELvEK suffixes when re-sending from cache. */
+function displayIpaFileName(name) {
+  const raw = String(name || "App.ipa");
+  if (/\.ipa$/i.test(raw)) {
+    return raw
+      .replace(/-Tetherless\.ipa$/i, "-[DELvEK.NeT].ipa")
+      .replace(/-DELvEK\.ipa$/i, "-[DELvEK.NeT].ipa")
+      .replace(/-\[DELvEK\.NeT\]\.ipa$/i, "-[DELvEK.NeT].ipa");
+  }
+  return buildIpaFileName({ name: raw.replace(/\.ipa$/i, "") });
 }
 
 /** IPA document caption — classic AppAssassin look (bundle · version · store). */
@@ -1231,7 +1243,16 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     await card.start(entry.storeUrl || "", entry.name || "App");
     await card.setStage("Sending…", 40);
   }
-  if (entry.fileId) {
+  // Telegram file_id/copy keep the baked-in filename — re-upload from disk
+  // when the cache still says *-Tetherless.ipa so users see [DELvEK.NeT].
+  const cachedName = String(entry.fileName || "");
+  const needsDelvekName =
+    /Tetherless\.ipa$/i.test(cachedName) ||
+    (/DELvEK\.ipa$/i.test(cachedName) && !/\[DELvEK\.NeT\]\.ipa$/i.test(cachedName));
+  const renameViaDisk =
+    needsDelvekName && entry.diskPath && fs.existsSync(entry.diskPath);
+
+  if (!renameViaDisk && entry.fileId) {
     await card.setStage("Sending…", 70);
     const caption = buildCaption({
       bid: entry.bid,
@@ -1250,7 +1271,7 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   }
   // Prefer fresh sendDocument with caption over copyMessage (copy keeps old empty captions).
   // Premium-user uploads: copyMessage from the original chat (no re-upload).
-  if (entry.messageId && entry.fromChatId) {
+  if (!renameViaDisk && entry.messageId && entry.fromChatId) {
     await card.setStage("Sending…", 70);
     const caption = buildCaption({
       bid: entry.bid,
@@ -1290,7 +1311,7 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   // Fallback: re-upload from Mac disk cache (still skips decrypt).
   if (entry.diskPath && fs.existsSync(entry.diskPath)) {
     await card.setStage("Uploading…", 76);
-    const fileName = entry.fileName || path.basename(entry.diskPath);
+    const fileName = displayIpaFileName(entry.fileName || path.basename(entry.diskPath));
     const thumbPath = entry.storeUrl ? fetchStoreIcon(entry.storeUrl) : "";
     const caption = buildCaption({
       bid: entry.bid,
@@ -1308,13 +1329,14 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
       const viaPremium = !!(sent.premium && sent.message_id);
       ipaCache.put({
         ...entry,
+        fileName,
         caption,
         fileId: (doc && doc.file_id) || entry.fileId || "",
         fileUniqueId: (doc && doc.file_unique_id) || entry.fileUniqueId || "",
         messageId: viaPremium ? Number(sent.message_id) || 0 : entry.messageId || 0,
         fromChatId: viaPremium ? String(chatId) : entry.fromChatId || "",
       });
-      console.log("[cache] hit disk re-upload", entry.diskPath);
+      console.log("[cache] hit disk re-upload", entry.diskPath, fileName);
       await card.finish();
       return true;
     }
@@ -1592,7 +1614,7 @@ async function handleMessage(msg) {
   const docName = (doc && doc.file_name) || "";
   if (doc && /\.ipa$/i.test(docName)) {
     // Premium/cache echo: our clear IPA uploads come back as user documents — don't re-decrypt.
-    if (/-(?:DELvEK|Tetherless)\.ipa$/i.test(docName)) {
+    if (/-(?:DELvEK|Tetherless|\[DELvEK\.NeT\])\.ipa$/i.test(docName)) {
       // Clear IPA echoes (bot/Premium upload) — don't re-decrypt.
       return;
     }
