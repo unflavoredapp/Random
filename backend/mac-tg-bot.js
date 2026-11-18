@@ -443,8 +443,8 @@ function startScreenText() {
     `• host: \`${st.host || "mac"}\`\n` +
     `• upload: \`${up}\`\n` +
     `• cloud cache: \`${ipaCache.list().length} IPA(s)\` in \`${ipaCache.CACHE_DIR}\`\n\n` +
-    `*Add an App Store URL to start.*\n` +
-    `Paste \`https://apps.apple.com/…\`, or send a \`.ipa\` / \`decrypt App.ipa\` from \`${DROP}\`.\n` +
+    `*Add an App Store URL to start.*\n\n` +
+    `Send an App Store link, or a \`.ipa\` / \`decrypt App.ipa\` from \`${DROP}\`.\n` +
     `Repeat links re-send from Telegram cloud (instant). /cache lists saved IPAs.`
   );
 }
