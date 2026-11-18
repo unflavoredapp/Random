@@ -169,15 +169,22 @@ function progressCaption({ name, stage, pct }) {
   ].join("\n");
 }
 
+function httpsUrl(raw, fallback) {
+  let u = String(raw || "").trim();
+  if (!u) u = fallback;
+  if (!/^https?:\/\//i.test(u)) u = `https://${u.replace(/^\/+/, "")}`;
+  return u.replace(/\/+$/, "") || fallback;
+}
+
 /** Final IPA buttons only: Patch · Get VIP (inline tabs under the document). */
 function resultKeyboard() {
-  const site = String(process.env.TETHERLESS_SITE_URL || "https://tetherless.dev").replace(/\/+$/, "");
-  const patch = String(process.env.TETHERLESS_PATCH_URL || `${site}/`).replace(/\/+$/, "") || site;
-  const vip = String(process.env.TETHERLESS_VIP_URL || `${site}/vip`).replace(/\/+$/, "") || `${site}/vip`;
+  const site = httpsUrl(process.env.TETHERLESS_SITE_URL, "https://tetherless.dev");
+  const patch = httpsUrl(process.env.TETHERLESS_PATCH_URL, `${site}/`);
+  const vip = httpsUrl(process.env.TETHERLESS_VIP_URL, `${site}/vip`);
   return {
     inline_keyboard: [
       [
-        { text: "🧩 Patch", url: patch },
+        { text: "🧩 Patch", url: patch.endsWith("/") ? patch : `${patch}/` },
         { text: "⭐ Get VIP", url: vip },
       ],
     ],
@@ -185,14 +192,22 @@ function resultKeyboard() {
 }
 
 /**
- * Force classic caption + Patch/Get VIP onto a bot-owned message.
- * Premium/user staging often loses inline keyboards; copyMessage can also omit
- * reply_markup — editMessageCaption / editMessageReplyMarkup is reliable.
+ * Force Patch/Get VIP onto a bot-owned message.
+ * Prefer editMessageReplyMarkup alone — editMessageCaption fails with
+ * "message is not modified" when caption already matches and then drops markup.
  */
 async function attachIpaChrome(chatId, messageId, { caption, replyMarkup } = {}) {
   const mid = Number(messageId);
   if (!chatId || !mid) return false;
   const markup = replyMarkup || resultKeyboard();
+
+  const markupOnly = await tgApi("editMessageReplyMarkup", {
+    chat_id: chatId,
+    message_id: mid,
+    reply_markup: markup,
+  }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
+  if (markupOnly && markupOnly.ok) return true;
+
   if (caption) {
     const withCap = await tgApi("editMessageCaption", {
       chat_id: chatId,
@@ -207,17 +222,48 @@ async function attachIpaChrome(chatId, messageId, { caption, replyMarkup } = {})
       (withCap && withCap.description) || "unknown"
     );
   }
-  const markupOnly = await tgApi("editMessageReplyMarkup", {
-    chat_id: chatId,
-    message_id: mid,
-    reply_markup: markup,
-  }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
-  if (markupOnly && markupOnly.ok) return true;
+
   console.warn(
     "[job] editMessageReplyMarkup failed:",
     (markupOnly && markupOnly.description) || "unknown"
   );
   return false;
+}
+
+/** Bot API sendDocument by file_id — most reliable way to bake in inline tabs. */
+async function sendIpaByFileId(chatId, fileId, caption, replyMarkup) {
+  const markup = replyMarkup || resultKeyboard();
+  const r = await tgApi("sendDocument", {
+    chat_id: chatId,
+    document: fileId,
+    caption: caption || undefined,
+    parse_mode: caption ? "HTML" : undefined,
+    reply_markup: markup,
+  }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
+  if (r && r.ok && r.result && r.result.message_id) {
+    // Belt-and-suspenders: some clients drop markup on the initial send.
+    await attachIpaChrome(chatId, r.result.message_id, { caption, replyMarkup: markup });
+  }
+  return r;
+}
+
+async function ensureIpaButtonTabs(chatId, messageId, { caption, replyMarkup } = {}) {
+  const markup = replyMarkup || resultKeyboard();
+  const mid = Number(messageId);
+  if (await attachIpaChrome(chatId, mid, { caption, replyMarkup: markup })) return true;
+  // Visible fallback: reply under the IPA with the same tabs.
+  const reply = await tgApi("sendMessage", {
+    chat_id: chatId,
+    text: "Tetherless",
+    reply_to_message_id: mid,
+    reply_markup: markup,
+    disable_web_page_preview: true,
+  }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
+  if (!(reply && reply.ok)) {
+    console.warn("[job] button reply failed:", (reply && reply.description) || "unknown");
+    return false;
+  }
+  return true;
 }
 
 function escapeHtml(s) {
@@ -699,9 +745,9 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     console.log(`[job] uploading via Premium session (${mb} MB) → ${peer}`);
     if (card) await card.setStage("Uploading…", 76);
     else await say(`uploading via Premium → ${peer} (${mb} MB)…`);
-    // Stage via Premium (user MTProto). Inline URL tabs on user→bot messages are
-    // often stripped by Telegram — the bot must own the final IPA and attach
-    // Patch/Get VIP via editMessageCaption / editMessageReplyMarkup.
+    // Stage via Premium (user MTProto). User→bot messages usually have no inline
+    // tabs. Bot copies to get a file_id, then sendDocument(file_id) WITH
+    // Patch/Get VIP baked in (edit* alone is not enough on some clients).
     const markup = extras.replyMarkup || resultKeyboard();
     const prem = await sendDocumentPremium(chatId, filePath, fileName, caption || "", {
       thumbPath: extras.thumbPath,
@@ -713,62 +759,83 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     if (prem && prem.ok && prem.message_id) {
       const stagedId = Number(prem.message_id);
       let copied = null;
-      const copyAttempts = [
-        // 1) Full chrome in one shot
-        {
-          caption: caption || undefined,
-          parse_mode: caption ? "HTML" : undefined,
-          reply_markup: markup,
-        },
-        // 2) Bare media copy — then we paint caption + buttons with edit*
-        {},
-      ];
       for (let attempt = 0; attempt < 6; attempt++) {
         if (attempt) await new Promise((r) => setTimeout(r, 700 * attempt));
-        const body = copyAttempts[attempt % copyAttempts.length];
+        // Bare copy — caption/tabs come from the bot sendDocument(file_id) below.
         copied = await tgApi("copyMessage", {
           chat_id: chatId,
           from_chat_id: chatId,
           message_id: stagedId,
-          ...body,
         }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
-        if (copied && copied.ok && copied.result && copied.result.message_id) {
-          const botMid = copied.result.message_id;
-          const chromeOk = await attachIpaChrome(chatId, botMid, {
+        if (!(copied && copied.ok && copied.result && copied.result.message_id)) continue;
+
+        const bridgeMid = copied.result.message_id;
+        const fileId =
+          (copied.result.document && copied.result.document.file_id) ||
+          (copied.result.video && copied.result.video.file_id) ||
+          "";
+
+        let finalMid = bridgeMid;
+        let finalResult = copied.result;
+
+        if (fileId) {
+          const resent = await sendIpaByFileId(chatId, fileId, caption || "", markup);
+          if (resent && resent.ok && resent.result && resent.result.message_id) {
+            await tgApi("deleteMessage", { chat_id: chatId, message_id: bridgeMid }).catch(() => {});
+            finalMid = resent.result.message_id;
+            finalResult = resent.result;
+          } else {
+            console.warn(
+              "[job] sendDocument(file_id) failed:",
+              (resent && resent.description) || "unknown"
+            );
+            await ensureIpaButtonTabs(chatId, bridgeMid, {
+              caption: caption || "",
+              replyMarkup: markup,
+            });
+            if (caption) {
+              await tgApi("editMessageCaption", {
+                chat_id: chatId,
+                message_id: bridgeMid,
+                caption,
+                parse_mode: "HTML",
+                reply_markup: markup,
+              }).catch(() => {});
+            }
+          }
+        } else {
+          await ensureIpaButtonTabs(chatId, bridgeMid, {
             caption: caption || "",
             replyMarkup: markup,
           });
-          await tgApi("deleteMessage", { chat_id: chatId, message_id: stagedId }).catch(() => {});
-          console.log(
-            "[job] bot produced IPA via copyMessage",
-            botMid,
-            chromeOk ? "chrome=ok" : "chrome=fail"
-          );
-          return {
-            ok: true,
-            premium: true,
-            bot_resent: true,
-            message_id: botMid,
-            chat_id: String(chatId),
-            result: copied.result,
-          };
+          if (caption) {
+            await tgApi("editMessageCaption", {
+              chat_id: chatId,
+              message_id: bridgeMid,
+              caption,
+              parse_mode: "HTML",
+              reply_markup: markup,
+            }).catch(() => {});
+          }
         }
+
+        await tgApi("deleteMessage", { chat_id: chatId, message_id: stagedId }).catch(() => {});
+        console.log("[job] bot produced IPA with tabs", finalMid, fileId ? "via file_id" : "via copy");
+        return {
+          ok: true,
+          premium: true,
+          bot_resent: true,
+          message_id: finalMid,
+          chat_id: String(chatId),
+          result: finalResult,
+        };
       }
       // Last resort: keep Premium IPA + bot reply with Patch/Get VIP tabs.
       console.warn(
         "[job] bot copyMessage failed; keeping Premium IPA + button reply:",
         (copied && copied.description) || "unknown"
       );
-      await tgApi("sendMessage", {
-        chat_id: chatId,
-        text: caption || "Tetherless IPA",
-        parse_mode: caption ? "HTML" : undefined,
-        reply_to_message_id: stagedId,
-        reply_markup: markup,
-        disable_web_page_preview: true,
-      }).catch((e) => {
-        console.warn("[job] button reply failed:", String((e && e.message) || e));
-      });
+      await ensureIpaButtonTabs(chatId, stagedId, { caption: caption || "", replyMarkup: markup });
       return {
         ...prem,
         premium: true,
@@ -820,14 +887,26 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     };
   }
 
+  const markup = extras.replyMarkup || resultKeyboard();
   const botSent = await sendDocumentBotApi(chatId, filePath, fileName, caption, {
     ...extras,
-    replyMarkup: extras.replyMarkup || resultKeyboard(),
+    replyMarkup: markup,
   });
   if (botSent && botSent.ok && botSent.result && botSent.result.message_id) {
-    await attachIpaChrome(chatId, botSent.result.message_id, {
+    const fileId = (botSent.result.document && botSent.result.document.file_id) || "";
+    if (fileId) {
+      const resent = await sendIpaByFileId(chatId, fileId, caption || "", markup);
+      if (resent && resent.ok && resent.result && resent.result.message_id) {
+        await tgApi("deleteMessage", {
+          chat_id: chatId,
+          message_id: botSent.result.message_id,
+        }).catch(() => {});
+        return resent;
+      }
+    }
+    await ensureIpaButtonTabs(chatId, botSent.result.message_id, {
       caption: caption || "",
-      replyMarkup: extras.replyMarkup || resultKeyboard(),
+      replyMarkup: markup,
     });
   }
   return botSent;
@@ -1000,15 +1079,9 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
       minIos: entry.minIos,
       storeUrl: entry.storeUrl,
     });
-    const r = await tgApi("sendDocument", {
-      chat_id: chatId,
-      document: entry.fileId,
-      caption: caption || undefined,
-      parse_mode: caption ? "HTML" : undefined,
-      reply_markup: markup,
-    });
+    const r = await sendIpaByFileId(chatId, entry.fileId, caption, markup);
     if (r && r.ok && r.result && r.result.message_id) {
-      await attachIpaChrome(chatId, r.result.message_id, { caption, replyMarkup: markup });
+      await ensureIpaButtonTabs(chatId, r.result.message_id, { caption, replyMarkup: markup });
       console.log("[cache] hit file_id", entry.adam, entry.version || "latest");
       await card.finish();
       return true;
@@ -1034,7 +1107,20 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
       reply_markup: markup,
     });
     if (r && r.ok && r.result && r.result.message_id) {
-      await attachIpaChrome(chatId, r.result.message_id, { caption, replyMarkup: markup });
+      const fileId = (r.result.document && r.result.document.file_id) || "";
+      if (fileId) {
+        const resent = await sendIpaByFileId(chatId, fileId, caption, markup);
+        if (resent && resent.ok && resent.result && resent.result.message_id) {
+          await tgApi("deleteMessage", {
+            chat_id: chatId,
+            message_id: r.result.message_id,
+          }).catch(() => {});
+          console.log("[cache] hit copyMessage→file_id", entry.adam, entry.version || "latest");
+          await card.finish();
+          return true;
+        }
+      }
+      await ensureIpaButtonTabs(chatId, r.result.message_id, { caption, replyMarkup: markup });
       console.log("[cache] hit copyMessage", entry.adam, entry.version || "latest");
       await card.finish();
       return true;
