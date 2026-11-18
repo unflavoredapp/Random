@@ -453,9 +453,10 @@ function create({ db /*, secret */ }) {
       if (/^\/(start|help)/i.test(text)) {
         const host = fairplayBackends.hostMode ? fairplayBackends.hostMode() : "";
         const help =
-          host === "mac"
-            ? "Send an App Store link (https://apps.apple.com/…). This Mac FairPlay host decrypts it with UnfairPlay and I’ll send the IPA back."
-            : "Send an App Store link (https://apps.apple.com/…). The configured FairPlay backend decrypts it and I’ll send the IPA back.";
+          "Tetherless Decrypt\n\n" +
+          "Send an App Store link (https://apps.apple.com/…).\n" +
+          "For TestFlight: upload the encrypted .ipa (site queue) or use the Mac Tetherless bot drop folder.\n" +
+          (host === "mac" ? "This host decrypts with UnfairPlay." : "Uses the configured FairPlay backends.");
         await tgApi("sendMessage", {
           chat_id: chatId,
           text: help,
@@ -466,17 +467,16 @@ function create({ db /*, secret */ }) {
       if (!link) {
         await tgApi("sendMessage", {
           chat_id: chatId,
-          text: "Paste a full apps.apple.com link.",
+          text: "Paste a full apps.apple.com link (or use /start).",
         }).catch(() => {});
         continue;
       }
       const verMatch = text.match(/\b(?:v|version)[:=\s]+([0-9][0-9A-Za-z._-]{0,29})\b/i);
       const version = verMatch ? verMatch[1] : "";
       try {
-        const host = fairplayBackends.hostMode ? fairplayBackends.hostMode() : "";
         await tgApi("sendMessage", {
           chat_id: chatId,
-          text: host === "mac" ? "Queued on Mac FairPlay host…" : "Queued…",
+          text: "Queued on Tetherless…",
         });
         const result = await helpers.createDecryptJob({
           url: link,
