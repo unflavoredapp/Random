@@ -28,6 +28,7 @@ const https = require("https");
 const { spawn, spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
 const ipaCache = require("./mac-tg-ipa-cache");
+const urlLog = require("./mac-tg-url-log");
 const { renderProgressBanner } = require("./mac-tg-progress-banner");
 
 const API_ROOT = String(process.env.TELEGRAM_API_ROOT || "https://api.telegram.org").replace(/\/+$/, "");
@@ -1107,7 +1108,8 @@ function startScreenText() {
     `• cloud cache: \`${ipaCache.list().length} IPA(s)\` in \`${ipaCache.CACHE_DIR}\`\n\n` +
     `*Add an App Store URL to start.*\n\n` +
     `Send an App Store link, or a \`.ipa\` / \`decrypt App.ipa\` from \`${DROP}\`.\n` +
-    `Repeat links re-send from Telegram cloud (instant). /cache lists saved IPAs.`
+    `Paste an App Store link — it’s removed from chat and saved to *History*.\n` +
+    `Tap History anytime to decrypt that version again. /cache lists cloud IPAs.`
   );
 }
 
@@ -1119,11 +1121,77 @@ function startKeyboard() {
         { text: "Status", callback_data: "status" },
       ],
       [
-        { text: "TestFlight help", callback_data: "testflight" },
+        { text: "History", callback_data: "history" },
         { text: "Cache", callback_data: "cache" },
       ],
+      [{ text: "TestFlight help", callback_data: "testflight" }],
     ],
   };
+}
+
+/** Best-effort: remove the user's pasted URL from the private chat. */
+async function deleteUserMessage(chatId, messageId) {
+  const mid = Number(messageId);
+  if (!chatId || !mid) return false;
+  const r = await tgApi("deleteMessage", {
+    chat_id: chatId,
+    message_id: mid,
+  }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
+  if (!(r && r.ok)) {
+    console.warn("[chat] deleteMessage failed:", (r && r.description) || "unknown");
+    return false;
+  }
+  return true;
+}
+
+function rememberStoreUrl(chatId, link, vreq) {
+  const meta = lookupStoreApp(link);
+  return urlLog.add(chatId, {
+    storeUrl: link,
+    version: vreq || "latest",
+    name: meta.name || "",
+    adam: urlLog.adamFromStoreUrl(link) || ipaCache.adamFromStoreUrl(link),
+  });
+}
+
+async function sendHistoryList(chatId) {
+  const items = urlLog.list(chatId, 20);
+  if (!items.length) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text:
+        "History is empty — paste an App Store URL.\n" +
+        "Links are deleted from chat but kept here so you can tap to decrypt again.",
+    });
+    return;
+  }
+  const lines = items.map((it, i) => {
+    const label = it.name || `App ${it.adam || "?"}`;
+    const ver = it.version && it.version !== "latest" ? ` v${it.version}` : "";
+    const when = it.at ? new Date(it.at).toLocaleString() : "";
+    return `${i + 1}. *${label.replace(/[*_`]/g, "")}*${ver}${when ? ` · ${when}` : ""}`;
+  });
+  const rows = items.slice(0, 12).map((it) => {
+    const label = String(it.name || it.adam || "App")
+      .split(/\s+[—\-–]\s+/)[0]
+      .slice(0, 28);
+    const ver = it.version && it.version !== "latest" ? ` v${it.version}` : "";
+    return [
+      {
+        text: `🔁 ${label}${ver}`.slice(0, 64),
+        callback_data: `hist:${it.id}`.slice(0, 64),
+      },
+    ];
+  });
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text:
+      `*History* — tap to decrypt again\n\n` +
+      lines.join("\n") +
+      `\n\n_Stored on this Mac under_ \`${urlLog.LOG_DIR}\``,
+    parse_mode: "Markdown",
+    reply_markup: { inline_keyboard: rows },
+  });
 }
 
 async function sendStart(chatId) {
@@ -1515,20 +1583,51 @@ async function handleCallback(cq) {
   const chatId = cq.message && cq.message.chat && cq.message.chat.id;
   const data = String(cq.data || "");
   if (!chatId) return;
-  await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
   if (!chatAllowed(chatId)) {
+    await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     await tgApi("sendMessage", { chat_id: chatId, text: "This bot is private." });
     return;
   }
   if (data === "status") {
+    await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     await sendStart(chatId);
     return;
   }
   if (data === "cache") {
+    await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     await sendCacheList(chatId);
     return;
   }
+  if (data === "history") {
+    await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+    await sendHistoryList(chatId);
+    return;
+  }
+  if (data.startsWith("hist:")) {
+    const id = data.slice(5);
+    const entry = urlLog.getById(chatId, id);
+    if (!entry || !entry.storeUrl) {
+      await tgApi("answerCallbackQuery", {
+        callback_query_id: cq.id,
+        text: "Not found in history",
+        show_alert: true,
+      }).catch(() => {});
+      return;
+    }
+    await tgApi("answerCallbackQuery", {
+      callback_query_id: cq.id,
+      text: `Decrypting ${entry.name || entry.adam || "app"}…`,
+    }).catch(() => {});
+    const vreq = entry.version && entry.version !== "latest" ? entry.version : "";
+    // Refresh log timestamp / bump to top
+    urlLog.add(chatId, entry);
+    await withWorker(chatId, async () => {
+      await decryptStoreUrl(chatId, entry.storeUrl, vreq);
+    });
+    return;
+  }
   if (data === "testflight") {
+    await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     await tgApi("sendMessage", {
       chat_id: chatId,
       text:
@@ -1541,11 +1640,13 @@ async function handleCallback(cq) {
     });
     return;
   }
+  await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
   await tgApi("sendMessage", {
     chat_id: chatId,
     text:
       "*How it works*\n" +
-      "• App Store link → download encrypted IPA → Tetherless decrypt → IPA back here\n" +
+      "• App Store link → removed from chat → decrypt → IPA back here\n" +
+      "• History keeps every link — tap to decrypt that version again\n" +
       "• TestFlight / custom IPA → upload or drop folder → same decrypt\n" +
       "• Optional: `version: 1.2.3` after a store link for an older build\n" +
       "• Large IPAs: local Bot API (2 GB) or Premium user session (4 GB)",
@@ -1615,6 +1716,11 @@ async function handleMessage(msg) {
     return;
   }
 
+  if (/^\/history\b/i.test(text)) {
+    await sendHistoryList(chatId);
+    return;
+  }
+
   if (/^decrypt\s+/i.test(text) || (/^[\w./-]+\.ipa$/i.test(text) && !/^https?:/i.test(text))) {
     const ipaPath = resolveDropPath(text);
     await withWorker(chatId, async () => {
@@ -1647,6 +1753,9 @@ async function handleMessage(msg) {
 
   const verMatch = text.match(/\b(?:v|version)[:=\s]+([0-9][0-9A-Za-z._-]{0,29})\b/i);
   const vreq = verMatch ? verMatch[1] : "";
+  // Clean chat: drop the pasted URL, keep it in History for re-decrypt.
+  await deleteUserMessage(chatId, msg.message_id);
+  rememberStoreUrl(chatId, link, vreq);
   await withWorker(chatId, async () => {
     await decryptStoreUrl(chatId, link, vreq);
   });
