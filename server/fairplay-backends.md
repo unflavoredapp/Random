@@ -46,6 +46,11 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 #   export TETHERLESS_KEYCHAIN_PASSWORD='pick-a-strong-pass'
 #   zsh ~/tetherless/server/mac-keychain-setup.sh
 #   ipatool auth login   # enter THAT password → Always Allow
+#
+# Full HTTPS backup API for the iOS app (when on-device decrypt fails):
+#   Double-click Desktop/Start-Tetherless-API.command
+#   Copy the printed https://….trycloudflare.com/ URL
+#   iOS app → FairPlay Decrypt → Decrypt site URL → paste that URL → Save host
 
 # 4) Run the TetherLess Node site on THIS Mac (same process as production)
 #    OR just mac-tg-bot.js above for Telegram-only decrypt.
