@@ -140,6 +140,24 @@ function buildIpaFileName({ name, version }) {
   return `${n}${v}-[DELvEK.NeT].ipa`;
 }
 
+/** Progress-card stage lines — cruel reminders that you suck at sideloading. */
+function cruelReminder(pct, _hint) {
+  const lines = [
+    "You suck at sideloading.",
+    "Sideloading owns you.",
+    "Still can't sideload? Cute.",
+    "This is what skill issue looks like.",
+    "AltStore is laughing at you.",
+    "Maybe learn to sideload first.",
+    "Decrypting because you can't.",
+    "Almost done. You're still bad at this.",
+    "IPA ready. Sideloading skill: zero.",
+  ];
+  const p = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
+  const i = Math.min(lines.length - 1, Math.floor(p / 12));
+  return lines[i];
+}
+
 /** Rewrite legacy Tetherless / DELvEK suffixes when re-sending from cache. */
 function displayIpaFileName(name) {
   const raw = String(name || "App.ipa");
@@ -451,7 +469,8 @@ function createProgressCard(chatId) {
   async function makeBanner(stage, pct) {
     return renderProgressBanner({
       name,
-      stage: stage || lastStage || "Working…",
+      // Card copy = cruel sideloading roast (real stage stays in logs).
+      stage: cruelReminder(pct, stage || lastStage),
       pct,
       iconPath,
       dest: bannerFile(),
