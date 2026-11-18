@@ -26,7 +26,9 @@ function loadSharp() {
 function sanitize(s, max) {
   return String(s || "")
     .replace(/…/g, "...")
-    .replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" }[c]))
+    // Keep apostrophes as ASCII — sharp SVG sometimes paints &apos; literally.
+    .replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]))
+    .replace(/'/g, "")
     .replace(/[^\x20-\x7E]+/g, "")
     .trim()
     .slice(0, max || 40);
@@ -169,6 +171,31 @@ function homescreenOverlaySvg({ pct, S }) {
 </svg>`);
 }
 
+/** Telegram-style white download arrow over a dimmed icon (for IPA document thumb). */
+function downloadArrowOverlaySvg(S) {
+  const cx = S / 2;
+  const cy = S / 2;
+  const corner = Math.round(S * 0.223);
+  const stroke = Math.max(14, Math.round(S * 0.085));
+  const shaftTop = cy - S * 0.22;
+  const shaftBot = cy + S * 0.06;
+  const headY = cy + S * 0.22;
+  const headW = S * 0.2;
+  return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}"/>
+    </clipPath>
+  </defs>
+  <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="rgba(0,0,0,0.38)" clip-path="url(#squircle)"/>
+  <!-- Shaft -->
+  <path d="M ${cx} ${shaftTop} L ${cx} ${shaftBot}" fill="none" stroke="#ffffff" stroke-width="${stroke}" stroke-linecap="round"/>
+  <!-- Arrow head -->
+  <path d="M ${cx - headW} ${cy + S * 0.02} L ${cx} ${headY} L ${cx + headW} ${cy + S * 0.02}" fill="none" stroke="#ffffff" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`);
+}
+
 function placeholderIconSvg(S) {
   const r = Math.round(S * 0.223);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
@@ -197,6 +224,7 @@ async function renderProgressBanner({
   dest,
   tag,
   brand,
+  done,
 } = {}) {
   const sharp = loadSharp();
   if (!sharp) return "";
@@ -206,8 +234,12 @@ async function renderProgressBanner({
   const W = 1200;
   const H = 630;
   const S = 480;
+  const isDone = !!done;
   const title = sanitize(name || "App", 26);
-  const progress = sanitize(stage || "You suck at sideloading.", 48);
+  const progress = sanitize(
+    stage || (isDone ? "IPA ready. Sideloading skill: zero." : "You suck at sideloading."),
+    48
+  );
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
   const brandLabel = sanitize(brand || "DELVEK", 18).toUpperCase();
 
@@ -262,11 +294,14 @@ async function renderProgressBanner({
       .composite([{ input: iconRoundMask, blend: "dest-in" }])
       .png()
       .toBuffer();
-    const withRing = await sharp(rounded)
-      .composite([{ input: homescreenOverlaySvg({ pct: p, S }), top: 0, left: 0 }])
+    const overlay = isDone
+      ? downloadArrowOverlaySvg(S)
+      : homescreenOverlaySvg({ pct: p, S });
+    const withOverlay = await sharp(rounded)
+      .composite([{ input: overlay, top: 0, left: 0 }])
       .png()
       .toBuffer();
-    layers.push({ input: withRing, left: iconLeft, top: iconTop });
+    layers.push({ input: withOverlay, left: iconLeft, top: iconTop });
 
     layers.push({
       input: leftPanelSvg({
@@ -317,12 +352,66 @@ async function renderProgressBanner({
   }
 }
 
+/**
+ * IPA document thumbnail (Telegram: JPEG ≤320px, ≤200KB) — app icon + download arrow.
+ * Tapping the document in chat starts the IPA download.
+ * @returns {Promise<string>} dest path on success, "" on failure
+ */
+async function renderDownloadThumb({ iconPath, dest, size } = {}) {
+  const sharp = loadSharp();
+  if (!sharp) return "";
+  const out = path.resolve(dest || "");
+  if (!out) return "";
+  const S = Math.max(160, Math.min(320, Math.round(Number(size) || 320)));
+
+  try {
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    const corner = Math.round(S * 0.223);
+    let iconBase;
+    if (iconPath && fs.existsSync(iconPath)) {
+      iconBase = await sharp(iconPath)
+        .resize(S, S, { fit: "cover" })
+        .png()
+        .toBuffer();
+    } else {
+      iconBase = await sharp(placeholderIconSvg(S)).png().toBuffer();
+    }
+    const mask = Buffer.from(`<?xml version="1.0"?>
+<svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
+  <rect width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="white"/>
+</svg>`);
+    const rounded = await sharp(iconBase)
+      .composite([{ input: mask, blend: "dest-in" }])
+      .png()
+      .toBuffer();
+    await sharp(rounded)
+      .composite([{ input: downloadArrowOverlaySvg(S), top: 0, left: 0 }])
+      .flatten({ background: { r: 20, g: 20, b: 28 } })
+      .jpeg({ quality: 82, mozjpeg: true })
+      .toFile(out);
+
+    if (!fs.existsSync(out) || fs.statSync(out).size < 400) return "";
+    // Telegram thumb hard limit ~200KB — recompress if needed.
+    if (fs.statSync(out).size > 190 * 1024) {
+      await sharp(out)
+        .resize(240, 240, { fit: "cover" })
+        .jpeg({ quality: 70, mozjpeg: true })
+        .toFile(out);
+    }
+    return out;
+  } catch (e) {
+    console.warn("[banner] download thumb failed:", String((e && e.message) || e).slice(0, 160));
+    return "";
+  }
+}
+
 function whichConvert() {
   return loadSharp() ? "sharp" : "";
 }
 
 module.exports = {
   renderProgressBanner,
+  renderDownloadThumb,
   whichConvert,
   sharpTag,
   loadSharp,
