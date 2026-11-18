@@ -147,10 +147,9 @@ function buildIpaFileName({ name, version }) {
   return `${n}${v}-Tetherless.ipa`;
 }
 
-/** Finished progress card: name — Tetherless + bundle / version / store link. */
-function finishCaption({ name, bid, version, minIos, storeUrl }) {
+/** IPA document caption — classic AppAssassin look (bundle · version · store). */
+function buildCaption({ bid, version, minIos, storeUrl }) {
   const lines = [];
-  lines.push(`<b>${escapeHtml(`${name || "App"} — Tetherless`)}</b>`);
   if (bid) lines.push(`📁 <code>${escapeHtml(bid)}</code>`);
   const verBits = [];
   if (version) verBits.push(`Version: ${escapeHtml(version)}`);
@@ -158,11 +157,6 @@ function finishCaption({ name, bid, version, minIos, storeUrl }) {
   if (verBits.length) lines.push(`⚙️ ${verBits.join(" · ")}`);
   if (storeUrl) lines.push(`🔗 <a href="${escapeHtml(storeUrl)}">App Store Link</a>`);
   return lines.join("\n");
-}
-
-/** IPA document: no caption — Patch/Get VIP buttons only. */
-function buildCaption() {
-  return "";
 }
 
 function progressBar(pct, width = 12) {
@@ -377,17 +371,9 @@ function createProgressCard(chatId) {
       await tgApi("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
       messageId = 0;
     },
-    /** Dynamically switch the live card back to bundle / version / store link. */
-    async finish(meta = {}) {
-      if (meta.name) name = meta.name;
-      const caption = finishCaption({
-        name,
-        bid: meta.bid || "",
-        version: meta.version || "",
-        minIos: meta.minIos || "",
-        storeUrl: meta.storeUrl || storeUrl,
-      });
-      await paint(caption);
+    /** Drop the live card once the IPA (with caption) is sent — no duplicate meta post. */
+    async finish() {
+      await this.clear();
     },
     async fail(err) {
       const caption =
@@ -870,46 +856,49 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     await card.start(entry.storeUrl || "", entry.name || "App");
     await card.setStage("Sending…", 40);
   }
-  // Prefer file_id so we can attach Patch/Get VIP without old caption junk.
   if (entry.fileId) {
     await card.setStage("Sending…", 70);
+    const caption = buildCaption({
+      bid: entry.bid,
+      version: entry.version,
+      minIos: entry.minIos,
+      storeUrl: entry.storeUrl,
+    });
     const r = await tgApi("sendDocument", {
       chat_id: chatId,
       document: entry.fileId,
+      caption: caption || undefined,
+      parse_mode: caption ? "HTML" : undefined,
       reply_markup: markup,
     });
     if (r && r.ok) {
       console.log("[cache] hit file_id", entry.adam, entry.version || "latest");
-      await card.finish({
-        name: entry.name,
-        bid: entry.bid,
-        version: entry.version,
-        minIos: entry.minIos,
-        storeUrl: entry.storeUrl,
-      });
+      await card.finish();
       return true;
     }
     console.warn("[cache] file_id send failed:", (r && r.description) || "unknown");
   }
+  // Prefer fresh sendDocument with caption over copyMessage (copy keeps old empty captions).
   // Premium-user uploads: copyMessage from the original chat (no re-upload).
   if (entry.messageId && entry.fromChatId) {
     await card.setStage("Sending…", 70);
+    const caption = buildCaption({
+      bid: entry.bid,
+      version: entry.version,
+      minIos: entry.minIos,
+      storeUrl: entry.storeUrl,
+    });
     const r = await tgApi("copyMessage", {
       chat_id: chatId,
       from_chat_id: entry.fromChatId,
       message_id: entry.messageId,
-      caption: "",
+      caption: caption || undefined,
+      parse_mode: caption ? "HTML" : undefined,
       reply_markup: markup,
     });
     if (r && r.ok) {
       console.log("[cache] hit copyMessage", entry.adam, entry.version || "latest");
-      await card.finish({
-        name: entry.name,
-        bid: entry.bid,
-        version: entry.version,
-        minIos: entry.minIos,
-        storeUrl: entry.storeUrl,
-      });
+      await card.finish();
       return true;
     }
     console.warn("[cache] copyMessage failed:", (r && r.description) || "unknown");
@@ -919,7 +908,13 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     await card.setStage("Uploading…", 76);
     const fileName = entry.fileName || path.basename(entry.diskPath);
     const thumbPath = entry.storeUrl ? fetchStoreIcon(entry.storeUrl) : "";
-    const sent = await sendDocument(chatId, entry.diskPath, fileName, "", {
+    const caption = buildCaption({
+      bid: entry.bid,
+      version: entry.version,
+      minIos: entry.minIos,
+      storeUrl: entry.storeUrl,
+    });
+    const sent = await sendDocument(chatId, entry.diskPath, fileName, caption, {
       thumbPath,
       replyMarkup: markup,
       card,
@@ -929,20 +924,14 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
       const viaPremium = !!(sent.premium && sent.message_id);
       ipaCache.put({
         ...entry,
-        caption: "",
+        caption,
         fileId: (doc && doc.file_id) || entry.fileId || "",
         fileUniqueId: (doc && doc.file_unique_id) || entry.fileUniqueId || "",
         messageId: viaPremium ? Number(sent.message_id) || 0 : entry.messageId || 0,
         fromChatId: viaPremium ? String(chatId) : entry.fromChatId || "",
       });
       console.log("[cache] hit disk re-upload", entry.diskPath);
-      await card.finish({
-        name: entry.name,
-        bid: entry.bid,
-        version: entry.version,
-        minIos: entry.minIos,
-        storeUrl: entry.storeUrl,
-      });
+      await card.finish();
       return true;
     }
     await card.fail(premiumFailDescription((sent && sent.description) || "upload failed"));
@@ -1023,7 +1012,7 @@ async function deliverResult(chatId, result, opts = {}) {
   const bytes = fs.statSync(result.file).size;
   const mb = (bytes / 1024 / 1024).toFixed(1);
   const fileName = buildIpaFileName({ name, version });
-  const caption = buildCaption();
+  const caption = buildCaption({ bid, version, minIos, storeUrl });
   const markup = resultKeyboard();
   const thumbPath = storeUrl ? fetchStoreIcon(storeUrl) : "";
   const adam = ipaCache.adamFromStoreUrl(storeUrl) || "";
@@ -1099,9 +1088,7 @@ async function deliverResult(chatId, result, opts = {}) {
         doc && doc.file_id ? "file_id" : viaPremium ? "copyMessage" : "disk-only"
       );
     }
-    if (card) {
-      await card.finish({ name, bid, version, minIos, storeUrl });
-    }
+    if (card) await card.finish();
   }
 }
 
