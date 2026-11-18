@@ -593,7 +593,17 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
         guard let i = jobs.firstIndex(where: { $0.id == id }) else { return }
         jobs[i].status = .processing
         persist()
-        let bid = jobs.first(where: { $0.id == id })?.bundleID
+        let job = jobs[i]
+        let bid = job.bundleID
+        // Stamp Store URL so Mac-only routing can decrypt without on-device FairPlay.
+        if !job.storeURL.isEmpty {
+            DecryptCompanionHandoff.publishStoreDecryptTarget(
+                url: job.storeURL,
+                version: job.version.isEmpty ? nil : job.version,
+                displayName: name,
+                bundleID: bid
+            )
+        }
         await DeviceDecryptService.shared.decryptDownloadedStoreIPA(
             at: ipa,
             displayName: name,

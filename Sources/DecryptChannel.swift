@@ -30,9 +30,12 @@ enum DecryptChannel: String, CaseIterable, Identifiable {
     var blurb: String {
         switch self {
         case .device:
+            if DecryptMacRouting.macOnly {
+                return "Get / companion decrypt runs on your Mac only (Decrypt site URL → unfairplay). On-device FairPlay is off."
+            }
             return "Free & purchased apps: silent Store download, then FairPlay decrypt on this iPhone — no Mac, no jailbreak."
         case .telegram:
-            return "Your bot queues App Store links; this iPhone’s Phone Worker decrypts and uploads the IPA (no FastDecryptBot)."
+            return "Your bot queues App Store links; decrypt finishes on the Mac host / Premium session (DELvEK)."
         }
     }
 
