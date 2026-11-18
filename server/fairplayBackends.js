@@ -390,7 +390,9 @@ function adamFromStoreUrl(url) {
 /** ipatool ≥2.x uses --app-id (not legacy --adam-id). */
 function ipatoolDownloadArgs(encPath, { url, vreq } = {}) {
   const adam = adamFromStoreUrl(url);
+  const platform = String(process.env.FAIRPLAY_IPATOOL_PLATFORM || "iphone").trim();
   const args = ["download", "--purchase", "--non-interactive", "-o", encPath];
+  if (platform) args.push("--platform", platform);
   if (adam) args.push("--app-id", adam);
   else args.push(String(url || "").trim());
   if (vreq) args.push("--external-version-id", String(vreq));
