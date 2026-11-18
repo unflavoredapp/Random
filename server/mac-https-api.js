@@ -4,7 +4,8 @@
 /**
  * Tetherless Mac backup decrypt HTTPS API (App → Decrypt site URL).
  *
- * Run on MacDuty desktop session (Keychain) behind Cloudflare tunnel:
+ * Run via WebSSH (dedicated keychain) behind Cloudflare tunnel:
+ *   zsh server/mac-ssh.sh api
  *   source ~/.tetherless-mac.env
  *   node server/mac-https-api.js
  *   # other terminal: cloudflared tunnel --url http://127.0.0.1:8787

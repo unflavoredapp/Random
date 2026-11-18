@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Brand: Tetherless · https://tetherless.dev
-# Desktop double-click OR prefer WebSSH: zsh ~/tetherless/server/mac-ssh.sh start
+# Prefer WebSSH: zsh ~/tetherless/server/mac-ssh.sh start
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/bin:/users/client/bin:$PATH"
 

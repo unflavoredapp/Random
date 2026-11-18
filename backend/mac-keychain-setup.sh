@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Brand: Tetherless · https://tetherless.dev
 # Create/unlock a dedicated Keychain for ipatool so the login Keychain
-# password prompt stops blocking MacDuty desktop sessions.
+# password prompt stops blocking WebSSH / MacDuty sessions.
 #
 # macOS cannot "always allow regardless of password" on a locked login
 # Keychain whose password you don't know. This script uses a NEW keychain
