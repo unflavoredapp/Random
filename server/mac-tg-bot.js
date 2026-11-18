@@ -261,31 +261,46 @@ function premiumUploadConfigured() {
   );
 }
 
-/** Peer for Premium user → bot chat. Numeric *user* chat_id would hit Saved Messages. */
-function premiumPeer() {
+/**
+ * Peers for Premium user → bot chat (never the numeric *user* chat_id —
+ * that lands in Saved Messages). Prefer bot id from getMe; @username is
+ * fallback only (env typos like ipaagentbot often 404).
+ */
+function premiumPeerCandidates() {
+  const out = [];
+  if (BOT_ID) out.push(String(BOT_ID));
   const uname = String(BOT_USERNAME || "").trim().replace(/^@/, "");
-  if (uname) return `@${uname}`;
-  if (BOT_ID) return String(BOT_ID);
-  return "";
+  if (uname) out.push(`@${uname}`);
+  return [...new Set(out)];
+}
+
+function premiumPeer() {
+  return premiumPeerCandidates()[0] || "";
+}
+
+function premiumFailDescription(raw) {
+  let s = String(raw || "unknown");
+  // Unwrap nested JSON from older spawn paths: {"ok":false,"description":"..."}
+  try {
+    const j = JSON.parse(s);
+    if (j && j.description) s = String(j.description);
+  } catch {
+    /* plain text */
+  }
+  return s.replace(/^'|'$/g, "").slice(0, 220);
 }
 
 /**
  * Upload via Premium user session (async — does not freeze the bot event loop).
  * Streams progress lines from Python and optional heartbeats to the chat.
  */
-function sendDocumentPremium(chatId, filePath, fileName, caption, { thumbPath, replyMarkup, onProgress } = {}) {
-  const peer = premiumPeer();
-  if (!peer) {
-    return Promise.resolve({
-      ok: false,
-      description:
-        "Bot username unknown — Premium upload needs @BotUsername (getMe failed). Set TELEGRAM_BOT_USERNAME.",
-    });
-  }
+function sendDocumentPremiumOnce(chatId, filePath, fileName, caption, peer, { thumbPath, replyMarkup, onProgress } = {}) {
   const env = {
     ...process.env,
-    // Upload as you → @Bot / bot id so the file appears in this chat (not Saved Messages).
+    // Upload as you → bot id / @Bot so the file appears in this chat (not Saved Messages).
     TG_UPLOAD_CHAT_ID: peer,
+    TG_UPLOAD_BOT_ID: BOT_ID ? String(BOT_ID) : "",
+    TG_UPLOAD_BOT_USERNAME: BOT_USERNAME || "",
     TG_UPLOAD_FILE: path.resolve(filePath),
     TG_UPLOAD_FILENAME: fileName,
     TG_UPLOAD_CAPTION: caption || "",
@@ -355,6 +370,7 @@ function sendDocumentPremium(chatId, filePath, fileName, caption, { thumbPath, r
         }
         if (j && typeof j.ok === "boolean") {
           if (j.ok) j.chat_id = String(chatId);
+          if (!j.ok && j.description) j.description = premiumFailDescription(j.description);
           finish(j);
           return;
         }
@@ -385,7 +401,6 @@ function sendDocumentPremium(chatId, filePath, fileName, caption, { thumbPath, r
       const err = stderr.trim();
       if (code === 0) {
         try {
-          // Last JSON object in stdout
           const lines = out.split(/\n/).filter(Boolean);
           const parsed = JSON.parse(lines[lines.length - 1] || "{}");
           if (parsed && parsed.ok) parsed.chat_id = String(chatId);
@@ -398,10 +413,35 @@ function sendDocumentPremium(chatId, filePath, fileName, caption, { thumbPath, r
       }
       finish({
         ok: false,
-        description: (err || out || `premium upload exit ${code}`).slice(0, 300),
+        description: premiumFailDescription(err || out || `premium upload exit ${code}`),
       });
     });
   });
+}
+
+async function sendDocumentPremium(chatId, filePath, fileName, caption, opts = {}) {
+  const peers = premiumPeerCandidates();
+  if (!peers.length) {
+    return {
+      ok: false,
+      description:
+        "Bot id/username unknown — Premium upload needs getMe(). Check TELEGRAM_BOT_TOKEN.",
+    };
+  }
+  let last = null;
+  for (let i = 0; i < peers.length; i++) {
+    const peer = peers[i];
+    if (i > 0 && typeof opts.onProgress === "function") {
+      opts.onProgress(`retry Premium peer ${peer}…`);
+    }
+    last = await sendDocumentPremiumOnce(chatId, filePath, fileName, caption, peer, opts);
+    if (last && last.ok) return last;
+    const why = premiumFailDescription(last && last.description);
+    console.warn(`[job] Premium peer ${peer} failed:`, why);
+    // Only retry on resolve/username misses; other errors (auth, network) won't help.
+    if (!/username not found|peer|resolve|get_chat|invalid peer/i.test(why)) break;
+  }
+  return last || { ok: false, description: "Premium upload failed" };
 }
 
 function preferPremiumUpload() {
@@ -716,8 +756,12 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
       chat_id: chatId,
       text:
         "Tetherless — cached IPA upload failed: " +
-        String((sent && sent.description) || "unknown").slice(0, 200),
+        premiumFailDescription((sent && sent.description) || "unknown") +
+        `\nSaved on Mac: \`${entry.diskPath}\``,
+      parse_mode: "Markdown",
     });
+    // Cache hit was real — do not fall through into a full re-decrypt.
+    return true;
   }
   return false;
 }
@@ -1070,20 +1114,30 @@ async function poll() {
 }
 
 async function resolveBotIdentity() {
+  const envHint = BOT_USERNAME;
   try {
     const me = await tgApi("getMe");
     if (me && me.ok && me.result) {
+      // Always prefer getMe over env — TELEGRAM_BOT_USERNAME typos 404 in Pyrogram.
       if (me.result.username) BOT_USERNAME = String(me.result.username).replace(/^@/, "");
       if (me.result.id) BOT_ID = Number(me.result.id) || 0;
     }
   } catch (e) {
     console.warn("getMe failed:", (e && e.message) || e);
   }
-  if (!BOT_USERNAME && !BOT_ID) {
+  if (envHint && BOT_USERNAME && envHint.toLowerCase() !== BOT_USERNAME.toLowerCase()) {
     console.warn(
-      "WARN: bot username unknown — Premium uploads need @BotUsername. Set TELEGRAM_BOT_USERNAME or fix the token."
+      `TELEGRAM_BOT_USERNAME=${envHint} ignored — getMe says @${BOT_USERNAME} (id=${BOT_ID})`
     );
   }
+  if (!BOT_ID) {
+    console.warn(
+      "WARN: bot id unknown — Premium uploads need getMe(). Check TELEGRAM_BOT_TOKEN."
+    );
+  }
+  console.log(
+    `Premium peers: ${premiumPeerCandidates().join(" → ") || "(none)"}`
+  );
 }
 
 async function boot() {

@@ -7,7 +7,10 @@ Bot API cannot use Premium limits. This script uses Pyrogram MTProto with your
 user account session.
 
 Invoked by mac-tg-bot.js with env:
-  TG_UPLOAD_CHAT_ID, TG_UPLOAD_FILE, TG_UPLOAD_FILENAME, TG_UPLOAD_CAPTION
+  TG_UPLOAD_CHAT_ID   — preferred peer (bot numeric id or @username)
+  TG_UPLOAD_BOT_ID    — fallback bot id from getMe
+  TG_UPLOAD_BOT_USERNAME — fallback @username from getMe
+  TG_UPLOAD_FILE, TG_UPLOAD_FILENAME, TG_UPLOAD_CAPTION
   TG_UPLOAD_THUMB (optional jpg), TG_UPLOAD_REPLY_MARKUP (optional JSON)
 Prints JSON progress lines, then a final {ok:true, message_id, chat_id}.
 """
@@ -28,6 +31,26 @@ def fail(msg: str, code: int = 1) -> None:
     sys.exit(code)
 
 
+def peer_candidates() -> list:
+    seen: set[str] = set()
+    out: list = []
+
+    def add(raw: str) -> None:
+        s = (raw or "").strip()
+        if not s or s in seen:
+            return
+        seen.add(s)
+        if s.lstrip("-").isdigit():
+            out.append(int(s))
+        else:
+            out.append(s if s.startswith("@") else f"@{s.lstrip('@')}")
+
+    add(os.environ.get("TG_UPLOAD_CHAT_ID") or "")
+    add(os.environ.get("TG_UPLOAD_BOT_ID") or "")
+    add(os.environ.get("TG_UPLOAD_BOT_USERNAME") or "")
+    return out
+
+
 async def main() -> None:
     try:
         from pyrogram import Client  # type: ignore
@@ -42,17 +65,17 @@ async def main() -> None:
         or os.environ.get("TELEGRAM_SESSION_STRING")
         or ""
     ).strip()
-    chat_id = (os.environ.get("TG_UPLOAD_CHAT_ID") or "").strip()
     path = (os.environ.get("TG_UPLOAD_FILE") or "").strip()
     filename = (os.environ.get("TG_UPLOAD_FILENAME") or os.path.basename(path) or "App.ipa").strip()
     caption = os.environ.get("TG_UPLOAD_CAPTION") or ""
     thumb = (os.environ.get("TG_UPLOAD_THUMB") or "").strip()
     markup_raw = (os.environ.get("TG_UPLOAD_REPLY_MARKUP") or "").strip()
+    peers = peer_candidates()
 
     if not api_id or not api_hash or not session:
         fail("Set TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION")
-    if not chat_id or not path or not os.path.isfile(path):
-        fail("Missing TG_UPLOAD_CHAT_ID or TG_UPLOAD_FILE")
+    if not peers or not path or not os.path.isfile(path):
+        fail("Missing TG_UPLOAD_CHAT_ID/bot id or TG_UPLOAD_FILE")
 
     reply_markup = None
     if markup_raw:
@@ -66,7 +89,6 @@ async def main() -> None:
                     if b.get("url"):
                         buttons.append(InlineKeyboardButton(text, url=b["url"]))
                     elif b.get("callback_data"):
-                        # User clients can't answer bot callback_data — use URL fallback.
                         site = os.environ.get("TETHERLESS_SITE_URL") or "https://tetherless.dev"
                         buttons.append(InlineKeyboardButton(text, url=site))
                 if buttons:
@@ -91,21 +113,38 @@ async def main() -> None:
         now = asyncio.get_event_loop().time()
         if total <= 0:
             return
-        # Throttle progress JSON so Node isn't flooded.
         if current < total and (now - last_emit) < 2.0:
             return
         last_emit = now
         emit({"progress": True, "current": int(current), "total": int(total)})
 
     async with app:
-        target = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
-        # Resolve @username early so failures are loud instead of a long hang.
-        try:
-            peer = await app.get_chat(target)
-            peer_title = getattr(peer, "username", None) or getattr(peer, "title", None) or str(target)
-            emit({"progress": True, "current": 0, "total": max(1, os.path.getsize(path)), "peer": peer_title})
-        except Exception as e:
-            fail(f"Cannot resolve Premium peer {chat_id!r}: {e}")
+        target = None
+        last_err = ""
+        for peer in peers:
+            try:
+                chat = await app.get_chat(peer)
+                target = peer
+                peer_title = (
+                    getattr(chat, "username", None)
+                    or getattr(chat, "title", None)
+                    or getattr(chat, "first_name", None)
+                    or str(peer)
+                )
+                emit(
+                    {
+                        "progress": True,
+                        "current": 0,
+                        "total": max(1, os.path.getsize(path)),
+                        "peer": peer_title,
+                    }
+                )
+                break
+            except Exception as e:
+                last_err = f"{peer}: {e}"
+                continue
+        if target is None:
+            fail(f"Cannot resolve Premium peer(s) {peers!r}: {last_err}")
 
         kwargs = {
             "chat_id": target,
@@ -127,7 +166,7 @@ async def main() -> None:
             "ok": True,
             "filename": filename,
             "message_id": getattr(msg, "id", None),
-            "chat_id": chat_id,
+            "chat_id": str(target),
         }
     )
 
