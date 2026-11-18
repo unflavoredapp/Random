@@ -4,9 +4,9 @@
 /**
  * Tetherless Telegram → UnfairPlay decrypt bot (Mac host).
  *
- * Start from the **desktop Terminal** (GUI session) so ipatool can read Keychain:
- *   source /users/client/.tetherless-mac.env
- *   node server/mac-tg-bot.js
+ * WebSSH only (dedicated keychain — no Mac desktop):
+ *   zsh server/mac-ssh.sh start
+ *   zsh server/mac-ssh.sh status | logs | session
  *
  * IPA delivery:
  *   • Default: your Premium *user* session (TELEGRAM_API_ID/HASH/SESSION) → ≤4 GB
@@ -25,7 +25,7 @@ const os = require("os");
 const path = require("path");
 const http = require("http");
 const https = require("https");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
 const ipaCache = require("./mac-tg-ipa-cache");
 
@@ -42,7 +42,9 @@ const TG_GETFILE_MAX = LOCAL_API
   : 20 * 1024 * 1024;
 
 const BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
-const BOT_USERNAME = String(process.env.TELEGRAM_BOT_USERNAME || "TetherLessDecryptBot").replace(/^@/, "");
+/** Filled from getMe() at boot — env override is only a bootstrap hint. */
+let BOT_USERNAME = String(process.env.TELEGRAM_BOT_USERNAME || "").replace(/^@/, "");
+let BOT_ID = 0;
 const ALLOWED = String(process.env.TELEGRAM_ALLOWED_IDS || "")
   .split(",")
   .map((s) => s.trim())
@@ -259,25 +261,30 @@ function premiumUploadConfigured() {
   );
 }
 
-/** Peer for Premium user → bot chat. Numeric user chat_id would hit Saved Messages. */
+/** Peer for Premium user → bot chat. Numeric *user* chat_id would hit Saved Messages. */
 function premiumPeer() {
-  const uname = String(BOT_USERNAME || process.env.TELEGRAM_BOT_USERNAME || "")
-    .trim()
-    .replace(/^@/, "");
-  return uname ? `@${uname}` : "";
+  const uname = String(BOT_USERNAME || "").trim().replace(/^@/, "");
+  if (uname) return `@${uname}`;
+  if (BOT_ID) return String(BOT_ID);
+  return "";
 }
 
-function sendDocumentPremium(chatId, filePath, fileName, caption, { thumbPath, replyMarkup } = {}) {
+/**
+ * Upload via Premium user session (async — does not freeze the bot event loop).
+ * Streams progress lines from Python and optional heartbeats to the chat.
+ */
+function sendDocumentPremium(chatId, filePath, fileName, caption, { thumbPath, replyMarkup, onProgress } = {}) {
   const peer = premiumPeer();
   if (!peer) {
-    return {
+    return Promise.resolve({
       ok: false,
-      description: "Set TELEGRAM_BOT_USERNAME so Premium uploads go to the bot chat (not Saved Messages).",
-    };
+      description:
+        "Bot username unknown — Premium upload needs @BotUsername (getMe failed). Set TELEGRAM_BOT_USERNAME.",
+    });
   }
   const env = {
     ...process.env,
-    // Upload as you → @Bot so the file appears in this chat (not Saved Messages).
+    // Upload as you → @Bot / bot id so the file appears in this chat (not Saved Messages).
     TG_UPLOAD_CHAT_ID: peer,
     TG_UPLOAD_FILE: path.resolve(filePath),
     TG_UPLOAD_FILENAME: fileName,
@@ -289,31 +296,112 @@ function sendDocumentPremium(chatId, filePath, fileName, caption, { thumbPath, r
     120000,
     Number(process.env.TELEGRAM_PREMIUM_UPLOAD_TIMEOUT_MS || 20 * 60 * 1000)
   );
-  const r = spawnSync("python3", [PREMIUM_UPLOAD], {
-    encoding: "utf8",
-    maxBuffer: 8 * 1024 * 1024,
-    env,
-    timeout: timeoutMs,
+  const mbTotal = (fs.statSync(filePath).size / 1024 / 1024).toFixed(1);
+  console.log(`[job] Premium upload → peer=${peer} file=${fileName} (${mbTotal} MB)`);
+
+  return new Promise((resolve) => {
+    const child = spawn("python3", ["-u", PREMIUM_UPLOAD], {
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    let lastPct = -1;
+    const started = Date.now();
+
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearInterval(ticker);
+      clearTimeout(killer);
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ignore */
+      }
+      resolve(result);
+    };
+
+    const killer = setTimeout(() => {
+      finish({
+        ok: false,
+        description: `Premium upload timed out after ${Math.round(timeoutMs / 60000)} min (peer=${peer})`,
+      });
+    }, timeoutMs);
+
+    const ticker = setInterval(() => {
+      const sec = Math.round((Date.now() - started) / 1000);
+      if (typeof onProgress === "function") {
+        onProgress(`still uploading… ${sec}s · ${mbTotal} MB → ${peer}`);
+      }
+    }, 15000);
+
+    const handleLine = (line) => {
+      const s = String(line || "").trim();
+      if (!s) return;
+      try {
+        const j = JSON.parse(s);
+        if (j && j.progress && j.total) {
+          const pct = Math.min(99, Math.floor((100 * Number(j.current || 0)) / Number(j.total)));
+          if (pct >= lastPct + 5 || pct >= 99) {
+            lastPct = pct;
+            const curMb = (Number(j.current || 0) / 1024 / 1024).toFixed(1);
+            if (typeof onProgress === "function") {
+              onProgress(`uploading ${pct}% (${curMb}/${mbTotal} MB)`);
+            }
+          }
+          return;
+        }
+        if (j && typeof j.ok === "boolean") {
+          if (j.ok) j.chat_id = String(chatId);
+          finish(j);
+          return;
+        }
+      } catch {
+        /* non-JSON log line */
+      }
+      stdout += s + "\n";
+    };
+
+    let buf = "";
+    child.stdout.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      const parts = buf.split(/\r?\n/);
+      buf = parts.pop() || "";
+      for (const p of parts) handleLine(p);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.on("error", (err) => {
+      finish({ ok: false, description: String((err && err.message) || err) });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      if (buf.trim()) handleLine(buf);
+      if (settled) return;
+      const out = stdout.trim();
+      const err = stderr.trim();
+      if (code === 0) {
+        try {
+          // Last JSON object in stdout
+          const lines = out.split(/\n/).filter(Boolean);
+          const parsed = JSON.parse(lines[lines.length - 1] || "{}");
+          if (parsed && parsed.ok) parsed.chat_id = String(chatId);
+          finish(parsed && typeof parsed.ok === "boolean" ? parsed : { ok: true, chat_id: String(chatId) });
+          return;
+        } catch {
+          finish({ ok: true, description: out.slice(0, 200), chat_id: String(chatId) });
+          return;
+        }
+      }
+      finish({
+        ok: false,
+        description: (err || out || `premium upload exit ${code}`).slice(0, 300),
+      });
+    });
   });
-  if (r.error) {
-    const msg = r.error.code === "ETIMEDOUT"
-      ? `Premium upload timed out after ${Math.round(timeoutMs / 60000)} min`
-      : String(r.error.message || r.error);
-    return { ok: false, description: msg };
-  }
-  const out = String(r.stdout || "").trim();
-  const err = String(r.stderr || "").trim();
-  if (r.status !== 0) {
-    return { ok: false, description: (err || out || `premium upload exit ${r.status}`).slice(0, 300) };
-  }
-  try {
-    const parsed = JSON.parse(out || "{}");
-    // Bot API copyMessage still uses the private chat id (user ↔ bot).
-    if (parsed && parsed.ok) parsed.chat_id = String(chatId);
-    return parsed;
-  } catch {
-    return { ok: true, description: out.slice(0, 200), chat_id: String(chatId) };
-  }
 }
 
 function preferPremiumUpload() {
@@ -328,6 +416,16 @@ function preferPremiumUpload() {
 async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
   const stat = fs.statSync(filePath);
   const mb = (stat.size / 1024 / 1024).toFixed(1);
+  const say =
+    typeof extras.onProgress === "function"
+      ? extras.onProgress
+      : async (t) => {
+          try {
+            await tgApi("sendMessage", { chat_id: chatId, text: `Tetherless — ${t}` });
+          } catch {
+            /* ignore */
+          }
+        };
 
   // Always prefer Premium *user* MTProto when session is set (unlimited cloud + ≤4 GB).
   if (preferPremiumUpload()) {
@@ -338,9 +436,17 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
         tooLarge: true,
       };
     }
-    console.log(`[job] uploading via your Premium Telegram session (${mb} MB)…`);
-    const prem = sendDocumentPremium(chatId, filePath, fileName, caption, extras);
+    const peer = premiumPeer() || "unset";
+    console.log(`[job] uploading via Premium session (${mb} MB) → ${peer}`);
+    await say(`uploading via Premium → ${peer} (${mb} MB)…`);
+    const prem = await sendDocumentPremium(chatId, filePath, fileName, caption, {
+      ...extras,
+      onProgress: (t) => {
+        say(t);
+      },
+    });
     if (prem && prem.ok) {
+      await say(`sent via Premium (${mb} MB).`);
       return {
         ...prem,
         premium: true,
@@ -353,6 +459,9 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
       };
     }
     console.warn("[job] premium session upload failed:", prem && prem.description);
+    await say(
+      `Premium upload failed: ${String((prem && prem.description) || "unknown").slice(0, 160)}`
+    );
     // Fall through to Bot API only for small files; large ones cannot use cloud Bot API.
     if (stat.size > 49 * 1024 * 1024 && !LOCAL_API) {
       return {
@@ -582,7 +691,7 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     const mb = entry.bytes ? (entry.bytes / 1024 / 1024).toFixed(1) : "?";
     await tgApi("sendMessage", {
       chat_id: chatId,
-      text: `Tetherless — cached on Mac (${mb} MB). Uploading via Premium session…`,
+      text: `Tetherless — cached on Mac (${mb} MB · ${entry.name || "App"}). Starting Premium upload…`,
     });
     const fileName = entry.fileName || path.basename(entry.diskPath);
     const thumbPath = entry.storeUrl ? fetchStoreIcon(entry.storeUrl) : "";
@@ -960,7 +1069,25 @@ async function poll() {
   }
 }
 
+async function resolveBotIdentity() {
+  try {
+    const me = await tgApi("getMe");
+    if (me && me.ok && me.result) {
+      if (me.result.username) BOT_USERNAME = String(me.result.username).replace(/^@/, "");
+      if (me.result.id) BOT_ID = Number(me.result.id) || 0;
+    }
+  } catch (e) {
+    console.warn("getMe failed:", (e && e.message) || e);
+  }
+  if (!BOT_USERNAME && !BOT_ID) {
+    console.warn(
+      "WARN: bot username unknown — Premium uploads need @BotUsername. Set TELEGRAM_BOT_USERNAME or fix the token."
+    );
+  }
+}
+
 async function boot() {
+  await resolveBotIdentity();
   await tgApi("setMyCommands", {
     commands: [
       { command: "start", description: "Tetherless start screen" },
@@ -971,7 +1098,7 @@ async function boot() {
   }).catch(() => {});
   const st = fairplayBackends.backendStatus();
   console.log(
-    `Tetherless TG bot @${BOT_USERNAME} · host=${st.host} · unfairplay=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
+    `Tetherless TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · host=${st.host} · unfairplay=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
   );
   console.log(
     `API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${preferPremiumUpload()} · peer=${premiumPeer() || "unset"}`

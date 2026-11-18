@@ -9,7 +9,7 @@ user account session.
 Invoked by mac-tg-bot.js with env:
   TG_UPLOAD_CHAT_ID, TG_UPLOAD_FILE, TG_UPLOAD_FILENAME, TG_UPLOAD_CAPTION
   TG_UPLOAD_THUMB (optional jpg), TG_UPLOAD_REPLY_MARKUP (optional JSON)
-Prints JSON {ok:true, message_id, chat_id} on success.
+Prints JSON progress lines, then a final {ok:true, message_id, chat_id}.
 """
 from __future__ import annotations
 
@@ -19,8 +19,12 @@ import os
 import sys
 
 
+def emit(obj: dict) -> None:
+    print(json.dumps(obj), flush=True)
+
+
 def fail(msg: str, code: int = 1) -> None:
-    print(json.dumps({"ok": False, "description": msg[:300]}))
+    emit({"ok": False, "description": msg[:300]})
     sys.exit(code)
 
 
@@ -80,8 +84,29 @@ async def main() -> None:
         in_memory=True,
     )
 
+    last_emit = 0.0
+
+    async def progress(current: int, total: int) -> None:
+        nonlocal last_emit
+        now = asyncio.get_event_loop().time()
+        if total <= 0:
+            return
+        # Throttle progress JSON so Node isn't flooded.
+        if current < total and (now - last_emit) < 2.0:
+            return
+        last_emit = now
+        emit({"progress": True, "current": int(current), "total": int(total)})
+
     async with app:
         target = int(chat_id) if chat_id.lstrip("-").isdigit() else chat_id
+        # Resolve @username early so failures are loud instead of a long hang.
+        try:
+            peer = await app.get_chat(target)
+            peer_title = getattr(peer, "username", None) or getattr(peer, "title", None) or str(target)
+            emit({"progress": True, "current": 0, "total": max(1, os.path.getsize(path)), "peer": peer_title})
+        except Exception as e:
+            fail(f"Cannot resolve Premium peer {chat_id!r}: {e}")
+
         kwargs = {
             "chat_id": target,
             "document": path,
@@ -89,6 +114,7 @@ async def main() -> None:
             "caption": caption[:1024] if caption else None,
             "parse_mode": "html",
             "force_document": True,
+            "progress": progress,
         }
         if thumb and os.path.isfile(thumb):
             kwargs["thumb"] = thumb
@@ -96,15 +122,13 @@ async def main() -> None:
             kwargs["reply_markup"] = reply_markup
         msg = await app.send_document(**kwargs)
 
-    print(
-        json.dumps(
-            {
-                "ok": True,
-                "filename": filename,
-                "message_id": getattr(msg, "id", None),
-                "chat_id": chat_id,
-            }
-        )
+    emit(
+        {
+            "ok": True,
+            "filename": filename,
+            "message_id": getattr(msg, "id", None),
+            "chat_id": chat_id,
+        }
     )
 
 
