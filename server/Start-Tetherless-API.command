@@ -1,6 +1,6 @@
 #!/bin/zsh
 # Brand: Tetherless · https://tetherless.dev
-# Double-click on Mac desktop: API + Cloudflare HTTPS tunnel for iOS backup decrypt.
+# Prefer WebSSH: zsh ~/tetherless/server/mac-ssh.sh api
 set -euo pipefail
 export PATH="/opt/homebrew/bin:$HOME/bin:/users/client/bin:$PATH"
 

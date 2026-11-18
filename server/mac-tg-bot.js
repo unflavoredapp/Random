@@ -4,9 +4,9 @@
 /**
  * Tetherless Telegram → UnfairPlay decrypt bot (Mac host).
  *
- * Start from the **desktop Terminal** (GUI session) so ipatool can read Keychain:
- *   source /users/client/.tetherless-mac.env
- *   node server/mac-tg-bot.js
+ * WebSSH only (dedicated keychain — no Mac desktop):
+ *   zsh server/mac-ssh.sh start
+ *   zsh server/mac-ssh.sh status | logs | session
  *
  * IPA delivery:
  *   • Default: your Premium *user* session (TELEGRAM_API_ID/HASH/SESSION) → ≤4 GB
