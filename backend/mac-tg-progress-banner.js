@@ -3,9 +3,10 @@
 /**
  * DELvEK progress card via `sharp`.
  *
- * Left: DELVEK · app name · stage · #tag
- * Right: blurred wash · large centered app icon with iOS Home Screen–style
- *        circular download progress (ring + % inside). No status pills / bars.
+ * Left: Delvek icon + DELVEK · app name · cruel roast line
+ * Mid: bigger Tetherless mark toward the progress circle + Made by Tetherless.Dev
+ * Right: app icon with Home Screen circular % ring
+ * No hashtag · no delvek.net footer
  */
 const fs = require("fs");
 const path = require("path");
@@ -41,17 +42,24 @@ function sharpTag(tag) {
   );
 }
 
-/** Credit block under #tag: icon slot + "Made by Tetherless.Dev". */
-const CREDIT_ICON = 72;
-const CREDIT_ICON_LEFT = 56;
-const CREDIT_ICON_TOP = 290;
+/** Bigger Tetherless mark, shifted toward the progress circle. */
+const CREDIT_ICON = 160;
+const CREDIT_ICON_LEFT = 250;
+const CREDIT_ICON_TOP = 300;
 
-function leftPanelSvg({ brand, title, stage, hash, W, H, creditIconLeft, creditIconTop, creditIconSize }) {
+const BRAND_ICON = 56;
+const BRAND_ICON_LEFT = 48;
+const BRAND_ICON_TOP = 36;
+
+function leftPanelSvg({ brand, title, stage, W, H, creditIconLeft, creditIconTop, creditIconSize }) {
   const ix = creditIconLeft != null ? creditIconLeft : CREDIT_ICON_LEFT;
   const iy = creditIconTop != null ? creditIconTop : CREDIT_ICON_TOP;
   const isz = creditIconSize != null ? creditIconSize : CREDIT_ICON;
   const creditCx = ix + isz / 2;
-  const creditTy = iy + isz + 28;
+  const creditTy = iy + isz + 30;
+  const brandTextX = BRAND_ICON_LEFT + BRAND_ICON + 16;
+  // Roast can be longer — wrap roughly via smaller font / wider max
+  const stageSafe = sanitize(stage, 48);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -62,26 +70,52 @@ function leftPanelSvg({ brand, title, stage, hash, W, H, creditIconLeft, creditI
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="${Math.round(W * 0.52)}" height="${H}" fill="url(#leftFade)"/>
-  <text x="56" y="72" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" letter-spacing="2">${brand}</text>
-  <text x="56" y="150" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="60" font-weight="700">${title}</text>
-  <text x="56" y="214" fill="#d7dbe6" font-family="Arial, Helvetica, sans-serif" font-size="28">${stage}</text>
-  <text x="56" y="268" fill="#6cb6ff" font-family="Arial, Helvetica, sans-serif" font-size="28">${hash}</text>
+  <text x="${brandTextX}" y="74" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" letter-spacing="2">${brand}</text>
+  <text x="56" y="150" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="56" font-weight="700">${title}</text>
+  <text x="56" y="214" fill="#ffb4b4" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="600">${stageSafe}</text>
   <text x="${creditCx}" y="${creditTy}" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="600">Made by Tetherless.Dev</text>
-  <text x="56" y="${H - 36}" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">delvek.net</text>
   <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@DELvEKBot</text>
 </svg>`);
 }
 
-function resolveTetherlessIcon() {
-  const candidates = [
-    path.join(__dirname, "assets", "tetherless-icon.png"),
-    path.join(__dirname, "..", "docs", "assets", "tetherless-icon.png"),
-    path.join(__dirname, "..", "Assets.xcassets", "AppIcon.appiconset", "icon-1024.png"),
+function resolveAsset(names) {
+  const roots = [
+    path.join(__dirname, "assets"),
+    path.join(__dirname, "..", "docs", "assets"),
+    path.join(__dirname, "..", "Assets.xcassets", "AppIcon.appiconset"),
+    path.join(__dirname, "..", "Assets.xcassets", "DelvekBadge.imageset"),
   ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) return p;
+  for (const name of names) {
+    for (const root of roots) {
+      const p = path.join(root, name);
+      if (fs.existsSync(p)) return p;
+    }
   }
   return "";
+}
+
+function resolveTetherlessIcon() {
+  return resolveAsset(["tetherless-icon.png", "icon-1024.png"]);
+}
+
+function resolveDelvekIcon() {
+  return resolveAsset(["delvek-icon.png", "DelvekBadge@3x.png", "DelvekBadge@2x.png"]);
+}
+
+async function roundedPng(sharp, srcPath, size) {
+  const corner = Math.round(size * 0.22);
+  const base = await sharp(srcPath)
+    .resize(size, size, { fit: "cover" })
+    .png()
+    .toBuffer();
+  const mask = Buffer.from(`<?xml version="1.0"?>
+<svg width="${size}" height="${size}" xmlns="http://www.w3.org/2000/svg">
+  <rect width="${size}" height="${size}" rx="${corner}" ry="${corner}" fill="white"/>
+</svg>`);
+  return sharp(base)
+    .composite([{ input: mask, blend: "dest-in" }])
+    .png()
+    .toBuffer();
 }
 
 /** Polar → cartesian for SVG arc (angles in degrees, 0 = top, clockwise). */
@@ -105,10 +139,6 @@ function arcPath(cx, cy, r, pct) {
   return `M ${cx} ${cy - r} A ${r} ${r} 0 ${large} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
 }
 
-/**
- * iOS Home Screen download overlay:
- * lightly dimmed squircle · dark circular lens · white progress ring · % in center.
- */
 function homescreenOverlaySvg({ pct, S }) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
   const cx = S / 2;
@@ -177,15 +207,19 @@ async function renderProgressBanner({
   const H = 630;
   const S = 480;
   const title = sanitize(name || "App", 26);
-  const progress = sanitize(stage || "Working...", 28);
+  const progress = sanitize(stage || "You suck at sideloading.", 48);
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-  const hash = `#${sharpTag(tag)}`;
   const brandLabel = sanitize(brand || "DELVEK", 18).toUpperCase();
 
   const rightLeft = Math.round(W * 0.46);
   const rightWidth = W - rightLeft;
   const iconLeft = rightLeft + Math.round((rightWidth - S) / 2);
   const iconTop = Math.round((H - S) / 2);
+
+  // Tetherless mark sits in the gap toward the circle.
+  const creditSize = CREDIT_ICON;
+  const creditLeft = CREDIT_ICON_LEFT;
+  const creditTop = CREDIT_ICON_TOP;
 
   try {
     fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -234,18 +268,11 @@ async function renderProgressBanner({
       .toBuffer();
     layers.push({ input: withRing, left: iconLeft, top: iconTop });
 
-    const creditIconPath = resolveTetherlessIcon();
-    const creditSize = CREDIT_ICON;
-    const creditLeft = CREDIT_ICON_LEFT;
-    const creditTop = CREDIT_ICON_TOP;
-
-    // Left copy (includes "Made by Tetherless.Dev" under the icon slot).
     layers.push({
       input: leftPanelSvg({
         brand: brandLabel,
         title,
         stage: progress,
-        hash,
         W,
         H,
         creditIconLeft: creditLeft,
@@ -256,21 +283,17 @@ async function renderProgressBanner({
       top: 0,
     });
 
-    // Tetherless mark under #tag — after the fade so it stays visible.
+    // Delvek mark beside brand label (top-left).
+    const delvekIconPath = resolveDelvekIcon();
+    if (delvekIconPath) {
+      const delvekRounded = await roundedPng(sharp, delvekIconPath, BRAND_ICON);
+      layers.push({ input: delvekRounded, left: BRAND_ICON_LEFT, top: BRAND_ICON_TOP });
+    }
+
+    // Bigger Tetherless mark toward the circle.
+    const creditIconPath = resolveTetherlessIcon();
     if (creditIconPath) {
-      const creditCorner = Math.round(creditSize * 0.22);
-      const creditBase = await sharp(creditIconPath)
-        .resize(creditSize, creditSize, { fit: "cover" })
-        .png()
-        .toBuffer();
-      const creditMask = Buffer.from(`<?xml version="1.0"?>
-<svg width="${creditSize}" height="${creditSize}" xmlns="http://www.w3.org/2000/svg">
-  <rect width="${creditSize}" height="${creditSize}" rx="${creditCorner}" ry="${creditCorner}" fill="white"/>
-</svg>`);
-      const creditRounded = await sharp(creditBase)
-        .composite([{ input: creditMask, blend: "dest-in" }])
-        .png()
-        .toBuffer();
+      const creditRounded = await roundedPng(sharp, creditIconPath, creditSize);
       layers.push({ input: creditRounded, left: creditLeft, top: creditTop });
     }
 
