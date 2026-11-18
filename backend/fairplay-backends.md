@@ -40,6 +40,12 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 #   node ~/tetherless/server/mac-tg-bot.js
 # App Store link → decrypt. TestFlight → send .ipa or drop into ~/tetherless-drop
 # and message: decrypt App.ipa
+#
+# If login Keychain password is unknown (MacDuty padlock dialogs), use a dedicated
+# keychain instead (macOS cannot unlock without a password):
+#   export TETHERLESS_KEYCHAIN_PASSWORD='pick-a-strong-pass'
+#   zsh ~/tetherless/server/mac-keychain-setup.sh
+#   ipatool auth login   # enter THAT password → Always Allow
 
 # 4) Run the TetherLess Node site on THIS Mac (same process as production)
 #    OR just mac-tg-bot.js above for Telegram-only decrypt.
