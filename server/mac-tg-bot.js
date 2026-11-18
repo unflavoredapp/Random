@@ -1,24 +1,13 @@
 #!/usr/bin/env node
-// Brand: Tetherless · https://tetherless.dev
+// Brand: DELvEK · https://delvek.net
 "use strict";
 /**
- * Tetherless Telegram decrypt bot (Mac host).
+ * DELvEK Telegram decrypt bot (@DELvEKBot) — free App Store / TestFlight IPAs.
  *
- * WebSSH only (dedicated keychain — no Mac desktop):
- *   zsh server/mac-ssh.sh start
- *   zsh server/mac-ssh.sh status | logs | session
+ * Host ops (WebSSH): zsh server/mac-ssh.sh start | status | logs | session
  *
- * IPA delivery:
- *   • Default: your Premium *user* session (TELEGRAM_API_ID/HASH/SESSION) → ≤4 GB
- *     + Telegram cloud storage (bots cannot use Premium; the user account uploads)
- *   • Fallback: cloud Bot API ~50 MB, or local Bot API (TELEGRAM_API_ROOT) ≤2000 MB
- *
- * Telegram cloud cache: after the first decrypt we keep Telegram's file_id (+ a
- * local copy). The next request for the same app/version re-sends by file_id —
- * instant, no re-decrypt.
- *
- * App Store links → ipatool download + Tetherless decrypt.
- * TestFlight / any encrypted IPA → send the .ipa here, or drop it in the drop folder.
+ * IPA delivery: Premium user session (≤4 GB) or Bot API fallback.
+ * Cloud cache: file_id + local copy for instant re-send.
  */
 const fs = require("fs");
 const os = require("os");
@@ -148,7 +137,7 @@ function readIpaMeta(ipaPath) {
 function buildIpaFileName({ name, version }) {
   const n = sanitizeFilePart(name);
   const v = version ? `_v${sanitizeFilePart(version)}` : "";
-  return `${n}${v}-Tetherless.ipa`;
+  return `${n}${v}-DELvEK.ipa`;
 }
 
 /** IPA document caption — classic AppAssassin look (bundle · version · store). */
@@ -172,11 +161,11 @@ function buildCaption({ bid, version, minIos, storeUrl }) {
  */
 function progressCaption({ name, stage, pct, tag }) {
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-  const sharp = String(tag || "tetherless")
+  const sharp = String(tag || "delvek")
     .toLowerCase()
     .replace(/^#/, "")
     .replace(/[^a-z0-9_]+/g, "")
-    .slice(0, 32) || "tetherless";
+    .slice(0, 32) || "delvek";
   return [
     `<b>${escapeHtml(name || "App")}</b>`,
     `#${sharp}`,
@@ -194,9 +183,18 @@ function httpsUrl(raw, fallback) {
 
 /** Final IPA buttons only: Patch · Get VIP (inline tabs under the document). */
 function resultKeyboard() {
-  const site = httpsUrl(process.env.TETHERLESS_SITE_URL, "https://tetherless.dev");
-  const patch = httpsUrl(process.env.TETHERLESS_PATCH_URL, `${site}/`);
-  const vip = httpsUrl(process.env.TETHERLESS_VIP_URL, `${site}/vip`);
+  const site = httpsUrl(
+    process.env.DELVEK_SITE_URL || process.env.TETHERLESS_SITE_URL,
+    "https://delvek.net"
+  );
+  const patch = httpsUrl(
+    process.env.DELVEK_PATCH_URL || process.env.TETHERLESS_PATCH_URL,
+    `${site}/`
+  );
+  const vip = httpsUrl(
+    process.env.DELVEK_VIP_URL || process.env.TETHERLESS_VIP_URL,
+    `${site}/vip`
+  );
   return {
     inline_keyboard: [
       [
@@ -270,7 +268,7 @@ async function ensureIpaButtonTabs(chatId, messageId, { caption, replyMarkup } =
   // Visible fallback: reply under the IPA with the same tabs.
   const reply = await tgApi("sendMessage", {
     chat_id: chatId,
-    text: "Tetherless",
+    text: "DELvEK",
     reply_to_message_id: mid,
     reply_markup: markup,
     disable_web_page_preview: true,
@@ -445,7 +443,8 @@ function createProgressCard(chatId) {
       pct,
       iconPath,
       dest: bannerFile(),
-      tag: "tetherless",
+      tag: "delvek",
+      brand: "DELVEK",
     });
   }
 
@@ -1078,45 +1077,13 @@ function isTestFlightUrl(t) {
 }
 
 function startScreenText() {
-  const st = fairplayBackends.backendStatus();
-  const uf = st.unfairplay && st.unfairplay.ready ? "ready" : "missing";
-  const model = st.enrollmentModel && st.enrollmentModel.ready ? "ready" : "missing";
-  const up = preferPremiumUpload()
-    ? "your Premium session ≤4 GB + cloud storage"
-    : premiumUploadConfigured()
-      ? "Premium session present but TELEGRAM_PREMIUM_UPLOAD=0"
-      : LOCAL_API
-        ? `local Bot API ≤${Math.round(TG_DOC_MAX / 1024 / 1024)} MB`
-        : "cloud Bot API ≤50 MB — run: mac-ssh.sh session";
+  // Minimal DELvEK start — no Mac/status/menu clutter; footer about links only.
   return (
-    `*Tetherless*\n` +
-    `Decrypt App Store / TestFlight IPAs on this Mac.\n\n` +
-    `• decrypt: \`${uf}\`\n` +
-    `• enrollment model: \`${model}\`\n` +
-    `• host: \`${st.host || "mac"}\`\n` +
-    `• upload: \`${up}\`\n` +
-    `• cloud cache: \`${ipaCache.list().length} IPA(s)\` in \`${ipaCache.CACHE_DIR}\`\n\n` +
-    `*Add an App Store URL to start.*\n\n` +
-    `Send an App Store link, or a \`.ipa\` / \`decrypt App.ipa\` from \`${DROP}\`.\n` +
-    `Paste an App Store link — it’s removed from chat and saved to *History*.\n` +
-    `Tap History anytime to decrypt that version again. /cache lists cloud IPAs.`
+    `*DELvEK*\n\n` +
+    `Paste an App Store link — it’s removed from chat.\n` +
+    `Send a \`.ipa\` anytime.\n\n` +
+    `[delvek.net](https://delvek.net)`
   );
-}
-
-function startKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: "How it works", callback_data: "help" },
-        { text: "Status", callback_data: "status" },
-      ],
-      [
-        { text: "History", callback_data: "history" },
-        { text: "Cache", callback_data: "cache" },
-      ],
-      [{ text: "TestFlight help", callback_data: "testflight" }],
-    ],
-  };
 }
 
 /** Best-effort: remove the user's pasted URL from the private chat. */
@@ -1183,7 +1150,7 @@ async function sendHistoryList(chatId) {
     text:
       `*History* — tap to decrypt again\n\n` +
       lines.join("\n") +
-      `\n\n_Stored on this Mac under_ \`${urlLog.LOG_DIR}\``,
+      `\n\n_Tap a button to decrypt again_`,
     parse_mode: "Markdown",
     reply_markup: { inline_keyboard: rows },
   });
@@ -1194,7 +1161,7 @@ async function sendStart(chatId) {
     chat_id: chatId,
     text: startScreenText(),
     parse_mode: "Markdown",
-    reply_markup: startKeyboard(),
+    disable_web_page_preview: true,
   });
 }
 
@@ -1203,7 +1170,7 @@ async function sendCacheList(chatId) {
   if (!items.length) {
     await tgApi("sendMessage", {
       chat_id: chatId,
-      text: "Tetherless cache is empty — paste an App Store URL to start.",
+      text: "Cache is empty — paste an App Store URL to start.",
     });
     return;
   }
@@ -1214,10 +1181,7 @@ async function sendCacheList(chatId) {
   });
   await tgApi("sendMessage", {
     chat_id: chatId,
-    text:
-      `*Tetherless cache* (${items.length})\n` +
-      `☁️ = Telegram cloud · 💾 = Mac disk only (will re-upload)\n\n` +
-      lines.join("\n"),
+    text: `*Cache* (${items.length})\n\n` + lines.join("\n"),
     parse_mode: "Markdown",
   });
 }
@@ -1578,19 +1542,16 @@ async function handleCallback(cq) {
     await tgApi("sendMessage", { chat_id: chatId, text: "This bot is private." });
     return;
   }
-  if (data === "status") {
+  // Old menu buttons (help/status/cache/history/testflight) → quiet dismiss + start.
+  if (
+    data === "status" ||
+    data === "cache" ||
+    data === "history" ||
+    data === "help" ||
+    data === "testflight"
+  ) {
     await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     await sendStart(chatId);
-    return;
-  }
-  if (data === "cache") {
-    await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
-    await sendCacheList(chatId);
-    return;
-  }
-  if (data === "history") {
-    await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
-    await sendHistoryList(chatId);
     return;
   }
   if (data.startsWith("hist:")) {
@@ -1616,32 +1577,7 @@ async function handleCallback(cq) {
     });
     return;
   }
-  if (data === "testflight") {
-    await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text:
-        "*TestFlight on Tetherless*\n\n" +
-        "1. Install the beta on a device / export the personalized encrypted IPA\n" +
-        "2. Send that \`.ipa\` to this chat (≤20 MB via Telegram), *or*\n" +
-        `3. Copy it to \`${DROP}\` and send: \`decrypt App.ipa\`\n\n` +
-        "Invite links (`testflight.apple.com`) can’t be downloaded with ipatool.",
-      parse_mode: "Markdown",
-    });
-    return;
-  }
   await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
-  await tgApi("sendMessage", {
-    chat_id: chatId,
-    text:
-      "*How it works*\n" +
-      "• App Store link → removed from chat → decrypt → IPA back here\n" +
-      "• History keeps every link — tap to decrypt that version again\n" +
-      "• TestFlight / custom IPA → upload or drop folder → same decrypt\n" +
-      "• Optional: `version: 1.2.3` after a store link for an older build\n" +
-      "• Large IPAs: local Bot API (2 GB) or Premium user session (4 GB)",
-    parse_mode: "Markdown",
-  });
 }
 
 async function handleMessage(msg) {
@@ -1656,8 +1592,8 @@ async function handleMessage(msg) {
   const docName = (doc && doc.file_name) || "";
   if (doc && /\.ipa$/i.test(docName)) {
     // Premium/cache echo: our clear IPA uploads come back as user documents — don't re-decrypt.
-    if (/-Tetherless\.ipa$/i.test(docName)) {
-      // If we somehow got a bot-visible file_id here, refresh cache for that adam later.
+    if (/-(?:DELvEK|Tetherless)\.ipa$/i.test(docName)) {
+      // Clear IPA echoes (bot/Premium upload) — don't re-decrypt.
       return;
     }
     if (!doc.file_id) return;
@@ -1665,9 +1601,8 @@ async function handleMessage(msg) {
       await tgApi("sendMessage", {
         chat_id: chatId,
         text:
-          `That IPA is ${((doc.file_size || 0) / 1024 / 1024).toFixed(1)} MB — Telegram only lets bots download ≤20 MB on cloud API.\n` +
-          `Copy it to \`${DROP}\` on the Mac and send: \`decrypt ${doc.file_name || "App.ipa"}\``,
-        parse_mode: "Markdown",
+          `That IPA is ${((doc.file_size || 0) / 1024 / 1024).toFixed(1)} MB — too large to pull from Telegram.\n` +
+          `Send a smaller build, or an App Store link instead.`,
       });
       return;
     }
@@ -1691,23 +1626,8 @@ async function handleMessage(msg) {
   const text = String(msg.text || "").trim();
   if (!text) return;
 
-  if (/^\/(start|help)\b/i.test(text)) {
+  if (/^\/start\b/i.test(text)) {
     await sendStart(chatId);
-    return;
-  }
-
-  if (/^\/status\b/i.test(text)) {
-    await sendStart(chatId);
-    return;
-  }
-
-  if (/^\/cache\b/i.test(text)) {
-    await sendCacheList(chatId);
-    return;
-  }
-
-  if (/^\/history\b/i.test(text)) {
-    await sendHistoryList(chatId);
     return;
   }
 
@@ -1723,7 +1643,7 @@ async function handleMessage(msg) {
   if (!link) {
     await tgApi("sendMessage", {
       chat_id: chatId,
-      text: "Paste an App Store link, send a `.ipa`, or type `decrypt App.ipa`. Send /start for the menu.",
+      text: "Paste an App Store link or send a `.ipa`.",
     });
     return;
   }
@@ -1731,12 +1651,7 @@ async function handleMessage(msg) {
   if (isTestFlightUrl(link)) {
     await tgApi("sendMessage", {
       chat_id: chatId,
-      text:
-        "TestFlight invite links can’t be fetched here.\n" +
-        "Send the encrypted `.ipa`, or drop it in the Mac folder and send `decrypt App.ipa`.",
-      reply_markup: {
-        inline_keyboard: [[{ text: "TestFlight help", callback_data: "testflight" }]],
-      },
+      text: "TestFlight invite links can’t be fetched — send the encrypted `.ipa` instead.",
     });
     return;
   }
@@ -1799,12 +1714,12 @@ async function resolveBotIdentity() {
 async function boot() {
   await resolveBotIdentity();
   await tgApi("setMyCommands", {
-    commands: [
-      { command: "start", description: "Tetherless start screen" },
-      { command: "help", description: "How decrypt works" },
-      { command: "status", description: "Backend / model status" },
-      { command: "cache", description: "List cloud-cached IPAs" },
-    ],
+    commands: [{ command: "start", description: "DELvEK" }],
+  }).catch(() => {});
+  // Drop old BotFather menu entries (help/status/cache) if Telegram cached them.
+  await tgApi("deleteMyCommands", {}).catch(() => {});
+  await tgApi("setMyCommands", {
+    commands: [{ command: "start", description: "DELvEK" }],
   }).catch(() => {});
   const st = fairplayBackends.backendStatus();
   const bannerMode = (() => {
@@ -1816,7 +1731,7 @@ async function boot() {
     }
   })();
   console.log(
-    `Tetherless TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · host=${st.host} · workers=${MAX_WORKERS} · decrypt=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
+    `DELvEK TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · workers=${MAX_WORKERS} · decrypt=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
   );
   console.log(
     `access=${LOCKDOWN && ALLOWED.length ? `lockdown(${ALLOWED.length} ids)` : "public"} · banner=${bannerMode}`
