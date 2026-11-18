@@ -147,7 +147,20 @@ function buildIpaFileName({ name, version }) {
   return `${n}${v}-Tetherless.ipa`;
 }
 
-/** Final IPA caption: keep empty — filename + Patch/Get VIP only (no duplicate meta post). */
+/** Finished progress card: name — Tetherless + bundle / version / store link. */
+function finishCaption({ name, bid, version, minIos, storeUrl }) {
+  const lines = [];
+  lines.push(`<b>${escapeHtml(`${name || "App"} — Tetherless`)}</b>`);
+  if (bid) lines.push(`📁 <code>${escapeHtml(bid)}</code>`);
+  const verBits = [];
+  if (version) verBits.push(`Version: ${escapeHtml(version)}`);
+  if (minIos) verBits.push(`${escapeHtml(minIos)}+`);
+  if (verBits.length) lines.push(`⚙️ ${verBits.join(" · ")}`);
+  if (storeUrl) lines.push(`🔗 <a href="${escapeHtml(storeUrl)}">App Store Link</a>`);
+  return lines.join("\n");
+}
+
+/** IPA document: no caption — Patch/Get VIP buttons only. */
 function buildCaption() {
   return "";
 }
@@ -158,7 +171,7 @@ function progressBar(pct, width = 12) {
   return "▓".repeat(filled) + "░".repeat(Math.max(0, width - filled));
 }
 
-/** Live card only: Name — Tetherless / status / bar — nothing else. */
+/** Live card: Name — Tetherless / Downloading… / bar — nothing else. */
 function progressCaption({ name, stage, pct }) {
   const title = `${name || "App"} — Tetherless`;
   return [
@@ -359,14 +372,22 @@ function createProgressCard(chatId) {
       const p = 75 + Math.round((Math.max(0, Math.min(100, pct)) / 100) * 24);
       return this.setStage("Uploading…", p);
     },
-    /** Remove the live card so the IPA is the only result message (no duplicate). */
     async clear() {
       if (!messageId) return;
       await tgApi("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
       messageId = 0;
     },
-    async finish() {
-      await this.clear();
+    /** Dynamically switch the live card back to bundle / version / store link. */
+    async finish(meta = {}) {
+      if (meta.name) name = meta.name;
+      const caption = finishCaption({
+        name,
+        bid: meta.bid || "",
+        version: meta.version || "",
+        minIos: meta.minIos || "",
+        storeUrl: meta.storeUrl || storeUrl,
+      });
+      await paint(caption);
     },
     async fail(err) {
       const caption =
@@ -859,7 +880,13 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     });
     if (r && r.ok) {
       console.log("[cache] hit file_id", entry.adam, entry.version || "latest");
-      await card.clear();
+      await card.finish({
+        name: entry.name,
+        bid: entry.bid,
+        version: entry.version,
+        minIos: entry.minIos,
+        storeUrl: entry.storeUrl,
+      });
       return true;
     }
     console.warn("[cache] file_id send failed:", (r && r.description) || "unknown");
@@ -876,7 +903,13 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     });
     if (r && r.ok) {
       console.log("[cache] hit copyMessage", entry.adam, entry.version || "latest");
-      await card.clear();
+      await card.finish({
+        name: entry.name,
+        bid: entry.bid,
+        version: entry.version,
+        minIos: entry.minIos,
+        storeUrl: entry.storeUrl,
+      });
       return true;
     }
     console.warn("[cache] copyMessage failed:", (r && r.description) || "unknown");
@@ -903,7 +936,13 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
         fromChatId: viaPremium ? String(chatId) : entry.fromChatId || "",
       });
       console.log("[cache] hit disk re-upload", entry.diskPath);
-      await card.clear();
+      await card.finish({
+        name: entry.name,
+        bid: entry.bid,
+        version: entry.version,
+        minIos: entry.minIos,
+        storeUrl: entry.storeUrl,
+      });
       return true;
     }
     await card.fail(premiumFailDescription((sent && sent.description) || "upload failed"));
@@ -1060,7 +1099,9 @@ async function deliverResult(chatId, result, opts = {}) {
         doc && doc.file_id ? "file_id" : viaPremium ? "copyMessage" : "disk-only"
       );
     }
-    if (card) await card.clear();
+    if (card) {
+      await card.finish({ name, bid, version, minIos, storeUrl });
+    }
   }
 }
 
