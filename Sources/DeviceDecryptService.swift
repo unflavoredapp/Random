@@ -869,6 +869,12 @@ final class DeviceDecryptService: ObservableObject {
             // Cookie jar may have refreshed during download — keep it for the next Get.
             AppleIDStore.shared.mergeStoreCookies(from: account)
             AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
+            DecryptCompanionHandoff.publishStoreDecryptTarget(
+                url: storeURL,
+                version: result.item.displayVersion.isEmpty ? version : result.item.displayVersion,
+                displayName: displayName,
+                bundleID: bundleID
+            )
             try await handoffStoreIPAToCompanion(
                 ipa: result.url,
                 displayName: displayName,

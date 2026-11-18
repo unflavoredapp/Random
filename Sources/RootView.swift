@@ -191,6 +191,13 @@ struct RootView: View {
             nav.goSearch()
             return
         }
+        // Companion hit ENOMEM / hard FairPlay fail — finish via Decrypt site URL (Mac / tetherless.dev).
+        if scheme == "tetherless",
+           ["decrypt-server", "server-decrypt", "server"].contains(url.host?.lowercased() ?? "") {
+            _ = DecryptCompanionHandoff.consumePendingServerFallback()
+            nav.goSearch()
+            return
+        }
         guard ["airshare", "msign", "tetherless", "sideloader"].contains(scheme) else { return }
         switch url.host?.lowercased() {
         case "activity", "signed":
