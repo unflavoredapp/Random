@@ -481,6 +481,7 @@ function createProgressCard(chatId) {
   let lastEdit = 0;
   let lastPct = -1;
   let lastStage = "";
+  let closed = false; // after IPA promote / clear — block late paints from resurrecting the card
   // Serialize paints — parallel start()+fromBackendLine used to send two photos.
   let paintChain = Promise.resolve();
 
@@ -508,7 +509,7 @@ function createProgressCard(chatId) {
   }
 
   async function clearPhotoCaption() {
-    if (!messageId || !hasPhoto) return;
+    if (!messageId || !hasPhoto || closed) return;
     await tgApi("editMessageCaption", {
       chat_id: chatId,
       message_id: messageId,
@@ -518,7 +519,9 @@ function createProgressCard(chatId) {
 
   async function paintBanner(stage, pct) {
     const run = async () => {
+      if (closed) return false;
       const img = await makeBanner(stage, pct);
+      if (closed) return false;
       if (!img) {
         // Prefer silence over duplicating banner text as a caption.
         console.warn("[job] banner render failed — leaving prior card");
@@ -526,6 +529,16 @@ function createProgressCard(chatId) {
       }
       if (!messageId) {
         const sent = await sendPhotoBotApi(chatId, img, "");
+        if (closed) {
+          // Uploaded after close — delete the stray photo.
+          if (sent && sent.ok && sent.result && sent.result.message_id) {
+            await tgApi("deleteMessage", {
+              chat_id: chatId,
+              message_id: sent.result.message_id,
+            }).catch(() => {});
+          }
+          return false;
+        }
         if (sent && sent.ok && sent.result) {
           messageId = sent.result.message_id;
           hasPhoto = true;
@@ -539,6 +552,7 @@ function createProgressCard(chatId) {
         if (!(edited && edited.ok)) {
           // Retry once; never fall back to text caption (duplicates the banner).
           await new Promise((r) => setTimeout(r, 400));
+          if (closed) return false;
           edited = await editMessageMediaBotApi(chatId, messageId, img, "");
         }
         if (edited && edited.ok) {
@@ -586,6 +600,7 @@ function createProgressCard(chatId) {
       }
     },
     async setStage(stage, pct) {
+      if (closed) return;
       // Never regress: upload heartbeats / stage floors (76–80) used to yank 90% → 70%.
       const raw = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
       const p = Math.max(lastPct < 0 ? 0 : lastPct, raw);
@@ -615,9 +630,13 @@ function createProgressCard(chatId) {
       const p = 80 + Math.round((Math.max(0, Math.min(100, pct)) / 100) * 19);
       return this.setStage("Uploading…", p);
     },
-    async clear() {
-      if (!messageId) return;
-      await tgApi("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
+    /**
+     * Release the progress photo without deleting it (after it became the IPA).
+     * Drains paint queue first so a late Uploading… paint can't resurrect the card.
+     */
+    async release() {
+      closed = true;
+      await paintChain.catch(() => {});
       messageId = 0;
       hasPhoto = false;
       if (bannerPath) {
@@ -629,12 +648,14 @@ function createProgressCard(chatId) {
         bannerPath = "";
       }
     },
-    /**
-     * Release the progress photo without deleting it (after it became the IPA).
-     */
-    release() {
-      messageId = 0;
-      hasPhoto = false;
+    async clear() {
+      closed = true;
+      await paintChain.catch(() => {});
+      if (messageId) {
+        await tgApi("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
+        messageId = 0;
+        hasPhoto = false;
+      }
       if (bannerPath) {
         try {
           fs.rmSync(bannerPath, { force: true });
@@ -649,6 +670,13 @@ function createProgressCard(chatId) {
       await this.clear();
     },
     async fail(err) {
+      if (closed) {
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text: `❌ ${String(err || "failed").slice(0, 160)}`,
+        }).catch(() => {});
+        return;
+      }
       lastStage = "Failed";
       // Allow 0% on failure only.
       lastPct = -1;
@@ -709,7 +737,13 @@ function editMessageToDocumentBotApi(
 
   if (fileId) {
     mediaObj.media = fileId;
+    if (thumbPath && fs.existsSync(thumbPath)) {
+      mediaObj.thumbnail = "attach://thumb";
+    }
     args.push("--form-string", `media=${JSON.stringify(mediaObj)}`);
+    if (thumbPath && fs.existsSync(thumbPath)) {
+      args.push("-F", `thumb=@${path.resolve(thumbPath)};type=image/jpeg`);
+    }
   } else {
     const abs = path.resolve(filePath || "");
     if (!abs || !fs.existsSync(abs)) {
@@ -1577,10 +1611,65 @@ async function deliverResult(chatId, result, opts = {}) {
   }
 }
 
+async function cacheIpaDelivery(pending, { fileName, caption, fileId, fileUniqueId, messageId, fromChatId, bytes, diskPath }) {
+  if (!pending || !pending.adam) return;
+  ipaCache.put({
+    adam: pending.adam,
+    version: pending.version || "",
+    bid: pending.bid || "",
+    name: pending.name || "",
+    minIos: pending.minIos || "",
+    storeUrl: pending.storeUrl || "",
+    fileName,
+    caption,
+    fileId: fileId || "",
+    fileUniqueId: fileUniqueId || "",
+    messageId: Number(messageId) || 0,
+    fromChatId: String(fromChatId || ""),
+    bytes: bytes || 0,
+    diskPath: diskPath || "",
+  });
+}
+
+/**
+ * Turn the sharp progress card into the IPA document (same message).
+ * Works with a fresh upload or an existing Telegram file_id.
+ */
+async function promoteCardToIpa(chatId, cardMid, { fileId, disk, fileName, caption, thumbPath, markup, card }) {
+  if (!cardMid) return null;
+  const edited = await editMessageToDocumentBotApi(chatId, cardMid, disk || "", fileName, caption, {
+    thumbPath,
+    replyMarkup: markup,
+    fileId: fileId || "",
+  });
+  if (!(edited && edited.ok)) {
+    console.warn(
+      "[job] card→document edit failed:",
+      (edited && edited.description) || "unknown"
+    );
+    return null;
+  }
+  await attachIpaChrome(chatId, cardMid, { caption, replyMarkup: markup });
+  if (card && typeof card.release === "function") await card.release();
+  console.log("[job] sharp card → IPA document", cardMid, fileName);
+  return edited;
+}
+
+async function dropProgressCard(card, cardMid, chatId) {
+  if (card && typeof card.finish === "function") {
+    await card.finish();
+    return;
+  }
+  if (cardMid) {
+    await tgApi("deleteMessage", { chat_id: chatId, message_id: cardMid }).catch(() => {});
+  }
+}
+
 /**
  * Finish delivery: sharp progress card disappears into the IPA document
- * (editMessageMedia photo→document on the same message — download-arrow thumb).
- * Opens a new bubble only when in-place edit can't take the file.
+ * (editMessageMedia photo→document — download-arrow thumb + Patch/VIP).
+ * Large files: Premium-upload for a file_id, then edit the card with that id
+ * and delete the temporary upload bubble.
  */
 async function deliverIpaAsDocument(chatId, pending, { card, cardMessageId } = {}) {
   if (!pending) return { ok: false, description: "expired" };
@@ -1600,92 +1689,109 @@ async function deliverIpaAsDocument(chatId, pending, { card, cardMessageId } = {
   const bytes = pending.bytes || (disk ? fs.statSync(disk).size : 0);
   const thumbPath = await buildIpaDocumentThumb(pending.storeUrl || "");
 
-  const canEditInPlace =
+  // 1) Direct in-place when we already have file_id or the file fits Bot API.
+  const canDirectEdit =
     cardMid && (pending.fileId || (disk && (LOCAL_API || bytes <= TG_DOC_MAX)));
-
-  if (canEditInPlace) {
-    const edited = await editMessageToDocumentBotApi(chatId, cardMid, disk, fileName, caption, {
-      thumbPath,
-      replyMarkup: markup,
+  if (canDirectEdit) {
+    const edited = await promoteCardToIpa(chatId, cardMid, {
       fileId: pending.fileId || "",
+      disk: pending.fileId ? "" : disk,
+      fileName,
+      caption,
+      thumbPath,
+      markup,
+      card,
     });
-    if (edited && edited.ok) {
+    if (edited) {
       const doc = edited.result && edited.result.document;
-      console.log("[job] sharp card → IPA document", cardMid, fileName);
-      if (pending.adam) {
-        ipaCache.put({
-          adam: pending.adam,
-          version: pending.version || "",
-          bid: pending.bid || "",
-          name: pending.name || "",
-          minIos: pending.minIos || "",
-          storeUrl: pending.storeUrl || "",
-          fileName,
-          caption,
-          fileId: (doc && doc.file_id) || pending.fileId || "",
-          fileUniqueId: (doc && doc.file_unique_id) || "",
-          messageId: cardMid,
-          fromChatId: String(chatId),
-          bytes,
-          diskPath: disk || pending.diskPath || "",
-        });
-      }
-      await attachIpaChrome(chatId, cardMid, { caption, replyMarkup: markup });
-      // Message is now the IPA — don't delete it.
-      if (card && typeof card.release === "function") card.release();
-      return { ok: true, result: edited.result, inPlace: true };
-    }
-    console.warn(
-      "[job] card→document edit failed:",
-      (edited && edited.description) || "unknown"
-    );
-  }
-
-  // Fallback: new document bubble (large Premium files / edit unsupported).
-  if (pending.fileId) {
-    const r = await sendIpaByFileId(chatId, pending.fileId, caption, markup);
-    if (r && r.ok) {
-      if (card) await card.finish();
-      else if (cardMid) {
-        await tgApi("deleteMessage", { chat_id: chatId, message_id: cardMid }).catch(() => {});
-      }
-      return r;
-    }
-  }
-  if (!disk) return { ok: false, description: "IPA no longer on Mac — decrypt again" };
-
-  const sent = await sendDocument(chatId, disk, fileName, caption, {
-    thumbPath,
-    replyMarkup: markup,
-    card: null, // don't double-drive the progress card during upload
-  });
-  if (sent && sent.ok) {
-    if (card) await card.finish();
-    else if (cardMid) {
-      await tgApi("deleteMessage", { chat_id: chatId, message_id: cardMid }).catch(() => {});
-    }
-    const doc = sent.result && sent.result.document;
-    const viaPremium = !!(sent.premium && sent.message_id);
-    if (pending.adam) {
-      ipaCache.put({
-        adam: pending.adam,
-        version: pending.version || "",
-        bid: pending.bid || "",
-        name: pending.name || "",
-        minIos: pending.minIos || "",
-        storeUrl: pending.storeUrl || "",
+      await cacheIpaDelivery(pending, {
         fileName,
         caption,
         fileId: (doc && doc.file_id) || pending.fileId || "",
         fileUniqueId: (doc && doc.file_unique_id) || "",
-        messageId: viaPremium ? Number(sent.message_id) || 0 : (sent.result && sent.result.message_id) || 0,
-        fromChatId: viaPremium ? String(sent.chat_id || chatId) : String(chatId),
+        messageId: cardMid,
+        fromChatId: chatId,
         bytes,
-        diskPath: disk,
+        diskPath: disk || pending.diskPath || "",
       });
+      return { ok: true, result: edited.result, inPlace: true };
     }
   }
-  return sent || { ok: false, description: "upload failed" };
+
+  // 2) Upload (Premium/Bot) to obtain a file_id, then promote the card.
+  let fileId = pending.fileId || "";
+  let uploadMid = 0;
+  let uploadResult = null;
+
+  if (!fileId && disk) {
+    const sent = await sendDocument(chatId, disk, fileName, caption, {
+      thumbPath,
+      replyMarkup: markup,
+      card: null, // don't drive progress paints during upload
+    });
+    if (!(sent && sent.ok)) {
+      return sent || { ok: false, description: "upload failed" };
+    }
+    uploadResult = sent;
+    uploadMid =
+      Number(sent.message_id || (sent.result && sent.result.message_id) || 0) || 0;
+    fileId =
+      (sent.result && sent.result.document && sent.result.document.file_id) || "";
+  } else if (fileId) {
+    const r = await sendIpaByFileId(chatId, fileId, caption, markup);
+    if (!(r && r.ok)) {
+      return r || { ok: false, description: "file_id send failed" };
+    }
+    uploadResult = r;
+    uploadMid = Number(r.result && r.result.message_id) || 0;
+    fileId = (r.result && r.result.document && r.result.document.file_id) || fileId;
+  } else {
+    return { ok: false, description: "IPA no longer on Mac — decrypt again" };
+  }
+
+  // Prefer: card becomes the IPA; delete the temporary upload bubble.
+  if (cardMid && fileId) {
+    const edited = await promoteCardToIpa(chatId, cardMid, {
+      fileId,
+      fileName,
+      caption,
+      thumbPath,
+      markup,
+      card,
+    });
+    if (edited) {
+      if (uploadMid && uploadMid !== cardMid) {
+        await tgApi("deleteMessage", { chat_id: chatId, message_id: uploadMid }).catch(() => {});
+      }
+      const doc = edited.result && edited.result.document;
+      await cacheIpaDelivery(pending, {
+        fileName,
+        caption,
+        fileId: (doc && doc.file_id) || fileId,
+        fileUniqueId: (doc && doc.file_unique_id) || "",
+        messageId: cardMid,
+        fromChatId: chatId,
+        bytes,
+        diskPath: disk || pending.diskPath || "",
+      });
+      return { ok: true, result: edited.result, inPlace: true };
+    }
+  }
+
+  // Couldn't promote — keep the upload bubble, drop the progress card.
+  await dropProgressCard(card, cardMid, chatId);
+  const doc = uploadResult && uploadResult.result && uploadResult.result.document;
+  await cacheIpaDelivery(pending, {
+    fileName,
+    caption,
+    fileId: (doc && doc.file_id) || fileId,
+    fileUniqueId: (doc && doc.file_unique_id) || "",
+    messageId: uploadMid,
+    fromChatId: chatId,
+    bytes,
+    diskPath: disk || pending.diskPath || "",
+  });
+  return uploadResult || { ok: true, message_id: uploadMid };
 }
 
 /** @deprecated name — kept for legacy dl: callbacks */
