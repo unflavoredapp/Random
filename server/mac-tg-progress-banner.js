@@ -4,8 +4,8 @@
  * Tetherless progress card via `sharp`.
  *
  * Left: TETHERLESS · app name · stage · #tag
- * Right: blurred wash · centered app icon with iOS Home Screen–style
- *        circular progress ring + % in the middle (no status chip).
+ * Right: blurred wash · large centered app icon with iOS Home Screen–style
+ *        circular download progress (ring + % inside). No status pills / bars.
  */
 const fs = require("fs");
 const path = require("path");
@@ -74,7 +74,6 @@ function arcPath(cx, cy, r, pct) {
   const p = Math.max(0, Math.min(100, pct));
   if (p <= 0) return "";
   if (p >= 100) {
-    // Full circle as two arcs
     return `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx} ${cy + r} A ${r} ${r} 0 1 1 ${cx} ${cy - r}`;
   }
   const sweep = (p / 100) * 360;
@@ -84,52 +83,57 @@ function arcPath(cx, cy, r, pct) {
 }
 
 /**
- * iOS Home Screen–style download overlay:
- * dimmed icon + circular progress ring + % in the center.
- * No status chip / no bottom bar.
+ * iOS Home Screen download overlay:
+ * lightly dimmed squircle · dark circular lens · white progress ring · % in center.
+ * No status chip / no bottom bar / no percentage pill.
  */
 function homescreenOverlaySvg({ pct, S }) {
   const p = Math.max(0, Math.min(100, Math.round(pct)));
   const cx = S / 2;
   const cy = S / 2;
-  const ringR = Math.round(S * 0.38);
+  // Ring sits near the outer edge of the icon, like SpringBoard downloads.
+  const ringR = Math.round(S * 0.42);
+  const stroke = Math.max(10, Math.round(S * 0.055));
+  const lensR = Math.round(ringR - stroke * 0.15);
   const track = `M ${cx} ${cy - ringR} A ${ringR} ${ringR} 0 1 1 ${cx} ${cy + ringR} A ${ringR} ${ringR} 0 1 1 ${cx} ${cy - ringR}`;
   const prog = arcPath(cx, cy, ringR, p);
-  const fontSize = Math.round(S * 0.18);
+  const fontSize = Math.round(S * 0.2);
+  const corner = Math.round(S * 0.223);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <clipPath id="squircle">
-      <rect x="0" y="0" width="${S}" height="${S}" rx="${Math.round(S * 0.22)}" ry="${Math.round(S * 0.22)}"/>
+      <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}"/>
     </clipPath>
   </defs>
-  <!-- Dim like iOS downloading icon -->
-  <rect x="0" y="0" width="${S}" height="${S}" rx="${Math.round(S * 0.22)}" ry="${Math.round(S * 0.22)}" fill="rgba(0,0,0,0.45)" clip-path="url(#squircle)"/>
-  <!-- Soft center disc behind % -->
-  <circle cx="${cx}" cy="${cy}" r="${Math.round(ringR * 0.72)}" fill="rgba(0,0,0,0.35)"/>
+  <!-- Soft full-icon dim (SpringBoard downloading) -->
+  <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="rgba(0,0,0,0.28)" clip-path="url(#squircle)"/>
+  <!-- Dark circular lens behind ring + % -->
+  <circle cx="${cx}" cy="${cy}" r="${lensR}" fill="rgba(0,0,0,0.48)"/>
   <!-- Track + progress ring -->
-  <path d="${track}" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="${Math.round(S * 0.045)}" stroke-linecap="round"/>
+  <path d="${track}" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="${stroke}" stroke-linecap="round"/>
   ${
     prog
-      ? `<path d="${prog}" fill="none" stroke="#ffffff" stroke-width="${Math.round(S * 0.045)}" stroke-linecap="round"/>`
+      ? `<path d="${prog}" fill="none" stroke="#ffffff" stroke-width="${stroke}" stroke-linecap="round"/>`
       : ""
   }
-  <text x="${cx}" y="${cy + fontSize * 0.35}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="700">${p}%</text>
+  <text x="${cx}" y="${cy + fontSize * 0.36}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="700">${p}%</text>
 </svg>`);
 }
 
 function placeholderIconSvg(S) {
-  const r = Math.round(S * 0.22);
+  const r = Math.round(S * 0.223);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
   <defs>
     <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a2740"/>
-      <stop offset="100%" stop-color="#0a1020"/>
+      <stop offset="0%" stop-color="#3d7cff"/>
+      <stop offset="55%" stop-color="#1a3a6e"/>
+      <stop offset="100%" stop-color="#0a1628"/>
     </linearGradient>
   </defs>
   <rect width="${S}" height="${S}" rx="${r}" ry="${r}" fill="url(#g)"/>
-  <text x="${S / 2}" y="${S / 2 + 20}" text-anchor="middle" fill="#6cb6ff" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="700">T</text>
+  <text x="${S / 2}" y="${S / 2 + Math.round(S * 0.08)}" text-anchor="middle" fill="#e8f0ff" font-family="Arial, Helvetica, sans-serif" font-size="${Math.round(S * 0.28)}" font-weight="700">T</text>
 </svg>`);
 }
 
@@ -153,15 +157,15 @@ async function renderProgressBanner({
 
   const W = 1200;
   const H = 630;
-  const S = 400;
+  // Large icon, centered in the right half of the card.
+  const S = 480;
   const title = sanitize(name || "App", 26);
   const progress = sanitize(stage || "Working...", 28);
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
   const hash = `#${sharpTag(tag)}`;
   const brandLabel = sanitize(brand || "TETHERLESS", 18).toUpperCase();
 
-  // Center icon in the right half of the banner.
-  const rightLeft = Math.round(W * 0.48);
+  const rightLeft = Math.round(W * 0.46);
   const rightWidth = W - rightLeft;
   const iconLeft = rightLeft + Math.round((rightWidth - S) / 2);
   const iconTop = Math.round((H - S) / 2);
@@ -191,7 +195,7 @@ async function renderProgressBanner({
     }
 
     // Squircle icon + Home Screen circular progress
-    const corner = Math.round(S * 0.22);
+    const corner = Math.round(S * 0.223);
     let iconBase;
     if (iconPath && fs.existsSync(iconPath)) {
       iconBase = await sharp(iconPath)
@@ -215,7 +219,7 @@ async function renderProgressBanner({
       .toBuffer();
     layers.push({ input: withRing, left: iconLeft, top: iconTop });
 
-    // Left copy (stage text only — no LIVE / status chips)
+    // Left copy only — no LIVE / UPDATING pills
     layers.push({
       input: leftPanelSvg({
         brand: brandLabel,
