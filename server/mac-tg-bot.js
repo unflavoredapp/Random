@@ -8,10 +8,10 @@
  *   source /users/client/.tetherless-mac.env
  *   node server/mac-tg-bot.js
  *
- * Large IPA delivery (Premium does NOT raise Bot API limits):
- *   • Cloud api.telegram.org → ~50 MB
- *   • Local Bot API (TELEGRAM_API_ROOT) → up to 2000 MB via file://
- *   • Premium user MTProto (TELEGRAM_API_ID + session) → up to 4 GB
+ * IPA delivery:
+ *   • Default: your Premium *user* session (TELEGRAM_API_ID/HASH/SESSION) → ≤4 GB
+ *     + Telegram cloud storage (bots cannot use Premium; the user account uploads)
+ *   • Fallback: cloud Bot API ~50 MB, or local Bot API (TELEGRAM_API_ROOT) ≤2000 MB
  *
  * Telegram cloud cache: after the first decrypt we keep Telegram's file_id (+ a
  * local copy). The next request for the same app/version re-sends by file_id —
@@ -233,16 +233,21 @@ function sendDocumentPremium(chatId, filePath, fileName, caption) {
   }
 }
 
+function preferPremiumUpload() {
+  // Default ON whenever a Premium user session is configured — bots can't use
+  // Premium storage; the user account uploads ≤4 GB into Telegram cloud.
+  // Set TELEGRAM_PREMIUM_UPLOAD=0 to force Bot API instead.
+  if (!premiumUploadConfigured()) return false;
+  const flag = String(process.env.TELEGRAM_PREMIUM_UPLOAD || "1").trim();
+  return flag !== "0" && flag.toLowerCase() !== "false" && flag.toLowerCase() !== "off";
+}
+
 async function sendDocument(chatId, filePath, fileName, caption) {
   const stat = fs.statSync(filePath);
   const mb = (stat.size / 1024 / 1024).toFixed(1);
 
-  // Premium user MTProto for big IPAs (up to 4 GB). Bot API cloud stays ~50 MB;
-  // local Bot API can take ≤2000 MB without a user session.
-  const forcePremium = process.env.TELEGRAM_PREMIUM_UPLOAD === "1";
-  const overCloud = stat.size > 49 * 1024 * 1024;
-  const needPremium = forcePremium || (overCloud && !LOCAL_API) || stat.size > TG_DOC_MAX;
-  if (premiumUploadConfigured() && needPremium) {
+  // Always prefer Premium *user* MTProto when session is set (unlimited cloud + ≤4 GB).
+  if (preferPremiumUpload()) {
     if (stat.size > 4 * 1024 * 1024 * 1024) {
       return {
         ok: false,
@@ -250,7 +255,7 @@ async function sendDocument(chatId, filePath, fileName, caption) {
         tooLarge: true,
       };
     }
-    console.log(`[job] uploading via Premium user MTProto (${mb} MB)…`);
+    console.log(`[job] uploading via your Premium Telegram session (${mb} MB)…`);
     const prem = sendDocumentPremium(chatId, filePath, fileName, caption);
     if (prem && prem.ok) {
       return {
@@ -264,16 +269,26 @@ async function sendDocument(chatId, filePath, fileName, caption) {
         },
       };
     }
-    console.warn("[job] premium upload failed:", prem && prem.description);
-    // Fall through to Bot API / local API when premium fails.
+    console.warn("[job] premium session upload failed:", prem && prem.description);
+    // Fall through to Bot API only for small files; large ones cannot use cloud Bot API.
+    if (stat.size > 49 * 1024 * 1024 && !LOCAL_API) {
+      return {
+        ok: false,
+        description:
+          `Premium session upload failed: ${String((prem && prem.description) || "unknown").slice(0, 180)}. ` +
+          `Saved on Mac: ${filePath}`,
+        tooLarge: true,
+        bytes: stat.size,
+      };
+    }
   }
 
   if (stat.size > TG_DOC_MAX) {
     const hint = premiumUploadConfigured()
-      ? "Premium upload failed and file exceeds Bot API limit."
+      ? "Premium session upload failed / disabled and file exceeds Bot API limit."
       : LOCAL_API
         ? `Local Bot API cap is ~${Math.round(TG_DOC_MAX / 1024 / 1024)} MB.`
-        : "Cloud Bot API caps ~50 MB (Telegram Premium does not raise bot uploads). Set TELEGRAM_API_ROOT to a local Bot API (2 GB) or TELEGRAM_API_ID/HASH/SESSION for Premium user upload (4 GB).";
+        : "Cloud Bot API caps ~50 MB. Wire your Premium user session: zsh server/mac-ssh.sh session";
     return {
       ok: false,
       description: `IPA is ${mb} MB — ${hint} Saved on Mac: ${filePath}`,
@@ -330,11 +345,13 @@ function startScreenText() {
   const st = fairplayBackends.backendStatus();
   const uf = st.unfairplay && st.unfairplay.ready ? "ready" : "missing";
   const model = st.enrollmentModel && st.enrollmentModel.ready ? "ready" : "missing";
-  const up = premiumUploadConfigured()
-    ? "Premium user ≤4 GB"
-    : LOCAL_API
-      ? `local Bot API ≤${Math.round(TG_DOC_MAX / 1024 / 1024)} MB`
-      : "cloud Bot API ≤50 MB";
+  const up = preferPremiumUpload()
+    ? "your Premium session ≤4 GB + cloud storage"
+    : premiumUploadConfigured()
+      ? "Premium session present but TELEGRAM_PREMIUM_UPLOAD=0"
+      : LOCAL_API
+        ? `local Bot API ≤${Math.round(TG_DOC_MAX / 1024 / 1024)} MB`
+        : "cloud Bot API ≤50 MB — run: mac-ssh.sh session";
   return (
     `*Tetherless*\n` +
     `Decrypt App Store / TestFlight IPAs on this Mac.\n\n` +

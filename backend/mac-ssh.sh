@@ -177,6 +177,26 @@ cmd_api() {
   grep -Eo 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -1 || true
 }
 
+cmd_logs() {
+  local n="${1:-80}"
+  echo "=== bot ($BOT_LOG) ==="
+  tail -n "$n" "$BOT_LOG" 2>/dev/null || echo "(no bot log yet)"
+}
+
+cmd_session() {
+  echo "Installing pyrogram (Premium user uploads ≤4 GB)…"
+  python3 -m pip install --user -q pyrogram tgcrypto
+  echo
+  echo "Get api_id + api_hash from https://my.telegram.org (same account with Premium)."
+  if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" ]]; then
+    echo "Tip: you can pre-set them in ~/.tetherless-mac.env before running this."
+  fi
+  python3 "$REPO/server/mac-tg-session-setup.py"
+  echo
+  echo "Restarting bot so it uses your Premium session…"
+  cmd_start
+}
+
 cmd_status() {
   echo "repo:   $REPO"
   echo "env:    ${ENV_FILE:-none}"
@@ -184,6 +204,16 @@ cmd_status() {
     echo "bot:    running pid $(cat "$BOT_PID")"
   else
     echo "bot:    stopped"
+  fi
+  if [[ -n "${TELEGRAM_SESSION:-}${TELEGRAM_SESSION_STRING:-}" && -n "${TELEGRAM_API_ID:-}" ]]; then
+    local flag="${TELEGRAM_PREMIUM_UPLOAD:-1}"
+    if [[ "$flag" == "0" || "$flag" == "false" || "$flag" == "off" ]]; then
+      echo "upload: Premium session present but disabled (TELEGRAM_PREMIUM_UPLOAD=$flag)"
+    else
+      echo "upload: Premium user session (≤4 GB + cloud storage)"
+    fi
+  else
+    echo "upload: Bot API only — run: zsh $REPO/server/mac-ssh.sh session"
   fi
   if alive_pid "$API_PID"; then
     echo "api:    running pid $(cat "$API_PID") :${MAC_API_PORT:-8787}"
@@ -206,12 +236,6 @@ cmd_status() {
   fi
 }
 
-cmd_logs() {
-  local n="${1:-80}"
-  echo "=== bot ($BOT_LOG) ==="
-  tail -n "$n" "$BOT_LOG" 2>/dev/null || echo "(no bot log yet)"
-}
-
 usage() {
   cat <<EOF
 Tetherless Mac SSH helper (no desktop)
@@ -220,6 +244,7 @@ Tetherless Mac SSH helper (no desktop)
   zsh $REPO/server/mac-ssh.sh stop
   zsh $REPO/server/mac-ssh.sh status
   zsh $REPO/server/mac-ssh.sh logs
+  zsh $REPO/server/mac-ssh.sh session   # link YOUR Premium Telegram account (≤4 GB)
   zsh $REPO/server/mac-ssh.sh api
   zsh $REPO/server/mac-ssh.sh stop-api
   zsh $REPO/server/mac-ssh.sh unlock
@@ -227,6 +252,7 @@ Tetherless Mac SSH helper (no desktop)
 
 Requires $HOME/.tetherless-mac.env with TELEGRAM_BOT_TOKEN and
 TETHERLESS_KEYCHAIN_PASSWORD (dedicated keychain — works over SSH).
+Premium uploads need TELEGRAM_API_ID / HASH / SESSION (mac-ssh.sh session).
 EOF
 }
 
@@ -237,6 +263,7 @@ case "$cmd" in
   stop-api) cmd_stop_api ;;
   status) cmd_status ;;
   logs) shift || true; cmd_logs "${1:-80}" ;;
+  session) cmd_session ;;
   api) cmd_api ;;
   unlock) cmd_unlock ;;
   pull) cmd_pull ;;
