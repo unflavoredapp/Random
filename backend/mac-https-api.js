@@ -326,7 +326,7 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Tetherless Mac HTTPS API on http://127.0.0.1:${PORT}`);
-  console.log(`host=${fp.host} unfairplay=${!!(fp.unfairplay && fp.unfairplay.ready)} model=${!!(fp.enrollmentModel && fp.enrollmentModel.ready)}`);
+  console.log(`host=${fp.host} decrypt=${!!(fp.unfairplay && fp.unfairplay.ready)} model=${!!(fp.enrollmentModel && fp.enrollmentModel.ready)}`);
   console.log("Expose with: cloudflared tunnel --url http://127.0.0.1:" + PORT);
   console.log("Then set iOS Decrypt site URL to that https://….trycloudflare.com/");
 });

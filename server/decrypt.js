@@ -456,7 +456,7 @@ function create({ db /*, secret */ }) {
           "Tetherless Decrypt\n\n" +
           "Send an App Store link (https://apps.apple.com/…).\n" +
           "For TestFlight: upload the encrypted .ipa (site queue) or use the Mac Tetherless bot drop folder.\n" +
-          (host === "mac" ? "This host decrypts with UnfairPlay." : "Uses the configured FairPlay backends.");
+          (host === "mac" ? "This host decrypts with Tetherless." : "Uses the configured Tetherless decrypt backends.");
         await tgApi("sendMessage", {
           chat_id: chatId,
           text: help,
@@ -527,7 +527,7 @@ function create({ db /*, secret */ }) {
     if (fp.requireCredential && !cred.ready && !model.ready && !unfair.ready) {
       error =
         cred.error ||
-        "Set FAIRPLAY_CREDENTIAL_BIN / FAIRPLAY_ENROLLMENT_MODEL, or run on a Mac (FAIRPLAY_HOST=mac) with UnfairPlay setup — see server/fairplay-backends.md.";
+        "Set FAIRPLAY_CREDENTIAL_BIN / FAIRPLAY_ENROLLMENT_MODEL, or run on a Mac (FAIRPLAY_HOST=mac) with Tetherless setup — see server/fairplay-backends.md.";
     } else if (wantsPhone && !WORKER_TOKEN) {
       error = "Set DECRYPT_WORKER_TOKEN and enable Phone Worker in the iOS app (or drop phone from DECRYPT_BACKENDS).";
     } else if (!BOT_TOKEN) {
