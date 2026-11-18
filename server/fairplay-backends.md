@@ -1,6 +1,6 @@
 # FairPlay decrypt backends
 
-**Best path if you rent a Mac:** run the whole TetherLess site decrypt queue **on that Mac**. Enroll once with UnfairPlay, then every job decrypts there — no mint → Linux hop.
+**Best path if you rent a Mac:** run the whole Tetherless site decrypt queue **on that Mac**. Enroll once with the decrypt binary, then every job decrypts there — no mint → Linux hop.
 
 No jailbreak / TrollStore / Phone Worker required.
 
@@ -13,7 +13,7 @@ Status: `GET /api/decrypt/backends` (includes `host`: `mac` | `linux`)
 On an Apple Silicon Mac (rented or local), signed into the **Mac App Store** with the same Apple ID / enrollment as your IPAs:
 
 ```bash
-# 1) Install UnfairPlay + ipatool, put them on PATH
+# 1) Install the Tetherless decrypt binary (UNFAIRPLAY_BIN) + ipatool, put them on PATH
 # 2) One-time enrollment (either form)
 sudo ./unfairplay setup --app /Applications/SomeOwnedApp.app
 # or: export-enrollment on this Mac, then setup --enrollment … --ipa App.ipa
@@ -28,7 +28,7 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 # FAIRPLAY_REQUIRE_CREDENTIAL defaults off on Mac
 
 # Optional: your own Telegram decrypt bot (BotFather → TELEGRAM_BOT_TOKEN).
-# Same Mac process polls the bot; paste apps.apple.com links → UnfairPlay → IPA back in chat.
+# Same Mac process polls the bot; paste apps.apple.com links → Tetherless decrypt → IPA back in chat.
 # export TELEGRAM_BOT_TOKEN=...
 # export TELEGRAM_BOT_USERNAME=YourDecryptBot
 # export TELEGRAM_ALLOWED_IDS=123456789   # your numeric chat id(s); omit = open to anyone
@@ -45,7 +45,7 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 #   python3 ~/tetherless/server/mac-tg-session-setup.py
 #   # add TELEGRAM_API_ID / HASH / SESSION / TELEGRAM_PREMIUM_UPLOAD=1 to .tetherless-mac.env
 # Cloud cache: first decrypt stores Telegram file_id / message under ~/tetherless-ipa-cache.
-# Same App Store link again → instant re-send (no UnfairPlay). /cache lists entries.
+# Same App Store link again → instant re-send (no re-decrypt). /cache lists entries.
 #
 # If login Keychain password is unknown (MacDuty padlock dialogs), use a dedicated
 # keychain instead (macOS cannot unlock without a password):
@@ -58,7 +58,7 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 #   Copy the printed https://….trycloudflare.com/ URL
 #   iOS app → FairPlay Decrypt → Decrypt site URL → paste that URL → Save host
 
-# 4) Run the TetherLess Node site on THIS Mac (same process as production)
+# 4) Run the Tetherless Node site on THIS Mac (same process as production)
 #    OR just mac-tg-bot.js above for Telegram-only decrypt.
 # Then in the iOS app: Account → Settings → FairPlay Decrypt → Decrypt site URL
 # set to https://YOUR-MAC-HOST/  (HTTPS required for App Transport; or keep tetherless.dev
@@ -106,9 +106,10 @@ chmod 600 "$FAIRPLAY_ENROLLMENT_MODEL" "$FAIRPLAY_CREDENTIAL_BIN"
 
 ## Backends
 
-### `unfairplay` (Mac default) — [DrWhax/unfairplay](https://github.com/DrWhax/unfairplay)
+### `unfairplay` (Mac default — shown as Tetherless) — [DrWhax/unfairplay](https://github.com/DrWhax/unfairplay)
 
-`decrypt --input … --output …` with optional `--model`. On Mac, omitting `--model` uses UnfairPlay’s default saved model directory after local `setup`.
+Internal backend id stays `unfairplay` / `UNFAIRPLAY_BIN`. User-facing status says **Tetherless**.  
+`decrypt --input … --output …` with optional `--model`. On Mac, omitting `--model` uses the default saved model directory after local `setup`.
 
 ### `fairplay-decrypt` — [EthanArbuckle/fairplay-decrypt](https://github.com/EthanArbuckle/fairplay-decrypt)
 
@@ -120,7 +121,7 @@ Optional Linux/Mac CLIs or HTTP wrappers.
 
 ### Opt-in only
 
-- `phone` — TetherLess Phone Worker  
+- `phone` — Tetherless Phone Worker  
 - `unfaird` — jailbroken LAN daemon  
 
 ---
@@ -128,7 +129,7 @@ Optional Linux/Mac CLIs or HTTP wrappers.
 ## App ↔ server
 
 1. App / site → `POST /api/decrypt` `{ url }`
-2. Host runs UnfairPlay / fairplay-decrypt
+2. Host runs Tetherless decrypt / fairplay-decrypt
 3. Clear IPA → `/api/ipa/file/:up`
 4. App downloads → Sign → Install
 
