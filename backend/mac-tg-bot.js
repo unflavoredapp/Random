@@ -211,8 +211,7 @@ function httpsUrl(raw, fallback) {
   return u.replace(/\/+$/, "") || fallback;
 }
 
-/** Final IPA buttons only: Patch · Get VIP (inline tabs under the document). */
-function resultKeyboard() {
+function siteLinkButtons() {
   const site = httpsUrl(
     process.env.DELVEK_SITE_URL || process.env.TETHERLESS_SITE_URL,
     "https://delvek.net"
@@ -225,14 +224,43 @@ function resultKeyboard() {
     process.env.DELVEK_VIP_URL || process.env.TETHERLESS_VIP_URL,
     `${site}/vip`
   );
-  return {
-    inline_keyboard: [
-      [
-        { text: "🧩 Patch", url: patch.endsWith("/") ? patch : `${patch}/` },
-        { text: "⭐ Get VIP", url: vip },
-      ],
-    ],
-  };
+  return [
+    { text: "🧩 Patch", url: patch.endsWith("/") ? patch : `${patch}/` },
+    { text: "⭐ Get VIP", url: vip },
+  ];
+}
+
+/** Final IPA buttons only: Patch · Get VIP (inline tabs under the document). */
+function resultKeyboard() {
+  return { inline_keyboard: [siteLinkButtons()] };
+}
+
+/**
+ * Done sharp-card buttons: Download puts the IPA behind this same card
+ * (editMessageMedia photo→document — no second bubble).
+ * callback_data must stay ≤64 bytes (`dl:` + short token).
+ */
+function doneCardKeyboard(downloadToken) {
+  const rows = [];
+  if (downloadToken) {
+    rows.push([{ text: "⬇️ Download", callback_data: `dl:${downloadToken}` }]);
+  }
+  rows.push(siteLinkButtons());
+  return { inline_keyboard: rows };
+}
+
+/** In-memory IPA handoff for Download taps on the done card (disk / file_id). */
+const pendingDownloads = new Map();
+
+function mintDownloadToken(payload) {
+  const token = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`.slice(0, 16);
+  pendingDownloads.set(token, { ...payload, at: Date.now() });
+  // Drop stale tokens (1h) so the map can't grow without bound.
+  const cutoff = Date.now() - 60 * 60 * 1000;
+  for (const [k, v] of pendingDownloads) {
+    if (!v || (v.at && v.at < cutoff)) pendingDownloads.delete(k);
+  }
+  return token;
 }
 
 /**
@@ -427,7 +455,7 @@ function sendPhotoBotApi(chatId, photoPath, caption, replyMarkup) {
 }
 
 /** Replace the progress card photo (URSA-style banner updates). */
-function editMessageMediaBotApi(chatId, messageId, photoPath, caption) {
+function editMessageMediaBotApi(chatId, messageId, photoPath, caption, replyMarkup) {
   const abs = path.resolve(photoPath);
   const media = JSON.stringify({
     type: "photo",
@@ -449,6 +477,9 @@ function editMessageMediaBotApi(chatId, messageId, photoPath, caption) {
     "-F",
     `photo=@${abs};type=image/jpeg`,
   ];
+  if (replyMarkup) {
+    args.push("--form-string", `reply_markup=${JSON.stringify(replyMarkup)}`);
+  }
   const r = spawnSync("curl", args, { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
   if (r.error) return Promise.reject(r.error);
   if (r.status !== 0) {
@@ -621,19 +652,65 @@ function createProgressCard(chatId) {
       }
     },
     /**
-     * Morph to download-arrow “done” art briefly, then drop the card so only
-     * the IPA document (same arrow thumb) remains in chat.
+     * Morph to download-arrow done art and KEEP the card.
+     * IPA is not auto-sent — user taps ⬇️ Download IPA on this card.
+     * @param {object} [ready] diskPath / fileId / caption / fileName for the tap
      */
-    async finish() {
+    async finishReady(ready = {}) {
+      const caption = ready.caption || "";
       try {
         const img = await makeBanner("Done", 100, { done: true });
         if (img && messageId && hasPhoto) {
-          await editMessageMediaBotApi(chatId, messageId, img, "");
-          await new Promise((r) => setTimeout(r, 900));
+          // Mint after we know messageId so Download can edit THIS card in-place.
+          const token = mintDownloadToken({
+            chatId: String(chatId),
+            cardMessageId: Number(messageId) || 0,
+            diskPath: ready.diskPath || "",
+            fileId: ready.fileId || "",
+            fileName: ready.fileName || "",
+            caption,
+            storeUrl: ready.storeUrl || storeUrl || "",
+            adam: ready.adam || "",
+            version: ready.version || "",
+            bid: ready.bid || "",
+            name: ready.name || name || "",
+            minIos: ready.minIos || "",
+            bytes: ready.bytes || 0,
+          });
+          const markup = doneCardKeyboard(token);
+          let edited = await editMessageMediaBotApi(chatId, messageId, img, caption, markup);
+          if (!(edited && edited.ok)) {
+            await new Promise((r) => setTimeout(r, 400));
+            edited = await editMessageMediaBotApi(chatId, messageId, img, caption, markup);
+          }
+          if (!(edited && edited.ok)) {
+            // Media edit failed — still try markup + caption so Download works.
+            if (caption) {
+              await tgApi("editMessageCaption", {
+                chat_id: chatId,
+                message_id: messageId,
+                caption,
+                parse_mode: "HTML",
+                reply_markup: markup,
+              }).catch(() => {});
+            } else {
+              await tgApi("editMessageReplyMarkup", {
+                chat_id: chatId,
+                message_id: messageId,
+                reply_markup: markup,
+              }).catch(() => {});
+            }
+          }
+          return true;
         }
-      } catch {
-        /* ignore — still clear */
+      } catch (e) {
+        console.warn("[job] finishReady failed:", String((e && e.message) || e).slice(0, 160));
       }
+      // No live photo card — fall back to sending the IPA document directly.
+      return false;
+    },
+    /** @deprecated Prefer finishReady — kept for fail-path callers that just need clear. */
+    async finish() {
       await this.clear();
     },
     async fail(err) {
@@ -658,6 +735,82 @@ function createProgressCard(chatId) {
       }).catch(() => {});
     },
   };
+}
+
+/**
+ * Turn the done sharp-card photo into the IPA document in-place.
+ * Same message_id — IPA sits behind the Download control, no extra bubble.
+ */
+function editMessageToDocumentBotApi(
+  chatId,
+  messageId,
+  filePath,
+  fileName,
+  caption,
+  { thumbPath, replyMarkup, fileId } = {}
+) {
+  const mid = Number(messageId);
+  if (!chatId || !mid) {
+    return Promise.resolve({ ok: false, description: "missing card message" });
+  }
+  const mediaObj = {
+    type: "document",
+    caption: caption || "",
+    parse_mode: "HTML",
+  };
+  const args = [
+    "-sS",
+    "-X",
+    "POST",
+    apiUrl("editMessageMedia"),
+    "--form-string",
+    `chat_id=${chatId}`,
+    "--form-string",
+    `message_id=${mid}`,
+  ];
+  if (replyMarkup) {
+    args.push("--form-string", `reply_markup=${JSON.stringify(replyMarkup)}`);
+  }
+
+  if (fileId) {
+    mediaObj.media = fileId;
+    args.push("--form-string", `media=${JSON.stringify(mediaObj)}`);
+  } else {
+    const abs = path.resolve(filePath || "");
+    if (!abs || !fs.existsSync(abs)) {
+      return Promise.resolve({ ok: false, description: "IPA missing on disk" });
+    }
+    mediaObj.media = "attach://document";
+    if (thumbPath && fs.existsSync(thumbPath)) {
+      mediaObj.thumbnail = "attach://thumb";
+    }
+    args.push("--form-string", `media=${JSON.stringify(mediaObj)}`);
+    if (LOCAL_API) {
+      args.push("-F", `document=file://${abs}`);
+    } else {
+      args.push(
+        "-F",
+        `document=@${abs};type=application/octet-stream;filename=${fileName || path.basename(abs)}`
+      );
+    }
+    if (thumbPath && fs.existsSync(thumbPath)) {
+      args.push("-F", `thumb=@${path.resolve(thumbPath)};type=image/jpeg`);
+    }
+  }
+
+  const r = spawnSync("curl", args, { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 });
+  if (r.error) return Promise.reject(r.error);
+  if (r.status !== 0) {
+    return Promise.resolve({
+      ok: false,
+      description: (r.stderr || r.stdout || `curl exit ${r.status}`).trim().slice(0, 300),
+    });
+  }
+  try {
+    return Promise.resolve(JSON.parse(r.stdout || "{}"));
+  } catch (e) {
+    return Promise.resolve({ ok: false, description: String(r.stdout || e.message).slice(0, 300) });
+  }
 }
 
 function sendDocumentBotApi(chatId, filePath, fileName, caption, { thumbPath, replyMarkup } = {}) {
@@ -1297,114 +1450,73 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
 
 async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   if (!entry) return false;
-  const markup = resultKeyboard();
-  const card = createProgressCard(chatId);
-  if (!quiet) {
-    await card.start(entry.storeUrl || "", entry.name || "App");
-    await card.setStage("Sending…", 40);
-  }
-  // Telegram file_id/copy keep the baked-in filename — re-upload from disk
-  // when the cache still says *-Tetherless.ipa so users see [DELvEK.NeT].
+  const hasDisk = entry.diskPath && fs.existsSync(entry.diskPath);
+  const hasFileId = !!entry.fileId;
+  if (!hasDisk && !hasFileId) return false;
+
+  // Prefer disk when cached name still says Tetherless / bare DELvEK.
   const cachedName = String(entry.fileName || "");
   const needsDelvekName =
     /Tetherless\.ipa$/i.test(cachedName) ||
     (/DELvEK\.ipa$/i.test(cachedName) && !/\[DELvEK\.NeT\]\.ipa$/i.test(cachedName));
-  const renameViaDisk =
-    needsDelvekName && entry.diskPath && fs.existsSync(entry.diskPath);
+  const fileName = displayIpaFileName(
+    needsDelvekName && hasDisk
+      ? path.basename(entry.diskPath)
+      : entry.fileName || (hasDisk ? path.basename(entry.diskPath) : "App.ipa")
+  );
+  const caption = buildCaption({
+    bid: entry.bid,
+    version: entry.version,
+    minIos: entry.minIos,
+    storeUrl: entry.storeUrl,
+  });
 
-  if (!renameViaDisk && entry.fileId) {
-    await card.setStage("Sending…", 70);
-    const caption = buildCaption({
-      bid: entry.bid,
-      version: entry.version,
-      minIos: entry.minIos,
-      storeUrl: entry.storeUrl,
-    });
-    const r = await sendIpaByFileId(chatId, entry.fileId, caption, markup);
-    if (r && r.ok && r.result && r.result.message_id) {
-      await ensureIpaButtonTabs(chatId, r.result.message_id, { caption, replyMarkup: markup });
-      console.log("[cache] hit file_id", entry.adam, entry.version || "latest");
-      await card.finish();
-      return true;
-    }
-    console.warn("[cache] file_id send failed:", (r && r.description) || "unknown");
+  const card = createProgressCard(chatId);
+  if (!quiet) {
+    await card.start(entry.storeUrl || "", entry.name || "App");
+    await card.setStage("Ready…", 96);
   }
-  // Prefer fresh sendDocument with caption over copyMessage (copy keeps old empty captions).
-  // Premium-user uploads: copyMessage from the original chat (no re-upload).
-  if (!renameViaDisk && entry.messageId && entry.fromChatId) {
-    await card.setStage("Sending…", 70);
-    const caption = buildCaption({
-      bid: entry.bid,
-      version: entry.version,
-      minIos: entry.minIos,
-      storeUrl: entry.storeUrl,
-    });
-    const r = await tgApi("copyMessage", {
-      chat_id: chatId,
-      from_chat_id: entry.fromChatId,
-      message_id: entry.messageId,
-      caption: caption || undefined,
-      parse_mode: caption ? "HTML" : undefined,
-      reply_markup: markup,
-    });
-    if (r && r.ok && r.result && r.result.message_id) {
-      const fileId = (r.result.document && r.result.document.file_id) || "";
-      if (fileId) {
-        const resent = await sendIpaByFileId(chatId, fileId, caption, markup);
-        if (resent && resent.ok && resent.result && resent.result.message_id) {
-          await tgApi("deleteMessage", {
-            chat_id: chatId,
-            message_id: r.result.message_id,
-          }).catch(() => {});
-          console.log("[cache] hit copyMessage→file_id", entry.adam, entry.version || "latest");
-          await card.finish();
-          return true;
-        }
-      }
-      await ensureIpaButtonTabs(chatId, r.result.message_id, { caption, replyMarkup: markup });
-      console.log("[cache] hit copyMessage", entry.adam, entry.version || "latest");
-      await card.finish();
-      return true;
-    }
-    console.warn("[cache] copyMessage failed:", (r && r.description) || "unknown");
-  }
-  // Fallback: re-upload from Mac disk cache (still skips decrypt).
-  if (entry.diskPath && fs.existsSync(entry.diskPath)) {
-    await card.setStage("Uploading…", 76);
-    const fileName = displayIpaFileName(entry.fileName || path.basename(entry.diskPath));
-    const thumbPath = await buildIpaDocumentThumb(entry.storeUrl || "");
-    const caption = buildCaption({
-      bid: entry.bid,
-      version: entry.version,
-      minIos: entry.minIos,
-      storeUrl: entry.storeUrl,
-    });
-    const sent = await sendDocument(chatId, entry.diskPath, fileName, caption, {
-      thumbPath,
-      replyMarkup: markup,
-      card,
-    });
-    if (sent && sent.ok) {
-      const doc = sent.result && sent.result.document;
-      const viaPremium = !!(sent.premium && sent.message_id);
-      ipaCache.put({
-        ...entry,
-        fileName,
-        caption,
-        fileId: (doc && doc.file_id) || entry.fileId || "",
-        fileUniqueId: (doc && doc.file_unique_id) || entry.fileUniqueId || "",
-        messageId: viaPremium ? Number(sent.message_id) || 0 : entry.messageId || 0,
-        fromChatId: viaPremium ? String(chatId) : entry.fromChatId || "",
-      });
-      console.log("[cache] hit disk re-upload", entry.diskPath, fileName);
-      await card.finish();
-      return true;
-    }
-    await card.fail(premiumFailDescription((sent && sent.description) || "upload failed"));
-    // Cache hit was real — do not fall through into a full re-decrypt.
+
+  const kept = await card.finishReady({
+    diskPath: hasDisk ? entry.diskPath : "",
+    // Skip stale file_id when we must rename via disk on Download tap.
+    fileId: needsDelvekName && hasDisk ? "" : entry.fileId || "",
+    fileName,
+    caption,
+    storeUrl: entry.storeUrl || "",
+    adam: entry.adam || "",
+    version: entry.version || "",
+    bid: entry.bid || "",
+    name: entry.name || "",
+    minIos: entry.minIos || "",
+    bytes: entry.bytes || 0,
+  });
+  if (kept) {
+    console.log("[cache] hit done-card", entry.adam, entry.version || "latest");
     return true;
   }
-  return false;
+
+  // Card missing — send document so cache still delivers.
+  const pending = {
+    diskPath: hasDisk ? entry.diskPath : "",
+    fileId: needsDelvekName && hasDisk ? "" : entry.fileId || "",
+    fileName,
+    caption,
+    storeUrl: entry.storeUrl || "",
+    adam: entry.adam || "",
+    version: entry.version || "",
+    bid: entry.bid || "",
+    name: entry.name || "",
+    minIos: entry.minIos || "",
+    bytes: entry.bytes || 0,
+  };
+  const sent = await sendPendingDownload(chatId, pending);
+  if (sent && sent.ok) {
+    await card.finish();
+    return true;
+  }
+  await card.fail(premiumFailDescription((sent && sent.description) || "cache send failed"));
+  return true;
 }
 
 async function trySendCached(chatId, storeUrl, vreq) {
@@ -1491,11 +1603,9 @@ async function deliverResult(chatId, result, opts = {}) {
   const mb = (bytes / 1024 / 1024).toFixed(1);
   const fileName = buildIpaFileName({ name, version });
   const caption = buildCaption({ bid, version, minIos, storeUrl });
-  const markup = resultKeyboard();
-  const thumbPath = await buildIpaDocumentThumb(storeUrl);
   const adam = ipaCache.adamFromStoreUrl(storeUrl) || "";
 
-  // Durable Mac copy used if Telegram file_id ever expires (prefer hardlink).
+  // Durable Mac copy — Download button sends this; no auto document bubble.
   const keep = ipaCache.diskPathFor(adam || "app", version || "latest", fileName);
   try {
     ipaCache.linkOrCopy(result.file, keep);
@@ -1503,30 +1613,52 @@ async function deliverResult(chatId, result, opts = {}) {
     fs.copyFileSync(result.file, keep);
   }
 
-  if (card) await card.setStage("Uploading…", 78);
+  if (adam) {
+    ipaCache.put({
+      adam,
+      version,
+      bid,
+      name,
+      minIos,
+      storeUrl,
+      fileName,
+      caption,
+      bytes,
+      diskPath: keep,
+    });
+    console.log("[cache] stored disk-ready", adam, version || "latest", keep);
+  }
+
+  const ready = {
+    diskPath: keep,
+    fileName,
+    caption,
+    storeUrl,
+    adam,
+    version,
+    bid,
+    name,
+    minIos,
+    bytes,
+  };
+
+  if (card) {
+    const kept = await card.finishReady(ready);
+    if (kept) {
+      console.log("[job] done card ready — IPA waits on Download tap:", keep);
+      return;
+    }
+  }
+
+  // No progress card (or edit failed): send the document so the user still gets the IPA.
+  const thumbPath = await buildIpaDocumentThumb(storeUrl);
   const sent = await sendDocument(chatId, keep, fileName, caption, {
     thumbPath,
-    replyMarkup: markup,
-    card,
+    replyMarkup: resultKeyboard(),
   });
   if (!sent || !sent.ok) {
     const why = (sent && sent.description) || "Telegram attach failed";
     console.warn("[job] sendDocument:", why);
-    // Still index the disk copy so a later Premium/local upload can finish the cache.
-    if (adam) {
-      ipaCache.put({
-        adam,
-        version,
-        bid,
-        name,
-        minIos,
-        storeUrl,
-        fileName,
-        caption,
-        bytes,
-        diskPath: keep,
-      });
-    }
     if (card) await card.fail(why);
     else {
       await tgApi("sendMessage", {
@@ -1539,9 +1671,8 @@ async function deliverResult(chatId, result, opts = {}) {
     }
   } else {
     const doc = sent.result && sent.result.document;
-    console.log("[job] sent IPA to Telegram:", keep);
-    if (adam) {
-      const viaPremium = !!(sent.premium && sent.message_id);
+    console.log("[job] sent IPA to Telegram (no card):", keep);
+    if (adam && doc && doc.file_id) {
       ipaCache.put({
         adam,
         version,
@@ -1551,22 +1682,123 @@ async function deliverResult(chatId, result, opts = {}) {
         storeUrl,
         fileName,
         caption,
-        fileId: (doc && doc.file_id) || "",
+        fileId: doc.file_id || "",
+        fileUniqueId: doc.file_unique_id || "",
+        messageId: (sent.result && sent.result.message_id) || 0,
+        fromChatId: String(chatId),
+        bytes,
+        diskPath: keep,
+      });
+    }
+  }
+}
+
+/**
+ * Download tap: put the IPA behind the done card (same message → document).
+ * Only opens a new bubble if in-place edit can't take the file (size / API).
+ */
+async function sendPendingDownload(chatId, pending, { cardMessageId } = {}) {
+  if (!pending) return { ok: false, description: "expired" };
+  const fileName = displayIpaFileName(pending.fileName || path.basename(pending.diskPath || "App.ipa"));
+  const caption =
+    pending.caption ||
+    buildCaption({
+      bid: pending.bid,
+      version: pending.version,
+      minIos: pending.minIos,
+      storeUrl: pending.storeUrl,
+    });
+  const markup = resultKeyboard();
+  const cardMid = Number(cardMessageId || pending.cardMessageId || 0) || 0;
+  const disk = pending.diskPath && fs.existsSync(pending.diskPath) ? pending.diskPath : "";
+  const bytes =
+    pending.bytes ||
+    (disk ? fs.statSync(disk).size : 0);
+  const thumbPath = await buildIpaDocumentThumb(pending.storeUrl || "");
+
+  // Prefer editing the sharp card into the IPA document (one message).
+  const canEditInPlace =
+    cardMid &&
+    (pending.fileId || (disk && (LOCAL_API || bytes <= TG_DOC_MAX)));
+
+  if (canEditInPlace) {
+    const edited = await editMessageToDocumentBotApi(chatId, cardMid, disk, fileName, caption, {
+      thumbPath,
+      replyMarkup: markup,
+      fileId: pending.fileId || "",
+    });
+    if (edited && edited.ok) {
+      const doc = edited.result && edited.result.document;
+      console.log("[job] IPA behind Download — card→document", cardMid, fileName);
+      if (pending.adam) {
+        ipaCache.put({
+          adam: pending.adam,
+          version: pending.version || "",
+          bid: pending.bid || "",
+          name: pending.name || "",
+          minIos: pending.minIos || "",
+          storeUrl: pending.storeUrl || "",
+          fileName,
+          caption,
+          fileId: (doc && doc.file_id) || pending.fileId || "",
+          fileUniqueId: (doc && doc.file_unique_id) || "",
+          messageId: cardMid,
+          fromChatId: String(chatId),
+          bytes,
+          diskPath: disk || pending.diskPath || "",
+        });
+      }
+      await attachIpaChrome(chatId, cardMid, { caption, replyMarkup: markup });
+      return { ok: true, result: edited.result, inPlace: true };
+    }
+    console.warn(
+      "[job] card→document edit failed:",
+      (edited && edited.description) || "unknown"
+    );
+  }
+
+  // Fallback: new document bubble (large Premium files / edit unsupported).
+  if (pending.fileId) {
+    const r = await sendIpaByFileId(chatId, pending.fileId, caption, markup);
+    if (r && r.ok) {
+      if (cardMid) {
+        await tgApi("deleteMessage", { chat_id: chatId, message_id: cardMid }).catch(() => {});
+      }
+      return r;
+    }
+  }
+  if (!disk) return { ok: false, description: "IPA no longer on Mac — decrypt again" };
+
+  const sent = await sendDocument(chatId, disk, fileName, caption, {
+    thumbPath,
+    replyMarkup: markup,
+  });
+  if (sent && sent.ok) {
+    if (cardMid) {
+      await tgApi("deleteMessage", { chat_id: chatId, message_id: cardMid }).catch(() => {});
+    }
+    const doc = sent.result && sent.result.document;
+    const viaPremium = !!(sent.premium && sent.message_id);
+    if (pending.adam) {
+      ipaCache.put({
+        adam: pending.adam,
+        version: pending.version || "",
+        bid: pending.bid || "",
+        name: pending.name || "",
+        minIos: pending.minIos || "",
+        storeUrl: pending.storeUrl || "",
+        fileName,
+        caption,
+        fileId: (doc && doc.file_id) || pending.fileId || "",
         fileUniqueId: (doc && doc.file_unique_id) || "",
         messageId: viaPremium ? Number(sent.message_id) || 0 : (sent.result && sent.result.message_id) || 0,
         fromChatId: viaPremium ? String(sent.chat_id || chatId) : String(chatId),
         bytes,
-        diskPath: keep,
+        diskPath: disk,
       });
-      console.log(
-        "[cache] stored",
-        adam,
-        version || "latest",
-        doc && doc.file_id ? "file_id" : viaPremium ? "copyMessage" : "disk-only"
-      );
     }
-    if (card) await card.finish();
   }
+  return sent || { ok: false, description: "upload failed" };
 }
 
 function resolveDropPath(name) {
@@ -1656,6 +1888,36 @@ async function handleCallback(cq) {
     urlLog.add(chatId, entry);
     await withWorker(chatId, async () => {
       await decryptStoreUrl(chatId, entry.storeUrl, vreq);
+    });
+    return;
+  }
+  if (data.startsWith("dl:")) {
+    const token = data.slice(3);
+    const pending = pendingDownloads.get(token);
+    if (!pending) {
+      await tgApi("answerCallbackQuery", {
+        callback_query_id: cq.id,
+        text: "Download expired — send the link again",
+        show_alert: true,
+      }).catch(() => {});
+      return;
+    }
+    const cardMessageId =
+      (cq.message && cq.message.message_id) || pending.cardMessageId || 0;
+    await tgApi("answerCallbackQuery", {
+      callback_query_id: cq.id,
+      text: "Loading IPA…",
+    }).catch(() => {});
+    await withWorker(chatId, async () => {
+      const sent = await sendPendingDownload(chatId, pending, { cardMessageId });
+      if (!sent || !sent.ok) {
+        const why = premiumFailDescription((sent && sent.description) || "send failed");
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text: `❌ Download failed: ${String(why).slice(0, 200)}`,
+          reply_to_message_id: cardMessageId || undefined,
+        }).catch(() => {});
+      }
     });
     return;
   }
