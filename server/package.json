@@ -1,0 +1,8 @@
+{
+  "name": "tetherless-mac-bot",
+  "private": true,
+  "description": "MacDuty Telegram decrypt bot deps (progress banners via sharp)",
+  "dependencies": {
+    "sharp": "^0.33.5"
+  }
+}

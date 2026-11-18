@@ -130,11 +130,18 @@ cmd_start() {
     echo "TELEGRAM_BOT_TOKEN missing in $ENV_FILE"
     exit 1
   fi
+  # Progress banners need sharp (URSA-style card). Install quietly if missing.
+  if [[ -f server/package.json ]]; then
+    if [[ ! -d server/node_modules/sharp ]] || ! node -e "require('./server/node_modules/sharp')" 2>/dev/null; then
+      echo "Installing server deps (sharp)…"
+      (cd server && npm install --omit=dev) || echo "npm install failed — banners will fall back to caption text"
+    fi
+  fi
   nohup node server/mac-tg-bot.js >>"$BOT_LOG" 2>&1 &
   echo $! >"$BOT_PID"
   sleep 1
   if alive_pid "$BOT_PID"; then
-    echo "Bot started (pid $(cat "$BOT_PID"))"
+    echo "Bot started (pid $(cat "$BOT_PID")) · workers=${MAC_TG_WORKERS:-3}"
     echo "Logs: tail -f $BOT_LOG"
     echo "Stop: zsh $REPO/server/mac-ssh.sh stop"
   else
