@@ -304,13 +304,16 @@ private struct PhoneDecryptWorkerInline: View {
     }
 }
 
-/// Override `as_site_base` so Store/Telegram decrypt jobs hit a Mac (or other) FairPlay host.
+/// Override `as_site_base` so Store/Telegram/companion jobs hit a Mac FairPlay host.
 private struct FairPlayDecryptHostField: View {
     @AppStorage("as_site_base") private var siteBase = ""
+    @AppStorage("tetherless.decrypt.macOnly") private var macOnly = true
     @State private var draft = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Toggle("Mac decrypt only (skip on-device companion FairPlay)", isOn: $macOnly)
+                .font(.footnote)
             TextField("https://mac-host.example/", text: $draft)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
@@ -330,7 +333,11 @@ private struct FairPlayDecryptHostField: View {
                 }
                 .buttonStyle(.bordered)
             }
-            Text(siteBase.isEmpty ? "Using default tetherless.dev" : "Override: \(siteBase)")
+            Text(
+                siteBase.isEmpty
+                    ? "Using default tetherless.dev — set your Mac Cloudflare / HTTPS URL for MacDuty."
+                    : "Mac host: \(siteBase)"
+            )
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)

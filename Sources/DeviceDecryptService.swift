@@ -685,6 +685,15 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.start(url: app.url, version: version, display: app.name)
         case .device:
             DecryptClient.shared.select(app)
+            // Mac-only: skip companion / on-device FairPlay — job hits Decrypt site URL.
+            if DecryptMacRouting.macOnly {
+                DecryptMacRouting.startMacDecrypt(
+                    storeURL: app.url,
+                    version: version,
+                    displayName: app.name
+                )
+                return
+            }
             // Don't set .running before winning the busy lock — that left the UI stuck
             // with no worker when a decrypt was already in flight.
             if busy {
@@ -735,12 +744,27 @@ final class DeviceDecryptService: ObservableObject {
 
     /// Device-channel path for a Store listing: silent purchase/download, then hand
     /// FairPlay to the companion IPA (never opens the App Store UI; no install-path embed).
+    /// When `DecryptMacRouting.macOnly`, skips companion and queues Mac Decrypt site URL.
     func decryptOwnedStoreApp(
         _ app: DeviceApp,
         storeURL: String,
         version: String? = nil,
         externalVersionId: String? = nil
     ) async {
+        let bid = app.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let linkHint = storeURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if DecryptMacRouting.macOnly {
+            var link = linkHint
+            if link.isEmpty, !bid.isEmpty {
+                link = (try? await self.storeURL(forBundleID: bid)) ?? ""
+            }
+            await DecryptMacRouting.startMacDecryptAndWait(
+                storeURL: link,
+                version: version,
+                displayName: app.name
+            )
+            return
+        }
         guard !busy else {
             if DecryptClient.shared.phase != .running && DecryptClient.shared.phase != .downloading {
                 DecryptClient.shared.phase = .failed
@@ -759,10 +783,9 @@ final class DeviceDecryptService: ObservableObject {
             guard AppleIDStore.shared.isSignedIn else {
                 throw DecryptError("Sign in under Account with the Apple ID that owns this app.")
             }
-            let bid = app.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
             let link: String
-            if !storeURL.isEmpty {
-                link = storeURL
+            if !linkHint.isEmpty {
+                link = linkHint
             } else if !bid.isEmpty {
                 link = try await self.storeURL(forBundleID: bid)
             } else {
@@ -916,7 +939,39 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     /// Push a Store IPA already on disk through the companion (Downloads Get → purchaseAndDownload).
+    /// Mac-only: ignore the local IPA and decrypt via Decrypt site URL using the stamped Store link.
     func decryptDownloadedStoreIPA(at ipa: URL, displayName: String, bundleID: String? = nil) async {
+        if DecryptMacRouting.macOnly {
+            let snap = DecryptCompanionHandoff.readHostSnapshot(fromManifest: nil)
+            var link = ((snap["hostStoreURL"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let ver = ((snap["hostStoreVersion"] as? String) ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            if link.isEmpty, let bid = bundleID?.trimmingCharacters(in: .whitespacesAndNewlines), !bid.isEmpty {
+                link = (try? await storeURL(forBundleID: bid)) ?? ""
+            }
+            // Prefer job-stamped Store URL; publish from Downloads before companion enqueue when possible.
+            if link.isEmpty {
+                DecryptClient.shared.phase = .failed
+                DecryptClient.shared.error =
+                    "Mac decrypt needs an App Store link on this job — retry Get from Search."
+                DecryptClient.shared.message = DecryptClient.shared.error ?? ""
+                return
+            }
+            DecryptCompanionHandoff.publishStoreDecryptTarget(
+                url: link,
+                version: ver.isEmpty ? nil : ver,
+                displayName: name.isEmpty ? "App" : name,
+                bundleID: bundleID ?? ""
+            )
+            await DecryptMacRouting.startMacDecryptAndWait(
+                storeURL: link,
+                version: ver.isEmpty ? nil : ver,
+                displayName: name.isEmpty ? "App" : name
+            )
+            return
+        }
         guard FileManager.default.fileExists(atPath: ipa.path) else {
             let text = "Downloaded IPA missing — retry Get."
             lastError = text

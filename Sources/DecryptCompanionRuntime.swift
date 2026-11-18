@@ -54,11 +54,19 @@ enum DecryptCompanionRuntime {
 
     /// FairPlayed `embeddedExport` + fail-closed DRM audit of the entire IPA:
     /// pre-scan cryptids → decrypt → verify copied tree → zip → verifyIPA.
+    /// When Mac-only routing is on, bounce straight to the host Mac decrypt API.
     static func runEmbeddedDecrypt(progress: ((String) -> Void)? = nil) async throws -> URL {
         let fm = FileManager.default
         let log: (String) -> Void = { line in
             progress?(line)
             DecryptCompanionController.shared.appendLog(line)
+        }
+
+        if DecryptMacRouting.macOnly {
+            log("Mac-only decrypt — skipping on-device FairPlay, opening host…")
+            DecryptCompanionController.shared.statusTitle = "Decrypting on Mac…"
+            DecryptCompanionHandoff.requestServerFallback(reason: "mac-only")
+            throw DecryptError("Finishing decrypt on your Mac (Decrypt site URL).")
         }
 
         guard let name = embeddedAppName() else {

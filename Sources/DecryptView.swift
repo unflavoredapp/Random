@@ -376,10 +376,16 @@ final class DecryptClient: ObservableObject {
         let dest = AppPaths.dir("inbox").appendingPathComponent(file)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
-        // Telegram bot IPAs should already be clear; still verify / finish with FairPlay when needed.
-        if DecryptChannel.current == .telegram {
+        // Mac / Telegram IPAs should already be clear — don't re-run on-device FairPlay.
+        if DecryptMacRouting.macOnly || DecryptChannel.current == .telegram {
             if let verify = try? FairPlayDecrypt.verifyIPA(at: dest), verify.isFullyClear {
-                message = "Saved from Telegram bot · \(verify.summary)"
+                message = DecryptMacRouting.macOnly
+                    ? "Saved from Mac · \(verify.summary)"
+                    : "Saved from Telegram bot · \(verify.summary)"
+                return dest
+            }
+            if DecryptMacRouting.macOnly {
+                message = "Saved from Mac"
                 return dest
             }
         }
