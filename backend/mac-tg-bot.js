@@ -147,29 +147,53 @@ function buildIpaFileName({ name, version }) {
   return `${n}${v}-Tetherless.ipa`;
 }
 
-/** AppAssassin-style caption: bundle · version/min iOS · store link. */
-function buildCaption({ bid, version, minIos, storeUrl }) {
+/** AppAssassin-style caption: name — Tetherless · bundle · version · store link. */
+function buildCaption({ name, bid, version, minIos, storeUrl }) {
   const lines = [];
+  const title = `${name || "App"} — Tetherless`;
+  lines.push(`<b>${escapeHtml(title)}</b>`);
   if (bid) lines.push(`📁 <code>${escapeHtml(bid)}</code>`);
   const verBits = [];
   if (version) verBits.push(`Version: ${escapeHtml(version)}`);
   if (minIos) verBits.push(`${escapeHtml(minIos)}+`);
   if (verBits.length) lines.push(`⚙️ ${verBits.join(" · ")}`);
   if (storeUrl) lines.push(`🔗 <a href="${escapeHtml(storeUrl)}">App Store Link</a>`);
-  if (!lines.length) lines.push("Tetherless");
   return lines.join("\n");
 }
 
-/** Inline buttons under the IPA (AppAssassin-style: help + site). */
+function progressBar(pct, width = 12) {
+  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const filled = Math.round((p / 100) * width);
+  return "▓".repeat(filled) + "░".repeat(Math.max(0, width - filled));
+}
+
+function progressCaption({ name, stage, pct, detail }) {
+  const title = `${name || "App"} — Tetherless`;
+  const lines = [
+    `<b>${escapeHtml(title)}</b>`,
+    `${progressBar(pct)} <b>${Math.round(pct)}%</b>`,
+    `⏳ ${escapeHtml(stage || "Working…")}`,
+  ];
+  if (detail) lines.push(`<i>${escapeHtml(String(detail).slice(0, 120))}</i>`);
+  return lines.join("\n");
+}
+
+/** Inline buttons: Patch · Help · Get VIP (URL-only — works for Bot + Premium). */
 function resultKeyboard(storeUrl) {
   const site = String(process.env.TETHERLESS_SITE_URL || "https://tetherless.dev").replace(/\/+$/, "");
-  // URLs only — works for both Bot API and Premium user sends (no callback_data).
+  const patch = String(process.env.TETHERLESS_PATCH_URL || `${site}/`).replace(/\/+$/, "") || site;
+  const help = String(process.env.TETHERLESS_HELP_URL || `${site}/`).replace(/\/+$/, "") || site;
+  const vip = String(process.env.TETHERLESS_VIP_URL || `${site}/vip`).replace(/\/+$/, "") || `${site}/vip`;
   return {
     inline_keyboard: [
       [
-        { text: "✨ How it works", url: `${site}/` },
-        { text: "⭐ Tetherless", url: site },
+        { text: "🧩 Patch", url: patch },
+        { text: "❓ Help", url: help },
+        { text: "⭐ Get VIP", url: vip },
       ],
+      storeUrl
+        ? [{ text: "🔗 App Store", url: storeUrl }]
+        : [{ text: "⭐ Tetherless", url: site }],
     ],
   };
 }
@@ -196,9 +220,10 @@ function isAppleSystemApp(storeUrl, bid) {
   return !!(adam && blocked.has(adam));
 }
 
-function fetchStoreIcon(storeUrl) {
+function lookupStoreApp(storeUrl) {
   const adam = ipaCache.adamFromStoreUrl(storeUrl);
-  if (!adam) return "";
+  const out = { adam, name: "", version: "", iconPath: "", trackViewUrl: storeUrl || "" };
+  if (!adam) return out;
   try {
     const cc = ((/apps\.apple\.com\/([a-z]{2})\//i.exec(storeUrl) || [])[1] || "us").toLowerCase();
     const lookup = spawnSync(
@@ -206,19 +231,167 @@ function fetchStoreIcon(storeUrl) {
       ["-fsSL", `https://itunes.apple.com/lookup?id=${adam}&country=${cc}`],
       { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }
     );
-    if (lookup.status !== 0) return "";
+    if (lookup.status !== 0) return out;
     const j = JSON.parse(lookup.stdout || "{}");
-    const art = j && j.results && j.results[0] && (j.results[0].artworkUrl512 || j.results[0].artworkUrl100);
-    if (!art) return "";
-    const dest = path.join(WORK, `icon-${adam}.jpg`);
-    const dl = spawnSync("curl", ["-fsSL", "-o", dest, String(art).replace("100x100", "256x256")], {
-      encoding: "utf8",
-    });
-    if (dl.status !== 0 || !fs.existsSync(dest) || fs.statSync(dest).size < 100) return "";
-    return dest;
+    const r = j && j.results && j.results[0];
+    if (!r) return out;
+    out.name = String(r.trackName || r.trackCensoredName || "").trim();
+    out.version = String(r.version || "").trim();
+    if (r.trackViewUrl) out.trackViewUrl = String(r.trackViewUrl);
+    const art = r.artworkUrl512 || r.artworkUrl100;
+    if (art) {
+      const dest = path.join(WORK, `icon-${adam}.jpg`);
+      const dl = spawnSync("curl", ["-fsSL", "-o", dest, String(art).replace("100x100", "256x256")], {
+        encoding: "utf8",
+      });
+      if (dl.status === 0 && fs.existsSync(dest) && fs.statSync(dest).size > 100) {
+        out.iconPath = dest;
+      }
+    }
   } catch {
-    return "";
+    /* ignore */
   }
+  return out;
+}
+
+function fetchStoreIcon(storeUrl) {
+  return lookupStoreApp(storeUrl).iconPath || "";
+}
+
+function sendPhotoBotApi(chatId, photoPath, caption, replyMarkup) {
+  const abs = path.resolve(photoPath);
+  const args = [
+    "-sS",
+    "-X",
+    "POST",
+    apiUrl("sendPhoto"),
+    "-F",
+    `chat_id=${chatId}`,
+    "-F",
+    "parse_mode=HTML",
+    "-F",
+    `photo=@${abs};type=image/jpeg`,
+  ];
+  if (caption) args.push("-F", `caption=${caption}`);
+  if (replyMarkup) args.push("-F", `reply_markup=${JSON.stringify(replyMarkup)}`);
+  const r = spawnSync("curl", args, { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+  if (r.error) return Promise.reject(r.error);
+  if (r.status !== 0) {
+    return Promise.resolve({
+      ok: false,
+      description: (r.stderr || r.stdout || `curl exit ${r.status}`).trim().slice(0, 300),
+    });
+  }
+  try {
+    return Promise.resolve(JSON.parse(r.stdout || "{}"));
+  } catch (e) {
+    return Promise.resolve({ ok: false, description: String(r.stdout || e.message).slice(0, 300) });
+  }
+}
+
+/** One editable Telegram card: icon + name — Tetherless + loading bar → final meta/buttons. */
+function createProgressCard(chatId) {
+  let messageId = 0;
+  let hasPhoto = false;
+  let name = "App";
+  let storeUrl = "";
+  let lastEdit = 0;
+  let lastPct = -1;
+  let lastStage = "";
+
+  async function paint(caption, replyMarkup) {
+    if (!messageId) return;
+    const body = {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: "HTML",
+      caption: hasPhoto ? caption : undefined,
+      text: hasPhoto ? undefined : caption,
+    };
+    if (replyMarkup) body.reply_markup = replyMarkup;
+    const method = hasPhoto ? "editMessageCaption" : "editMessageText";
+    // When editing text messages, Telegram wants `text` not caption.
+    if (!hasPhoto) {
+      delete body.caption;
+      body.text = caption;
+    } else {
+      delete body.text;
+    }
+    await tgApi(method, body).catch(() => {});
+  }
+
+  return {
+    get name() {
+      return name;
+    },
+    get storeUrl() {
+      return storeUrl;
+    },
+    async start(link, hintName) {
+      storeUrl = link || "";
+      const meta = link ? lookupStoreApp(link) : { name: "", iconPath: "" };
+      name = hintName || meta.name || "App";
+      const caption = progressCaption({ name, stage: "Fetching…", pct: 4 });
+      if (meta.iconPath && fs.existsSync(meta.iconPath)) {
+        const sent = await sendPhotoBotApi(chatId, meta.iconPath, caption);
+        if (sent && sent.ok && sent.result) {
+          messageId = sent.result.message_id;
+          hasPhoto = true;
+          return;
+        }
+      }
+      const sent = await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: caption,
+        parse_mode: "HTML",
+      });
+      if (sent && sent.ok && sent.result) {
+        messageId = sent.result.message_id;
+        hasPhoto = false;
+      }
+    },
+    async setStage(stage, pct, detail) {
+      const p = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
+      const now = Date.now();
+      const stageChanged = stage && stage !== lastStage;
+      if (!stageChanged && p < lastPct + 3 && now - lastEdit < 1800) return;
+      lastEdit = now;
+      lastPct = p;
+      if (stage) lastStage = stage;
+      console.log("[job]", stage || lastStage, `${p}%`, detail || "");
+      await paint(progressCaption({ name, stage: stage || lastStage, pct: p, detail }));
+    },
+    /** Map backend say() lines into card stages. */
+    async fromBackendLine(line) {
+      const t = String(line || "");
+      if (/ipatool|download/i.test(t)) return this.setStage("Downloading…", 28, t);
+      if (/unfairplay|decrypt|FairPlay|model/i.test(t)) return this.setStage("Decrypting…", 55, t);
+      if (/produced|done/i.test(t)) return this.setStage("Decrypting…", 72, t);
+      if (/upload/i.test(t)) return this.setStage("Uploading…", 80, t);
+      return this.setStage(lastStage || "Working…", Math.max(lastPct, 12), t);
+    },
+    async setUploadPct(pct) {
+      const p = 75 + Math.round((Math.max(0, Math.min(100, pct)) / 100) * 24);
+      return this.setStage("Uploading…", p);
+    },
+    async finish(meta = {}) {
+      if (meta.name) name = meta.name;
+      const caption = buildCaption({
+        name,
+        bid: meta.bid || "",
+        version: meta.version || "",
+        minIos: meta.minIos || "",
+        storeUrl: meta.storeUrl || storeUrl,
+      });
+      await paint(caption, resultKeyboard(meta.storeUrl || storeUrl));
+    },
+    async fail(err) {
+      const caption =
+        `<b>${escapeHtml(name)} — Tetherless</b>\n` +
+        `❌ ${escapeHtml(String(err || "failed").slice(0, 200))}`;
+      await paint(caption);
+    },
+  };
 }
 
 function sendDocumentBotApi(chatId, filePath, fileName, caption, { thumbPath, replyMarkup } = {}) {
@@ -456,16 +629,19 @@ function preferPremiumUpload() {
 async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
   const stat = fs.statSync(filePath);
   const mb = (stat.size / 1024 / 1024).toFixed(1);
+  const card = extras.card || null;
   const say =
     typeof extras.onProgress === "function"
       ? extras.onProgress
-      : async (t) => {
-          try {
-            await tgApi("sendMessage", { chat_id: chatId, text: `Tetherless — ${t}` });
-          } catch {
-            /* ignore */
+      : card
+        ? async (t) => {
+            const m = /(\d+)\s*%/.exec(String(t || ""));
+            if (m) await card.setUploadPct(Number(m[1]));
+            else if (/upload/i.test(String(t || ""))) await card.setStage("Uploading…", 78, t);
           }
-        };
+        : async () => {
+            /* quiet — progress lives on the card */
+          };
 
   // Always prefer Premium *user* MTProto when session is set (unlimited cloud + ≤4 GB).
   if (preferPremiumUpload()) {
@@ -478,7 +654,8 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     }
     const peer = premiumPeer() || "unset";
     console.log(`[job] uploading via Premium session (${mb} MB) → ${peer}`);
-    await say(`uploading via Premium → ${peer} (${mb} MB)…`);
+    if (card) await card.setStage("Uploading…", 76, `${mb} MB`);
+    else await say(`uploading via Premium → ${peer} (${mb} MB)…`);
     const prem = await sendDocumentPremium(chatId, filePath, fileName, caption, {
       ...extras,
       onProgress: (t) => {
@@ -486,7 +663,6 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
       },
     });
     if (prem && prem.ok) {
-      await say(`sent via Premium (${mb} MB).`);
       return {
         ...prem,
         premium: true,
@@ -499,9 +675,6 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
       };
     }
     console.warn("[job] premium session upload failed:", prem && prem.description);
-    await say(
-      `Premium upload failed: ${String((prem && prem.description) || "unknown").slice(0, 160)}`
-    );
     // Fall through to Bot API only for small files; large ones cannot use cloud Bot API.
     if (stat.size > 49 * 1024 * 1024 && !LOCAL_API) {
       return {
@@ -650,15 +823,16 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
   if (!fs.existsSync(ipaPath) || fs.statSync(ipaPath).size < 100) {
     throw new Error("IPA not found or empty: " + ipaPath);
   }
+  const card = createProgressCard(chatId);
+  await card.start("", label || path.basename(ipaPath, ".ipa") || "App");
+  await card.setStage("Decrypting…", 20);
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
   const enc = path.join(dir, "encrypted-source.ipa");
   fs.copyFileSync(ipaPath, enc);
   try {
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text: "Tetherless — starting decrypt…",
-    });
-    const say = (t) => console.log("[job]", t);
+    const say = (t) => {
+      card.fromBackendLine(t);
+    };
     const result = await fairplayBackends.tryRemoteBackends({
       url: "https://apps.apple.com/app/id0",
       dir,
@@ -668,12 +842,11 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
-    const mb = (fs.statSync(result.file).size / 1024 / 1024).toFixed(1);
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text: `Tetherless — decrypted (${mb} MB). Uploading…`,
-    });
-    await deliverResult(chatId, result, { label });
+    await card.setStage("Uploading…", 74);
+    await deliverResult(chatId, result, { label, card });
+  } catch (e) {
+    await card.fail((e && e.message) || e);
+    throw e;
   } finally {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -686,14 +859,14 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
 async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   if (!entry) return false;
   const markup = resultKeyboard(entry.storeUrl || "");
+  const card = createProgressCard(chatId);
+  if (!quiet) {
+    await card.start(entry.storeUrl || "", entry.name || "App");
+    await card.setStage("Sending from cache…", 40);
+  }
   // Premium-user uploads: copyMessage from the original chat (no re-upload).
   if (entry.messageId && entry.fromChatId) {
-    if (!quiet) {
-      await tgApi("sendMessage", {
-        chat_id: chatId,
-        text: "Tetherless — sending cached IPA from Telegram cloud…",
-      });
-    }
+    await card.setStage("Sending from Telegram cloud…", 70);
     const r = await tgApi("copyMessage", {
       chat_id: chatId,
       from_chat_id: entry.fromChatId,
@@ -702,17 +875,19 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     });
     if (r && r.ok) {
       console.log("[cache] hit copyMessage", entry.adam, entry.version || "latest");
+      await card.finish({
+        name: entry.name,
+        bid: entry.bid,
+        version: entry.version,
+        minIos: entry.minIos,
+        storeUrl: entry.storeUrl,
+      });
       return true;
     }
     console.warn("[cache] copyMessage failed:", (r && r.description) || "unknown");
   }
   if (entry.fileId) {
-    if (!quiet) {
-      await tgApi("sendMessage", {
-        chat_id: chatId,
-        text: "Tetherless — sending cached IPA from Telegram cloud…",
-      });
-    }
+    await card.setStage("Sending from Telegram cloud…", 70);
     const r = await tgApi("sendDocument", {
       chat_id: chatId,
       document: entry.fileId,
@@ -722,44 +897,58 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     });
     if (r && r.ok) {
       console.log("[cache] hit file_id", entry.adam, entry.version || "latest");
+      await card.finish({
+        name: entry.name,
+        bid: entry.bid,
+        version: entry.version,
+        minIos: entry.minIos,
+        storeUrl: entry.storeUrl,
+      });
       return true;
     }
     console.warn("[cache] file_id send failed:", (r && r.description) || "unknown");
   }
   // Fallback: re-upload from Mac disk cache (still skips decrypt).
   if (entry.diskPath && fs.existsSync(entry.diskPath)) {
-    const mb = entry.bytes ? (entry.bytes / 1024 / 1024).toFixed(1) : "?";
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text: `Tetherless — cached on Mac (${mb} MB · ${entry.name || "App"}). Starting Premium upload…`,
-    });
+    await card.setStage("Uploading…", 76);
     const fileName = entry.fileName || path.basename(entry.diskPath);
     const thumbPath = entry.storeUrl ? fetchStoreIcon(entry.storeUrl) : "";
-    const sent = await sendDocument(chatId, entry.diskPath, fileName, entry.caption || "", {
+    const caption =
+      entry.caption ||
+      buildCaption({
+        name: entry.name,
+        bid: entry.bid,
+        version: entry.version,
+        minIos: entry.minIos,
+        storeUrl: entry.storeUrl,
+      });
+    const sent = await sendDocument(chatId, entry.diskPath, fileName, caption, {
       thumbPath,
       replyMarkup: markup,
+      card,
     });
     if (sent && sent.ok) {
       const doc = sent.result && sent.result.document;
       const viaPremium = !!(sent.premium && sent.message_id);
       ipaCache.put({
         ...entry,
+        caption,
         fileId: (doc && doc.file_id) || entry.fileId || "",
         fileUniqueId: (doc && doc.file_unique_id) || entry.fileUniqueId || "",
         messageId: viaPremium ? Number(sent.message_id) || 0 : entry.messageId || 0,
         fromChatId: viaPremium ? String(chatId) : entry.fromChatId || "",
       });
       console.log("[cache] hit disk re-upload", entry.diskPath);
+      await card.finish({
+        name: entry.name,
+        bid: entry.bid,
+        version: entry.version,
+        minIos: entry.minIos,
+        storeUrl: entry.storeUrl,
+      });
       return true;
     }
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text:
-        "Tetherless — cached IPA upload failed: " +
-        premiumFailDescription((sent && sent.description) || "unknown") +
-        `\nSaved on Mac: \`${entry.diskPath}\``,
-      parse_mode: "Markdown",
-    });
+    await card.fail(premiumFailDescription((sent && sent.description) || "upload failed"));
     // Cache hit was real — do not fall through into a full re-decrypt.
     return true;
   }
@@ -782,31 +971,19 @@ async function decryptStoreUrl(chatId, link, vreq) {
   }
   if (await trySendCached(chatId, link, vreq)) return;
 
+  const card = createProgressCard(chatId);
+  await card.start(link);
+  await card.setStage("Fetching…", 8);
+
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
   try {
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text: "Tetherless — starting decrypt…",
-    });
-    let lastPing = 0;
-    const say = async (t) => {
-      const line = String(t || "").slice(0, 120);
-      console.log("[job]", line);
-      const now = Date.now();
-      // Throttle Telegram progress so we don't spam while unfairplay runs.
-      if (now - lastPing < 8000 && !/done|fail|error|produced|upload/i.test(line)) return;
-      lastPing = now;
-      try {
-        await tgApi("sendMessage", { chat_id: chatId, text: `Tetherless — ${line}` });
-      } catch {
-        /* ignore */
-      }
+    const say = (t) => {
+      card.fromBackendLine(t);
     };
     const result = await fairplayBackends.tryRemoteBackends({
       url: link,
       dir,
       say: (t) => {
-        // fairplayBackends may call say sync — fire-and-forget progress.
         say(t);
       },
       vreq,
@@ -814,12 +991,11 @@ async function decryptStoreUrl(chatId, link, vreq) {
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
-    const mb = (fs.statSync(result.file).size / 1024 / 1024).toFixed(1);
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text: `Tetherless — decrypted (${mb} MB). Uploading…`,
-    });
-    await deliverResult(chatId, result, { storeUrl: link, versionHint: vreq });
+    await card.setStage("Uploading…", 74);
+    await deliverResult(chatId, result, { storeUrl: link, versionHint: vreq, card });
+  } catch (e) {
+    await card.fail((e && e.message) || e);
+    throw e;
   } finally {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -831,22 +1007,26 @@ async function decryptStoreUrl(chatId, link, vreq) {
 
 async function deliverResult(chatId, result, opts = {}) {
   const ipaMeta = readIpaMeta(result.file);
-  const name = opts.label || ipaMeta.name || result.name || "App";
+  const name = opts.label || ipaMeta.name || result.name || (opts.card && opts.card.name) || "App";
   const version = opts.versionHint || ipaMeta.version || "";
   const bid = ipaMeta.bid || "";
   const minIos = ipaMeta.minIos || "";
   const storeUrl = opts.storeUrl || "";
+  const card = opts.card || null;
   if (isAppleSystemApp(storeUrl, bid)) {
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text: "⛔ Apple system apps are not supported for decryption.",
-    });
+    if (card) await card.fail("Apple system apps are not supported.");
+    else {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: "⛔ Apple system apps are not supported for decryption.",
+      });
+    }
     return;
   }
   const bytes = fs.statSync(result.file).size;
   const mb = (bytes / 1024 / 1024).toFixed(1);
   const fileName = buildIpaFileName({ name, version });
-  const caption = buildCaption({ bid, version, minIos, storeUrl });
+  const caption = buildCaption({ name, bid, version, minIos, storeUrl });
   const markup = resultKeyboard(storeUrl);
   const thumbPath = storeUrl ? fetchStoreIcon(storeUrl) : "";
   const adam = ipaCache.adamFromStoreUrl(storeUrl) || "";
@@ -860,9 +1040,11 @@ async function deliverResult(chatId, result, opts = {}) {
   }
   fs.copyFileSync(result.file, keep);
 
+  if (card) await card.setStage("Uploading…", 78, `${mb} MB`);
   const sent = await sendDocument(chatId, keep, fileName, caption, {
     thumbPath,
     replyMarkup: markup,
+    card,
   });
   if (!sent || !sent.ok) {
     const why = (sent && sent.description) || "Telegram attach failed";
@@ -882,13 +1064,16 @@ async function deliverResult(chatId, result, opts = {}) {
         diskPath: keep,
       });
     }
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text:
-        `Decrypted (${mb} MB) but Telegram upload failed:\n${String(why).slice(0, 400)}\n\n` +
-        `Saved on Mac:\n\`${keep}\``,
-      parse_mode: "Markdown",
-    });
+    if (card) await card.fail(why);
+    else {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text:
+          `Decrypted (${mb} MB) but Telegram upload failed:\n${String(why).slice(0, 400)}\n\n` +
+          `Saved on Mac:\n\`${keep}\``,
+        parse_mode: "Markdown",
+      });
+    }
   } else {
     const doc = sent.result && sent.result.document;
     console.log("[job] sent IPA to Telegram:", keep);
@@ -916,6 +1101,9 @@ async function deliverResult(chatId, result, opts = {}) {
         version || "latest",
         doc && doc.file_id ? "file_id" : viaPremium ? "copyMessage" : "disk-only"
       );
+    }
+    if (card) {
+      await card.finish({ name, bid, version, minIos, storeUrl });
     }
   }
 }
