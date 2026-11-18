@@ -18,7 +18,8 @@
 // Hardening:
 // - Map only [remap_off, +remap_len) (no leading unencrypted bytes before remmap).
 // - Lean buffers (no second full-cryptsize orig); per-page cipher verify.
-// - Retried vm_read_overwrite + MADV_WILLNEED; progress-based remount rounds.
+// - Retried vm_read_overwrite + chunked MADV_WILLNEED; MADV_DONTNEED after page capture.
+// - Real lean decrypt path (1× buffer + disk compares) when memory is tight / crypt ≥ 32 MB.
 // - Remmap-ok-but-unchanged classified as license/keys (FP_FAIL_PERM).
 #include "fpcore.h"
 #include "fp_page.h"
@@ -70,19 +71,24 @@ static void fp_note_errno(int err) {
 }
 
 int fp_memory_tight_for(uint64_t cryptsize) {
-    // Three working buffers (dec/cipher/merged) ≈ 3× cryptsize, plus remap map.
-    uint64_t need = cryptsize * 3;
-    if (cryptsize > (64ull << 20)) need += cryptsize; // padded remap can be large
+    // Lean path needs ≈1× cryptsize + remap window; classic path needs ≈3×.
+    // Treat as tight when available RAM can't cover classic 3× with headroom,
+    // or when the crypt range itself is large enough to jetsam mid-mremap.
+    uint64_t classic_need = cryptsize * 3;
+    uint64_t lean_need = cryptsize + (16ull << 20);
+    if (cryptsize > (48ull << 20)) classic_need += cryptsize; // large padded remap
 #if defined(__APPLE__) && __has_include(<os/proc.h>)
-    // Weak-link style: symbol present on iOS 13+.
     if (&os_proc_available_memory != NULL) {
         size_t avail = os_proc_available_memory();
-        if (avail > 0 && (uint64_t)avail < need + (48ull << 20)) return 1;
+        if (avail > 0) {
+            if ((uint64_t)avail < classic_need + (64ull << 20)) return 1;
+            if ((uint64_t)avail < lean_need + (32ull << 20)) return 1;
+        }
     }
 #endif
-    (void)need;
-    // Hard ceiling: refuse multi-hundred-MB triple buffers on phone.
-    if (cryptsize >= (180ull << 20)) return 1;
+    (void)classic_need; (void)lean_need;
+    // Prefer lean once crypt ≥ 32 MB — phones often jetsam the 3× path here.
+    if (cryptsize >= (32ull << 20)) return 1;
     return 0;
 }
 
@@ -569,14 +575,24 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
             continue;
         }
 
+        // Prefault in ~4 MiB chunks (not the whole crypt window) — full-map
+        // MADV_WILLNEED was a major ENOMEM / Jetsam trigger on large mains.
+        const uint64_t chunk_pages = fp_suggested_chunk_pages(s->cryptsize, pg);
+        for (uint64_t i = 0; i < total; ) {
+            uint64_t run = 0;
+            while (i + run < total && run < chunk_pages) {
+                if (!okmask[i + run]) {
+                    volatile uint8_t touch = base[read_bias + (i + run) * pg];
+                    (void)touch;
+                }
+                run++;
+            }
 #ifdef MADV_WILLNEED
-        (void)madvise(base, (size_t)map_len, MADV_WILLNEED);
+            if (run) {
+                (void)madvise(base + read_bias + i * pg, (size_t)(run * pg), MADV_WILLNEED);
+            }
 #endif
-        // Prefault each still-needed crypt page (buddy3 first protected userspace read).
-        for (uint64_t i = 0; i < total; i++) {
-            if (okmask[i]) continue;
-            volatile uint8_t touch = base[read_bias + i * pg];
-            (void)touch;
+            i += run ? run : 1;
         }
 
         uint64_t pages_ok = 0;
@@ -602,6 +618,10 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
                     // modes / rounds can recover (missing keys often look like this).
                     if (!first_kr) { first_kr = -2; first_off = s->cryptoff + off; }
                 }
+#ifdef MADV_DONTNEED
+                // Drop the remapped page from RSS once we hold plaintext in `dec`.
+                (void)madvise(base + read_bias + off, (size_t)pg, MADV_DONTNEED);
+#endif
             }
         }
         res->pages_ok = pages_ok;
@@ -836,57 +856,112 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             : (sizeof order_default / sizeof order_default[0]);
 
         const bool mem_tight = fp_memory_tight_for(s->cryptsize);
-        if (mem_tight) {
-            logf_(log, ctx, "  slice[%d] low memory for %.1f MB crypt range — using lean buffers (close apps if this fails)",
-                  i, (double)s->cryptsize / (1024.0 * 1024.0));
-        }
-
-        // Lean alloc: cipher (reference) + merged (accumulator) + one attempt buffer.
-        // fp_attempt no longer keeps a second full cryptsize orig copy.
-        uint8_t *cipher = malloc(s->cryptsize);
-        uint8_t *merged = malloc(s->cryptsize);
-        uint8_t *dec = malloc(s->cryptsize);
         uint64_t page_total = (s->cryptsize + pg - 1) / pg;
         if (page_total == 0) page_total = 1;
+
+        // Classic: cipher + merged + dec (3×). Lean: one dec + page compares via pread,
+        // accumulate good pages into the output file (no second/third full buffers).
+        uint8_t *cipher = NULL;
+        uint8_t *merged = NULL;
+        uint8_t *dec = malloc(s->cryptsize);
         uint8_t *merged_ok = calloc((size_t)page_total, 1);
+        uint8_t *page_cipher = malloc((size_t)pg);
         int cin = open(in_path, O_RDONLY);
-        bool cipher_ok = cin >= 0 && cipher &&
-            pread_full(cin, cipher, s->cryptsize, (off_t)(s->slice_off + s->cryptoff));
-        if (cin >= 0) close(cin);
-        if (!dec || !cipher || !merged || !merged_ok || !cipher_ok) {
+        bool lean = mem_tight;
+        if (!lean) {
+            cipher = malloc(s->cryptsize);
+            merged = malloc(s->cryptsize);
+            if (!cipher || !merged) {
+                free(cipher); free(merged);
+                cipher = merged = NULL;
+                lean = true;
+            }
+        }
+        bool cipher_ok = false;
+        if (!lean && cin >= 0 && cipher) {
+            cipher_ok = pread_full(cin, cipher, s->cryptsize,
+                                   (off_t)(s->slice_off + s->cryptoff));
+        }
+        if (!dec || !merged_ok || !page_cipher || cin < 0 || (!lean && !cipher_ok)) {
             logf_(log, ctx, "  slice[%d] buffer alloc/read failed (ENOMEM?)", i);
-            free(dec); free(cipher); free(merged); free(merged_ok);
+            free(dec); free(cipher); free(merged); free(merged_ok); free(page_cipher);
+            if (cin >= 0) close(cin);
             fp_set_fail(FP_FAIL_NOMEM);
             rc = -1; break;
         }
-        memcpy(merged, cipher, s->cryptsize);
+        if (lean) {
+            logf_(log, ctx,
+                  "  slice[%d] lean path for %.1f MB crypt — 1× buffer + disk page compares",
+                  i, (double)s->cryptsize / (1024.0 * 1024.0));
+        }
+        if (!lean) memcpy(merged, cipher, s->cryptsize);
         logf_(log, ctx, "  slice[%d] map window pages≈%llu chunk_hint=%llu%s",
               i, (unsigned long long)page_total,
               (unsigned long long)fp_suggested_chunk_pages(s->cryptsize, pg),
-              mem_tight ? " (mem-tight)" : "");
+              lean ? " (lean)" : "");
 
         bool done = false;
         fp_attempt_t best; memset(&best, 0, sizeof best); best.mremap_ret = -1;
         uint64_t merged_pages = 0;
+        const int tries_per_mode = lean ? 3 : 2;
 
         for (size_t k = 0; k < order_n && !done; k++) {
             fp_attempt_t a; char d[512];
-            // Extra tries per mode — guarded remapping inside fp_attempt plus outer backoff.
-            for (int attempt = 0; attempt < 2 && !done; attempt++) {
-                if (attempt) usleep((useconds_t)(40 * 1000 * attempt));
-                memcpy(dec, cipher, s->cryptsize);
+            for (int attempt = 0; attempt < tries_per_mode && !done; attempt++) {
+                if (attempt) {
+                    // Longer backoff under lean / ENOMEM so Jetsam can reclaim.
+                    unsigned usec = lean ? (120 * 1000 * (attempt + 1)) : (40 * 1000 * attempt);
+                    usleep((useconds_t)usec);
+                }
+                // Seed attempt buffer: full cipher copy, or only missing pages from disk (lean).
+                bool seed_ok = true;
+                if (!lean) {
+                    memcpy(dec, cipher, s->cryptsize);
+                } else {
+                    for (uint64_t p = 0; p < page_total; p++) {
+                        if (merged_ok[p]) continue;
+                        uint64_t off = p * pg;
+                        uint64_t nbytes = (off + pg <= s->cryptsize) ? pg : (s->cryptsize - off);
+                        if (!pread_full(cin, dec + off, (size_t)nbytes,
+                                        (off_t)(s->slice_off + s->cryptoff + off))) {
+                            seed_ok = false;
+                            break;
+                        }
+                    }
+                }
+                if (!seed_ok) {
+                    fp_set_fail(FP_FAIL_IO);
+                    logf_(log, ctx, "  slice[%d] lean seed pread failed", i);
+                    break;
+                }
                 fp_attempt(in_path, s, order[k][0], order[k][1], dec, &a);
                 if (a.pages_ok > best.pages_ok || (a.pages_ok == best.pages_ok && a.changed && !best.changed))
                     best = a;
-                // Merge pages that transformed vs ciphertext (buddy-style chunk recovery).
+                // Merge pages that transformed vs ciphertext.
                 if (a.mremap_ret == 0 && a.pages_ok > 0) {
                     for (uint64_t p = 0; p < page_total; p++) {
                         if (merged_ok[p]) continue;
                         uint64_t off = p * pg;
                         uint64_t nbytes = (off + pg <= s->cryptsize) ? pg : (s->cryptsize - off);
-                        if (memcmp(dec + off, cipher + off, (size_t)nbytes) == 0) continue;
-                        memcpy(merged + off, dec + off, (size_t)nbytes);
-                        merged_ok[p] = 1;
+                        bool transformed = false;
+                        if (!lean) {
+                            transformed = memcmp(dec + off, cipher + off, (size_t)nbytes) != 0;
+                            if (transformed) memcpy(merged + off, dec + off, (size_t)nbytes);
+                        } else {
+                            if (!pread_full(cin, page_cipher, (size_t)nbytes,
+                                            (off_t)(s->slice_off + s->cryptoff + off))) {
+                                continue;
+                            }
+                            transformed = memcmp(dec + off, page_cipher, (size_t)nbytes) != 0;
+                            // Persist good pages immediately so we don't need a merged buffer.
+                            if (transformed) {
+                                if (!pwrite_full(out, dec + off, (size_t)nbytes,
+                                                 (off_t)(s->slice_off + s->cryptoff + off))) {
+                                    fp_set_fail(FP_FAIL_IO);
+                                }
+                            }
+                        }
+                        if (transformed) merged_ok[p] = 1;
                     }
                     merged_pages = 0;
                     for (uint64_t p = 0; p < page_total; p++) if (merged_ok[p]) merged_pages++;
@@ -894,27 +969,48 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                 fp_attempt_describe(&a, d, sizeof d);
                 done = attempt_looks_decrypted(&a);
                 if (!done && merged_pages == page_total) {
-                    memcpy(dec, merged, s->cryptsize);
+                    if (!lean) memcpy(dec, merged, s->cryptsize);
+                    else {
+                        // Reload accumulated plaintext from the output file.
+                        if (!pread_full(out, dec, s->cryptsize,
+                                        (off_t)(s->slice_off + s->cryptoff))) {
+                            fp_set_fail(FP_FAIL_IO);
+                        }
+                    }
                     a.pages_ok = page_total;
                     a.pages_total = page_total;
                     a.changed = 1;
                     a.ret_after = code_words(dec, s->cryptsize);
                     a.ent_after = entropy(dec, s->cryptsize);
-                    a.ret_before = code_words(cipher, s->cryptsize);
-                    a.ent_before = entropy(cipher, s->cryptsize);
+                    if (!lean) {
+                        a.ret_before = code_words(cipher, s->cryptsize);
+                        a.ent_before = entropy(cipher, s->cryptsize);
+                    } else {
+                        // Sample ciphertext entropy from the first page on disk.
+                        uint64_t sample = s->cryptsize < pg ? s->cryptsize : pg;
+                        if (pread_full(cin, page_cipher, (size_t)sample,
+                                       (off_t)(s->slice_off + s->cryptoff))) {
+                            a.ret_before = code_words(page_cipher, sample);
+                            a.ent_before = entropy(page_cipher, sample);
+                        }
+                    }
                     done = attempt_looks_decrypted(&a);
                     if (done) best = a;
                 }
-                logf_(log, ctx, "  slice[%d] try%zu.%d %s %s (merged %llu/%llu%s)",
+                logf_(log, ctx, "  slice[%d] try%zu.%d %s %s (merged %llu/%llu%s%s)",
                       i, k, attempt, done ? "[DECRYPTED]" : "[--]", d,
                       (unsigned long long)merged_pages, (unsigned long long)page_total,
-                      exact ? ", exact" : "");
+                      exact ? ", exact" : "", lean ? ", lean" : "");
             }
         }
         if (!done && merged_pages == page_total) {
-            memcpy(dec, merged, s->cryptsize);
+            if (!lean) memcpy(dec, merged, s->cryptsize);
+            else if (!pread_full(out, dec, s->cryptsize, (off_t)(s->slice_off + s->cryptoff))) {
+                fp_set_fail(FP_FAIL_IO);
+            }
             done = true;
-            logf_(log, ctx, "  slice[%d] recovered via merged pages across modes", i);
+            logf_(log, ctx, "  slice[%d] recovered via merged pages across modes%s",
+                  i, lean ? " (lean/out-file)" : "");
         }
         if (!done) {
             char d[512];
@@ -925,15 +1021,20 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             else if (best.mremap_errno == EPERM || best.mremap_errno == EACCES) fp_set_fail(FP_FAIL_PERM);
             else if (best.mremap_ret == 0 && !best.changed) fp_set_fail(FP_FAIL_PERM);
             else if (g_fp_last_fail == FP_FAIL_NONE) fp_set_fail(FP_FAIL_STILL_ENC);
-            rc = -1; free(dec); free(cipher); free(merged); free(merged_ok); break;
+            rc = -1;
+            free(dec); free(cipher); free(merged); free(merged_ok); free(page_cipher);
+            close(cin);
+            break;
         }
-        if (merged_pages == page_total) memcpy(dec, merged, s->cryptsize);
+        if (!lean && merged_pages == page_total) memcpy(dec, merged, s->cryptsize);
         uint32_t zero = 0;
+        // Lean already pwrite'd good pages; still rewrite full crypt range for consistency.
         if (!pwrite_full(out, dec, s->cryptsize, (off_t)(s->slice_off + s->cryptoff)) ||
             !pwrite_full(out, &zero, 4, (off_t)(s->enc_lc_off + offsetof(struct encryption_info_command, cryptid)))) {
             logf_(log, ctx, "  write failed: %s", strerror(errno)); rc = -1;
         }
-        free(dec); free(cipher); free(merged); free(merged_ok);
+        free(dec); free(cipher); free(merged); free(merged_ok); free(page_cipher);
+        close(cin);
     }
     if (rc == 0) {
         fsync(out);

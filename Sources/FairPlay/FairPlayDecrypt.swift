@@ -960,13 +960,19 @@ enum FairPlayDecrypt {
                 fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
             }
         }
-        // Main-binary ENOMEM: brief memory pause + one retry before failing the IPA.
+        // Main-binary ENOMEM: purge + progressive backoff retries (lean path in fpcore).
         if rc != 0 && rc != 1 && role == .main {
-            let klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
-            if klass == .outOfMemory {
-                progress?("Main executable hit mremap ENOMEM — freeing memory and retrying once…")
+            var klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
+            var oomTry = 0
+            while klass == .outOfMemory && oomTry < 3 {
+                oomTry += 1
+                progress?(
+                    "Main executable hit mremap ENOMEM — freeing memory and retrying "
+                        + "(\(oomTry)/3)…"
+                )
                 try? fm.removeItem(at: tmp)
-                Thread.sleep(forTimeInterval: 1.2)
+                Self.purgeTransientMemory()
+                Thread.sleep(forTimeInterval: 1.0 + Double(oomTry) * 1.25)
                 pauseIfMemoryPressure(progress: progress)
                 logBuf.clear()
                 rc = decryptInput.path.withCString { inPath in
@@ -974,6 +980,8 @@ enum FairPlayDecrypt {
                         fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
                     }
                 }
+                if rc == 0 || rc == 1 { break }
+                klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
             }
         }
 
@@ -1535,9 +1543,10 @@ enum FairPlayDecrypt {
         detail: ((String) -> Void)?
     ) -> [ParallelDecryptItem] {
         guard !files.isEmpty else { return [] }
-        // Cap concurrency — mremap is memory-heavy; 3 keeps Flutter apps moving without Jetsam.
-        let maxWorkers = min(3, max(1, files.count))
-        detail?("Parallel FairPlay workers: \(maxWorkers)")
+        // Cap concurrency — mremap is memory-heavy; under pressure stay serial.
+        let tight = fp_memory_tight_for(48 * 1024 * 1024) != 0
+        let maxWorkers = tight ? 1 : min(3, max(1, files.count))
+        detail?("Parallel FairPlay workers: \(maxWorkers)\(tight ? " (low memory)" : "")")
         let gate = DispatchSemaphore(value: maxWorkers)
         let lock = NSLock()
         var items: [ParallelDecryptItem] = []
@@ -1839,14 +1848,20 @@ enum FairPlayDecrypt {
         return parts.reduce(root) { $0.appendingPathComponent($1, isDirectory: false) }
     }
 
+    /// Drop URL caches so mremap has a better shot after ENOMEM.
+    private static func purgeTransientMemory() {
+        URLCache.shared.removeAllCachedResponses()
+    }
+
     /// Brief pause when fpcore reports tight memory so Jetsam is less likely mid-decrypt.
     private static func pauseIfMemoryPressure(progress: ((String) -> Void)?) {
         if fp_memory_tight_for(64 * 1024 * 1024) != 0 {
             progress?("Low memory — pausing before next Mach-O…")
-            Thread.sleep(forTimeInterval: 0.8)
+            purgeTransientMemory()
+            Thread.sleep(forTimeInterval: 1.2)
         } else if fp_memory_tight_for(48 * 1024 * 1024) != 0 {
             progress?("Low memory — pausing before next Mach-O…")
-            Thread.sleep(forTimeInterval: 0.4)
+            Thread.sleep(forTimeInterval: 0.6)
         }
     }
 
