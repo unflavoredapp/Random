@@ -648,12 +648,59 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     console.log(`[job] uploading via Premium session (${mb} MB) → ${peer}`);
     if (card) await card.setStage("Uploading…", 76);
     else await say(`uploading via Premium → ${peer} (${mb} MB)…`);
-    const prem = await sendDocumentPremium(chatId, filePath, fileName, caption, {
-      ...extras,
+    // Stage via Premium (≤4 GB cloud), bare file — then the *bot* re-sends so
+    // the IPA appears from IPA Agent, not as your outgoing purple bubble.
+    const prem = await sendDocumentPremium(chatId, filePath, fileName, "", {
+      thumbPath: extras.thumbPath,
       onProgress: (t) => {
         say(t);
       },
     });
+    if (prem && prem.ok && prem.message_id) {
+      const stagedId = Number(prem.message_id);
+      let copied = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        if (attempt) {
+          await new Promise((r) => setTimeout(r, 700 * attempt));
+        }
+        copied = await tgApi("copyMessage", {
+          chat_id: chatId,
+          from_chat_id: chatId,
+          message_id: stagedId,
+          caption: caption || undefined,
+          parse_mode: caption ? "HTML" : undefined,
+          reply_markup: extras.replyMarkup || undefined,
+        }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
+        if (copied && copied.ok && copied.result) break;
+      }
+      if (copied && copied.ok && copied.result) {
+        // Remove your staging upload so only the bot's IPA remains.
+        await tgApi("deleteMessage", { chat_id: chatId, message_id: stagedId }).catch(() => {});
+        console.log("[job] bot produced IPA via copyMessage", copied.result.message_id);
+        return {
+          ok: true,
+          premium: true,
+          bot_resent: true,
+          message_id: copied.result.message_id,
+          chat_id: String(chatId),
+          result: copied.result,
+        };
+      }
+      console.warn(
+        "[job] bot copyMessage failed, leaving Premium staging message:",
+        (copied && copied.description) || "unknown"
+      );
+      return {
+        ...prem,
+        premium: true,
+        message_id: prem.message_id,
+        chat_id: prem.chat_id || chatId,
+        result: {
+          message_id: prem.message_id,
+          document: null,
+        },
+      };
+    }
     if (prem && prem.ok) {
       return {
         ...prem,
