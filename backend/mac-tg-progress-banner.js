@@ -1,10 +1,11 @@
 // Brand: Tetherless · https://tetherless.dev
 "use strict";
 /**
- * Tetherless progress card — URSA-inspired layout via `sharp` (no ImageMagick).
+ * Tetherless progress card via `sharp`.
  *
- * Left: TETHERLESS · app name · stage + LIVE · #tag
- * Right: blurred wash · sharp rounded icon with live % overlay + bar
+ * Left: TETHERLESS · app name · stage · #tag
+ * Right: blurred wash · centered app icon with iOS Home Screen–style
+ *        circular progress ring + % in the middle (no status chip).
  */
 const fs = require("fs");
 const path = require("path");
@@ -40,16 +41,7 @@ function sharpTag(tag) {
   );
 }
 
-function escapeXml(s) {
-  return String(s || "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 function leftPanelSvg({ brand, title, stage, hash, W, H }) {
-  const pillX = 56 + Math.min(340, stage.length * 15);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -59,41 +51,75 @@ function leftPanelSvg({ brand, title, stage, hash, W, H }) {
       <stop offset="100%" stop-color="#080a10" stop-opacity="0"/>
     </linearGradient>
   </defs>
-  <rect x="0" y="0" width="${Math.round(W * 0.58)}" height="${H}" fill="url(#leftFade)"/>
+  <rect x="0" y="0" width="${Math.round(W * 0.52)}" height="${H}" fill="url(#leftFade)"/>
   <text x="56" y="72" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" letter-spacing="2">${brand}</text>
   <text x="56" y="150" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="60" font-weight="700">${title}</text>
   <text x="56" y="214" fill="#d7dbe6" font-family="Arial, Helvetica, sans-serif" font-size="28">${stage}</text>
-  <rect x="${pillX}" y="186" rx="22" ry="22" width="100" height="40" fill="#f5c542"/>
-  <text x="${pillX + 50}" y="214" text-anchor="middle" fill="#111111" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">LIVE</text>
   <text x="56" y="268" fill="#6cb6ff" font-family="Arial, Helvetica, sans-serif" font-size="28">${hash}</text>
   <text x="56" y="${H - 36}" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">tetherless.dev</text>
   <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@tetherless</text>
 </svg>`);
 }
 
-function iconOverlaySvg({ pct, chip, S }) {
+/** Polar → cartesian for SVG arc (angles in degrees, 0 = top, clockwise). */
+function polar(cx, cy, r, deg) {
+  const rad = ((deg - 90) * Math.PI) / 180;
+  return {
+    x: cx + r * Math.cos(rad),
+    y: cy + r * Math.sin(rad),
+  };
+}
+
+function arcPath(cx, cy, r, pct) {
   const p = Math.max(0, Math.min(100, pct));
-  const barW = Math.round((S - 100) * (p / 100));
-  const chipText = escapeXml(String(chip || "LIVE").slice(0, 14).toUpperCase());
+  if (p <= 0) return "";
+  if (p >= 100) {
+    // Full circle as two arcs
+    return `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx} ${cy + r} A ${r} ${r} 0 1 1 ${cx} ${cy - r}`;
+  }
+  const sweep = (p / 100) * 360;
+  const end = polar(cx, cy, r, sweep);
+  const large = sweep > 180 ? 1 : 0;
+  return `M ${cx} ${cy - r} A ${r} ${r} 0 ${large} 1 ${end.x.toFixed(2)} ${end.y.toFixed(2)}`;
+}
+
+/**
+ * iOS Home Screen–style download overlay:
+ * dimmed icon + circular progress ring + % in the center.
+ * No status chip / no bottom bar.
+ */
+function homescreenOverlaySvg({ pct, S }) {
+  const p = Math.max(0, Math.min(100, Math.round(pct)));
+  const cx = S / 2;
+  const cy = S / 2;
+  const ringR = Math.round(S * 0.38);
+  const track = `M ${cx} ${cy - ringR} A ${ringR} ${ringR} 0 1 1 ${cx} ${cy + ringR} A ${ringR} ${ringR} 0 1 1 ${cx} ${cy - ringR}`;
+  const prog = arcPath(cx, cy, ringR, p);
+  const fontSize = Math.round(S * 0.18);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" xmlns="http://www.w3.org/2000/svg">
   <defs>
-    <clipPath id="round">
-      <rect x="0" y="0" width="${S}" height="${S}" rx="72" ry="72"/>
+    <clipPath id="squircle">
+      <rect x="0" y="0" width="${S}" height="${S}" rx="${Math.round(S * 0.22)}" ry="${Math.round(S * 0.22)}"/>
     </clipPath>
   </defs>
-  <rect x="0" y="0" width="${S}" height="${S}" rx="72" ry="72" fill="rgba(0,0,0,0.32)" clip-path="url(#round)"/>
-  <rect x="${Math.round(S * 0.14)}" y="${Math.round(S * 0.34)}" width="${Math.round(S * 0.72)}" height="${Math.round(S * 0.38)}" rx="36" ry="36" fill="rgba(0,0,0,0.72)"/>
-  <text x="${S / 2}" y="${S / 2 + 18}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="${Math.round(S * 0.24)}" font-weight="700">${p}%</text>
-  <rect x="50" y="${S - 56}" width="${S - 100}" height="18" rx="9" ry="9" fill="rgba(255,255,255,0.28)"/>
-  <rect x="50" y="${S - 56}" width="${Math.max(10, barW)}" height="18" rx="9" ry="9" fill="#5ec8ff"/>
-  <rect x="0" y="0" width="${S}" height="${S}" rx="72" ry="72" fill="none" stroke="#5ec8ff" stroke-width="6"/>
-  <rect x="${S - 250}" y="18" rx="26" ry="26" width="232" height="48" fill="#2f6bff"/>
-  <text x="${S - 134}" y="50" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">${chipText}</text>
+  <!-- Dim like iOS downloading icon -->
+  <rect x="0" y="0" width="${S}" height="${S}" rx="${Math.round(S * 0.22)}" ry="${Math.round(S * 0.22)}" fill="rgba(0,0,0,0.45)" clip-path="url(#squircle)"/>
+  <!-- Soft center disc behind % -->
+  <circle cx="${cx}" cy="${cy}" r="${Math.round(ringR * 0.72)}" fill="rgba(0,0,0,0.35)"/>
+  <!-- Track + progress ring -->
+  <path d="${track}" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="${Math.round(S * 0.045)}" stroke-linecap="round"/>
+  ${
+    prog
+      ? `<path d="${prog}" fill="none" stroke="#ffffff" stroke-width="${Math.round(S * 0.045)}" stroke-linecap="round"/>`
+      : ""
+  }
+  <text x="${cx}" y="${cy + fontSize * 0.35}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="700">${p}%</text>
 </svg>`);
 }
 
 function placeholderIconSvg(S) {
+  const r = Math.round(S * 0.22);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -102,7 +128,7 @@ function placeholderIconSvg(S) {
       <stop offset="100%" stop-color="#0a1020"/>
     </linearGradient>
   </defs>
-  <rect width="${S}" height="${S}" fill="url(#g)"/>
+  <rect width="${S}" height="${S}" rx="${r}" ry="${r}" fill="url(#g)"/>
   <text x="${S / 2}" y="${S / 2 + 20}" text-anchor="middle" fill="#6cb6ff" font-family="Arial, Helvetica, sans-serif" font-size="72" font-weight="700">T</text>
 </svg>`);
 }
@@ -127,13 +153,18 @@ async function renderProgressBanner({
 
   const W = 1200;
   const H = 630;
-  const S = 420;
+  const S = 400;
   const title = sanitize(name || "App", 26);
   const progress = sanitize(stage || "Working...", 28);
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
   const hash = `#${sharpTag(tag)}`;
   const brandLabel = sanitize(brand || "TETHERLESS", 18).toUpperCase();
-  const chip = p >= 100 ? "DONE" : progress.toUpperCase().slice(0, 14) || "LIVE";
+
+  // Center icon in the right half of the banner.
+  const rightLeft = Math.round(W * 0.48);
+  const rightWidth = W - rightLeft;
+  const iconLeft = rightLeft + Math.round((rightWidth - S) / 2);
+  const iconTop = Math.round((H - S) / 2);
 
   try {
     fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -148,10 +179,9 @@ async function renderProgressBanner({
         .modulate({ brightness: 0.55, saturation: 0.85 })
         .png()
         .toBuffer();
-      // Mask to right half via SVG
       const rightMask = Buffer.from(`<?xml version="1.0"?>
 <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
-  <rect x="${Math.round(W * 0.4)}" y="0" width="${Math.round(W * 0.6)}" height="${H}" fill="white"/>
+  <rect x="${rightLeft}" y="0" width="${rightWidth}" height="${H}" fill="white"/>
 </svg>`);
       const masked = await sharp(blurBuf)
         .composite([{ input: rightMask, blend: "dest-in" }])
@@ -160,7 +190,8 @@ async function renderProgressBanner({
       layers.push({ input: masked, left: 0, top: 0 });
     }
 
-    // Sharp rounded icon + % overlay
+    // Squircle icon + Home Screen circular progress
+    const corner = Math.round(S * 0.22);
     let iconBase;
     if (iconPath && fs.existsSync(iconPath)) {
       iconBase = await sharp(iconPath)
@@ -172,19 +203,19 @@ async function renderProgressBanner({
     }
     const iconRoundMask = Buffer.from(`<?xml version="1.0"?>
 <svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
-  <rect width="${S}" height="${S}" rx="72" ry="72" fill="white"/>
+  <rect width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="white"/>
 </svg>`);
     const rounded = await sharp(iconBase)
       .composite([{ input: iconRoundMask, blend: "dest-in" }])
       .png()
       .toBuffer();
-    const withPct = await sharp(rounded)
-      .composite([{ input: iconOverlaySvg({ pct: p, chip, S }), top: 0, left: 0 }])
+    const withRing = await sharp(rounded)
+      .composite([{ input: homescreenOverlaySvg({ pct: p, S }), top: 0, left: 0 }])
       .png()
       .toBuffer();
-    layers.push({ input: withPct, left: W - S - 64, top: Math.round((H - S) / 2) });
+    layers.push({ input: withRing, left: iconLeft, top: iconTop });
 
-    // Left text panel SVG
+    // Left copy (stage text only — no LIVE / status chips)
     layers.push({
       input: leftPanelSvg({
         brand: brandLabel,
@@ -219,7 +250,6 @@ async function renderProgressBanner({
 }
 
 function whichConvert() {
-  // Kept for status/debug — banners now prefer sharp.
   return loadSharp() ? "sharp" : "";
 }
 
