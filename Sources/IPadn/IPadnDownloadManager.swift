@@ -638,12 +638,19 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             let msg = DecryptClient.shared.error ?? DecryptClient.shared.message
             jobs[j].error = msg.isEmpty ? "Decrypt failed." : msg
         default:
-            // Still running / unknown — treat as completed if IPA exists.
-            jobs[j].status = jobs[j].fileURL != nil ? .completed : .failed
-            if jobs[j].status == .failed {
+            if DecryptMacRouting.macOnly {
+                jobs[j].status = .failed
                 jobs[j].error = DecryptClient.shared.message.isEmpty
-                    ? "Decrypt did not finish."
+                    ? "Mac decrypt did not finish — check Decrypt site URL."
                     : DecryptClient.shared.message
+            } else {
+                // Still running / unknown — treat as completed if IPA exists.
+                jobs[j].status = jobs[j].fileURL != nil ? .completed : .failed
+                if jobs[j].status == .failed {
+                    jobs[j].error = DecryptClient.shared.message.isEmpty
+                        ? "Decrypt did not finish."
+                        : DecryptClient.shared.message
+                }
             }
         }
         persist()
