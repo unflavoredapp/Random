@@ -1,0 +1,245 @@
+#!/bin/zsh
+# Brand: Tetherless · https://tetherless.dev
+#
+# Run everything from WebSSH / plain SSH — no Mac desktop required
+# (uses tetherless.keychain-db + TETHERLESS_KEYCHAIN_PASSWORD).
+#
+#   zsh ~/tetherless/server/mac-ssh.sh start     # bot in background
+#   zsh ~/tetherless/server/mac-ssh.sh stop
+#   zsh ~/tetherless/server/mac-ssh.sh status
+#   zsh ~/tetherless/server/mac-ssh.sh logs
+#   zsh ~/tetherless/server/mac-ssh.sh api       # HTTPS backup API + cloudflared
+#   zsh ~/tetherless/server/mac-ssh.sh pull
+#   zsh ~/tetherless/server/mac-ssh.sh unlock    # keychain only
+#
+set -euo pipefail
+
+export PATH="/opt/homebrew/bin:$HOME/bin:/users/client/bin:/usr/local/bin:$PATH"
+
+ENV_FILE=""
+for f in "$HOME/.tetherless-mac.env" /users/client/.tetherless-mac.env; do
+  [[ -f "$f" ]] && ENV_FILE="$f" && break
+done
+if [[ -n "$ENV_FILE" ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  source "$ENV_FILE"
+  set +a
+fi
+
+REPO=""
+for d in "$HOME/tetherless" /users/client/tetherless; do
+  [[ -f "$d/server/mac-tg-bot.js" ]] && REPO="$d" && break
+done
+if [[ -z "$REPO" ]]; then
+  echo "Missing ~/tetherless (server/mac-tg-bot.js). Clone first."
+  exit 1
+fi
+
+RUN_DIR="${MAC_SSH_RUN_DIR:-$HOME/tetherless-run}"
+mkdir -p "$RUN_DIR"
+BOT_PID="$RUN_DIR/bot.pid"
+BOT_LOG="$RUN_DIR/bot.log"
+API_PID="$RUN_DIR/api.pid"
+API_LOG="$RUN_DIR/api.log"
+CF_PID="$RUN_DIR/cloudflared.pid"
+CF_LOG="$RUN_DIR/cloudflared.log"
+
+unlock_keychain() {
+  local pass="${TETHERLESS_KEYCHAIN_PASSWORD:-}"
+  local kc="$HOME/Library/Keychains/tetherless.keychain-db"
+  if [[ -z "$pass" ]]; then
+    echo "WARN: TETHERLESS_KEYCHAIN_PASSWORD not set in $ENV_FILE — ipatool may fail over SSH."
+    return 0
+  fi
+  if [[ ! -f "$kc" ]]; then
+    echo "Creating dedicated keychain…"
+    zsh "$REPO/server/mac-keychain-setup.sh"
+  else
+    security unlock-keychain -p "$pass" "$kc"
+    security list-keychains -d user -s "$kc" 2>/dev/null || true
+    security default-keychain -d user -s "$kc" 2>/dev/null || true
+    security set-keychain-settings -t 21600 -l "$kc" 2>/dev/null || true
+  fi
+  echo "Keychain unlocked: $kc"
+}
+
+alive_pid() {
+  local f="$1"
+  [[ -f "$f" ]] || return 1
+  local p
+  p="$(cat "$f" 2>/dev/null || true)"
+  [[ -n "$p" ]] || return 1
+  kill -0 "$p" 2>/dev/null
+}
+
+stop_pidfile() {
+  local f="$1"
+  local name="$2"
+  if alive_pid "$f"; then
+    local p
+    p="$(cat "$f")"
+    kill "$p" 2>/dev/null || true
+    sleep 0.5
+    kill -9 "$p" 2>/dev/null || true
+    echo "Stopped $name (pid $p)"
+  else
+    echo "$name not running"
+  fi
+  rm -f "$f"
+}
+
+cmd_pull() {
+  cd "$REPO"
+  git fetch --quiet origin 2>/dev/null || true
+  if git rev-parse --abbrev-ref --symbolic-full-name @{u} >/dev/null 2>&1; then
+    git pull --ff-only
+  else
+    git pull origin "$(git rev-parse --abbrev-ref HEAD)" || git pull origin main
+  fi
+  echo "Repo: $REPO @ $(git rev-parse --short HEAD)"
+}
+
+cmd_unlock() {
+  unlock_keychain
+  if command -v ipatool >/dev/null 2>&1; then
+    ipatool auth info 2>&1 | head -5 || echo "ipatool not logged in — from SSH run: ipatool auth login"
+  fi
+}
+
+cmd_stop() {
+  stop_pidfile "$BOT_PID" "bot"
+  # Also kill stragglers from desktop launches
+  pkill -f "node server/mac-tg-bot.js" 2>/dev/null || true
+  pkill -f "node.*/mac-tg-bot.js" 2>/dev/null || true
+}
+
+cmd_stop_api() {
+  stop_pidfile "$CF_PID" "cloudflared"
+  stop_pidfile "$API_PID" "api"
+  pkill -f "node server/mac-https-api.js" 2>/dev/null || true
+  pkill -f "cloudflared tunnel" 2>/dev/null || true
+}
+
+cmd_start() {
+  cmd_pull
+  unlock_keychain
+  cmd_stop
+  cd "$REPO"
+  if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+    echo "TELEGRAM_BOT_TOKEN missing in $ENV_FILE"
+    exit 1
+  fi
+  nohup node server/mac-tg-bot.js >>"$BOT_LOG" 2>&1 &
+  echo $! >"$BOT_PID"
+  sleep 1
+  if alive_pid "$BOT_PID"; then
+    echo "Bot started (pid $(cat "$BOT_PID"))"
+    echo "Logs: tail -f $BOT_LOG"
+    echo "Stop: zsh $REPO/server/mac-ssh.sh stop"
+  else
+    echo "Bot failed to stay up — last log lines:"
+    tail -n 40 "$BOT_LOG" || true
+    exit 1
+  fi
+}
+
+cmd_api() {
+  unlock_keychain
+  cmd_stop_api
+  cd "$REPO"
+  export MAC_API_OPEN="${MAC_API_OPEN:-1}"
+  export MAC_API_PORT="${MAC_API_PORT:-8787}"
+
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    echo "Installing cloudflared…"
+    mkdir -p "$HOME/bin"
+    curl -fsSL -o /tmp/cloudflared.tgz \
+      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz"
+    tar -xzf /tmp/cloudflared.tgz -C "$HOME/bin"
+    if [[ ! -x "$HOME/bin/cloudflared" ]]; then
+      local cf
+      cf="$(find "$HOME/bin" -maxdepth 1 -type f -name 'cloudflared*' | head -1)"
+      [[ -n "$cf" ]] && ln -sfn "$cf" "$HOME/bin/cloudflared"
+    fi
+    chmod +x "$HOME/bin/cloudflared" 2>/dev/null || true
+  fi
+
+  nohup node server/mac-https-api.js >>"$API_LOG" 2>&1 &
+  echo $! >"$API_PID"
+  sleep 1
+  nohup cloudflared tunnel --url "http://127.0.0.1:${MAC_API_PORT}" >>"$CF_LOG" 2>&1 &
+  echo $! >"$CF_PID"
+  sleep 3
+  echo "API pid=$(cat "$API_PID" 2>/dev/null) cloudflared pid=$(cat "$CF_PID" 2>/dev/null)"
+  echo "Look for https://….trycloudflare.com in:"
+  echo "  tail -f $CF_LOG"
+  grep -Eo 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -1 || true
+}
+
+cmd_status() {
+  echo "repo:   $REPO"
+  echo "env:    ${ENV_FILE:-none}"
+  if alive_pid "$BOT_PID"; then
+    echo "bot:    running pid $(cat "$BOT_PID")"
+  else
+    echo "bot:    stopped"
+  fi
+  if alive_pid "$API_PID"; then
+    echo "api:    running pid $(cat "$API_PID") :${MAC_API_PORT:-8787}"
+  else
+    echo "api:    stopped"
+  fi
+  if alive_pid "$CF_PID"; then
+    echo "tunnel: running pid $(cat "$CF_PID")"
+    grep -Eo 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -1 || true
+  else
+    echo "tunnel: stopped"
+  fi
+  if command -v ipatool >/dev/null 2>&1; then
+    echo -n "ipatool: "
+    ipatool auth info 2>&1 | head -2 || echo "not logged in"
+  fi
+  if [[ -f "$REPO/server/mac-tg-ipa-cache.js" ]]; then
+    node -e "const c=require('./server/mac-tg-ipa-cache'); console.log('cache:  '+c.list().length+' IPA(s) in '+c.CACHE_DIR)" 2>/dev/null \
+      || echo "cache:  (unavailable)"
+  fi
+}
+
+cmd_logs() {
+  local n="${1:-80}"
+  echo "=== bot ($BOT_LOG) ==="
+  tail -n "$n" "$BOT_LOG" 2>/dev/null || echo "(no bot log yet)"
+}
+
+usage() {
+  cat <<EOF
+Tetherless Mac SSH helper (no desktop)
+
+  zsh $REPO/server/mac-ssh.sh start
+  zsh $REPO/server/mac-ssh.sh stop
+  zsh $REPO/server/mac-ssh.sh status
+  zsh $REPO/server/mac-ssh.sh logs
+  zsh $REPO/server/mac-ssh.sh api
+  zsh $REPO/server/mac-ssh.sh stop-api
+  zsh $REPO/server/mac-ssh.sh unlock
+  zsh $REPO/server/mac-ssh.sh pull
+
+Requires $HOME/.tetherless-mac.env with TELEGRAM_BOT_TOKEN and
+TETHERLESS_KEYCHAIN_PASSWORD (dedicated keychain — works over SSH).
+EOF
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  start|bot) cmd_start ;;
+  stop) cmd_stop ;;
+  stop-api) cmd_stop_api ;;
+  status) cmd_status ;;
+  logs) shift || true; cmd_logs "${1:-80}" ;;
+  api) cmd_api ;;
+  unlock) cmd_unlock ;;
+  pull) cmd_pull ;;
+  -h|--help|help|"") usage ;;
+  *) echo "Unknown: $cmd"; usage; exit 1 ;;
+esac

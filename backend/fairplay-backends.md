@@ -33,11 +33,10 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 # export TELEGRAM_BOT_USERNAME=YourDecryptBot
 # export TELEGRAM_ALLOWED_IDS=123456789   # your numeric chat id(s); omit = open to anyone
 #
-# Standalone Tetherless bot (recommended on MacDuty): start from the **desktop Terminal**
-# so ipatool can use the Keychain (WebSSH cannot unlock login.keychain on these hosts):
-#   git clone https://github.com/unflavoredapp/Random.git ~/tetherless
-#   source /users/client/.tetherless-mac.env
-#   node ~/tetherless/server/mac-tg-bot.js
+# Standalone Tetherless bot (recommended on MacDuty) — **WebSSH only** (dedicated keychain):
+#   zsh ~/tetherless/server/mac-ssh.sh start
+#   zsh ~/tetherless/server/mac-ssh.sh status
+#   zsh ~/tetherless/server/mac-ssh.sh logs
 # App Store link → decrypt. TestFlight → send .ipa or drop into ~/tetherless-drop
 # and message: decrypt App.ipa
 # Replies look like AppAssassin (Name_vX.Y-Tetherless.ipa + bundle / version / store link).
