@@ -159,13 +159,25 @@ function buildCaption({ bid, version, minIos, storeUrl }) {
   return lines.join("\n");
 }
 
-/** Live card caption under the app icon: name + stage + numeric %. */
-function progressCaption({ name, stage, pct }) {
+/**
+ * Live card caption under the app icon — URSA-style stack:
+ *   App name
+ *   #hashtag
+ *   progress text
+ *   percentage
+ */
+function progressCaption({ name, stage, pct, tag }) {
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const sharp = String(tag || "tetherless")
+    .toLowerCase()
+    .replace(/^#/, "")
+    .replace(/[^a-z0-9_]+/g, "")
+    .slice(0, 32) || "tetherless";
   return [
     `<b>${escapeHtml(name || "App")}</b>`,
-    `Tetherless`,
-    `${escapeHtml(stage || "Working…")} · <b>${p}%</b>`,
+    `#${sharp}`,
+    escapeHtml(stage || "Working…"),
+    `<b>${p}%</b>`,
   ].join("\n");
 }
 
@@ -463,11 +475,13 @@ function createProgressCard(chatId) {
       await this.clear();
     },
     async fail(err) {
-      const caption =
-        `<b>${escapeHtml(name)}</b>\n` +
-        `Tetherless\n` +
-        `Failed · <b>0%</b>\n` +
-        `❌ ${escapeHtml(String(err || "failed").slice(0, 160))}`;
+      const caption = [
+        `<b>${escapeHtml(name)}</b>`,
+        `#tetherless`,
+        `Failed`,
+        `<b>0%</b>`,
+        `❌ ${escapeHtml(String(err || "failed").slice(0, 160))}`,
+      ].join("\n");
       await paint(caption);
     },
   };
