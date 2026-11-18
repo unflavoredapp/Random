@@ -526,7 +526,9 @@ function createProgressCard(chatId) {
       }
     },
     async setStage(stage, pct) {
-      const p = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
+      // Never regress: upload heartbeats / stage floors (76–80) used to yank 90% → 70%.
+      const raw = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
+      const p = Math.max(lastPct < 0 ? 0 : lastPct, raw);
       const now = Date.now();
       const stageChanged = stage && stage !== lastStage;
       if (!stageChanged && p < lastPct + 3 && now - lastEdit < 1800) return;
@@ -544,11 +546,13 @@ function createProgressCard(chatId) {
         return this.setStage("Decrypting…", 55);
       }
       if (/produced|done/i.test(t)) return this.setStage("Decrypting…", 72);
-      if (/upload/i.test(t)) return this.setStage("Uploading…", 80);
+      // Floor only — setStage keeps progress monotonic (won't drop below current %).
+      if (/upload/i.test(t)) return this.setStage("Uploading…", Math.max(lastPct, 80));
       return this.setStage(lastStage || "Working…", Math.max(lastPct, 12));
     },
     async setUploadPct(pct) {
-      const p = 75 + Math.round((Math.max(0, Math.min(100, pct)) / 100) * 24);
+      // Map file upload 0–100% into card band 80–99 (after decrypt ~72–78).
+      const p = 80 + Math.round((Math.max(0, Math.min(100, pct)) / 100) * 19);
       return this.setStage("Uploading…", p);
     },
     async clear() {
