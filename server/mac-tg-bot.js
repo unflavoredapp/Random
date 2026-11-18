@@ -47,6 +47,8 @@ const BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
 /** Filled from getMe() at boot — env override is only a bootstrap hint. */
 let BOT_USERNAME = String(process.env.TELEGRAM_BOT_USERNAME || "").replace(/^@/, "");
 let BOT_ID = 0;
+/** Optional lockdown — omit TELEGRAM_LOCKDOWN (default) so anyone can message. */
+const LOCKDOWN = process.env.TELEGRAM_LOCKDOWN === "1";
 const ALLOWED = String(process.env.TELEGRAM_ALLOWED_IDS || "")
   .split(",")
   .map((s) => s.trim())
@@ -1062,7 +1064,8 @@ function downloadTelegramFile(filePathOnTg, dest) {
 }
 
 function chatAllowed(chatId) {
-  if (!ALLOWED.length) return true;
+  // Public by default. Only restrict when TELEGRAM_LOCKDOWN=1 + ALLOWED_IDS set.
+  if (!LOCKDOWN || !ALLOWED.length) return true;
   return ALLOWED.includes(String(chatId));
 }
 
@@ -1804,8 +1807,19 @@ async function boot() {
     ],
   }).catch(() => {});
   const st = fairplayBackends.backendStatus();
+  const bannerMode = (() => {
+    try {
+      const src = fs.readFileSync(path.join(__dirname, "mac-tg-progress-banner.js"), "utf8");
+      return /homescreenOverlaySvg/.test(src) ? "homescreen-circle" : "legacy";
+    } catch {
+      return "missing";
+    }
+  })();
   console.log(
     `Tetherless TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · host=${st.host} · workers=${MAX_WORKERS} · decrypt=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
+  );
+  console.log(
+    `access=${LOCKDOWN && ALLOWED.length ? `lockdown(${ALLOWED.length} ids)` : "public"} · banner=${bannerMode}`
   );
   console.log(
     `API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${preferPremiumUpload()} · peer=${premiumPeer() || "unset"}`
