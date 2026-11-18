@@ -259,31 +259,60 @@ function premiumUploadConfigured() {
   );
 }
 
+/** Peer for Premium user → bot chat. Numeric user chat_id would hit Saved Messages. */
+function premiumPeer() {
+  const uname = String(BOT_USERNAME || process.env.TELEGRAM_BOT_USERNAME || "")
+    .trim()
+    .replace(/^@/, "");
+  return uname ? `@${uname}` : "";
+}
+
 function sendDocumentPremium(chatId, filePath, fileName, caption, { thumbPath, replyMarkup } = {}) {
+  const peer = premiumPeer();
+  if (!peer) {
+    return {
+      ok: false,
+      description: "Set TELEGRAM_BOT_USERNAME so Premium uploads go to the bot chat (not Saved Messages).",
+    };
+  }
   const env = {
     ...process.env,
-    TG_UPLOAD_CHAT_ID: String(chatId),
+    // Upload as you → @Bot so the file appears in this chat (not Saved Messages).
+    TG_UPLOAD_CHAT_ID: peer,
     TG_UPLOAD_FILE: path.resolve(filePath),
     TG_UPLOAD_FILENAME: fileName,
     TG_UPLOAD_CAPTION: caption || "",
     TG_UPLOAD_THUMB: thumbPath && fs.existsSync(thumbPath) ? path.resolve(thumbPath) : "",
     TG_UPLOAD_REPLY_MARKUP: replyMarkup ? JSON.stringify(replyMarkup) : "",
   };
+  const timeoutMs = Math.max(
+    120000,
+    Number(process.env.TELEGRAM_PREMIUM_UPLOAD_TIMEOUT_MS || 20 * 60 * 1000)
+  );
   const r = spawnSync("python3", [PREMIUM_UPLOAD], {
     encoding: "utf8",
     maxBuffer: 8 * 1024 * 1024,
     env,
+    timeout: timeoutMs,
   });
-  if (r.error) return { ok: false, description: String(r.error.message || r.error) };
+  if (r.error) {
+    const msg = r.error.code === "ETIMEDOUT"
+      ? `Premium upload timed out after ${Math.round(timeoutMs / 60000)} min`
+      : String(r.error.message || r.error);
+    return { ok: false, description: msg };
+  }
   const out = String(r.stdout || "").trim();
   const err = String(r.stderr || "").trim();
   if (r.status !== 0) {
     return { ok: false, description: (err || out || `premium upload exit ${r.status}`).slice(0, 300) };
   }
   try {
-    return JSON.parse(out || "{}");
+    const parsed = JSON.parse(out || "{}");
+    // Bot API copyMessage still uses the private chat id (user ↔ bot).
+    if (parsed && parsed.ok) parsed.chat_id = String(chatId);
+    return parsed;
   } catch {
-    return { ok: true, description: out.slice(0, 200) };
+    return { ok: true, description: out.slice(0, 200), chat_id: String(chatId) };
   }
 }
 
@@ -414,7 +443,8 @@ function startScreenText() {
     `• host: \`${st.host || "mac"}\`\n` +
     `• upload: \`${up}\`\n` +
     `• cloud cache: \`${ipaCache.list().length} IPA(s)\` in \`${ipaCache.CACHE_DIR}\`\n\n` +
-    `Send an App Store link, or a \`.ipa\` / \`decrypt App.ipa\` from \`${DROP}\`.\n` +
+    `*Add an App Store URL to start.*\n` +
+    `Paste \`https://apps.apple.com/…\`, or send a \`.ipa\` / \`decrypt App.ipa\` from \`${DROP}\`.\n` +
     `Repeat links re-send from Telegram cloud (instant). /cache lists saved IPAs.`
   );
 }
@@ -426,7 +456,10 @@ function startKeyboard() {
         { text: "How it works", callback_data: "help" },
         { text: "Status", callback_data: "status" },
       ],
-      [{ text: "TestFlight help", callback_data: "testflight" }],
+      [
+        { text: "TestFlight help", callback_data: "testflight" },
+        { text: "Cache", callback_data: "cache" },
+      ],
     ],
   };
 }
@@ -440,6 +473,30 @@ async function sendStart(chatId) {
   });
 }
 
+async function sendCacheList(chatId) {
+  const items = ipaCache.list().slice(0, 30);
+  if (!items.length) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: "Tetherless cache is empty — paste an App Store URL to start.",
+    });
+    return;
+  }
+  const lines = items.map((it, i) => {
+    const mb = it.bytes ? `${(it.bytes / 1024 / 1024).toFixed(1)} MB` : "?";
+    const cloud = it.fileId || it.messageId ? "☁️" : "💾";
+    return `${i + 1}. ${cloud} *${(it.name || "App").replace(/[*_`]/g, "")}* · v${it.version || "?"} · ${mb}`;
+  });
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text:
+      `*Tetherless cache* (${items.length})\n` +
+      `☁️ = Telegram cloud · 💾 = Mac disk only (will re-upload)\n\n` +
+      lines.join("\n"),
+    parse_mode: "Markdown",
+  });
+}
+
 async function decryptLocalIpa(chatId, ipaPath, label) {
   if (!fs.existsSync(ipaPath) || fs.statSync(ipaPath).size < 100) {
     throw new Error("IPA not found or empty: " + ipaPath);
@@ -448,7 +505,10 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
   const enc = path.join(dir, "encrypted-source.ipa");
   fs.copyFileSync(ipaPath, enc);
   try {
-    await tgApi("sendMessage", { chat_id: chatId, text: "Queued on Tetherless…" });
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: "Tetherless — starting decrypt…",
+    });
     const say = (t) => console.log("[job]", t);
     const result = await fairplayBackends.tryRemoteBackends({
       url: "https://apps.apple.com/app/id0",
@@ -459,6 +519,11 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
+    const mb = (fs.statSync(result.file).size / 1024 / 1024).toFixed(1);
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: `Tetherless — decrypted (${mb} MB). Uploading…`,
+    });
     await deliverResult(chatId, result, { label });
   } finally {
     try {
@@ -471,15 +536,15 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
 
 async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   if (!entry) return false;
-  if (!quiet) {
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text: "Cached on Tetherless — sending from Telegram cloud…",
-    });
-  }
   const markup = resultKeyboard(entry.storeUrl || "");
   // Premium-user uploads: copyMessage from the original chat (no re-upload).
   if (entry.messageId && entry.fromChatId) {
+    if (!quiet) {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: "Tetherless — sending cached IPA from Telegram cloud…",
+      });
+    }
     const r = await tgApi("copyMessage", {
       chat_id: chatId,
       from_chat_id: entry.fromChatId,
@@ -493,6 +558,12 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     console.warn("[cache] copyMessage failed:", (r && r.description) || "unknown");
   }
   if (entry.fileId) {
+    if (!quiet) {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: "Tetherless — sending cached IPA from Telegram cloud…",
+      });
+    }
     const r = await tgApi("sendDocument", {
       chat_id: chatId,
       document: entry.fileId,
@@ -508,6 +579,11 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   }
   // Fallback: re-upload from Mac disk cache (still skips decrypt).
   if (entry.diskPath && fs.existsSync(entry.diskPath)) {
+    const mb = entry.bytes ? (entry.bytes / 1024 / 1024).toFixed(1) : "?";
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: `Tetherless — cached on Mac (${mb} MB). Uploading via Premium session…`,
+    });
     const fileName = entry.fileName || path.basename(entry.diskPath);
     const thumbPath = entry.storeUrl ? fetchStoreIcon(entry.storeUrl) : "";
     const sent = await sendDocument(chatId, entry.diskPath, fileName, entry.caption || "", {
@@ -516,18 +592,24 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     });
     if (sent && sent.ok) {
       const doc = sent.result && sent.result.document;
-      if (doc && doc.file_id) {
-        ipaCache.put({
-          ...entry,
-          fileId: doc.file_id,
-          fileUniqueId: doc.file_unique_id || "",
-        });
-      }
+      const viaPremium = !!(sent.premium && sent.message_id);
+      ipaCache.put({
+        ...entry,
+        fileId: (doc && doc.file_id) || entry.fileId || "",
+        fileUniqueId: (doc && doc.file_unique_id) || entry.fileUniqueId || "",
+        messageId: viaPremium ? Number(sent.message_id) || 0 : entry.messageId || 0,
+        fromChatId: viaPremium ? String(chatId) : entry.fromChatId || "",
+      });
       console.log("[cache] hit disk re-upload", entry.diskPath);
       return true;
     }
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text:
+        "Tetherless — cached IPA upload failed: " +
+        String((sent && sent.description) || "unknown").slice(0, 200),
+    });
   }
-  if (entry.adam) ipaCache.remove(entry.adam, entry.version || "latest");
   return false;
 }
 
@@ -549,17 +631,41 @@ async function decryptStoreUrl(chatId, link, vreq) {
 
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
   try {
-    await tgApi("sendMessage", { chat_id: chatId, text: "Queued on Tetherless…" });
-    const say = (t) => console.log("[job]", t);
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: "Tetherless — starting decrypt…",
+    });
+    let lastPing = 0;
+    const say = async (t) => {
+      const line = String(t || "").slice(0, 120);
+      console.log("[job]", line);
+      const now = Date.now();
+      // Throttle Telegram progress so we don't spam while unfairplay runs.
+      if (now - lastPing < 8000 && !/done|fail|error|produced|upload/i.test(line)) return;
+      lastPing = now;
+      try {
+        await tgApi("sendMessage", { chat_id: chatId, text: `Tetherless — ${line}` });
+      } catch {
+        /* ignore */
+      }
+    };
     const result = await fairplayBackends.tryRemoteBackends({
       url: link,
       dir,
-      say,
+      say: (t) => {
+        // fairplayBackends may call say sync — fire-and-forget progress.
+        say(t);
+      },
       vreq,
     });
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
+    const mb = (fs.statSync(result.file).size / 1024 / 1024).toFixed(1);
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: `Tetherless — decrypted (${mb} MB). Uploading…`,
+    });
     await deliverResult(chatId, result, { storeUrl: link, versionHint: vreq });
   } finally {
     try {
@@ -708,6 +814,10 @@ async function handleCallback(cq) {
     await sendStart(chatId);
     return;
   }
+  if (data === "cache") {
+    await sendCacheList(chatId);
+    return;
+  }
   if (data === "testflight") {
     await tgApi("sendMessage", {
       chat_id: chatId,
@@ -791,27 +901,7 @@ async function handleMessage(msg) {
   }
 
   if (/^\/cache\b/i.test(text)) {
-    const items = ipaCache.list().slice(0, 30);
-    if (!items.length) {
-      await tgApi("sendMessage", {
-        chat_id: chatId,
-        text: "Cloud cache is empty — decrypt an App Store link once to store it.",
-      });
-      return;
-    }
-    const lines = items.map((it, i) => {
-      const mb = it.bytes ? `${(it.bytes / 1024 / 1024).toFixed(1)} MB` : "?";
-      const cloud = it.fileId ? "☁️" : "💾";
-      return `${i + 1}. ${cloud} *${(it.name || "App").replace(/[*_`]/g, "")}* · v${it.version || "?"} · ${mb}`;
-    });
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text:
-        `*Tetherless cloud cache* (${items.length})\n` +
-        `☁️ = Telegram file\\_id · 💾 = Mac disk only\n\n` +
-        lines.join("\n"),
-      parse_mode: "Markdown",
-    });
+    await sendCacheList(chatId);
     return;
   }
 
@@ -883,10 +973,12 @@ async function boot() {
   console.log(
     `Tetherless TG bot @${BOT_USERNAME} · host=${st.host} · unfairplay=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
   );
-  console.log(`API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${premiumUploadConfigured()}`);
+  console.log(
+    `API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${preferPremiumUpload()} · peer=${premiumPeer() || "unset"}`
+  );
   console.log(`IPA cloud cache: ${ipaCache.CACHE_DIR} (${ipaCache.list().length} entries)`);
   console.log(`Drop folder for TestFlight IPAs: ${DROP}`);
-  console.log("Start from desktop Terminal so ipatool Keychain works. Ctrl+C to stop.");
+  console.log("WebSSH: zsh server/mac-ssh.sh start | status | logs | session");
   setInterval(() => {
     poll().catch(() => {});
   }, 2000);
