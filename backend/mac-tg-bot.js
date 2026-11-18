@@ -169,7 +169,7 @@ function progressCaption({ name, stage, pct }) {
   ].join("\n");
 }
 
-/** Final IPA buttons only: Patch · Get VIP. */
+/** Final IPA buttons only: Patch · Get VIP (inline tabs under the document). */
 function resultKeyboard() {
   const site = String(process.env.TETHERLESS_SITE_URL || "https://tetherless.dev").replace(/\/+$/, "");
   const patch = String(process.env.TETHERLESS_PATCH_URL || `${site}/`).replace(/\/+$/, "") || site;
@@ -182,6 +182,42 @@ function resultKeyboard() {
       ],
     ],
   };
+}
+
+/**
+ * Force classic caption + Patch/Get VIP onto a bot-owned message.
+ * Premium/user staging often loses inline keyboards; copyMessage can also omit
+ * reply_markup — editMessageCaption / editMessageReplyMarkup is reliable.
+ */
+async function attachIpaChrome(chatId, messageId, { caption, replyMarkup } = {}) {
+  const mid = Number(messageId);
+  if (!chatId || !mid) return false;
+  const markup = replyMarkup || resultKeyboard();
+  if (caption) {
+    const withCap = await tgApi("editMessageCaption", {
+      chat_id: chatId,
+      message_id: mid,
+      caption,
+      parse_mode: "HTML",
+      reply_markup: markup,
+    }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
+    if (withCap && withCap.ok) return true;
+    console.warn(
+      "[job] editMessageCaption failed:",
+      (withCap && withCap.description) || "unknown"
+    );
+  }
+  const markupOnly = await tgApi("editMessageReplyMarkup", {
+    chat_id: chatId,
+    message_id: mid,
+    reply_markup: markup,
+  }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
+  if (markupOnly && markupOnly.ok) return true;
+  console.warn(
+    "[job] editMessageReplyMarkup failed:",
+    (markupOnly && markupOnly.description) || "unknown"
+  );
+  return false;
 }
 
 function escapeHtml(s) {
@@ -393,9 +429,19 @@ function createProgressCard(chatId) {
 
 function sendDocumentBotApi(chatId, filePath, fileName, caption, { thumbPath, replyMarkup } = {}) {
   const abs = path.resolve(filePath);
-  const args = ["-sS", "-X", "POST", apiUrl("sendDocument"), "-F", `chat_id=${chatId}`, "-F", `parse_mode=HTML`];
-  if (caption) args.push("-F", `caption=${caption}`);
-  if (replyMarkup) args.push("-F", `reply_markup=${JSON.stringify(replyMarkup)}`);
+  // --form-string for caption/reply_markup so HTML + JSON aren't mangled by -F.
+  const args = [
+    "-sS",
+    "-X",
+    "POST",
+    apiUrl("sendDocument"),
+    "-F",
+    `chat_id=${chatId}`,
+    "--form-string",
+    "parse_mode=HTML",
+  ];
+  if (caption) args.push("--form-string", `caption=${caption}`);
+  if (replyMarkup) args.push("--form-string", `reply_markup=${JSON.stringify(replyMarkup)}`);
   if (thumbPath && fs.existsSync(thumbPath)) {
     args.push("-F", `thumbnail=@${path.resolve(thumbPath)};type=image/jpeg`);
   }
@@ -653,9 +699,9 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     console.log(`[job] uploading via Premium session (${mb} MB) → ${peer}`);
     if (card) await card.setStage("Uploading…", 76);
     else await say(`uploading via Premium → ${peer} (${mb} MB)…`);
-    // Stage via Premium WITH caption + Patch/Get VIP first (never bare — if bot
-    // re-send fails the user still sees the classic IPA look). Then the bot
-    // copyMessage’s it so the final document is from IPA Agent.
+    // Stage via Premium (user MTProto). Inline URL tabs on user→bot messages are
+    // often stripped by Telegram — the bot must own the final IPA and attach
+    // Patch/Get VIP via editMessageCaption / editMessageReplyMarkup.
     const markup = extras.replyMarkup || resultKeyboard();
     const prem = await sendDocumentPremium(chatId, filePath, fileName, caption || "", {
       thumbPath: extras.thumbPath,
@@ -667,34 +713,62 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     if (prem && prem.ok && prem.message_id) {
       const stagedId = Number(prem.message_id);
       let copied = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (attempt) await new Promise((r) => setTimeout(r, 900 * attempt));
+      const copyAttempts = [
+        // 1) Full chrome in one shot
+        {
+          caption: caption || undefined,
+          parse_mode: caption ? "HTML" : undefined,
+          reply_markup: markup,
+        },
+        // 2) Bare media copy — then we paint caption + buttons with edit*
+        {},
+      ];
+      for (let attempt = 0; attempt < 6; attempt++) {
+        if (attempt) await new Promise((r) => setTimeout(r, 700 * attempt));
+        const body = copyAttempts[attempt % copyAttempts.length];
         copied = await tgApi("copyMessage", {
           chat_id: chatId,
           from_chat_id: chatId,
           message_id: stagedId,
-          caption: caption || undefined,
-          parse_mode: caption ? "HTML" : undefined,
-          reply_markup: markup,
+          ...body,
         }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
-        if (copied && copied.ok && copied.result) {
+        if (copied && copied.ok && copied.result && copied.result.message_id) {
+          const botMid = copied.result.message_id;
+          const chromeOk = await attachIpaChrome(chatId, botMid, {
+            caption: caption || "",
+            replyMarkup: markup,
+          });
           await tgApi("deleteMessage", { chat_id: chatId, message_id: stagedId }).catch(() => {});
-          console.log("[job] bot produced IPA via copyMessage", copied.result.message_id);
+          console.log(
+            "[job] bot produced IPA via copyMessage",
+            botMid,
+            chromeOk ? "chrome=ok" : "chrome=fail"
+          );
           return {
             ok: true,
             premium: true,
             bot_resent: true,
-            message_id: copied.result.message_id,
+            message_id: botMid,
             chat_id: String(chatId),
             result: copied.result,
           };
         }
       }
-      // Keep Premium message — it already has caption + Patch/Get VIP.
+      // Last resort: keep Premium IPA + bot reply with Patch/Get VIP tabs.
       console.warn(
-        "[job] bot copyMessage failed; keeping Premium IPA with caption/buttons:",
+        "[job] bot copyMessage failed; keeping Premium IPA + button reply:",
         (copied && copied.description) || "unknown"
       );
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: caption || "Tetherless IPA",
+        parse_mode: caption ? "HTML" : undefined,
+        reply_to_message_id: stagedId,
+        reply_markup: markup,
+        disable_web_page_preview: true,
+      }).catch((e) => {
+        console.warn("[job] button reply failed:", String((e && e.message) || e));
+      });
       return {
         ...prem,
         premium: true,
@@ -746,7 +820,17 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     };
   }
 
-  return sendDocumentBotApi(chatId, filePath, fileName, caption, extras);
+  const botSent = await sendDocumentBotApi(chatId, filePath, fileName, caption, {
+    ...extras,
+    replyMarkup: extras.replyMarkup || resultKeyboard(),
+  });
+  if (botSent && botSent.ok && botSent.result && botSent.result.message_id) {
+    await attachIpaChrome(chatId, botSent.result.message_id, {
+      caption: caption || "",
+      replyMarkup: extras.replyMarkup || resultKeyboard(),
+    });
+  }
+  return botSent;
 }
 
 function downloadTelegramFile(filePathOnTg, dest) {
@@ -923,7 +1007,8 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
       parse_mode: caption ? "HTML" : undefined,
       reply_markup: markup,
     });
-    if (r && r.ok) {
+    if (r && r.ok && r.result && r.result.message_id) {
+      await attachIpaChrome(chatId, r.result.message_id, { caption, replyMarkup: markup });
       console.log("[cache] hit file_id", entry.adam, entry.version || "latest");
       await card.finish();
       return true;
@@ -948,7 +1033,8 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
       parse_mode: caption ? "HTML" : undefined,
       reply_markup: markup,
     });
-    if (r && r.ok) {
+    if (r && r.ok && r.result && r.result.message_id) {
+      await attachIpaChrome(chatId, r.result.message_id, { caption, replyMarkup: markup });
       console.log("[cache] hit copyMessage", entry.adam, entry.version || "latest");
       await card.finish();
       return true;
