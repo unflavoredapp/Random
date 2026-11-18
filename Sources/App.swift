@@ -54,6 +54,11 @@ struct TetherlessApp: App {
                                 _ = DecryptCompanionHandoff.consumePendingClearIPAExport()
                                 AppNav.shared.goSearch()
                             }
+                            if scheme == "tetherless",
+                               ["decrypt-server", "server-decrypt", "server"].contains(url.host?.lowercased() ?? "") {
+                                _ = DecryptCompanionHandoff.consumePendingServerFallback()
+                                AppNav.shared.goSearch()
+                            }
                             return
                         }
                         // Shared / Open-in IPA from companion → treat as clear decrypt import.
@@ -80,6 +85,9 @@ struct TetherlessApp: App {
                             AppNav.shared.nudgeAccountLoginIfNeeded()
                             // Companion may have published a clear IPA while we were backgrounded.
                             if DecryptCompanionHandoff.consumePendingClearIPAExport() != nil {
+                                AppNav.shared.goSearch()
+                            }
+                            if DecryptCompanionHandoff.consumePendingServerFallback() {
                                 AppNav.shared.goSearch()
                             }
                             Task {

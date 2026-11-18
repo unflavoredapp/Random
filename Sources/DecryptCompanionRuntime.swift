@@ -551,8 +551,13 @@ struct DecryptCompanionRoot: View {
                         shareURL = url
                     }
                 } catch {
-                    errorText = error.localizedDescription
-                    companion.markFailed(error.localizedDescription)
+                    let text = error.localizedDescription
+                    errorText = text
+                    companion.markFailed(text)
+                    if Self.shouldBounceToServer(text) {
+                        companion.appendLog("On-device FairPlay failed — opening TetherLess to finish on backup server…")
+                        DecryptCompanionHandoff.requestServerFallback(reason: text)
+                    }
                 }
             }
             .sheet(item: Binding(
@@ -573,6 +578,11 @@ struct DecryptCompanionRoot: View {
                         AppStoreDecryptGuide.openSystemSettings()
                     }
                 }
+                if Self.shouldBounceToServer(errorText) {
+                    Button("Use backup server") {
+                        DecryptCompanionHandoff.requestServerFallback(reason: errorText ?? "ENOMEM")
+                    }
+                }
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(errorText ?? "")
@@ -585,6 +595,15 @@ struct DecryptCompanionRoot: View {
             || t.contains("decryption keys")
             || t.contains("fairplay needs")
             || t.contains("license")
+    }
+
+    /// Memory / remap failures can't finish on-device — bounce to Decrypt site URL host.
+    private static func shouldBounceToServer(_ text: String?) -> Bool {
+        let t = (text ?? "").lowercased()
+        return t.contains("enomem")
+            || t.contains("not enough memory")
+            || t.contains("mremap")
+            || t.contains("out of memory")
     }
 }
 

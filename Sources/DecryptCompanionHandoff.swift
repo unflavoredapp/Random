@@ -23,7 +23,14 @@ enum DecryptCompanionHandoff {
     static let clearExportDirName = "ClearExports"
     /// Host deep link — companion opens this after publishing a clear IPA.
     static let hostImportURLString = "tetherless://decrypt-export"
+    /// Host deep link — companion opens this after on-device ENOMEM / hard FairPlay fail
+    /// so the host can finish via Decrypt site URL (Mac HTTPS API / tetherless.dev).
+    static let hostServerFallbackURLString = "tetherless://decrypt-server"
     nonisolated static let encryptedIPADirName = "EncryptedIPAs"
+    private static let serverFallbackMetaKey = "companion.serverFallback"
+    private static let storeURLKey = "companion.hostStoreURL"
+    private static let storeVersionKey = "companion.hostStoreVersion"
+    private static let storeDisplayKey = "companion.hostStoreDisplayName"
 
     private static var suite: UserDefaults? { UserDefaults(suiteName: suiteName) }
     private static var local: UserDefaults { .standard }
@@ -124,7 +131,101 @@ enum DecryptCompanionHandoff {
            snap["bundleID"] == nil {
             snap["bundleID"] = bid
         }
+        if let url = (suite?.string(forKey: storeURLKey) ?? local.string(forKey: storeURLKey))?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !url.isEmpty {
+            snap["hostStoreURL"] = url
+        }
+        if let ver = (suite?.string(forKey: storeVersionKey) ?? local.string(forKey: storeVersionKey))?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !ver.isEmpty {
+            snap["hostStoreVersion"] = ver
+        }
+        if let name = (suite?.string(forKey: storeDisplayKey) ?? local.string(forKey: storeDisplayKey))?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !name.isEmpty {
+            snap["hostStoreDisplayName"] = name
+        }
         return snap
+    }
+
+    /// Remember App Store URL / version so companion ENOMEM can bounce to Mac/server decrypt.
+    static func publishStoreDecryptTarget(url: String, version: String?, displayName: String, bundleID: String = "") {
+        let u = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        let v = (version ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let n = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let bid = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !u.isEmpty else { return }
+        suite?.set(u, forKey: storeURLKey)
+        local.set(u, forKey: storeURLKey)
+        if !v.isEmpty {
+            suite?.set(v, forKey: storeVersionKey)
+            local.set(v, forKey: storeVersionKey)
+        } else {
+            suite?.removeObject(forKey: storeVersionKey)
+            local.removeObject(forKey: storeVersionKey)
+        }
+        if !n.isEmpty {
+            suite?.set(n, forKey: storeDisplayKey)
+            local.set(n, forKey: storeDisplayKey)
+        }
+        if !bid.isEmpty {
+            suite?.set(bid, forKey: encryptedIPABundleKey)
+            local.set(bid, forKey: encryptedIPABundleKey)
+        }
+        publishHostSnapshot()
+    }
+
+    struct ServerFallbackRequest: Codable, Equatable {
+        var storeURL: String
+        var version: String
+        var displayName: String
+        var bundleID: String
+        var reason: String
+        var requestedAt: TimeInterval
+    }
+
+    /// Companion: after on-device FairPlay can't finish (ENOMEM…), ask host to decrypt on the API host.
+    static func requestServerFallback(reason: String) {
+        let snap = readHostSnapshot(fromManifest: nil)
+        let url = ((snap["hostStoreURL"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return }
+        let req = ServerFallbackRequest(
+            storeURL: url,
+            version: ((snap["hostStoreVersion"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            displayName: ((snap["hostStoreDisplayName"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            bundleID: ((snap["bundleID"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+            reason: String(reason.trimmingCharacters(in: .whitespacesAndNewlines).prefix(200)),
+            requestedAt: Date().timeIntervalSince1970
+        )
+        guard let data = try? JSONEncoder().encode(req) else { return }
+        suite?.set(data, forKey: serverFallbackMetaKey)
+        local.set(data, forKey: serverFallbackMetaKey)
+        guard let deep = URL(string: hostServerFallbackURLString) else { return }
+        UIApplication.shared.open(deep)
+    }
+
+    /// Host: start `DecryptClient` against Decrypt site URL (Mac HTTPS / tetherless.dev).
+    @discardableResult
+    static func consumePendingServerFallback() -> Bool {
+        let data = suite?.data(forKey: serverFallbackMetaKey) ?? local.data(forKey: serverFallbackMetaKey)
+        suite?.removeObject(forKey: serverFallbackMetaKey)
+        local.removeObject(forKey: serverFallbackMetaKey)
+        guard let data,
+              let req = try? JSONDecoder().decode(ServerFallbackRequest.self, from: data) else {
+            return false
+        }
+        if Date().timeIntervalSince1970 - req.requestedAt > 30 * 60 { return false }
+        let url = req.storeURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !url.isEmpty else { return false }
+        let name = req.displayName.isEmpty ? "App" : req.displayName
+        let ver = req.version.isEmpty ? nil : req.version
+        DecryptClient.shared.phase = .queued
+        DecryptClient.shared.message = "On-device FairPlay failed — decrypting on backup server…"
+        DecryptClient.shared.error = nil
+        DecryptClient.shared.finishedName = name
+        DecryptClient.shared.start(url: url, version: ver, display: name)
+        return true
     }
 
     /// Publish snapshot to App Group when the free/paid provision still has the group.
