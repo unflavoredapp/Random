@@ -415,7 +415,7 @@ function editMessageMediaBotApi(chatId, messageId, photoPath, caption) {
   }
 }
 
-/** One editable Telegram card: URSA-style banner (name · #tag · stage · %). */
+/** One editable Telegram card: URSA-style banner only (no caption under the photo). */
 function createProgressCard(chatId) {
   let messageId = 0;
   let hasPhoto = false;
@@ -426,6 +426,8 @@ function createProgressCard(chatId) {
   let lastEdit = 0;
   let lastPct = -1;
   let lastStage = "";
+  // Serialize paints — parallel start()+fromBackendLine used to send two photos.
+  let paintChain = Promise.resolve();
 
   function bannerFile() {
     if (!bannerPath) {
@@ -445,48 +447,52 @@ function createProgressCard(chatId) {
     });
   }
 
-  async function paintText(caption) {
-    if (!messageId) return;
-    const body = {
+  async function clearPhotoCaption() {
+    if (!messageId || !hasPhoto) return;
+    await tgApi("editMessageCaption", {
       chat_id: chatId,
       message_id: messageId,
-      parse_mode: "HTML",
-      text: caption,
-    };
-    await tgApi("editMessageText", body).catch(() => {});
+      caption: "",
+    }).catch(() => {});
   }
 
   async function paintBanner(stage, pct) {
-    const img = await makeBanner(stage, pct);
-    if (!img) {
-      await paintText(progressCaption({ name, stage, pct }));
-      return false;
-    }
-    if (!messageId) {
-      const sent = await sendPhotoBotApi(chatId, img, "");
-      if (sent && sent.ok && sent.result) {
-        messageId = sent.result.message_id;
-        hasPhoto = true;
-        return true;
+    const run = async () => {
+      const img = await makeBanner(stage, pct);
+      if (!img) {
+        // Prefer silence over duplicating banner text as a caption.
+        console.warn("[job] banner render failed — leaving prior card");
+        return false;
       }
-      console.warn("[job] sendPhoto banner failed:", (sent && sent.description) || "unknown");
+      if (!messageId) {
+        const sent = await sendPhotoBotApi(chatId, img, "");
+        if (sent && sent.ok && sent.result) {
+          messageId = sent.result.message_id;
+          hasPhoto = true;
+          return true;
+        }
+        console.warn("[job] sendPhoto banner failed:", (sent && sent.description) || "unknown");
+        return false;
+      }
+      if (hasPhoto) {
+        let edited = await editMessageMediaBotApi(chatId, messageId, img, "");
+        if (!(edited && edited.ok)) {
+          // Retry once; never fall back to text caption (duplicates the banner).
+          await new Promise((r) => setTimeout(r, 400));
+          edited = await editMessageMediaBotApi(chatId, messageId, img, "");
+        }
+        if (edited && edited.ok) {
+          await clearPhotoCaption();
+          return true;
+        }
+        console.warn("[job] editMessageMedia failed:", (edited && edited.description) || "unknown");
+        return false;
+      }
       return false;
-    }
-    if (hasPhoto) {
-      const edited = await editMessageMediaBotApi(chatId, messageId, img, "");
-      if (edited && edited.ok) return true;
-      console.warn("[job] editMessageMedia failed:", (edited && edited.description) || "unknown");
-      // Fall back to caption-only update on the existing photo.
-      await tgApi("editMessageCaption", {
-        chat_id: chatId,
-        message_id: messageId,
-        caption: progressCaption({ name, stage, pct }),
-        parse_mode: "HTML",
-      }).catch(() => {});
-      return false;
-    }
-    await paintText(progressCaption({ name, stage, pct }));
-    return false;
+    };
+    const done = paintChain.then(run, run);
+    paintChain = done.catch(() => {});
+    return done;
   }
 
   return {
@@ -507,23 +513,13 @@ function createProgressCard(chatId) {
       lastPct = 4;
       const ok = await paintBanner("Fetching…", 4);
       if (ok) return;
-      const caption = progressCaption({ name, stage: "Fetching…", pct: 4 });
-      if (iconPath) {
-        const sent = await sendPhotoBotApi(chatId, iconPath, caption);
+      // Single fallback photo — still no caption text under it.
+      if (!messageId && iconPath) {
+        const sent = await sendPhotoBotApi(chatId, iconPath, "");
         if (sent && sent.ok && sent.result) {
           messageId = sent.result.message_id;
           hasPhoto = true;
-          return;
         }
-      }
-      const sent = await tgApi("sendMessage", {
-        chat_id: chatId,
-        text: caption,
-        parse_mode: "HTML",
-      });
-      if (sent && sent.ok && sent.result) {
-        messageId = sent.result.message_id;
-        hasPhoto = false;
       }
     },
     async setStage(stage, pct) {
@@ -560,6 +556,7 @@ function createProgressCard(chatId) {
       if (!messageId) return;
       await tgApi("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
       messageId = 0;
+      hasPhoto = false;
       if (bannerPath) {
         try {
           fs.rmSync(bannerPath, { force: true });
@@ -575,34 +572,24 @@ function createProgressCard(chatId) {
     },
     async fail(err) {
       lastStage = "Failed";
+      // Allow 0% on failure only.
+      lastPct = -1;
       lastPct = 0;
       const img = await makeBanner("Failed", 0);
       if (img && messageId && hasPhoto) {
-        await editMessageMediaBotApi(
-          chatId,
-          messageId,
-          img,
-          `❌ ${escapeHtml(String(err || "failed").slice(0, 160))}`
-        );
+        await editMessageMediaBotApi(chatId, messageId, img, "");
+        // Failure detail as a separate short message — keep banner caption-free.
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text: `❌ ${String(err || "failed").slice(0, 160)}`,
+          reply_to_message_id: messageId,
+        }).catch(() => {});
         return;
       }
-      const caption = [
-        `<b>${escapeHtml(name)}</b>`,
-        `#tetherless`,
-        `Failed`,
-        `<b>0%</b>`,
-        `❌ ${escapeHtml(String(err || "failed").slice(0, 160))}`,
-      ].join("\n");
-      if (hasPhoto && messageId) {
-        await tgApi("editMessageCaption", {
-          chat_id: chatId,
-          message_id: messageId,
-          caption,
-          parse_mode: "HTML",
-        }).catch(() => {});
-      } else {
-        await paintText(caption);
-      }
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: `❌ ${String(err || "failed").slice(0, 160)}`,
+      }).catch(() => {});
     },
   };
 }
@@ -1133,15 +1120,20 @@ function startKeyboard() {
 async function deleteUserMessage(chatId, messageId) {
   const mid = Number(messageId);
   if (!chatId || !mid) return false;
-  const r = await tgApi("deleteMessage", {
-    chat_id: chatId,
-    message_id: mid,
-  }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
-  if (!(r && r.ok)) {
-    console.warn("[chat] deleteMessage failed:", (r && r.description) || "unknown");
-    return false;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt) await new Promise((r) => setTimeout(r, 350 * attempt));
+    const r = await tgApi("deleteMessage", {
+      chat_id: chatId,
+      message_id: mid,
+    }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
+    if (r && r.ok) return true;
+    console.warn(
+      "[chat] deleteMessage failed:",
+      (r && r.description) || "unknown",
+      `attempt=${attempt + 1}`
+    );
   }
-  return true;
+  return false;
 }
 
 function rememberStoreUrl(chatId, link, vreq) {
@@ -1384,26 +1376,21 @@ async function decryptStoreUrl(chatId, link, vreq) {
 
   const card = createProgressCard(chatId);
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
-  // Start Apple download / encrypted-cache hit while the progress card loads.
-  let prepError = null;
-  const prep = fairplayBackends
-    .ensureEncryptedSource({
+
+  try {
+    // Establish the single progress photo BEFORE any backend say() ticks —
+    // starting prep in parallel used to race and send duplicate banners.
+    await card.start(link);
+    await card.setStage("Fetching…", 8);
+
+    await fairplayBackends.ensureEncryptedSource({
       url: link,
       dir,
       say: (t) => {
         card.fromBackendLine(t);
       },
       vreq,
-    })
-    .catch((e) => {
-      prepError = e;
     });
-
-  try {
-    await card.start(link);
-    await card.setStage("Fetching…", 8);
-    await prep;
-    if (prepError) throw prepError;
 
     const say = (t) => {
       card.fromBackendLine(t);
