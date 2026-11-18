@@ -27,7 +27,33 @@ export UNFAIRPLAY_MODEL_DIR="$HOME/unfairplay/models"
 export FAIRPLAY_IPATOOL_BIN=ipatool
 # FAIRPLAY_REQUIRE_CREDENTIAL defaults off on Mac
 
+# Optional: your own Telegram decrypt bot (BotFather → TELEGRAM_BOT_TOKEN).
+# Same Mac process polls the bot; paste apps.apple.com links → UnfairPlay → IPA back in chat.
+# export TELEGRAM_BOT_TOKEN=...
+# export TELEGRAM_BOT_USERNAME=YourDecryptBot
+# export TELEGRAM_ALLOWED_IDS=123456789   # your numeric chat id(s); omit = open to anyone
+#
+# Standalone Tetherless bot (recommended on MacDuty): start from the **desktop Terminal**
+# so ipatool can use the Keychain (WebSSH cannot unlock login.keychain on these hosts):
+#   git clone https://github.com/unflavoredapp/Random.git ~/tetherless
+#   source /users/client/.tetherless-mac.env
+#   node ~/tetherless/server/mac-tg-bot.js
+# App Store link → decrypt. TestFlight → send .ipa or drop into ~/tetherless-drop
+# and message: decrypt App.ipa
+#
+# If login Keychain password is unknown (MacDuty padlock dialogs), use a dedicated
+# keychain instead (macOS cannot unlock without a password):
+#   export TETHERLESS_KEYCHAIN_PASSWORD='pick-a-strong-pass'
+#   zsh ~/tetherless/server/mac-keychain-setup.sh
+#   ipatool auth login   # enter THAT password → Always Allow
+#
+# Full HTTPS backup API for the iOS app (when on-device decrypt fails):
+#   Double-click Desktop/Start-Tetherless-API.command
+#   Copy the printed https://….trycloudflare.com/ URL
+#   iOS app → FairPlay Decrypt → Decrypt site URL → paste that URL → Save host
+
 # 4) Run the TetherLess Node site on THIS Mac (same process as production)
+#    OR just mac-tg-bot.js above for Telegram-only decrypt.
 # Then in the iOS app: Account → Settings → FairPlay Decrypt → Decrypt site URL
 # set to https://YOUR-MAC-HOST/  (HTTPS required for App Transport; or keep tetherless.dev
 # and copy FAIRPLAY_ENROLLMENT_MODEL to the Linux production host instead)

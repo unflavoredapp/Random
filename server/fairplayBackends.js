@@ -337,7 +337,7 @@ function runCmd(bin, args, { cwd, timeoutMs = 20 * 60 * 1000, env } = {}) {
       else
         reject(
           new Error(
-            `${bin} exited ${code}: ${(stderr || stdout).trim().slice(0, 400) || "no output"}`
+            `${bin} exited ${code}: ${stripAnsi(stderr || stdout).trim().slice(0, 400) || "no output"}`
           )
         );
     });
@@ -385,6 +385,22 @@ function httpRequest(urlString, { method = "GET", headers = {}, body, timeoutMs 
 function adamFromStoreUrl(url) {
   const m = /\bid(\d{5,12})\b/i.exec(String(url || ""));
   return m ? m[1] : "";
+}
+
+/** ipatool ≥2.x uses --app-id (not legacy --adam-id). */
+function ipatoolDownloadArgs(encPath, { url, vreq } = {}) {
+  const adam = adamFromStoreUrl(url);
+  const platform = String(process.env.FAIRPLAY_IPATOOL_PLATFORM || "iphone").trim();
+  const args = ["download", "--purchase", "--non-interactive", "-o", encPath];
+  if (platform) args.push("--platform", platform);
+  if (adam) args.push("--app-id", adam);
+  else args.push(String(url || "").trim());
+  if (vreq) args.push("--external-version-id", String(vreq));
+  return args;
+}
+
+function stripAnsi(s) {
+  return String(s || "").replace(/\u001b\[[0-9;]*m/g, "");
 }
 
 /**
@@ -490,12 +506,7 @@ async function runFairplayDecrypt({ url, dir, say, vreq }) {
       );
     }
     say("ipatool downloading encrypted IPA…");
-    const adam = adamFromStoreUrl(url);
-    const args = ["download", "--purchase", "-o", enc];
-    if (adam) args.push("--adam-id", adam);
-    else args.push(url);
-    if (vreq) args.push("--external-version-id", String(vreq));
-    await runCmd(ipatool, args, { cwd: dir });
+    await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq }), { cwd: dir });
   }
 
   const py = process.env.FAIRPLAY_DECRYPT_PYTHON || "python3";
@@ -546,12 +557,7 @@ async function runUnfairplay({ url, dir, say, vreq }) {
       );
     }
     say("ipatool downloading encrypted IPA…");
-    const adam = adamFromStoreUrl(url);
-    const args = ["download", "--purchase", "-o", enc];
-    if (adam) args.push("--adam-id", adam);
-    else args.push(url);
-    if (vreq) args.push("--external-version-id", String(vreq));
-    await runCmd(ipatool, args, { cwd: dir });
+    await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq }), { cwd: dir });
   }
 
   const args = ["decrypt", "--input", enc, "--output", out, "--force"];

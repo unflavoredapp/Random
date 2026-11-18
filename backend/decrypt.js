@@ -451,10 +451,15 @@ function create({ db /*, secret */ }) {
       const text = String(msg.text || "").trim();
       if (!text) continue;
       if (/^\/(start|help)/i.test(text)) {
+        const host = fairplayBackends.hostMode ? fairplayBackends.hostMode() : "";
+        const help =
+          "Tetherless Decrypt\n\n" +
+          "Send an App Store link (https://apps.apple.com/…).\n" +
+          "For TestFlight: upload the encrypted .ipa (site queue) or use the Mac Tetherless bot drop folder.\n" +
+          (host === "mac" ? "This host decrypts with UnfairPlay." : "Uses the configured FairPlay backends.");
         await tgApi("sendMessage", {
           chat_id: chatId,
-          text:
-            "Send an App Store link (https://apps.apple.com/…). Your iPhone worker decrypts it on-device and I’ll send the IPA back.",
+          text: help,
         }).catch(() => {});
         continue;
       }
@@ -462,7 +467,7 @@ function create({ db /*, secret */ }) {
       if (!link) {
         await tgApi("sendMessage", {
           chat_id: chatId,
-          text: "Paste a full apps.apple.com link.",
+          text: "Paste a full apps.apple.com link (or use /start).",
         }).catch(() => {});
         continue;
       }
@@ -471,7 +476,7 @@ function create({ db /*, secret */ }) {
       try {
         await tgApi("sendMessage", {
           chat_id: chatId,
-          text: "Queued for your iPhone worker…",
+          text: "Queued on Tetherless…",
         });
         const result = await helpers.createDecryptJob({
           url: link,
