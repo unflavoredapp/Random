@@ -16,7 +16,9 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const https = require("https");
+const { spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
+const TG_DOC_MAX = 49 * 1024 * 1024; // Bot API soft limit ~50MB
 
 const BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
 const BOT_USERNAME = String(process.env.TELEGRAM_BOT_USERNAME || "TetherLessDecryptBot").replace(/^@/, "");
@@ -65,52 +67,44 @@ function tgApi(method, body) {
 }
 
 function sendDocument(chatId, filePath, caption) {
-  return new Promise((resolve, reject) => {
-    const boundary = "----TetherLess" + Date.now();
-    const filename = path.basename(filePath).replace(/[^\w.-]+/g, "_") || "App.ipa";
-    const stat = fs.statSync(filePath);
-    const head =
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="chat_id"\r\n\r\n${chatId}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="caption"\r\n\r\n${caption || ""}\r\n` +
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="document"; filename="${filename}"\r\n` +
-      `Content-Type: application/octet-stream\r\n\r\n`;
-    const tail = `\r\n--${boundary}--\r\n`;
-    const contentLength = Buffer.byteLength(head) + stat.size + Buffer.byteLength(tail);
-    const req = https.request(
-      {
-        hostname: "api.telegram.org",
-        path: `/bot${BOT_TOKEN}/sendDocument`,
-        method: "POST",
-        headers: {
-          "Content-Type": `multipart/form-data; boundary=${boundary}`,
-          "Content-Length": contentLength,
-        },
-      },
-      (res) => {
-        const chunks = [];
-        res.on("data", (c) => chunks.push(c));
-        res.on("end", () => {
-          try {
-            resolve(JSON.parse(Buffer.concat(chunks).toString("utf8")));
-          } catch (e) {
-            reject(e);
-          }
-        });
-      }
-    );
-    req.on("error", reject);
-    req.write(head);
-    fs.createReadStream(filePath)
-      .on("error", reject)
-      .on("end", () => {
-        req.write(tail);
-        req.end();
-      })
-      .pipe(req, { end: false });
-  });
+  const stat = fs.statSync(filePath);
+  if (stat.size > TG_DOC_MAX) {
+    return Promise.resolve({
+      ok: false,
+      description: `IPA is ${(stat.size / 1024 / 1024).toFixed(1)} MB — Telegram bots cap ~50 MB. Saved on Mac: ${filePath}`,
+      tooLarge: true,
+      bytes: stat.size,
+    });
+  }
+  // curl multipart is reliable for large binaries; hand-rolled streams often truncate.
+  const r = spawnSync(
+    "curl",
+    [
+      "-sS",
+      "-X",
+      "POST",
+      `https://api.telegram.org/bot${BOT_TOKEN}/sendDocument`,
+      "-F",
+      `chat_id=${chatId}`,
+      "-F",
+      `caption=${caption || ""}`,
+      "-F",
+      `document=@${filePath};type=application/octet-stream;filename=${path.basename(filePath).replace(/[^\w.-]+/g, "_") || "App.ipa"}`,
+    ],
+    { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }
+  );
+  if (r.error) return Promise.reject(r.error);
+  if (r.status !== 0) {
+    return Promise.resolve({
+      ok: false,
+      description: (r.stderr || r.stdout || `curl exit ${r.status}`).trim().slice(0, 300),
+    });
+  }
+  try {
+    return Promise.resolve(JSON.parse(r.stdout || "{}"));
+  } catch (e) {
+    return Promise.resolve({ ok: false, description: String(r.stdout || e.message).slice(0, 300) });
+  }
 }
 
 function chatAllowed(chatId) {
@@ -170,13 +164,26 @@ async function handleMessage(msg) {
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
-    const caption = `${result.name || "App"} · FairPlay decrypt`.trim();
-    const sent = await sendDocument(chatId, result.file, caption);
+    const mb = (fs.statSync(result.file).size / 1024 / 1024).toFixed(1);
+    const caption = `${result.name || "App"} · ${mb} MB · FairPlay decrypt`.trim();
+    // Keep a copy outside the temp job dir (we delete dir in finally).
+    const keepDir = path.join(WORK, "out");
+    fs.mkdirSync(keepDir, { recursive: true });
+    const keep = path.join(
+      keepDir,
+      `${Date.now()}-${(result.name || "App").replace(/[^\w.-]+/g, "_")}.ipa`
+    );
+    fs.copyFileSync(result.file, keep);
+    const sent = await sendDocument(chatId, keep, caption);
     if (!sent || !sent.ok) {
+      const why = (sent && sent.description) || "Telegram attach failed";
+      console.warn("[job] sendDocument:", why);
       await tgApi("sendMessage", {
         chat_id: chatId,
-        text: `Done: ${result.name || "App"} (Telegram attach failed — check server logs).`,
+        text: `Decrypted (${mb} MB) but Telegram upload failed: ${String(why).slice(0, 180)}\nSaved on Mac: ${keep}`,
       });
+    } else {
+      console.log("[job] sent IPA to Telegram:", keep);
     }
   } catch (e) {
     const err = String((e && e.message) || e).slice(0, 200);
