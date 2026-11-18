@@ -28,6 +28,7 @@ const https = require("https");
 const { spawn, spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
 const ipaCache = require("./mac-tg-ipa-cache");
+const { renderProgressBanner } = require("./mac-tg-progress-banner");
 
 const API_ROOT = String(process.env.TELEGRAM_API_ROOT || "https://api.telegram.org").replace(/\/+$/, "");
 const LOCAL_API =
@@ -375,35 +376,116 @@ function sendPhotoBotApi(chatId, photoPath, caption, replyMarkup) {
   }
 }
 
-/** One editable Telegram card: icon + name — Tetherless + loading bar → final meta/buttons. */
+/** Replace the progress card photo (URSA-style banner updates). */
+function editMessageMediaBotApi(chatId, messageId, photoPath, caption) {
+  const abs = path.resolve(photoPath);
+  const media = JSON.stringify({
+    type: "photo",
+    media: "attach://photo",
+    caption: caption || "",
+    parse_mode: "HTML",
+  });
+  const args = [
+    "-sS",
+    "-X",
+    "POST",
+    apiUrl("editMessageMedia"),
+    "--form-string",
+    `chat_id=${chatId}`,
+    "--form-string",
+    `message_id=${messageId}`,
+    "--form-string",
+    `media=${media}`,
+    "-F",
+    `photo=@${abs};type=image/jpeg`,
+  ];
+  const r = spawnSync("curl", args, { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 });
+  if (r.error) return Promise.reject(r.error);
+  if (r.status !== 0) {
+    return Promise.resolve({
+      ok: false,
+      description: (r.stderr || r.stdout || `curl exit ${r.status}`).trim().slice(0, 300),
+    });
+  }
+  try {
+    return Promise.resolve(JSON.parse(r.stdout || "{}"));
+  } catch (e) {
+    return Promise.resolve({ ok: false, description: String(r.stdout || e.message).slice(0, 300) });
+  }
+}
+
+/** One editable Telegram card: URSA-style banner (name · #tag · stage · %). */
 function createProgressCard(chatId) {
   let messageId = 0;
   let hasPhoto = false;
   let name = "App";
   let storeUrl = "";
+  let iconPath = "";
+  let bannerPath = "";
   let lastEdit = 0;
   let lastPct = -1;
   let lastStage = "";
 
-  async function paint(caption, replyMarkup) {
+  function bannerFile() {
+    if (!bannerPath) {
+      bannerPath = path.join(WORK, `progress-${chatId}-${Date.now()}.jpg`);
+    }
+    return bannerPath;
+  }
+
+  function makeBanner(stage, pct) {
+    return renderProgressBanner({
+      name,
+      stage: stage || lastStage || "Working…",
+      pct,
+      iconPath,
+      dest: bannerFile(),
+      tag: "tetherless",
+    });
+  }
+
+  async function paintText(caption) {
     if (!messageId) return;
     const body = {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: "HTML",
-      caption: hasPhoto ? caption : undefined,
-      text: hasPhoto ? undefined : caption,
+      text: caption,
     };
-    if (replyMarkup) body.reply_markup = replyMarkup;
-    const method = hasPhoto ? "editMessageCaption" : "editMessageText";
-    // When editing text messages, Telegram wants `text` not caption.
-    if (!hasPhoto) {
-      delete body.caption;
-      body.text = caption;
-    } else {
-      delete body.text;
+    await tgApi("editMessageText", body).catch(() => {});
+  }
+
+  async function paintBanner(stage, pct) {
+    const img = makeBanner(stage, pct);
+    if (!img) {
+      await paintText(progressCaption({ name, stage, pct }));
+      return false;
     }
-    await tgApi(method, body).catch(() => {});
+    if (!messageId) {
+      const sent = await sendPhotoBotApi(chatId, img, "");
+      if (sent && sent.ok && sent.result) {
+        messageId = sent.result.message_id;
+        hasPhoto = true;
+        return true;
+      }
+      console.warn("[job] sendPhoto banner failed:", (sent && sent.description) || "unknown");
+      return false;
+    }
+    if (hasPhoto) {
+      const edited = await editMessageMediaBotApi(chatId, messageId, img, "");
+      if (edited && edited.ok) return true;
+      console.warn("[job] editMessageMedia failed:", (edited && edited.description) || "unknown");
+      // Fall back to caption-only update on the existing photo.
+      await tgApi("editMessageCaption", {
+        chat_id: chatId,
+        message_id: messageId,
+        caption: progressCaption({ name, stage, pct }),
+        parse_mode: "HTML",
+      }).catch(() => {});
+      return false;
+    }
+    await paintText(progressCaption({ name, stage, pct }));
+    return false;
   }
 
   return {
@@ -419,17 +501,19 @@ function createProgressCard(chatId) {
       // Prefer short App Store title (drop “- Play Music Offline” style suffixes for the card).
       const rawName = hintName || meta.name || "App";
       name = String(rawName).split(/\s+[—\-–]\s+/)[0].trim() || rawName;
+      iconPath = (meta.iconPath && fs.existsSync(meta.iconPath) && meta.iconPath) || "";
+      lastStage = "Fetching…";
+      lastPct = 4;
+      const ok = await paintBanner("Fetching…", 4);
+      if (ok) return;
       const caption = progressCaption({ name, stage: "Fetching…", pct: 4 });
-      if (meta.iconPath && fs.existsSync(meta.iconPath)) {
-        const sent = await sendPhotoBotApi(chatId, meta.iconPath, caption);
+      if (iconPath) {
+        const sent = await sendPhotoBotApi(chatId, iconPath, caption);
         if (sent && sent.ok && sent.result) {
           messageId = sent.result.message_id;
           hasPhoto = true;
           return;
         }
-        console.warn("[job] sendPhoto failed:", (sent && sent.description) || "unknown");
-      } else {
-        console.warn("[job] no store icon for progress card", link || "(none)");
       }
       const sent = await tgApi("sendMessage", {
         chat_id: chatId,
@@ -450,13 +534,15 @@ function createProgressCard(chatId) {
       lastPct = p;
       if (stage) lastStage = stage;
       console.log("[job]", stage || lastStage, `${p}%`);
-      await paint(progressCaption({ name, stage: stage || lastStage, pct: p }));
+      await paintBanner(stage || lastStage, p);
     },
     /** Map backend say() lines into card stages. */
     async fromBackendLine(line) {
       const t = String(line || "");
-      if (/ipatool|download/i.test(t)) return this.setStage("Downloading…", 28);
-      if (/unfairplay|decrypt|FairPlay|model/i.test(t)) return this.setStage("Decrypting…", 55);
+      if (/ipatool|download|encrypted IPA cache/i.test(t)) return this.setStage("Downloading…", 28);
+      if (/unfairplay|decrypt|FairPlay|model|Tetherless decrypt/i.test(t)) {
+        return this.setStage("Decrypting…", 55);
+      }
       if (/produced|done/i.test(t)) return this.setStage("Decrypting…", 72);
       if (/upload/i.test(t)) return this.setStage("Uploading…", 80);
       return this.setStage(lastStage || "Working…", Math.max(lastPct, 12));
@@ -469,12 +555,32 @@ function createProgressCard(chatId) {
       if (!messageId) return;
       await tgApi("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
       messageId = 0;
+      if (bannerPath) {
+        try {
+          fs.rmSync(bannerPath, { force: true });
+        } catch {
+          /* ignore */
+        }
+        bannerPath = "";
+      }
     },
     /** Drop the live card once the IPA (with caption) is sent — no duplicate meta post. */
     async finish() {
       await this.clear();
     },
     async fail(err) {
+      lastStage = "Failed";
+      lastPct = 0;
+      const img = makeBanner("Failed", 0);
+      if (img && messageId && hasPhoto) {
+        await editMessageMediaBotApi(
+          chatId,
+          messageId,
+          img,
+          `❌ ${escapeHtml(String(err || "failed").slice(0, 160))}`
+        );
+        return;
+      }
       const caption = [
         `<b>${escapeHtml(name)}</b>`,
         `#tetherless`,
@@ -482,7 +588,16 @@ function createProgressCard(chatId) {
         `<b>0%</b>`,
         `❌ ${escapeHtml(String(err || "failed").slice(0, 160))}`,
       ].join("\n");
-      await paint(caption);
+      if (hasPhoto && messageId) {
+        await tgApi("editMessageCaption", {
+          chat_id: chatId,
+          message_id: messageId,
+          caption,
+          parse_mode: "HTML",
+        }).catch(() => {});
+      } else {
+        await paintText(caption);
+      }
     },
   };
 }
