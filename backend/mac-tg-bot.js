@@ -1373,7 +1373,7 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
     await deliverResult(chatId, result, { label, card });
   } catch (e) {
     await card.fail((e && e.message) || e);
-    throw e;
+    throw markReported(e);
   } finally {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1487,7 +1487,7 @@ async function decryptStoreUrl(chatId, link, vreq) {
     await deliverResult(chatId, result, { storeUrl: link, versionHint: vreq, card });
   } catch (e) {
     await card.fail((e && e.message) || e);
-    throw e;
+    throw markReported(e);
   } finally {
     try {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -1713,29 +1713,53 @@ let offset = 0;
 const MAX_WORKERS = Math.max(1, Math.min(8, Number(process.env.MAC_TG_WORKERS || 3) || 3));
 let activeWorkers = 0;
 const jobWaiters = [];
+/** One live decrypt at a time per chat — stops duplicate sharp cards. */
+const chatJobTail = new Map();
+
+function markReported(err) {
+  const e = err instanceof Error ? err : new Error(String(err || "failed"));
+  e.reported = true;
+  return e;
+}
 
 async function withWorker(chatId, fn) {
-  if (activeWorkers >= MAX_WORKERS) {
-    const place = activeWorkers + jobWaiters.length + 1;
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text: `Queued (#${place}) — ${activeWorkers}/${MAX_WORKERS} workers busy…`,
-    }).catch(() => {});
-    await new Promise((resolve) => jobWaiters.push(resolve));
-  }
-  activeWorkers++;
-  console.log(`[job] worker start (${activeWorkers}/${MAX_WORKERS} active, ${jobWaiters.length} waiting)`);
+  const key = String(chatId || "");
+  const run = async () => {
+    if (activeWorkers >= MAX_WORKERS) {
+      const place = activeWorkers + jobWaiters.length + 1;
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: `Queued (#${place}) — ${activeWorkers}/${MAX_WORKERS} workers busy…`,
+      }).catch(() => {});
+      await new Promise((resolve) => jobWaiters.push(resolve));
+    }
+    activeWorkers++;
+    console.log(`[job] worker start (${activeWorkers}/${MAX_WORKERS} active, ${jobWaiters.length} waiting)`);
+    try {
+      await fn();
+    } catch (e) {
+      const err = String((e && e.message) || e).slice(0, 200);
+      console.warn("[job] failed:", err);
+      // card.fail already posted ❌ — don't send a second "Failed:" bubble.
+      if (!(e && e.reported)) {
+        await tgApi("sendMessage", { chat_id: chatId, text: "Failed: " + err }).catch(() => {});
+      }
+    } finally {
+      activeWorkers--;
+      const next = jobWaiters.shift();
+      if (next) next();
+      console.log(`[job] worker done (${activeWorkers}/${MAX_WORKERS} active, ${jobWaiters.length} waiting)`);
+    }
+  };
+
+  // Serialize per chat so a second paste / overlapping poll can't spawn two cards.
+  const prev = chatJobTail.get(key) || Promise.resolve();
+  const chained = prev.catch(() => {}).then(run);
+  chatJobTail.set(key, chained);
   try {
-    await fn();
-  } catch (e) {
-    const err = String((e && e.message) || e).slice(0, 200);
-    console.warn("[job] failed:", err);
-    await tgApi("sendMessage", { chat_id: chatId, text: "Failed: " + err }).catch(() => {});
+    await chained;
   } finally {
-    activeWorkers--;
-    const next = jobWaiters.shift();
-    if (next) next();
-    console.log(`[job] worker done (${activeWorkers}/${MAX_WORKERS} active, ${jobWaiters.length} waiting)`);
+    if (chatJobTail.get(key) === chained) chatJobTail.delete(key);
   }
 }
 
@@ -1903,21 +1927,37 @@ async function handleMessage(msg) {
   });
 }
 
+/** Only one getUpdates in flight — overlapping polls re-delivered the same URL → duplicate cards. */
+let pollBusy = false;
+
 async function poll() {
+  if (pollBusy) return;
+  pollBusy = true;
   try {
     const r = await tgApi("getUpdates", {
       offset,
-      timeout: 0,
+      timeout: 25,
       allowed_updates: ["message", "callback_query"],
     });
     if (!r.ok || !Array.isArray(r.result)) return;
     for (const u of r.result) {
+      // Ack before dispatch so a concurrent poll can't fetch the same update.
       offset = Math.max(offset, (u.update_id || 0) + 1);
-      if (u.callback_query) await handleCallback(u.callback_query);
-      else if (u.message) await handleMessage(u.message);
+      // Don't await decrypt — withWorker serializes per chat; poll must keep cycling.
+      Promise.resolve()
+        .then(() =>
+          u.callback_query
+            ? handleCallback(u.callback_query)
+            : u.message
+              ? handleMessage(u.message)
+              : null
+        )
+        .catch((e) => console.warn("update:", (e && e.message) || e));
     }
   } catch (e) {
     console.warn("poll:", (e && e.message) || e);
+  } finally {
+    pollBusy = false;
   }
 }
 
@@ -1981,10 +2021,13 @@ async function boot() {
   );
   console.log(`Drop folder for TestFlight IPAs: ${DROP}`);
   console.log("WebSSH: zsh server/mac-ssh.sh start | status | logs | session");
-  setInterval(() => {
-    poll().catch(() => {});
-  }, 2000);
-  poll().catch(() => {});
+  // Kick the next poll when the previous finishes (no overlapping getUpdates).
+  const pump = () => {
+    poll()
+      .catch(() => {})
+      .finally(() => setTimeout(pump, 400));
+  };
+  pump();
 }
 
 boot().catch((e) => {
