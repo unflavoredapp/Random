@@ -400,6 +400,59 @@ function ipatoolDownloadArgs(encPath, { url, vreq } = {}) {
   return args;
 }
 
+function loadIpaCache() {
+  try {
+    return require("./mac-tg-ipa-cache");
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ensure dir/encrypted-source.ipa exists:
+ *   1) already in job dir
+ *   2) encrypted disk cache (skip Apple download)
+ *   3) ipatool download → save into encrypted cache
+ */
+async function ensureEncryptedSource({ url, dir, say, vreq }) {
+  const enc = path.join(dir, "encrypted-source.ipa");
+  if (fs.existsSync(enc) && fs.statSync(enc).size >= 100) return enc;
+
+  const adam = adamFromStoreUrl(url);
+  const ver = String(vreq || "").trim() || "latest";
+  const ipaCache = loadIpaCache();
+  if (ipaCache && adam) {
+    const hit = ipaCache.getEncryptedPath(adam, ver);
+    if (hit) {
+      say("encrypted IPA cache hit — skipping App Store download…");
+      ipaCache.linkOrCopy(hit, enc);
+      return enc;
+    }
+  }
+
+  const ipatool = which(process.env.FAIRPLAY_IPATOOL_BIN || "ipatool");
+  if (!ipatool) {
+    throw new Error(
+      "Need encrypted IPA at encrypted-source.ipa or FAIRPLAY_IPATOOL_BIN/ipatool on PATH"
+    );
+  }
+  say("ipatool downloading encrypted IPA…");
+  await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq }), { cwd: dir });
+  if (!fs.existsSync(enc) || fs.statSync(enc).size < 100) {
+    throw new Error("ipatool produced no encrypted IPA");
+  }
+
+  if (ipaCache && adam) {
+    try {
+      ipaCache.putEncrypted(adam, ver, enc);
+      say(`cached encrypted IPA (${adam}${ver !== "latest" ? " v" + ver : ""})…`);
+    } catch (e) {
+      say(`encrypted cache save skipped: ${String((e && e.message) || e).slice(0, 80)}`);
+    }
+  }
+  return enc;
+}
+
 function stripAnsi(s) {
   return String(s || "").replace(/\u001b\[[0-9;]*m/g, "");
 }
@@ -511,17 +564,7 @@ async function runFairplayDecrypt({ url, dir, say, vreq }) {
     /* ignore */
   }
 
-  // Prefer a pre-fetched encrypted IPA in dir; else ipatool download when configured.
-  if (!fs.existsSync(enc) || fs.statSync(enc).size < 100) {
-    const ipatool = which(process.env.FAIRPLAY_IPATOOL_BIN || "ipatool");
-    if (!ipatool) {
-      throw new Error(
-        "fairplay-decrypt needs encrypted IPA at encrypted-source.ipa or FAIRPLAY_IPATOOL_BIN/ipatool on PATH"
-      );
-    }
-    say("ipatool downloading encrypted IPA…");
-    await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq }), { cwd: dir });
-  }
+  await ensureEncryptedSource({ url, dir, say, vreq });
 
   const py = process.env.FAIRPLAY_DECRYPT_PYTHON || "python3";
   const bin = process.env.FAIRPLAY_DECRYPT_BIN || "";
@@ -563,16 +606,7 @@ async function runUnfairplay({ url, dir, say, vreq }) {
     /* ignore */
   }
 
-  if (!fs.existsSync(enc) || fs.statSync(enc).size < 100) {
-    const ipatool = which(process.env.FAIRPLAY_IPATOOL_BIN || "ipatool");
-    if (!ipatool) {
-      throw new Error(
-        "Tetherless needs encrypted IPA at encrypted-source.ipa or FAIRPLAY_IPATOOL_BIN/ipatool on PATH"
-      );
-    }
-    say("ipatool downloading encrypted IPA…");
-    await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq }), { cwd: dir });
-  }
+  await ensureEncryptedSource({ url, dir, say, vreq });
 
   const args = ["decrypt", "--input", enc, "--output", out, "--force"];
   if (modelArg) {
@@ -757,6 +791,7 @@ module.exports = {
   configuredBackends,
   backendStatus,
   tryRemoteBackends,
+  ensureEncryptedSource,
   adamFromStoreUrl,
   validateCredentialBin,
   credentialPath,

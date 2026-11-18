@@ -46,6 +46,8 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 #   # add TELEGRAM_API_ID / HASH / SESSION / TELEGRAM_PREMIUM_UPLOAD=1 to .tetherless-mac.env
 # Cloud cache: first decrypt stores Telegram file_id / message under ~/tetherless-ipa-cache.
 # Same App Store link again → instant re-send (no re-decrypt). /cache lists entries.
+# Encrypted cache: ipatool downloads are kept under ~/tetherless-ipa-cache/encrypted —
+# same adam/version later skips the App Store download (still decrypts unless clear-cached).
 #
 # If login Keychain password is unknown (MacDuty padlock dialogs), use a dedicated
 # keychain instead (macOS cannot unlock without a password):
