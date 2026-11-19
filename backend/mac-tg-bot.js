@@ -1264,14 +1264,15 @@ function isTestFlightUrl(t) {
 }
 
 function startScreenText() {
-  // Single /start blurb — no status, no inline menu, no Mac ops text.
+  // Single /start blurb — paste links only; no Mac ops / menu clutter.
   return (
     `Hi, I'm <b>DELvEK</b>, the decryption bot. I'm fully static and capable of decrypting ` +
     `iOS, iPadOS, macOS, tvOS, and visionOS 26/27 apps, and I'm cute too!\n\n` +
-    `You can use me in this chat. Just send the App Store application link, and I'll provide the decrypted file.\n\n` +
+    `Just <b>paste an App Store link</b> here and I'll send the decrypted IPA.\n\n` +
     `Mention me in any group or chat with:\n` +
     `<code>@DELvEKBot &lt;App Store App Link&gt;</code>\n` +
     `to get a download link.\n\n` +
+    `Free apps work with the Mac’s App Store session. Paid apps only if that Apple ID already owns them.\n\n` +
     `There are subscription options that allow you to decrypt TestFlight betas, apps up to 4 GB, ` +
     `paid applications, older app versions, and select platforms - all without the 3 apps/day limit. ` +
     `An HTTP API is also available for automation. Contact @mrzefie to subscribe, or if you have other questions.\n\n` +
@@ -2018,7 +2019,7 @@ async function handleMessage(msg) {
   if (!link) {
     await tgApi("sendMessage", {
       chat_id: chatId,
-      text: "Paste an App Store link or send a `.ipa`.",
+      text: "Paste an App Store link (paid apps must already be owned by this Apple ID).",
     });
     return;
   }
