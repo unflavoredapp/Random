@@ -288,8 +288,8 @@ async function sendIpaByFileId(chatId, fileId, caption, replyMarkup) {
     reply_markup: markup,
   }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
   if (r && r.ok && r.result && r.result.message_id) {
-    // Belt-and-suspenders: some clients drop markup on the initial send.
-    await attachIpaChrome(chatId, r.result.message_id, { caption, replyMarkup: markup });
+    // edit* can drop tabs on large/Premium-bridged docs — ensure or reply with Patch/VIP.
+    await ensureIpaButtonTabs(chatId, r.result.message_id, { caption, replyMarkup: markup });
   }
   return r;
 }
@@ -1489,6 +1489,10 @@ async function decryptStoreUrl(chatId, link, vreq) {
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
 
   try {
+    // SSH sessions need the dedicated keychain unlocked before ipatool.
+    if (typeof fairplayBackends.unlockKeychain === "function") {
+      fairplayBackends.unlockKeychain();
+    }
     // Establish the single progress photo BEFORE any backend say() ticks —
     // starting prep in parallel used to race and send duplicate banners.
     await card.start(link);
@@ -1649,7 +1653,8 @@ async function promoteCardToIpa(chatId, cardMid, { fileId, disk, fileName, capti
     );
     return null;
   }
-  await attachIpaChrome(chatId, cardMid, { caption, replyMarkup: markup });
+  // Large file_id edits often drop inline tabs — force Patch/VIP (reply fallback OK).
+  await ensureIpaButtonTabs(chatId, cardMid, { caption, replyMarkup: markup });
   if (card && typeof card.release === "function") await card.release();
   console.log("[job] sharp card → IPA document", cardMid, fileName);
   return edited;
@@ -1778,8 +1783,11 @@ async function deliverIpaAsDocument(chatId, pending, { card, cardMessageId } = {
     }
   }
 
-  // Couldn't promote — keep the upload bubble, drop the progress card.
+  // Couldn't promote — keep the upload bubble, drop the progress card, still force Patch/VIP.
   await dropProgressCard(card, cardMid, chatId);
+  if (uploadMid) {
+    await ensureIpaButtonTabs(chatId, uploadMid, { caption, replyMarkup: markup });
+  }
   const doc = uploadResult && uploadResult.result && uploadResult.result.document;
   await cacheIpaDelivery(pending, {
     fileName,
@@ -2126,7 +2134,11 @@ async function boot() {
     `IPA cloud cache: ${ipaCache.CACHE_DIR} (${ipaCache.list().length} clear, ${ipaCache.listEncrypted().length} encrypted)`
   );
   console.log(`Drop folder for TestFlight IPAs: ${DROP}`);
-  console.log("WebSSH: zsh server/mac-ssh.sh start | status | logs | session");
+  console.log("WebSSH: zsh ~/tetherless/server/mac-ssh.sh start | status | logs | session | unlock");
+  if (typeof fairplayBackends.unlockKeychain === "function") {
+    const unlocked = fairplayBackends.unlockKeychain();
+    console.log(unlocked ? "Keychain: unlocked (tetherless.keychain-db)" : "Keychain: skipped (set TETHERLESS_KEYCHAIN_PASSWORD)");
+  }
   // Kick the next poll when the previous finishes (no overlapping getUpdates).
   const pump = () => {
     poll()
