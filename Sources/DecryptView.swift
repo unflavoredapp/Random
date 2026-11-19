@@ -234,9 +234,9 @@ final class DecryptClient: ObservableObject {
         loadingVersions = true; error = nil
         defer { loadingVersions = false }
 
-        // This Device: authenticated store version IDs (externalVersionId) first.
+        // This Device / Mac-only: Store history + Timbrd/Bilin/iosdump on-device first.
         if DecryptChannel.current == .device {
-            if let local = await DeviceDecryptService.shared.versionList(for: app) {
+            if let local = await DeviceDecryptService.shared.versionList(for: app), !local.versions.isEmpty {
                 versions = local.versions
                 versionPage = 1
                 versionPages = 1
@@ -245,19 +245,28 @@ final class DecryptClient: ObservableObject {
                 return
             }
             if let verErr = DeviceDecryptService.shared.lastVersionError, !verErr.isEmpty {
-                // Keep going to public iTunes fallback below, but remember the Store error.
+                // Keep going to Mac API / public feeds below.
                 error = verErr
             }
         }
 
-        // Telegram / server archive history (paged).
+        // Mac API / Telegram archive history (Timbrd+Bilin+iosdump on the host).
         do {
-            let o = try await send(makeRequest("api/decrypt/versions", body: ["url": app.url, "page": page], timeout: 150))
+            var body: [String: Any] = ["url": app.url, "page": page]
+            if let sf = UserDefaults.standard.string(forKey: "tetherless.ipatool.storefront"),
+               !sf.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                body["storefront"] = sf.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            }
+            let o = try await send(makeRequest("api/decrypt/versions", body: body, timeout: 150))
             let list = (o["versions"] as? [[String: Any]]) ?? []
             let mapped = list.compactMap { i -> DecryptVersion? in
-                guard let v = i["v"] as? String, !v.isEmpty else { return nil }
+                let ext = (i["external_id"] as? String) ?? (i["externalVersionId"] as? String) ?? (i["id"] as? String)
+                var v = (i["v"] as? String) ?? (i["label"] as? String) ?? (i["version"] as? String) ?? ""
+                if v.isEmpty || v == "—" {
+                    v = (ext?.isEmpty == false) ? (ext ?? "—") : ""
+                }
+                guard !v.isEmpty else { return nil }
                 let minOS = (i["min_ios"] as? String) ?? (i["minimumOsVersion"] as? String)
-                let ext = (i["external_id"] as? String) ?? (i["externalVersionId"] as? String)
                 return DecryptVersion(
                     v: v,
                     current: (i["current"] as? Bool) ?? false,
@@ -569,7 +578,8 @@ struct DecryptView: View {
                         IPadnDecryptAppRow(
                             app: app,
                             onGet: {
-                                IPadnDecryptPipeline.get(app)
+                                // Always pick a build first (Timbrd/Bilin/iosdump + Store history).
+                                versionsApp = app
                             },
                             onVersions: {
                                 detailPath.append(app.asIPadnStoreApp)
@@ -650,7 +660,21 @@ struct DecryptView: View {
         guard !q.isEmpty else { return }
         DecryptSearchHistory.remember(q)
         recentSearches = DecryptSearchHistory.load()
-        Task { await c.search(q) }
+        let openVersions = shouldAutoOpenVersions(for: q)
+        Task {
+            await c.search(q)
+            // App Store link / bare App ID → one hit: open the Versions sheet immediately.
+            if openVersions, c.results.count == 1, let app = c.results.first {
+                versionsApp = app
+            }
+        }
+    }
+
+    /// True for apps.apple.com links or numeric App IDs (optionally with a version id).
+    private func shouldAutoOpenVersions(for raw: String) -> Bool {
+        if DecryptClient.isStoreLink(raw) { return true }
+        if let parsed = try? IPadnSearchQuery.parse(raw), case .appID = parsed { return true }
+        return false
     }
 
     /// Soft-check that Account already has an iPadn store session (no remint).
@@ -1128,11 +1152,11 @@ private struct DecryptVersionsSheet: View {
                             }()
                             Button {
                                 if DecryptChannel.current == .telegram {
-                                    c.start(url: app.url, version: v.v, display: app.name)
+                                    c.start(url: app.url, version: v.externalId ?? v.v, display: app.name)
                                 } else {
-                                    DeviceDecryptService.shared.decryptFromSearch(
+                                    // Prefer Downloads queue + Mac/companion path with externalVersionId.
+                                    IPadnDecryptPipeline.get(
                                         app,
-                                        version: v.v,
                                         externalVersionId: v.externalId
                                     )
                                 }
