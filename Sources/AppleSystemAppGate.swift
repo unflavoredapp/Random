@@ -2,8 +2,7 @@
 // Brand: Tetherless · https://tetherless.dev
 //  AppleSystemAppGate.swift
 //  Refuse Apple first-party / system App Store titles (TestFlight, App Store, …)
-//  before Store SAP / Mac unfairplay — those paths can hard-fail with opaque JS
-//  errors like "Maximum call stack size exceeded".
+//  before Store SAP / Mac unfairplay — they are not decryptable third-party apps.
 //
 
 import Foundation
