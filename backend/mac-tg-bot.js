@@ -192,13 +192,25 @@ function displayAppVersion({ versionHint, versionLabel, ipaVersion } = {}) {
 }
 
 /** Progress-card stage lines — cruel reminders that you suck at sideloading. */
-/** Clean a backend say() / stage line for the progress-card terminal. */
+/**
+ * Clean a backend say() / stage line for the progress-card terminal.
+ * Public-facing names only: ipatool→TetherTool, unfairplay→Tetherless, FairPlay→trustC0re.
+ */
 function cleanTermLine(raw) {
   return String(raw || "")
     .replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "")
     .replace(/\r/g, "")
     .split("\n")
-    .map((l) => l.replace(/[^\x20-\x7E]+/g, " ").replace(/\s+/g, " ").trim())
+    .map((l) =>
+      l
+        .replace(/[^\x20-\x7E]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .replace(/\bipatool\b/gi, "TetherTool")
+        .replace(/\bunfairplay\b/gi, "Tetherless")
+        .replace(/\bFairPlay\b/g, "trustC0re")
+        .replace(/\bfairplay\b/gi, "trustC0re")
+    )
     .filter(Boolean)[0] || "";
 }
 

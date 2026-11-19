@@ -54,7 +54,7 @@ const BRAND_ICON_TOP = 36;
 
 const TERM_FONT = "Menlo, Monaco, Consolas, monospace";
 
-/** Transparent terminal pane — live backend say() lines. */
+/** Transparent terminal pane — live backend say() lines (no Mac window chrome). */
 function terminalLogSvg({ logLines, W, H, rightLeft }) {
   const lines = (Array.isArray(logLines) ? logLines : [])
     .map((l) => sanitize(String(l || ""), 56))
@@ -66,8 +66,8 @@ function terminalLogSvg({ logLines, W, H, rightLeft }) {
   const panelX = 40;
   const panelY = 108;
   const lineH = 28;
-  const padTop = 44;
-  const panelH = padTop + lines.length * lineH + 18;
+  const padTop = 22;
+  const panelH = padTop + lines.length * lineH + 16;
   const rx = 14;
 
   let body = "";
@@ -90,10 +90,6 @@ function terminalLogSvg({ logLines, W, H, rightLeft }) {
     </linearGradient>
   </defs>
   <rect x="${panelX}" y="${panelY}" width="${panelW}" height="${panelH}" rx="${rx}" ry="${rx}" fill="url(#termGlass)" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1.5"/>
-  <circle cx="${panelX + 22}" cy="${panelY + 20}" r="5" fill="#ff5f57" fill-opacity="0.85"/>
-  <circle cx="${panelX + 40}" cy="${panelY + 20}" r="5" fill="#febc2e" fill-opacity="0.85"/>
-  <circle cx="${panelX + 58}" cy="${panelY + 20}" r="5" fill="#28c840" fill-opacity="0.85"/>
-  <text x="${panelX + 78}" y="${panelY + 25}" fill="#7a8699" font-family="${TERM_FONT}" font-size="14" font-weight="600">backend</text>
   ${body}
 </svg>`);
 }
