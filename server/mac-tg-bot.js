@@ -19,6 +19,7 @@ const fairplayBackends = require("./fairplayBackends");
 const ipaCache = require("./mac-tg-ipa-cache");
 const urlLog = require("./mac-tg-url-log");
 const { renderProgressBanner, renderDownloadThumb } = require("./mac-tg-progress-banner");
+const publicDl = require("./mac-tg-public-dl");
 
 const API_ROOT = String(process.env.TELEGRAM_API_ROOT || "https://api.telegram.org").replace(/\/+$/, "");
 const LOCAL_API =
@@ -28,8 +29,10 @@ const TG_DOC_MAX = Math.max(
   1,
   Number(process.env.TELEGRAM_UPLOAD_MAX_MB || (LOCAL_API ? 2000 : 50))
 ) * 1024 * 1024;
+/** Telegram Premium hard cap for a single document. */
+const TG_PREMIUM_DOC_MAX = 4 * 1024 * 1024 * 1024;
 const TG_GETFILE_MAX = LOCAL_API
-  ? Math.max(TG_DOC_MAX, 4 * 1024 * 1024 * 1024)
+  ? Math.max(TG_DOC_MAX, TG_PREMIUM_DOC_MAX)
   : 20 * 1024 * 1024;
 
 const BOT_TOKEN = String(process.env.TELEGRAM_BOT_TOKEN || "").trim();
@@ -1494,6 +1497,10 @@ async function decryptStoreUrl(chatId, link, vreq) {
     if (typeof fairplayBackends.unlockKeychain === "function") {
       fairplayBackends.unlockKeychain();
     }
+    if (typeof fairplayBackends.preflightDecrypt === "function") {
+      const pre = fairplayBackends.preflightDecrypt({});
+      if (!pre.ok) throw new Error(pre.error);
+    }
     // Establish the single progress photo BEFORE any backend say() ticks —
     // starting prep in parallel used to race and send duplicate banners.
     await card.start(link);
@@ -1586,6 +1593,32 @@ async function deliverResult(chatId, result, opts = {}) {
 
   if (card) await card.setStage("Uploading…", 92);
 
+  // Telegram Premium hard-caps documents at 4 GB — stage a Mac download link instead.
+  if (bytes > TG_PREMIUM_DOC_MAX) {
+    const linkSent = await deliverOversizedViaLink(chatId, {
+      diskPath: keep,
+      fileName,
+      caption,
+      name,
+      bytes,
+      storeUrl,
+    }, { card });
+    if (!linkSent || !linkSent.ok) {
+      const why = (linkSent && linkSent.description) || "download link failed";
+      if (card) await card.fail(why);
+      else {
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text:
+            `Decrypted (${mb} MB) but over Telegram’s 4 GB cap and no public download base.\n` +
+            `${String(why).slice(0, 300)}\n\nSaved on Mac:\n\`${keep}\``,
+          parse_mode: "Markdown",
+        });
+      }
+    }
+    return;
+  }
+
   // Sharp card → IPA document (same message). Download-arrow thumb = native TG download.
   const sent = await deliverIpaAsDocument(chatId, {
     diskPath: keep,
@@ -1614,6 +1647,68 @@ async function deliverResult(chatId, result, opts = {}) {
       });
     }
   }
+}
+
+/**
+ * IPA larger than Telegram’s 4 GB document cap → tokenized HTTPS download
+ * (requires mac-ssh.sh api / cloudflared + MAC_PUBLIC_BASE or live tunnel URL).
+ */
+async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
+  const bytes = pending.bytes || 0;
+  const gb = (bytes / (1024 ** 3)).toFixed(2);
+  const fileName = displayIpaFileName(pending.fileName || "App.ipa");
+  let staged;
+  try {
+    staged = publicDl.stageIpa(pending.diskPath, { fileName, bytes });
+  } catch (e) {
+    return { ok: false, description: String((e && e.message) || e).slice(0, 200) };
+  }
+  const url = publicDl.downloadUrlFor(staged.token);
+  if (!url) {
+    return {
+      ok: false,
+      description:
+        "Set MAC_PUBLIC_BASE to your trycloudflare URL (or run: zsh ~/tetherless/server/mac-ssh.sh api)",
+    };
+  }
+  const caption = pending.caption || "";
+  const text =
+    `<b>${escapeHtml(pending.name || "App")}</b> · ${gb} GB\n` +
+    `Too large for Telegram’s 4 GB file cap.\n\n` +
+    `⬇️ <a href="${escapeHtml(url)}">Download IPA</a>\n` +
+    `<code>${escapeHtml(url)}</code>\n\n` +
+    (caption ? `${caption}\n\n` : "") +
+    `<i>Link expires in ~${Math.round(publicDl.TTL_MS / 60000)} minutes.</i>`;
+
+  const mid = card && card.messageId;
+  if (mid) {
+    // Keep the sharp card photo; put the link as caption + Patch/VIP.
+    await tgApi("editMessageCaption", {
+      chat_id: chatId,
+      message_id: mid,
+      caption: text,
+      parse_mode: "HTML",
+      reply_markup: resultKeyboard(),
+    }).catch(() => {});
+    await ensureIpaButtonTabs(chatId, mid, { caption: text, replyMarkup: resultKeyboard() });
+    if (card && typeof card.release === "function") await card.release();
+    console.log("[job] oversized IPA → download link on card", url);
+    return { ok: true, url, inPlace: true };
+  }
+
+  const sent = await tgApi("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: resultKeyboard(),
+  }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
+  if (card) await card.finish();
+  if (!(sent && sent.ok)) {
+    return { ok: false, description: (sent && sent.description) || "sendMessage failed" };
+  }
+  console.log("[job] oversized IPA → download link message", url);
+  return { ok: true, url, result: sent.result };
 }
 
 async function cacheIpaDelivery(pending, { fileName, caption, fileId, fileUniqueId, messageId, fromChatId, bytes, diskPath }) {
@@ -1824,8 +1919,18 @@ function resolveDropPath(name) {
 
 let offset = 0;
 
-/** Parallel decrypt workers (default 3). Set MAC_TG_WORKERS=1 for serial. */
-const MAX_WORKERS = Math.max(1, Math.min(8, Number(process.env.MAC_TG_WORKERS || 3) || 3));
+/** Parallel decrypt workers — auto 2 on ≤16 GB Macs unless MAC_TG_WORKERS is set. */
+const MAX_WORKERS = Math.max(
+  1,
+  Math.min(
+    8,
+    Number(
+      process.env.MAC_TG_WORKERS ||
+        (fairplayBackends.suggestedWorkers && fairplayBackends.suggestedWorkers(3)) ||
+        3
+    ) || 3
+  )
+);
 let activeWorkers = 0;
 const jobWaiters = [];
 /** One live decrypt at a time per chat — stops duplicate sharp cards. */

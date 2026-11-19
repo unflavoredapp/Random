@@ -242,7 +242,7 @@ cmd_status() {
     if [[ "$flag" == "0" || "$flag" == "false" || "$flag" == "off" ]]; then
       echo "upload: Premium session present but disabled (TELEGRAM_PREMIUM_UPLOAD=$flag)"
     else
-      echo "upload: Premium user session (≤4 GB + cloud storage)"
+      echo "upload: Premium user session (≤4 GB + cloud storage; larger → /d/ link)"
     fi
   else
     echo "upload: Bot API only — run: zsh $REPO/server/mac-ssh.sh session"
@@ -262,9 +262,23 @@ cmd_status() {
     echo -n "ipatool: "
     ipatool auth info 2>&1 | head -2 || echo "not logged in"
   fi
+  if [[ -f "$REPO/server/fairplayBackends.js" ]]; then
+    node -e '
+      const f=require("./server/fairplayBackends");
+      const st=f.backendStatus();
+      const r=f.hostResources();
+      console.log("unfairplay: "+(st.unfairplay&&st.unfairplay.ready?"ready":"not ready")+" · host="+st.host);
+      console.log("workers: suggested "+f.suggestedWorkers(3)+" (MAC_TG_WORKERS overrides)");
+      console.log("disk:    "+r.freeDiskGb.toFixed(1)+" GB free / "+(r.totalDisk/(1024**3)).toFixed(0)+" GB");
+      console.log("ram:     "+r.freeMemGb.toFixed(1)+" GB free / "+r.totalMemGb.toFixed(0)+" GB");
+    ' 2>/dev/null || echo "unfairplay: (status unavailable)"
+  fi
   if [[ -f "$REPO/server/mac-tg-ipa-cache.js" ]]; then
     node -e "const c=require('./server/mac-tg-ipa-cache'); console.log('cache:  '+c.list().length+' IPA(s) in '+c.CACHE_DIR)" 2>/dev/null \
       || echo "cache:  (unavailable)"
+  fi
+  if [[ -n "${MAC_PUBLIC_BASE:-}" ]]; then
+    echo "public: $MAC_PUBLIC_BASE"
   fi
 }
 

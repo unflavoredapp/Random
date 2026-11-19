@@ -52,7 +52,94 @@ function unlockKeychain() {
   return true;
 }
 
+function hostResources() {
+  const totalMem = os.totalmem();
+  const freeMem = os.freemem();
+  let freeDisk = 0;
+  let totalDisk = 0;
+  try {
+    // df -kP works on macOS/Linux; pick the volume for $HOME.
+    const home = os.homedir();
+    const out = spawnSync("df", ["-kP", home], { encoding: "utf8" });
+    const line = String(out.stdout || "")
+      .trim()
+      .split("\n")
+      .pop();
+    const parts = String(line || "").split(/\s+/);
+    // Filesystem 1024-blocks Used Available Capacity Mounted
+    if (parts.length >= 4) {
+      totalDisk = Number(parts[1] || 0) * 1024;
+      freeDisk = Number(parts[3] || 0) * 1024;
+    }
+  } catch {
+    /* ignore */
+  }
+  return {
+    totalMem,
+    freeMem,
+    totalDisk,
+    freeDisk,
+    totalMemGb: totalMem / (1024 ** 3),
+    freeMemGb: freeMem / (1024 ** 3),
+    freeDiskGb: freeDisk / (1024 ** 3),
+  };
+}
+
+/** Suggested parallel decrypt workers for this Mac (16 GB → 2). */
+function suggestedWorkers(fallback = 3) {
+  const env = Number(process.env.MAC_TG_WORKERS || 0);
+  if (env >= 1) return Math.max(1, Math.min(8, env));
+  const gb = hostResources().totalMemGb;
+  if (gb > 0 && gb <= 18) return 2;
+  if (gb <= 36) return 3;
+  return Math.max(1, Math.min(8, fallback));
+}
+
+/**
+ * Refuse jobs that clearly won't fit (need ~2.5× IPA for enc+dec+temp).
+ * @param {{ bytes?: number, minFreeGb?: number }} opts
+ */
+function preflightDecrypt(opts = {}) {
+  const res = hostResources();
+  const minFreeGb = Number(opts.minFreeGb || process.env.MAC_TG_MIN_FREE_DISK_GB || 8) || 8;
+  const bytes = Number(opts.bytes || 0) || 0;
+  const need = bytes > 0 ? bytes * 2.5 : minFreeGb * 1024 ** 3;
+  if (res.freeDisk > 0 && res.freeDisk < Math.max(need, minFreeGb * 1024 ** 3)) {
+    const free = res.freeDiskGb.toFixed(1);
+    const want = (need / 1024 ** 3).toFixed(1);
+    return {
+      ok: false,
+      error: `Not enough free disk on this Mac (${free} GB free, need ~${want} GB). Free space in ~/tetherless-ipa-cache and try again.`,
+      resources: res,
+    };
+  }
+  if (bytes > 0 && res.totalMem > 0 && bytes > res.totalMem * 0.85) {
+    return {
+      ok: false,
+      error: `IPA is ~${(bytes / 1024 ** 3).toFixed(1)} GB — too large for this Mac’s ${(res.totalMemGb).toFixed(0)} GB RAM (unfairplay may OOM).`,
+      resources: res,
+    };
+  }
+  return { ok: true, resources: res };
+}
+
+function friendlyDecryptError(err) {
+  const s = String((err && err.message) || err || "");
+  if (/timed out|Timeout/i.test(s)) {
+    return "Decrypt timed out on this Mac — try again, or free RAM/disk and re-run.";
+  }
+  if (/ENOMEM|out of memory|Cannot allocate|killed|SIGKILL|signal 9/i.test(s)) {
+    return "Decrypt ran out of memory on this Mac. Close other jobs or use a smaller app.";
+  }
+  if (/No space|ENOSPC|not enough free disk/i.test(s)) {
+    return "Mac disk is full — free space under ~/tetherless-ipa-cache and retry.";
+  }
+  return "";
+}
+
 function friendlyIpatoolError(err) {
+  const decryptHint = friendlyDecryptError(err);
+  if (decryptHint) return decryptHint;
   const s = String((err && err.message) || err || "");
   if (/keyring|keychain|failed to get account|failed to get item|specified item could not be found/i.test(s)) {
     return (
@@ -358,7 +445,7 @@ function runCmd(bin, args, { cwd, timeoutMs = 20 * 60 * 1000, env } = {}) {
       } catch {
         /* ignore */
       }
-      reject(new Error(`Timed out: ${bin} ${args.join(" ")}`));
+      reject(new Error(`Timed out after ${Math.round(timeoutMs / 60000)}m: ${path.basename(bin)}`));
     }, timeoutMs);
     child.stdout.on("data", (d) => {
       stdout += d.toString("utf8");
@@ -370,15 +457,14 @@ function runCmd(bin, args, { cwd, timeoutMs = 20 * 60 * 1000, env } = {}) {
       clearTimeout(timer);
       reject(e);
     });
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       clearTimeout(timer);
       if (code === 0) resolve({ stdout, stderr, code });
-      else
-        reject(
-          new Error(
-            `${bin} exited ${code}: ${stripAnsi(stderr || stdout).trim().slice(0, 400) || "no output"}`
-          )
-        );
+      else {
+        const detail = stripAnsi(stderr || stdout).trim().slice(0, 400) || signal || "no output";
+        const raw = new Error(`${bin} exited ${code}: ${detail}`);
+        reject(new Error(friendlyIpatoolError(raw) || raw.message));
+      }
     });
   });
 }
@@ -652,6 +738,10 @@ async function runUnfairplay({ url, dir, say, vreq }) {
 
   await ensureEncryptedSource({ url, dir, say, vreq });
 
+  const encBytes = fs.existsSync(enc) ? fs.statSync(enc).size : 0;
+  const pre = preflightDecrypt({ bytes: encBytes });
+  if (!pre.ok) throw new Error(pre.error);
+
   const args = ["decrypt", "--input", enc, "--output", out, "--force"];
   if (modelArg) {
     say(`Tetherless decrypt (--model ${modelArg})…`);
@@ -659,7 +749,17 @@ async function runUnfairplay({ url, dir, say, vreq }) {
   } else {
     say("Tetherless decrypt (Mac default model dir)…");
   }
-  await runCmd(bin, args, { cwd: dir });
+  // Bigger IPAs need longer — ~8 min/GB, floor 20m, cap 90m.
+  const timeoutMs = Math.min(
+    90 * 60 * 1000,
+    Math.max(20 * 60 * 1000, Math.round((encBytes / (1024 ** 3)) * 8 * 60 * 1000) || 20 * 60 * 1000)
+  );
+  say(`decrypt budget ${Math.round(timeoutMs / 60000)}m · free disk ${pre.resources.freeDiskGb.toFixed(1)} GB…`);
+  try {
+    await runCmd(bin, args, { cwd: dir, timeoutMs });
+  } catch (e) {
+    throw new Error(friendlyIpatoolError(e));
+  }
   if (!fs.existsSync(out) || fs.statSync(out).size < 100) {
     throw new Error("Tetherless decrypt produced no IPA");
   }
@@ -838,6 +938,10 @@ module.exports = {
   ensureEncryptedSource,
   unlockKeychain,
   friendlyIpatoolError,
+  friendlyDecryptError,
+  hostResources,
+  suggestedWorkers,
+  preflightDecrypt,
   adamFromStoreUrl,
   validateCredentialBin,
   credentialPath,
