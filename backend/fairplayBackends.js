@@ -147,6 +147,18 @@ function friendlyIpatoolError(err) {
       "WebSSH: zsh ~/tetherless/server/mac-ssh.sh unlock && ipatool auth login"
     );
   }
+  if (/two[- ]?factor|2fa|verification code|trusted device|enter the code/i.test(s)) {
+    return "App Store needs 2FA on this Mac — finish ipatool auth login over WebSSH, then retry.";
+  }
+  if (/rate.?limit|too many requests|429|try again later|slow down/i.test(s)) {
+    return "App Store rate-limited ipatool — wait a minute and paste the link again.";
+  }
+  if (/version.*(not found|unavailable|invalid)|external.version|no matching version/i.test(s)) {
+    return "That app version isn’t available for this Apple ID — try latest or another owned version.";
+  }
+  if (/network|connection reset|tls|timeout|temporary failure|EOF|ECONNRESET|ENETUNREACH|EAI_AGAIN/i.test(s)) {
+    return "App Store download hiccup (network). Retrying usually works — paste the link again.";
+  }
   // Paid / license / purchase failures — never dump STDQ / guest-bridge noise to chat.
   if (
     /failed to purchase|purchase item|STDQ|license|not owned|do not own|haven't purchased|have not purchased|no current price|payment|volumePurchase|store request|guest bridge|unknown format obj|password token|auth.*fail|forbidden|access denied/i.test(
@@ -162,6 +174,67 @@ function friendlyIpatoolError(err) {
   const oneLine = s.replace(/\s+/g, " ").trim();
   if (oneLine.length > 180) return oneLine.slice(0, 177) + "…";
   return oneLine || "App Store download failed";
+}
+
+/** True when a failed ipatool run is worth an automatic retry. */
+function isTransientIpatoolFailure(err) {
+  const s = String((err && err.message) || err || "");
+  return /network|connection reset|tls|timeout|temporary|EOF|ECONNRESET|ENETUNREACH|EAI_AGAIN|rate.?limit|429|try again later|hiccup/i.test(
+    s
+  );
+}
+
+/** True when --purchase failed but a plain download may still work (already owned). */
+function isPurchaseAlreadyOwnedFailure(err) {
+  const s = String((err && err.message) || err || "");
+  return /already.*(purchased|owned)|have already|duplicate.*purchase|item is free|no current price/i.test(s);
+}
+
+function ipatoolBin() {
+  return which(process.env.FAIRPLAY_IPATOOL_BIN || "ipatool");
+}
+
+/** @type {{ at: number, value: ReturnType<typeof ipatoolAuthStatusUncached> } | null} */
+let _ipatoolAuthCache = null;
+
+/**
+ * Best-effort `ipatool auth info` — used before downloads + in backend status.
+ * @returns {{ ready: boolean, email?: string, name?: string, raw?: string, error?: string }}
+ */
+function ipatoolAuthStatus(opts = {}) {
+  const ttl = Number(opts.ttlMs || 20000);
+  const force = !!opts.force;
+  if (!force && _ipatoolAuthCache && Date.now() - _ipatoolAuthCache.at < ttl) {
+    return _ipatoolAuthCache.value;
+  }
+  const value = ipatoolAuthStatusUncached();
+  _ipatoolAuthCache = { at: Date.now(), value };
+  return value;
+}
+
+function ipatoolAuthStatusUncached() {
+  const bin = ipatoolBin();
+  if (!bin) return { ready: false, error: "ipatool not on PATH" };
+  unlockKeychain();
+  const r = spawnSync(bin, ["auth", "info"], {
+    encoding: "utf8",
+    timeout: 20000,
+    env: process.env,
+  });
+  const out = stripAnsi(`${r.stdout || ""}\n${r.stderr || ""}`).trim();
+  if (r.status !== 0) {
+    return {
+      ready: false,
+      error: friendlyIpatoolError(out || `ipatool auth info exited ${r.status}`),
+      raw: out.slice(0, 240),
+    };
+  }
+  const email =
+    (out.match(/email[:\s]+([^\s]+@[^\s]+)/i) ||
+      out.match(/([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/i) ||
+      [])[1] || "";
+  const name = (out.match(/name[:\s]+(.+)/i) || [])[1]?.trim() || "";
+  return { ready: true, email, name, raw: out.slice(0, 240) };
 }
 
 const DEFAULT_CREDENTIAL_PATH = "/var/lib/tetherless/credential.bin";
@@ -409,6 +482,23 @@ function backendStatus() {
       url: process.env.UNFAIRD_URL || "",
       note: "Opt-in jailbreak daemon — skip",
     },
+    ipatool: (() => {
+      const bin = ipatoolBin();
+      if (!bin) {
+        return { ready: false, bin: "ipatool", error: "ipatool not on PATH", note: "Needed to fetch encrypted IPAs" };
+      }
+      const auth = ipatoolAuthStatus();
+      return {
+        ready: !!auth.ready,
+        bin,
+        email: auth.email || "",
+        name: auth.name || "",
+        error: auth.error || "",
+        note: auth.ready
+          ? `Logged in${auth.email ? " as " + auth.email : ""}`
+          : auth.error || "Run: ipatool auth login (after mac-ssh.sh unlock)",
+      };
+    })(),
   };
 }
 
@@ -430,7 +520,7 @@ function which(cmd) {
   return "";
 }
 
-function runCmd(bin, args, { cwd, timeoutMs = 20 * 60 * 1000, env } = {}) {
+function runCmd(bin, args, { cwd, timeoutMs = 20 * 60 * 1000, env, onLine } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
       cwd,
@@ -439,6 +529,26 @@ function runCmd(bin, args, { cwd, timeoutMs = 20 * 60 * 1000, env } = {}) {
     });
     let stdout = "";
     let stderr = "";
+    let lineBuf = "";
+    const feed = (chunk, stream) => {
+      const text = chunk.toString("utf8");
+      if (stream === "out") stdout += text;
+      else stderr += text;
+      if (typeof onLine !== "function") return;
+      lineBuf += text;
+      const parts = lineBuf.split(/\r?\n/);
+      lineBuf = parts.pop() || "";
+      for (const line of parts) {
+        const clean = stripAnsi(line).trim();
+        if (clean) {
+          try {
+            onLine(clean);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    };
     const timer = setTimeout(() => {
       try {
         child.kill("SIGKILL");
@@ -447,18 +557,24 @@ function runCmd(bin, args, { cwd, timeoutMs = 20 * 60 * 1000, env } = {}) {
       }
       reject(new Error(`Timed out after ${Math.round(timeoutMs / 60000)}m: ${path.basename(bin)}`));
     }, timeoutMs);
-    child.stdout.on("data", (d) => {
-      stdout += d.toString("utf8");
-    });
-    child.stderr.on("data", (d) => {
-      stderr += d.toString("utf8");
-    });
+    child.stdout.on("data", (d) => feed(d, "out"));
+    child.stderr.on("data", (d) => feed(d, "err"));
     child.on("error", (e) => {
       clearTimeout(timer);
       reject(e);
     });
     child.on("close", (code, signal) => {
       clearTimeout(timer);
+      if (lineBuf && typeof onLine === "function") {
+        const clean = stripAnsi(lineBuf).trim();
+        if (clean) {
+          try {
+            onLine(clean);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
       if (code === 0) resolve({ stdout, stderr, code });
       else {
         const detail = stripAnsi(stderr || stdout).trim().slice(0, 400) || signal || "no output";
@@ -513,15 +629,44 @@ function adamFromStoreUrl(url) {
 }
 
 /** ipatool ≥2.x uses --app-id (not legacy --adam-id). */
-function ipatoolDownloadArgs(encPath, { url, vreq } = {}) {
+function ipatoolDownloadArgs(encPath, { url, vreq, purchase = true } = {}) {
   const adam = adamFromStoreUrl(url);
   const platform = String(process.env.FAIRPLAY_IPATOOL_PLATFORM || "iphone").trim();
-  const args = ["download", "--purchase", "--non-interactive", "-o", encPath];
+  const args = ["download", "--non-interactive", "-o", encPath];
+  if (purchase) args.splice(1, 0, "--purchase");
   if (platform) args.push("--platform", platform);
   if (adam) args.push("--app-id", adam);
   else args.push(String(url || "").trim());
   if (vreq) args.push("--external-version-id", String(vreq));
   return args;
+}
+
+/** Pick the newest .ipa in dir (ipatool sometimes ignores -o filename). */
+function newestIpaInDir(dir, preferPath) {
+  if (preferPath && fs.existsSync(preferPath) && fs.statSync(preferPath).size >= 100) {
+    return preferPath;
+  }
+  let best = "";
+  let bestM = 0;
+  try {
+    for (const f of fs.readdirSync(dir)) {
+      if (!/\.ipa$/i.test(f)) continue;
+      const full = path.join(dir, f);
+      try {
+        const st = fs.statSync(full);
+        if (st.size < 100) continue;
+        if (st.mtimeMs >= bestM) {
+          bestM = st.mtimeMs;
+          best = full;
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return best;
 }
 
 function loadIpaCache() {
@@ -536,7 +681,7 @@ function loadIpaCache() {
  * Ensure dir/encrypted-source.ipa exists:
  *   1) already in job dir
  *   2) encrypted disk cache (skip Apple download)
- *   3) ipatool download → save into encrypted cache
+ *   3) ipatool download (auth preflight · retries · collect IPA) → encrypted cache
  */
 async function ensureEncryptedSource({ url, dir, say, vreq }) {
   const enc = path.join(dir, "encrypted-source.ipa");
@@ -554,7 +699,7 @@ async function ensureEncryptedSource({ url, dir, say, vreq }) {
     }
   }
 
-  const ipatool = which(process.env.FAIRPLAY_IPATOOL_BIN || "ipatool");
+  const ipatool = ipatoolBin();
   if (!ipatool) {
     throw new Error(
       "Need encrypted IPA at encrypted-source.ipa or FAIRPLAY_IPATOOL_BIN/ipatool on PATH"
@@ -562,15 +707,80 @@ async function ensureEncryptedSource({ url, dir, say, vreq }) {
   }
   // Keychain re-locks; unlock before every App Store download over SSH.
   if (unlockKeychain()) say("keychain unlocked…");
-  say("ipatool downloading encrypted IPA…");
-  try {
-    await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq }), { cwd: dir });
-  } catch (e) {
-    throw new Error(friendlyIpatoolError(e));
+
+  const auth = ipatoolAuthStatus({ force: true });
+  if (!auth.ready) {
+    throw new Error(auth.error || "ipatool is not logged in — run: ipatool auth login");
+  }
+  if (auth.email) say(`ipatool: ${auth.email}`);
+
+  const timeoutMs = Math.min(
+    90 * 60 * 1000,
+    Math.max(15 * 60 * 1000, Number(process.env.FAIRPLAY_IPATOOL_TIMEOUT_MS) || 45 * 60 * 1000)
+  );
+  const maxAttempts = Math.max(1, Math.min(4, Number(process.env.FAIRPLAY_IPATOOL_RETRIES) || 3));
+  let lastErr = null;
+  let purchase = true;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    say(
+      attempt === 1
+        ? `ipatool downloading encrypted IPA${adam ? " · " + adam : ""}…`
+        : `ipatool retry ${attempt}/${maxAttempts}${purchase ? "" : " (no --purchase)"}…`
+    );
+    try {
+      await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq, purchase }), {
+        cwd: dir,
+        timeoutMs,
+        onLine: (line) => {
+          // Surface useful progress; skip noisy JSON blobs.
+          if (line.length > 160) return;
+          if (/^(error|failed|panic)/i.test(line)) say(line.slice(0, 120));
+          else if (/%|download|purchas|writing|done|success|app.?id/i.test(line)) {
+            say(line.slice(0, 120));
+          }
+        },
+      });
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+      if (purchase && isPurchaseAlreadyOwnedFailure(e)) {
+        purchase = false;
+        say("already owned — retrying ipatool without --purchase…");
+        continue;
+      }
+      if (attempt < maxAttempts && isTransientIpatoolFailure(e)) {
+        const waitMs = 1500 * attempt;
+        say(`ipatool transient error — wait ${Math.round(waitMs / 1000)}s…`);
+        await sleep(waitMs);
+        unlockKeychain();
+        continue;
+      }
+      throw new Error(friendlyIpatoolError(e));
+    }
+  }
+  if (lastErr) throw new Error(friendlyIpatoolError(lastErr));
+
+  const found = newestIpaInDir(dir, enc);
+  if (!found) throw new Error("ipatool produced no encrypted IPA");
+  if (found !== enc) {
+    try {
+      fs.renameSync(found, enc);
+    } catch {
+      fs.copyFileSync(found, enc);
+      try {
+        fs.rmSync(found, { force: true });
+      } catch {
+        /* ignore */
+      }
+    }
   }
   if (!fs.existsSync(enc) || fs.statSync(enc).size < 100) {
     throw new Error("ipatool produced no encrypted IPA");
   }
+  const mb = (fs.statSync(enc).size / (1024 * 1024)).toFixed(1);
+  say(`encrypted IPA ready · ${mb} MB`);
 
   if (ipaCache && adam) {
     try {
@@ -939,6 +1149,9 @@ module.exports = {
   unlockKeychain,
   friendlyIpatoolError,
   friendlyDecryptError,
+  ipatoolBin,
+  ipatoolAuthStatus,
+  isTransientIpatoolFailure,
   hostResources,
   suggestedWorkers,
   preflightDecrypt,
