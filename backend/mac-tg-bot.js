@@ -650,7 +650,7 @@ function createProgressCard(chatId) {
       iconPath,
       dest: bannerFile(),
       tag: "delvek",
-      brand: "DELVEK",
+      brand: "DELvEK.NeT",
       done: !!done,
     });
   }
