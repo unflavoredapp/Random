@@ -495,7 +495,7 @@ function extractIpaIcon(ipaPath, destPath) {
 }
 
 /**
- * Telegram document thumbnail: this build’s icon + white download arrow.
+ * Telegram document thumbnail: this build’s icon only (no download arrow).
  * Prefer an IPA-extracted icon (older builds) over today’s App Store art.
  */
 async function buildIpaDocumentThumb(storeUrl, iconOverride) {
@@ -2136,7 +2136,7 @@ async function deliverResult(chatId, result, opts = {}) {
     return;
   }
 
-  // Sharp card → IPA document (same message). Download-arrow thumb = native TG download.
+  // Sharp card → IPA document (same message). Clean app-icon thumb; TG draws download.
   const sent = await deliverIpaAsDocument(chatId, {
     diskPath: keep,
     fileName,
@@ -2286,7 +2286,7 @@ async function dropProgressCard(card, cardMid, chatId) {
 
 /**
  * Finish delivery: sharp progress card disappears into the IPA document
- * (editMessageMedia photo→document — download-arrow thumb + Patch/VIP).
+ * (editMessageMedia photo→document — clean app-icon thumb + Patch/VIP).
  * Large files: Premium-upload for a file_id, then edit the card with that id
  * and delete the temporary upload bubble.
  */
