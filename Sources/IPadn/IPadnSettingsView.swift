@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import UIKit
 import UserNotifications
 
 struct IPadnSettingsView: View {
@@ -304,49 +305,119 @@ private struct PhoneDecryptWorkerInline: View {
     }
 }
 
-/// Override `as_site_base` so Store/Telegram/companion jobs hit a Mac FairPlay host.
+/// Override `as_site_base` so Store/Telegram/companion jobs hit the Mac HTTPS API
+/// (`mac-https-api.js` behind cloudflared — not tetherless.dev).
 private struct FairPlayDecryptHostField: View {
     @AppStorage("as_site_base") private var siteBase = ""
     @AppStorage("tetherless.decrypt.macOnly") private var macOnly = true
     @State private var draft = ""
+    @State private var note = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle("Mac decrypt only (skip on-device companion FairPlay)", isOn: $macOnly)
                 .font(.footnote)
-            TextField("https://mac-host.example/", text: $draft)
+            TextField("Mac API URL (https://….trycloudflare.com/)", text: $draft)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
                 .font(.footnote.monospaced())
-                .onAppear { draft = siteBase }
+                .onAppear {
+                    draft = siteBase
+                    if Self.isDeadLookingHost(siteBase) {
+                        note = "Previous Mac tunnel may be dead — Refresh clears it, then paste a new Mac API URL."
+                    }
+                }
             HStack {
-                Button("Save host") {
-                    let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    siteBase = trimmed
-                    draft = trimmed
+                Button("Save Mac API") {
+                    saveMacAPI(draft)
+                }
+                .buttonStyle(.borderedProminent)
+                Button("Paste") {
+                    if let clip = UIPasteboard.general.string?
+                        .trimmingCharacters(in: .whitespacesAndNewlines),
+                       !clip.isEmpty {
+                        draft = Self.normalizeMacAPIURL(clip)
+                        saveMacAPI(draft)
+                    } else {
+                        note = "Clipboard is empty — copy the URL from mac-ssh.sh api / status first."
+                    }
+                }
+                .buttonStyle(.bordered)
+            }
+            HStack {
+                Button("Clear dead host") {
+                    clearHost(reason: "Cleared. Run: zsh ~/tetherless/server/mac-ssh.sh api — then Paste the printed Mac API URL.")
                 }
                 .buttonStyle(.bordered)
                 Button("Use tetherless.dev") {
-                    siteBase = ""
-                    draft = ""
+                    clearHost(reason: "Using tetherless.dev (not MacDuty unfairplay).")
                 }
                 .buttonStyle(.bordered)
             }
             Text(
                 siteBase.isEmpty
-                    ? "Using default tetherless.dev — set your Mac Cloudflare / HTTPS URL for MacDuty."
-                    : "Mac host: \(siteBase)"
+                    ? "No Mac API set — Mac decrypt needs the live trycloudflare URL from mac-ssh.sh api."
+                    : "Mac API: \(siteBase)"
             )
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+            if !note.isEmpty {
+                Text(note)
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            }
         }
+    }
+
+    private func saveMacAPI(_ raw: String) {
+        let normalized = Self.normalizeMacAPIURL(raw)
+        guard !normalized.isEmpty else {
+            note = "Paste the Mac API URL from: zsh ~/tetherless/server/mac-ssh.sh api"
+            return
+        }
+        siteBase = normalized
+        draft = normalized
+        note = "Saved Mac API. Tap Refresh backend status."
+        NotificationCenter.default.post(name: .tetherlessMacAPIHostDidChange, object: normalized)
+    }
+
+    private func clearHost(reason: String) {
+        siteBase = ""
+        draft = ""
+        note = reason
+        NotificationCenter.default.post(name: .tetherlessMacAPIHostDidChange, object: "")
+    }
+
+    static func normalizeMacAPIURL(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if s.isEmpty { return "" }
+        if !s.hasPrefix("http://"), !s.hasPrefix("https://") {
+            s = "https://" + s
+        }
+        // Prefer HTTPS for App Transport; trycloudflare is always https.
+        if s.hasPrefix("http://"), s.lowercased().contains("trycloudflare.com") {
+            s = "https://" + s.dropFirst("http://".count)
+        }
+        if !s.hasSuffix("/") { s += "/" }
+        return s
+    }
+
+    static func isDeadLookingHost(_ raw: String) -> Bool {
+        let lower = raw.lowercased()
+        return lower.contains("trycloudflare.com")
     }
 }
 
-/// Shows which FairPlay backends the site reports as configured.
+extension Notification.Name {
+    static let tetherlessMacAPIHostDidChange = Notification.Name("tetherless.macAPIHostDidChange")
+}
+
+/// Shows which FairPlay backends the Mac API / site reports as configured.
 private struct DecryptBackendsStatusRow: View {
+    @AppStorage("as_site_base") private var siteBase = ""
     @State private var lines: [String] = ["Tap Refresh"]
     @State private var busy = false
 
@@ -354,7 +425,7 @@ private struct DecryptBackendsStatusRow: View {
         ForEach(lines, id: \.self) { line in
             Text(line)
                 .font(.caption.monospaced())
-                .foregroundStyle(.secondary)
+                .foregroundStyle(lineHasError(line) ? Color.orange : Color.secondary)
                 .textSelection(.enabled)
         }
         Button(busy ? "Refreshing…" : "Refresh backend status") {
@@ -362,26 +433,50 @@ private struct DecryptBackendsStatusRow: View {
         }
         .disabled(busy)
         .task { await refresh() }
+        .onReceive(NotificationCenter.default.publisher(for: .tetherlessMacAPIHostDidChange)) { _ in
+            Task { await refresh() }
+        }
+    }
+
+    private func lineHasError(_ line: String) -> Bool {
+        let l = line.lowercased()
+        return l.contains("could not be found")
+            || l.contains("dead")
+            || l.contains("failed")
+            || l.contains("timed out")
+            || l.hasPrefix("http ")
     }
 
     private func refresh() async {
         busy = true
         defer { busy = false }
+        let configured = siteBase.trimmingCharacters(in: .whitespacesAndNewlines)
+        if configured.isEmpty {
+            lines = [
+                "No Mac API URL — run on the Mac:",
+                "zsh ~/tetherless/server/mac-ssh.sh api",
+                "Then Paste the printed https://….trycloudflare.com/ URL.",
+            ]
+            return
+        }
         do {
             let base = DecryptClient.siteBase
             guard !base.isEmpty, let url = URL(string: base + "api/decrypt/backends") else {
-                lines = ["No site base configured"]
+                lines = ["Bad Mac API URL"]
                 return
             }
             let (data, resp) = try await URLSession.shared.data(from: url)
             let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
             guard code < 400,
                   let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                lines = ["HTTP \(code)"]
+                lines = ["Mac API HTTP \(code) — is mac-https-api running?"]
                 return
             }
             let order = (json["backends"] as? [String]) ?? []
-            var out: [String] = ["Order: " + (order.isEmpty ? "(none)" : order.joined(separator: " → "))]
+            var out: [String] = ["Mac API OK · Order: " + (order.isEmpty ? "(none)" : order.joined(separator: " → "))]
+            if let macApi = (json["macApiUrl"] as? String) ?? (json["publicBase"] as? String), !macApi.isEmpty {
+                out.append("Public: \(macApi)")
+            }
             if let status = json["status"] as? [String: Any] {
                 if let host = status["host"] as? String, !host.isEmpty {
                     out.append("Host: \(host)" + ((status["macHost"] as? Bool) == true ? " (enroll+decrypt here)" : ""))
@@ -408,8 +503,29 @@ private struct DecryptBackendsStatusRow: View {
             }
             lines = out
         } catch {
-            lines = [error.localizedDescription]
+            let msg = error.localizedDescription
+            // Dead trycloudflare tunnels show "hostname could not be found" — clear so Mac API can be set fresh.
+            if isUnreachableHostError(msg), FairPlayDecryptHostField.isDeadLookingHost(configured) {
+                siteBase = ""
+                lines = [
+                    "Dead Mac tunnel cleared (hostname not found).",
+                    "On the Mac: zsh ~/tetherless/server/mac-ssh.sh api",
+                    "Copy the new https://….trycloudflare.com/ → Paste → Save Mac API.",
+                ]
+                NotificationCenter.default.post(name: .tetherlessMacAPIHostDidChange, object: "")
+            } else {
+                lines = [msg]
+            }
         }
+    }
+
+    private func isUnreachableHostError(_ msg: String) -> Bool {
+        let l = msg.lowercased()
+        return l.contains("hostname could not be found")
+            || l.contains("nodename nor servname")
+            || l.contains("could not resolve")
+            || l.contains("a server with the specified hostname")
+            || l.contains("not known")
     }
 }
 
@@ -436,7 +552,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Server · FairPlay host")
         } footer: {
-            Text("Preferred: run the site on a rented Apple Silicon Mac (FAIRPLAY_HOST=mac, DECRYPT_BACKENDS=unfairplay) with Tetherless enrolled. Set Decrypt site URL only if that Mac (or another host) serves the Tetherless site API. Leave blank for tetherless.dev. No jailbreak or TrollStore.")
+            Text("MacDuty: zsh ~/tetherless/server/mac-ssh.sh api → paste the printed Mac API URL here (Save Mac API). Dead trycloudflare hosts are cleared on Refresh. Leave empty only if you want tetherless.dev instead of Mac unfairplay. No jailbreak or TrollStore.")
         }
 
         Section {

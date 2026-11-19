@@ -40,7 +40,7 @@ enum DecryptMacRouting {
         if !macSiteConfigured {
             DecryptClient.shared.phase = .failed
             DecryptClient.shared.error =
-                "Set Decrypt site URL to your Mac (Cloudflare / HTTPS) under Account › FairPlay host."
+                "Set Mac API URL under Account › FairPlay Decrypt (run: zsh ~/tetherless/server/mac-ssh.sh api)."
             DecryptClient.shared.message = DecryptClient.shared.error ?? ""
             return
         }
