@@ -3,9 +3,8 @@
 /**
  * DELvEK progress card via `sharp`.
  *
- * Left: Delvek icon + DELVEK · app name · cruel roast line
- * Mid: bigger Tetherless mark toward the progress circle + Made by Tetherless.Dev
- * Right: app icon with Home Screen circular % ring
+ * Left: Delvek icon + DELVEK · cruel roast · centered-lower Tetherless mark
+ * Right: app name above icon · Home Screen % ring · version by the divider
  * No hashtag · no delvek.net footer
  */
 const fs = require("fs");
@@ -44,23 +43,22 @@ function sharpTag(tag) {
   );
 }
 
-/** Bigger Tetherless mark, shifted toward the progress circle. */
-const CREDIT_ICON = 160;
-const CREDIT_ICON_LEFT = 250;
-const CREDIT_ICON_TOP = 300;
+/** Tetherless mark — centered in the left panel, lower on the card. */
+const CREDIT_ICON = 148;
+const CREDIT_ICON_LEFT = 164; // (left panel ~552 center) − size/2 ≈ (276 − 74)
+const CREDIT_ICON_TOP = 390;
 
 const BRAND_ICON = 56;
 const BRAND_ICON_LEFT = 48;
 const BRAND_ICON_TOP = 36;
 
-function leftPanelSvg({ brand, title, stage, W, H, creditIconLeft, creditIconTop, creditIconSize }) {
+function leftPanelSvg({ brand, stage, W, H, creditIconLeft, creditIconTop, creditIconSize }) {
   const ix = creditIconLeft != null ? creditIconLeft : CREDIT_ICON_LEFT;
   const iy = creditIconTop != null ? creditIconTop : CREDIT_ICON_TOP;
   const isz = creditIconSize != null ? creditIconSize : CREDIT_ICON;
   const creditCx = ix + isz / 2;
-  const creditTy = iy + isz + 30;
+  const creditTy = iy + isz + 28;
   const brandTextX = BRAND_ICON_LEFT + BRAND_ICON + 16;
-  // Roast can be longer — wrap roughly via smaller font / wider max
   const stageSafe = sanitize(stage, 48);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
@@ -73,10 +71,31 @@ function leftPanelSvg({ brand, title, stage, W, H, creditIconLeft, creditIconTop
   </defs>
   <rect x="0" y="0" width="${Math.round(W * 0.52)}" height="${H}" fill="url(#leftFade)"/>
   <text x="${brandTextX}" y="74" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" letter-spacing="2">${brand}</text>
-  <text x="56" y="150" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="56" font-weight="700">${title}</text>
-  <text x="56" y="214" fill="#ffb4b4" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="600">${stageSafe}</text>
+  <text x="56" y="150" fill="#ffb4b4" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="600">${stageSafe}</text>
   <text x="${creditCx}" y="${creditTy}" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="600">Made by Tetherless.Dev</text>
   <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@DELvEKBot</text>
+</svg>`);
+}
+
+/** App name above the right-side icon + version by the divider (lower-left of right panel). */
+function rightMetaSvg({ title, version, W, H, rightLeft, iconLeft, iconTop, iconSize }) {
+  const name = sanitize(title || "App", 42);
+  const verRaw = String(version || "").trim().replace(/^v/i, "");
+  const ver = verRaw ? sanitize(`v${verRaw}`, 24) : "";
+  // Smaller font so longer App Store names fit above the icon.
+  const fontSize = name.length > 28 ? 26 : name.length > 18 ? 30 : 34;
+  const nameCx = iconLeft + iconSize / 2;
+  const nameY = Math.max(42, iconTop - 22);
+  const verX = rightLeft + 28;
+  const verY = H - 40;
+  return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+  <text x="${nameCx}" y="${nameY}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="${fontSize}" font-weight="700">${name}</text>
+  ${
+    ver
+      ? `<text x="${verX}" y="${verY}" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${ver}</text>`
+      : ""
+  }
 </svg>`);
 }
 
@@ -193,6 +212,7 @@ function placeholderIconSvg(S) {
  */
 async function renderProgressBanner({
   name,
+  version,
   stage,
   pct,
   iconPath,
@@ -208,9 +228,10 @@ async function renderProgressBanner({
 
   const W = 1200;
   const H = 630;
-  const S = 480;
+  // Slightly smaller icon so the full app name fits above it on the right.
+  const S = 440;
   const isDone = !!done;
-  const title = sanitize(name || "App", 26);
+  const title = String(name || "App").trim() || "App";
   const progress = sanitize(
     stage || (isDone ? "IPA ready. Sideloading skill: zero." : "You suck at sideloading."),
     48
@@ -221,11 +242,12 @@ async function renderProgressBanner({
   const rightLeft = Math.round(W * 0.46);
   const rightWidth = W - rightLeft;
   const iconLeft = rightLeft + Math.round((rightWidth - S) / 2);
-  const iconTop = Math.round((H - S) / 2);
+  // Leave room above for the app name.
+  const iconTop = Math.round((H - S) / 2) + 18;
 
-  // Tetherless mark sits in the gap toward the circle.
+  // Centered in the left panel, lower on the card.
   const creditSize = CREDIT_ICON;
-  const creditLeft = CREDIT_ICON_LEFT;
+  const creditLeft = Math.round((rightLeft - creditSize) / 2);
   const creditTop = CREDIT_ICON_TOP;
 
   try {
@@ -281,13 +303,27 @@ async function renderProgressBanner({
     layers.push({
       input: leftPanelSvg({
         brand: brandLabel,
-        title,
         stage: progress,
         W,
         H,
         creditIconLeft: creditLeft,
         creditIconTop: creditTop,
         creditIconSize: creditSize,
+      }),
+      left: 0,
+      top: 0,
+    });
+
+    layers.push({
+      input: rightMetaSvg({
+        title,
+        version: version || "",
+        W,
+        H,
+        rightLeft,
+        iconLeft,
+        iconTop,
+        iconSize: S,
       }),
       left: 0,
       top: 0,
@@ -300,7 +336,7 @@ async function renderProgressBanner({
       layers.push({ input: delvekRounded, left: BRAND_ICON_LEFT, top: BRAND_ICON_TOP });
     }
 
-    // Bigger Tetherless mark toward the circle.
+    // Tetherless mark — centered lower in the left panel.
     const creditIconPath = resolveTetherlessIcon();
     if (creditIconPath) {
       const creditRounded = await roundedPng(sharp, creditIconPath, creditSize);

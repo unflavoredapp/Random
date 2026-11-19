@@ -606,6 +606,7 @@ function createProgressCard(chatId) {
   let messageId = 0;
   let hasPhoto = false;
   let name = "App";
+  let version = "";
   let storeUrl = "";
   let iconPath = "";
   let bannerPath = "";
@@ -626,6 +627,7 @@ function createProgressCard(chatId) {
   async function makeBanner(stage, pct, { done } = {}) {
     return renderProgressBanner({
       name,
+      version,
       // Card copy = cruel sideloading roast (real stage stays in logs).
       stage: done
         ? "IPA ready. Sideloading skill: zero."
@@ -704,18 +706,25 @@ function createProgressCard(chatId) {
     get name() {
       return name;
     },
+    get version() {
+      return version;
+    },
     get storeUrl() {
       return storeUrl;
     },
     get messageId() {
       return messageId;
     },
-    async start(link, hintName) {
+    async start(link, hintName, opts = {}) {
       storeUrl = link || "";
-      const meta = link ? lookupStoreApp(link) : { name: "", iconPath: "" };
+      const meta = link ? lookupStoreApp(link) : { name: "", iconPath: "", version: "" };
       // Prefer short App Store title (drop “- Play Music Offline” style suffixes for the card).
       const rawName = hintName || meta.name || "App";
       name = String(rawName).split(/\s+[—\-–]\s+/)[0].trim() || rawName;
+      // Marketing version for the right-side label (not external-version-id).
+      const hintVer = String(opts.version || opts.versionLabel || "").trim().replace(/^v/i, "");
+      if (hintVer && !isExternalVersionId(hintVer)) version = hintVer;
+      else if (meta.version && !isExternalVersionId(meta.version)) version = meta.version;
       iconPath = (meta.iconPath && fs.existsSync(meta.iconPath) && meta.iconPath) || "";
       lastStage = "Fetching…";
       lastPct = 4;
@@ -729,6 +738,23 @@ function createProgressCard(chatId) {
           hasPhoto = true;
         }
       }
+    },
+    /** Update marketing version on the right-side card label and repaint. */
+    async setVersion(nextVer, stage, pct) {
+      if (closed) return;
+      const v = String(nextVer || "").trim().replace(/^v/i, "");
+      if (!v || isExternalVersionId(v)) return;
+      if (v === version) return;
+      version = v;
+      const p =
+        pct != null
+          ? Math.max(lastPct < 0 ? 0 : lastPct, Math.max(0, Math.min(99, Math.round(Number(pct) || 0))))
+          : lastPct < 0
+            ? 0
+            : lastPct;
+      lastPct = p;
+      if (stage) lastStage = stage;
+      await paintBanner(stage || lastStage || "Working…", p);
     },
     /** Swap to an IPA-extracted icon (this build’s artwork) and repaint. */
     async setIcon(nextIcon, stage, pct) {
@@ -1947,7 +1973,9 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
 
   const card = createProgressCard(chatId);
   if (!quiet) {
-    await card.start(entry.storeUrl || "", entry.name || "App");
+    await card.start(entry.storeUrl || "", entry.name || "App", {
+      version: entry.version || "",
+    });
     await card.setStage("Sending…", 90);
   }
 
@@ -2022,7 +2050,7 @@ async function decryptStoreUrl(chatId, link, vreq, opts = {}) {
     }
     // Establish the single progress photo BEFORE any backend say() ticks —
     // starting prep in parallel used to race and send duplicate banners.
-    await card.start(link);
+    await card.start(link, "", { versionLabel });
     await card.setStage("Fetching…", 8);
 
     await fairplayBackends.ensureEncryptedSource({
@@ -2099,6 +2127,9 @@ async function deliverResult(chatId, result, opts = {}) {
   const minIos = ipaMeta.minIos || "";
   const storeUrl = opts.storeUrl || "";
   const card = opts.card || null;
+  if (card && version) {
+    await card.setVersion(version).catch(() => {});
+  }
   if (isAppleSystemApp(storeUrl, bid)) {
     if (card) await card.fail("Apple system apps are not supported.");
     else {
