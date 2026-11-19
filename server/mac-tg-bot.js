@@ -192,21 +192,14 @@ function displayAppVersion({ versionHint, versionLabel, ipaVersion } = {}) {
 }
 
 /** Progress-card stage lines — cruel reminders that you suck at sideloading. */
-function cruelReminder(pct, _hint) {
-  const lines = [
-    "You suck at sideloading.",
-    "Sideloading owns you.",
-    "Still can't sideload? Cute.",
-    "This is what skill issue looks like.",
-    "AltStore is laughing at you.",
-    "Maybe learn to sideload first.",
-    "Decrypting because you can't.",
-    "Almost done. You're still bad at this.",
-    "IPA ready. Sideloading skill: zero.",
-  ];
-  const p = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
-  const i = Math.min(lines.length - 1, Math.floor(p / 12));
-  return lines[i];
+/** Clean a backend say() / stage line for the progress-card terminal. */
+function cleanTermLine(raw) {
+  return String(raw || "")
+    .replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\r/g, "")
+    .split("\n")
+    .map((l) => l.replace(/[^\x20-\x7E]+/g, " ").replace(/\s+/g, " ").trim())
+    .filter(Boolean)[0] || "";
 }
 
 /** Rewrite legacy Tetherless / DELvEK suffixes when re-sending from cache. */
@@ -613,6 +606,7 @@ function createProgressCard(chatId) {
   let lastEdit = 0;
   let lastPct = -1;
   let lastStage = "";
+  let termLog = []; // rolling backend lines for the transparent terminal
   let closed = false; // after IPA promote / clear — block late paints from resurrecting the card
   // Serialize paints — parallel start()+fromBackendLine used to send two photos.
   let paintChain = Promise.resolve();
@@ -624,14 +618,22 @@ function createProgressCard(chatId) {
     return bannerPath;
   }
 
+  function pushTerm(line) {
+    const t = cleanTermLine(line);
+    if (!t) return false;
+    if (termLog.length && termLog[termLog.length - 1] === t) return false;
+    termLog.push(t);
+    if (termLog.length > 8) termLog = termLog.slice(-8);
+    return true;
+  }
+
   async function makeBanner(stage, pct, { done } = {}) {
+    if (done) pushTerm("done — IPA ready");
     return renderProgressBanner({
       name,
       version,
-      // Card copy = cruel sideloading roast (real stage stays in logs).
-      stage: done
-        ? "IPA ready. Sideloading skill: zero."
-        : cruelReminder(pct, stage || lastStage),
+      stage: stage || lastStage || "",
+      logLines: termLog.length ? termLog.slice() : [stage || lastStage || "starting…"],
       pct: done ? 100 : pct,
       iconPath,
       dest: bannerFile(),
@@ -728,6 +730,8 @@ function createProgressCard(chatId) {
       iconPath = (meta.iconPath && fs.existsSync(meta.iconPath) && meta.iconPath) || "";
       lastStage = "Fetching…";
       lastPct = 4;
+      pushTerm("$ job start");
+      pushTerm("Fetching…");
       const ok = await paintBanner("Fetching…", 4);
       if (ok) return;
       // Single fallback photo — still no caption text under it.
@@ -782,24 +786,55 @@ function createProgressCard(chatId) {
       const p = Math.max(lastPct < 0 ? 0 : lastPct, raw);
       const now = Date.now();
       const stageChanged = stage && stage !== lastStage;
-      if (!stageChanged && p < lastPct + 3 && now - lastEdit < 1800) return;
+      const logged = stage ? pushTerm(stage) : false;
+      // Paint sooner when the terminal gets a new line; still throttle pct-only spam.
+      if (!stageChanged && !logged && p < lastPct + 3 && now - lastEdit < 1800) return;
+      if (!stageChanged && logged && now - lastEdit < 700) {
+        lastPct = p;
+        return;
+      }
       lastEdit = now;
       lastPct = p;
       if (stage) lastStage = stage;
       console.log("[job]", stage || lastStage, `${p}%`);
       await paintBanner(stage || lastStage, p);
     },
-    /** Map backend say() lines into card stages. */
+    /** Append backend say() to the terminal and nudge stage %. */
     async fromBackendLine(line) {
       const t = String(line || "");
-      if (/ipatool|download|encrypted IPA cache/i.test(t)) return this.setStage("Downloading…", 28);
-      if (/unfairplay|decrypt|FairPlay|model|Tetherless decrypt/i.test(t)) {
-        return this.setStage("Decrypting…", 55);
+      const logged = pushTerm(t);
+      let stage = lastStage || "Working…";
+      let pct = Math.max(lastPct < 0 ? 0 : lastPct, 12);
+      if (/ipatool|download|encrypted IPA cache/i.test(t)) {
+        stage = "Downloading…";
+        pct = 28;
+      } else if (/unfairplay|decrypt|FairPlay|model|Tetherless decrypt/i.test(t)) {
+        stage = "Decrypting…";
+        pct = 55;
+      } else if (/produced|done/i.test(t)) {
+        stage = "Decrypting…";
+        pct = 72;
+      } else if (/upload/i.test(t)) {
+        stage = "Uploading…";
+        pct = Math.max(lastPct, 80);
       }
-      if (/produced|done/i.test(t)) return this.setStage("Decrypting…", 72);
-      // Floor only — setStage keeps progress monotonic (won't drop below current %).
-      if (/upload/i.test(t)) return this.setStage("Uploading…", Math.max(lastPct, 80));
-      return this.setStage(lastStage || "Working…", Math.max(lastPct, 12));
+      // Force a paint when we got a new terminal line (bypass setStage's skip).
+      if (logged) {
+        const raw = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
+        const p = Math.max(lastPct < 0 ? 0 : lastPct, raw);
+        const now = Date.now();
+        if (now - lastEdit < 650 && p < lastPct + 2 && stage === lastStage) {
+          lastPct = p;
+          return;
+        }
+        lastEdit = now;
+        lastPct = p;
+        lastStage = stage;
+        console.log("[job]", stage, `${p}%`, cleanTermLine(t).slice(0, 60));
+        await paintBanner(stage, p);
+        return;
+      }
+      return this.setStage(stage, pct);
     },
     async setUploadPct(pct) {
       // Map file upload 0–100% into card band 80–99 (after decrypt ~72–78).
@@ -857,6 +892,7 @@ function createProgressCard(chatId) {
       // Allow 0% on failure only.
       lastPct = -1;
       lastPct = 0;
+      pushTerm(`error: ${String(err || "failed").slice(0, 80)}`);
       const img = await makeBanner("Failed", 0);
       if (img && messageId && hasPhoto) {
         await editMessageMediaBotApi(chatId, messageId, img, "");

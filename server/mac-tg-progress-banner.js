@@ -3,7 +3,7 @@
 /**
  * DELvEK progress card via `sharp`.
  *
- * Left: Delvek icon + DELVEK · cruel roast · centered-lower Tetherless mark
+ * Left: Delvek icon + DELVEK · transparent terminal log · centered-lower Tetherless mark
  * Right: app name above icon · Home Screen % ring · version by the divider
  * No hashtag · no delvek.net footer
  */
@@ -44,22 +44,67 @@ function sharpTag(tag) {
 }
 
 /** Tetherless mark — centered in the left panel, lower on the card. */
-const CREDIT_ICON = 148;
-const CREDIT_ICON_LEFT = 164; // (left panel ~552 center) − size/2 ≈ (276 − 74)
-const CREDIT_ICON_TOP = 390;
+const CREDIT_ICON = 132;
+const CREDIT_ICON_LEFT = 164;
+const CREDIT_ICON_TOP = 455;
 
 const BRAND_ICON = 56;
 const BRAND_ICON_LEFT = 48;
 const BRAND_ICON_TOP = 36;
 
-function leftPanelSvg({ brand, stage, W, H, creditIconLeft, creditIconTop, creditIconSize }) {
+const TERM_FONT = "Menlo, Monaco, Consolas, monospace";
+
+/** Transparent terminal pane — live backend say() lines. */
+function terminalLogSvg({ logLines, W, H, rightLeft }) {
+  const lines = (Array.isArray(logLines) ? logLines : [])
+    .map((l) => sanitize(String(l || ""), 56))
+    .filter(Boolean)
+    .slice(-6);
+  while (lines.length < 1) lines.push("$ waiting…");
+
+  const panelW = Math.min(500, Math.max(360, rightLeft - 72));
+  const panelX = 40;
+  const panelY = 108;
+  const lineH = 28;
+  const padTop = 44;
+  const panelH = padTop + lines.length * lineH + 18;
+  const rx = 14;
+
+  let body = "";
+  for (let i = 0; i < lines.length; i++) {
+    const y = panelY + padTop + i * lineH;
+    const isLast = i === lines.length - 1;
+    const fill = isLast ? "#7CFFB2" : "#8FA3B8";
+    const prefix = lines[i].startsWith("$") || lines[i].startsWith(">") ? "" : "> ";
+    body += `<text x="${panelX + 18}" y="${y}" fill="${fill}" font-family="${TERM_FONT}" font-size="17" font-weight="${
+      isLast ? "700" : "500"
+    }">${prefix}${lines[i]}</text>`;
+  }
+
+  return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="termGlass" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0c121c" stop-opacity="0.62"/>
+      <stop offset="100%" stop-color="#070a10" stop-opacity="0.48"/>
+    </linearGradient>
+  </defs>
+  <rect x="${panelX}" y="${panelY}" width="${panelW}" height="${panelH}" rx="${rx}" ry="${rx}" fill="url(#termGlass)" stroke="#ffffff" stroke-opacity="0.14" stroke-width="1.5"/>
+  <circle cx="${panelX + 22}" cy="${panelY + 20}" r="5" fill="#ff5f57" fill-opacity="0.85"/>
+  <circle cx="${panelX + 40}" cy="${panelY + 20}" r="5" fill="#febc2e" fill-opacity="0.85"/>
+  <circle cx="${panelX + 58}" cy="${panelY + 20}" r="5" fill="#28c840" fill-opacity="0.85"/>
+  <text x="${panelX + 78}" y="${panelY + 25}" fill="#7a8699" font-family="${TERM_FONT}" font-size="14" font-weight="600">backend</text>
+  ${body}
+</svg>`);
+}
+
+function leftPanelSvg({ brand, W, H, creditIconLeft, creditIconTop, creditIconSize }) {
   const ix = creditIconLeft != null ? creditIconLeft : CREDIT_ICON_LEFT;
   const iy = creditIconTop != null ? creditIconTop : CREDIT_ICON_TOP;
   const isz = creditIconSize != null ? creditIconSize : CREDIT_ICON;
   const creditCx = ix + isz / 2;
-  const creditTy = iy + isz + 28;
+  const creditTy = iy + isz + 26;
   const brandTextX = BRAND_ICON_LEFT + BRAND_ICON + 16;
-  const stageSafe = sanitize(stage, 48);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -71,7 +116,6 @@ function leftPanelSvg({ brand, stage, W, H, creditIconLeft, creditIconTop, credi
   </defs>
   <rect x="0" y="0" width="${Math.round(W * 0.52)}" height="${H}" fill="url(#leftFade)"/>
   <text x="${brandTextX}" y="74" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" letter-spacing="2">${brand}</text>
-  <text x="56" y="150" fill="#ffb4b4" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="600">${stageSafe}</text>
   <text x="${creditCx}" y="${creditTy}" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="600">Made by Tetherless.Dev</text>
   <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@DELvEKBot</text>
 </svg>`);
@@ -214,6 +258,7 @@ async function renderProgressBanner({
   name,
   version,
   stage,
+  logLines,
   pct,
   iconPath,
   dest,
@@ -232,12 +277,11 @@ async function renderProgressBanner({
   const S = 440;
   const isDone = !!done;
   const title = String(name || "App").trim() || "App";
-  const progress = sanitize(
-    stage || (isDone ? "IPA ready. Sideloading skill: zero." : "You suck at sideloading."),
-    48
-  );
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
   const brandLabel = sanitize(brand || "DELVEK", 18).toUpperCase();
+  const termLines = Array.isArray(logLines) && logLines.length
+    ? logLines
+    : [stage || (isDone ? "done" : "starting…")];
 
   const rightLeft = Math.round(W * 0.46);
   const rightWidth = W - rightLeft;
@@ -245,7 +289,7 @@ async function renderProgressBanner({
   // Leave room above for the app name.
   const iconTop = Math.round((H - S) / 2) + 18;
 
-  // Centered in the left panel, lower on the card.
+  // Centered in the left panel, lower on the card (under the terminal).
   const creditSize = CREDIT_ICON;
   const creditLeft = Math.round((rightLeft - creditSize) / 2);
   const creditTop = CREDIT_ICON_TOP;
@@ -303,12 +347,22 @@ async function renderProgressBanner({
     layers.push({
       input: leftPanelSvg({
         brand: brandLabel,
-        stage: progress,
         W,
         H,
         creditIconLeft: creditLeft,
         creditIconTop: creditTop,
         creditIconSize: creditSize,
+      }),
+      left: 0,
+      top: 0,
+    });
+
+    layers.push({
+      input: terminalLogSvg({
+        logLines: termLines,
+        W,
+        H,
+        rightLeft,
       }),
       left: 0,
       top: 0,
