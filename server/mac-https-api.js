@@ -171,7 +171,7 @@ async function runJob(j) {
     });
   } catch (e) {
     j.status = "error";
-    j.error = String((e && e.message) || e).slice(0, 200);
+    j.error = fairplayBackends.friendlyIpatoolError(e).slice(0, 200);
     j.msg = "Failed";
     console.warn("[api] job failed:", j.error);
   } finally {
