@@ -32,12 +32,36 @@
  * This module shells out / HTTP-calls those tools — it does not embed their crypto.
  */
 
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const https = require("https");
 const http = require("http");
 const { URL } = require("url");
+
+/** Unlock dedicated tetherless keychain so ipatool can read the Apple ID over SSH. */
+function unlockKeychain() {
+  const pass = String(process.env.TETHERLESS_KEYCHAIN_PASSWORD || "").trim();
+  const kc = path.join(os.homedir(), "Library/Keychains/tetherless.keychain-db");
+  if (!pass || !fs.existsSync(kc)) return false;
+  spawnSync("security", ["unlock-keychain", "-p", pass, kc], { stdio: "ignore" });
+  spawnSync("security", ["list-keychains", "-d", "user", "-s", kc], { stdio: "ignore" });
+  spawnSync("security", ["default-keychain", "-d", "user", "-s", kc], { stdio: "ignore" });
+  spawnSync("security", ["set-keychain-settings", "-t", "21600", "-l", kc], { stdio: "ignore" });
+  return true;
+}
+
+function friendlyIpatoolError(err) {
+  const s = String((err && err.message) || err || "");
+  if (/keyring|keychain|failed to get account|failed to get item|specified item could not be found/i.test(s)) {
+    return (
+      "App Store login missing on Mac (ipatool keychain). " +
+      "WebSSH: zsh ~/tetherless/server/mac-ssh.sh unlock && ipatool auth login"
+    );
+  }
+  return s;
+}
 
 const DEFAULT_CREDENTIAL_PATH = "/var/lib/tetherless/credential.bin";
 const DEFAULT_ENROLLMENT_PATH = "/var/lib/tetherless/fairplay-enrollment.bin";
@@ -436,8 +460,14 @@ async function ensureEncryptedSource({ url, dir, say, vreq }) {
       "Need encrypted IPA at encrypted-source.ipa or FAIRPLAY_IPATOOL_BIN/ipatool on PATH"
     );
   }
+  // Keychain re-locks; unlock before every App Store download over SSH.
+  if (unlockKeychain()) say("keychain unlocked…");
   say("ipatool downloading encrypted IPA…");
-  await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq }), { cwd: dir });
+  try {
+    await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq }), { cwd: dir });
+  } catch (e) {
+    throw new Error(friendlyIpatoolError(e));
+  }
   if (!fs.existsSync(enc) || fs.statSync(enc).size < 100) {
     throw new Error("ipatool produced no encrypted IPA");
   }
@@ -792,6 +822,8 @@ module.exports = {
   backendStatus,
   tryRemoteBackends,
   ensureEncryptedSource,
+  unlockKeychain,
+  friendlyIpatoolError,
   adamFromStoreUrl,
   validateCredentialBin,
   credentialPath,
