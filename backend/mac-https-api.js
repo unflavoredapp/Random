@@ -22,6 +22,7 @@ const path = require("path");
 const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
+const publicDl = require("./mac-tg-public-dl");
 
 const PORT = Number(process.env.MAC_API_PORT || 8787);
 const OPEN = String(process.env.MAC_API_OPEN || "1") !== "0";
@@ -179,6 +180,7 @@ async function handle(req, res) {
 
   if (p === "/" || p === "/health") {
     const fp = fairplayBackends.backendStatus();
+    const resHost = fairplayBackends.hostResources ? fairplayBackends.hostResources() : null;
     return json(res, 200, {
       ok: true,
       service: "tetherless-mac-https-api",
@@ -186,7 +188,34 @@ async function handle(req, res) {
       host: fp.host,
       unfairplay: !!(fp.unfairplay && fp.unfairplay.ready),
       model: !!(fp.enrollmentModel && fp.enrollmentModel.ready),
+      resources: resHost
+        ? {
+            freeDiskGb: Number(resHost.freeDiskGb.toFixed(2)),
+            totalMemGb: Number(resHost.totalMemGb.toFixed(2)),
+            freeMemGb: Number(resHost.freeMemGb.toFixed(2)),
+          }
+        : undefined,
     });
+  }
+
+  // Public tokenized IPA download (bot stages >4 GB files here).
+  const dlMatch = /^\/d\/([a-f0-9]+)$/i.exec(p);
+  if (dlMatch && req.method === "GET") {
+    publicDl.cleanExpired();
+    const entry = publicDl.getEntry(dlMatch[1]);
+    if (!entry || !fs.existsSync(entry.file)) {
+      return fail(res, 404, "Download expired — paste the App Store link again.");
+    }
+    const st = fs.statSync(entry.file);
+    res.writeHead(200, {
+      "Content-Type": "application/octet-stream",
+      "Content-Length": st.size,
+      "Content-Disposition": `attachment; filename="${String(entry.fileName || "App.ipa").replace(/"/g, "")}"`,
+      "Cache-Control": "private, max-age=60",
+      "Access-Control-Allow-Origin": "*",
+    });
+    fs.createReadStream(entry.file).pipe(res);
+    return;
   }
 
   if (p === "/api/decrypt/backends" && req.method === "GET") {
