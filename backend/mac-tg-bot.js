@@ -193,25 +193,44 @@ function displayAppVersion({ versionHint, versionLabel, ipaVersion } = {}) {
 
 /** Progress-card stage lines — cruel reminders that you suck at sideloading. */
 /**
- * Clean a backend say() / stage line for the progress-card terminal.
- * Public-facing names only: ipatool→TetherTool, unfairplay→Tetherless, FairPlay→trustC0re.
+ * Public terminal lines only — never echo raw backend say() (no host/model/ids/paths).
+ * Looks real; is a safe mock of the stage the user already sees on the %.
  */
+function mockTermLineForStage(stage, pct) {
+  const s = String(stage || "").toLowerCase();
+  const p = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
+  if (/fail|error/i.test(s)) return "error — job stopped";
+  if (/upload|send/i.test(s)) return p >= 95 ? "packaging IPA…" : "uploading to Telegram…";
+  if (/decrypt/i.test(s)) {
+    if (p >= 70) return "trustC0re unlock OK";
+    if (p >= 50) return "Tetherless decrypt…";
+    return "Tetherless prepare…";
+  }
+  if (/download/i.test(s)) return "TetherTool download…";
+  if (/fetch|start|work/i.test(s)) return p < 10 ? "$ job start" : "TetherTool fetch…";
+  if (/done|ready/i.test(s)) return "done — IPA ready";
+  return "working…";
+}
+
 function cleanTermLine(raw) {
-  return String(raw || "")
+  // Keep for callers that pass a short public stage label; strip anything leaky.
+  const t = String(raw || "")
     .replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "")
     .replace(/\r/g, "")
     .split("\n")
-    .map((l) =>
-      l
-        .replace(/[^\x20-\x7E]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim()
-        .replace(/\bipatool\b/gi, "TetherTool")
-        .replace(/\bunfairplay\b/gi, "Tetherless")
-        .replace(/\bFairPlay\b/g, "trustC0re")
-        .replace(/\bfairplay\b/gi, "trustC0re")
-    )
+    .map((l) => l.replace(/[^\x20-\x7E]+/g, " ").replace(/\s+/g, " ").trim())
     .filter(Boolean)[0] || "";
+  if (!t) return "";
+  // Drop lines that look like real backend dumps (paths, ids, hosts, models).
+  if (/[/\\]|(?:\bid=)|(?:model=)|(?:host)|(?:keychain)|(?:ssh)|(?:localhost)|(?:\d{6,})/i.test(t)) {
+    return "";
+  }
+  return t
+    .replace(/\bipatool\b/gi, "TetherTool")
+    .replace(/\bunfairplay\b/gi, "Tetherless")
+    .replace(/\bFairPlay\b/g, "trustC0re")
+    .replace(/\bfairplay\b/gi, "trustC0re")
+    .slice(0, 48);
 }
 
 /** Rewrite legacy Tetherless / DELvEK suffixes when re-sending from cache. */
@@ -299,6 +318,10 @@ const pendingDownloads = new Map();
  * Prefer editMessageReplyMarkup alone — editMessageCaption fails with
  * "message is not modified" when caption already matches and then drops markup.
  */
+function tgAlreadyOk(desc) {
+  return /message is not modified|exactly the same/i.test(String(desc || ""));
+}
+
 async function attachIpaChrome(chatId, messageId, { caption, replyMarkup } = {}) {
   const mid = Number(messageId);
   if (!chatId || !mid) return false;
@@ -309,7 +332,8 @@ async function attachIpaChrome(chatId, messageId, { caption, replyMarkup } = {})
     message_id: mid,
     reply_markup: markup,
   }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
-  if (markupOnly && markupOnly.ok) return true;
+  // Tabs already on the IPA → success (do NOT spawn a "DELvEK" reply).
+  if (markupOnly && (markupOnly.ok || tgAlreadyOk(markupOnly.description))) return true;
 
   if (caption) {
     const withCap = await tgApi("editMessageCaption", {
@@ -319,7 +343,7 @@ async function attachIpaChrome(chatId, messageId, { caption, replyMarkup } = {})
       parse_mode: "HTML",
       reply_markup: markup,
     }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
-    if (withCap && withCap.ok) return true;
+    if (withCap && (withCap.ok || tgAlreadyOk(withCap.description))) return true;
     console.warn(
       "[job] editMessageCaption failed:",
       (withCap && withCap.description) || "unknown"
@@ -350,14 +374,19 @@ async function sendIpaByFileId(chatId, fileId, caption, replyMarkup) {
   return r;
 }
 
-async function ensureIpaButtonTabs(chatId, messageId, { caption, replyMarkup } = {}) {
+async function ensureIpaButtonTabs(chatId, messageId, { caption, replyMarkup, allowReply } = {}) {
   const markup = replyMarkup || resultKeyboard();
   const mid = Number(messageId);
   if (await attachIpaChrome(chatId, mid, { caption, replyMarkup: markup })) return true;
-  // Visible fallback: reply under the IPA with the same tabs.
+  // Only reply when explicitly allowed — default OFF so we never duplicate
+  // Patch/Get VIP under an IPA that already has (or almost has) the tabs.
+  if (!allowReply) {
+    console.warn("[job] IPA tabs edit failed; skipping DELvEK.NeT reply to avoid duplicate");
+    return false;
+  }
   const reply = await tgApi("sendMessage", {
     chat_id: chatId,
-    text: "DELvEK",
+    text: "DELvEK.NeT",
     reply_to_message_id: mid,
     reply_markup: markup,
     disable_web_page_preview: true,
@@ -639,13 +668,20 @@ function createProgressCard(chatId) {
     return true;
   }
 
+  /** Stage-driven mock log — never dumps raw backend say(). */
+  function pushMockStage(stage, pct) {
+    return pushTerm(mockTermLineForStage(stage, pct));
+  }
+
   async function makeBanner(stage, pct, { done } = {}) {
-    if (done) pushTerm("done — IPA ready");
+    if (done) pushMockStage("done", 100);
     return renderProgressBanner({
       name,
       version,
       stage: stage || lastStage || "",
-      logLines: termLog.length ? termLog.slice() : [stage || lastStage || "starting…"],
+      logLines: termLog.length
+        ? termLog.slice()
+        : [mockTermLineForStage(stage || lastStage || "Fetching…", pct)],
       pct: done ? 100 : pct,
       iconPath,
       dest: bannerFile(),
@@ -742,8 +778,7 @@ function createProgressCard(chatId) {
       iconPath = (meta.iconPath && fs.existsSync(meta.iconPath) && meta.iconPath) || "";
       lastStage = "Fetching…";
       lastPct = 4;
-      pushTerm("$ job start");
-      pushTerm("Fetching…");
+      pushMockStage("Fetching…", 4);
       const ok = await paintBanner("Fetching…", 4);
       if (ok) return;
       // Single fallback photo — still no caption text under it.
@@ -798,7 +833,7 @@ function createProgressCard(chatId) {
       const p = Math.max(lastPct < 0 ? 0 : lastPct, raw);
       const now = Date.now();
       const stageChanged = stage && stage !== lastStage;
-      const logged = stage ? pushTerm(stage) : false;
+      const logged = stage ? pushMockStage(stage, p) : false;
       // Paint sooner when the terminal gets a new line; still throttle pct-only spam.
       if (!stageChanged && !logged && p < lastPct + 3 && now - lastEdit < 1800) return;
       if (!stageChanged && logged && now - lastEdit < 700) {
@@ -811,10 +846,12 @@ function createProgressCard(chatId) {
       console.log("[job]", stage || lastStage, `${p}%`);
       await paintBanner(stage || lastStage, p);
     },
-    /** Append backend say() to the terminal and nudge stage %. */
+    /**
+     * Map backend say() → stage/% only. Terminal shows safe mock lines —
+     * never the raw backend text (hosts, models, ids, paths).
+     */
     async fromBackendLine(line) {
       const t = String(line || "");
-      const logged = pushTerm(t);
       let stage = lastStage || "Working…";
       let pct = Math.max(lastPct < 0 ? 0 : lastPct, 12);
       if (/ipatool|download|encrypted IPA cache/i.test(t)) {
@@ -829,22 +866,9 @@ function createProgressCard(chatId) {
       } else if (/upload/i.test(t)) {
         stage = "Uploading…";
         pct = Math.max(lastPct, 80);
-      }
-      // Force a paint when we got a new terminal line (bypass setStage's skip).
-      if (logged) {
-        const raw = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
-        const p = Math.max(lastPct < 0 ? 0 : lastPct, raw);
-        const now = Date.now();
-        if (now - lastEdit < 650 && p < lastPct + 2 && stage === lastStage) {
-          lastPct = p;
-          return;
-        }
-        lastEdit = now;
-        lastPct = p;
-        lastStage = stage;
-        console.log("[job]", stage, `${p}%`, cleanTermLine(t).slice(0, 60));
-        await paintBanner(stage, p);
-        return;
+      } else {
+        // Unknown backend chatter — nudge % only, no terminal dump.
+        return this.setStage(stage, pct);
       }
       return this.setStage(stage, pct);
     },
@@ -904,7 +928,7 @@ function createProgressCard(chatId) {
       // Allow 0% on failure only.
       lastPct = -1;
       lastPct = 0;
-      pushTerm(`error: ${String(err || "failed").slice(0, 80)}`);
+      pushMockStage("Failed", 0);
       const img = await makeBanner("Failed", 0);
       if (img && messageId && hasPhoto) {
         await editMessageMediaBotApi(chatId, messageId, img, "");
@@ -1363,12 +1387,16 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
           result: finalResult,
         };
       }
-      // Last resort: keep Premium IPA + bot reply with Patch/Get VIP tabs.
+      // Last resort: Premium user bubble often can't take bot markup — allow one reply.
       console.warn(
         "[job] bot copyMessage failed; keeping Premium IPA + button reply:",
         (copied && copied.description) || "unknown"
       );
-      await ensureIpaButtonTabs(chatId, stagedId, { caption: caption || "", replyMarkup: markup });
+      await ensureIpaButtonTabs(chatId, stagedId, {
+        caption: caption || "",
+        replyMarkup: markup,
+        allowReply: true,
+      });
       return {
         ...prem,
         premium: true,
