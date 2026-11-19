@@ -220,13 +220,15 @@ enum DecryptCompanionHandoff {
         guard !url.isEmpty else { return false }
         let name = req.displayName.isEmpty ? "App" : req.displayName
         let ver = req.version.isEmpty ? nil : req.version
-        DecryptClient.shared.phase = .queued
-        DecryptClient.shared.message = DecryptMacRouting.macOnly
-            ? "Decrypting on Mac…"
-            : "On-device FairPlay failed — decrypting on backup server…"
+        // Don't set .queued before start() — busy guard would no-op the job.
         DecryptClient.shared.error = nil
         DecryptClient.shared.finishedName = name
         DecryptClient.shared.start(url: url, version: ver, display: name)
+        if DecryptClient.shared.busy {
+            DecryptClient.shared.message = DecryptMacRouting.macOnly
+                ? "Decrypting on Mac…"
+                : "On-device FairPlay failed — decrypting on backup server…"
+        }
         return true
     }
 
