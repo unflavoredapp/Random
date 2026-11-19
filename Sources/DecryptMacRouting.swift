@@ -44,8 +44,14 @@ enum DecryptMacRouting {
             DecryptClient.shared.message = DecryptClient.shared.error ?? ""
             return
         }
-        DecryptClient.shared.phase = .queued
-        DecryptClient.shared.message = "Decrypting on Mac…"
+        // Do NOT set .queued before start() — DecryptClient.start guards on busy
+        // (queued/running/downloading) and would no-op, leaving the UI stuck forever.
+        if DecryptClient.shared.busy {
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = "Already decrypting — wait for the current Mac job to finish."
+            DecryptClient.shared.message = DecryptClient.shared.error ?? ""
+            return
+        }
         DecryptClient.shared.error = nil
         DecryptClient.shared.finishedName = name.isEmpty ? "App" : name
         DecryptClient.shared.start(
@@ -53,6 +59,9 @@ enum DecryptMacRouting {
             version: version?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
             display: name.isEmpty ? "App" : name
         )
+        if DecryptClient.shared.busy {
+            DecryptClient.shared.message = "Decrypting on Mac…"
+        }
     }
 
     /// Same as `startMacDecrypt`, then wait until DecryptClient reaches a terminal phase.

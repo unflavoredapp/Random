@@ -302,28 +302,50 @@ final class DecryptClient: ObservableObject {
             return
         }
         task?.cancel()
-        phase = .queued; message = "Queued"; queue = 0; error = nil; finished = nil; finishedName = display
+        let macMsg = DecryptMacRouting.macOnly ? "Decrypting on Mac…" : "Queued"
+        phase = .queued; message = macMsg; queue = 0; error = nil; finished = nil; finishedName = display
         task = Task { [weak self] in
             guard let self else { return }
             do {
                 var body: [String: Any] = ["url": url]
                 if let version, !version.isEmpty { body["version"] = version }
-                let o = try await self.send(self.makeRequest("api/decrypt", body: body))
+                if let sf = UserDefaults.standard.string(forKey: "tetherless.ipatool.storefront"),
+                   !sf.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    body["storefront"] = sf.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                }
+                // Mac API jobs can take a long time (ipatool + unfairplay); don't use the 30s default.
+                let postTimeout: TimeInterval = DecryptMacRouting.macOnly ? 120 : 30
+                let o = try await self.send(self.makeRequest("api/decrypt", body: body, timeout: postTimeout))
                 guard let id = o["id"] as? String else { throw DecryptError("Server didn't start the job.") }
                 if let q = (o["quota"] as? [String: Any]).flatMap({ DecryptQuota(json: $0) }) { self.quota = q }
+                self.phase = .running
+                self.message = DecryptMacRouting.macOnly ? "Decrypting on Mac…" : "Running"
 
                 var up: String?
                 var name = display, ver = ""
                 var misses = 0
+                var lastPct = -1
                 while !Task.isCancelled {
                     try await Task.sleep(nanoseconds: 2_000_000_000)
                     let s: [String: Any]
-                    do { s = try await self.send(self.makeRequest("api/decrypt/\(id)")); misses = 0 }
+                    do { s = try await self.send(self.makeRequest("api/decrypt/\(id)", timeout: 60)); misses = 0 }
                     catch let e as DecryptError { throw e }
                     catch { misses += 1; if misses >= 4 { throw error }; continue }
                     let st = (s["status"] as? String) ?? ""
                     if let m = s["msg"] as? String, !m.isEmpty { self.message = m }
-                    self.queue = Int(self.intValue(s["queue"]))
+                    let pctVal: Int? = (s["progress"] as? Int) ?? (s["progress"] as? Double).map { Int($0) }
+                    if let pct = pctVal, pct != lastPct {
+                        lastPct = pct
+                        if self.message.isEmpty || self.message == macMsg || self.message == "Running"
+                            || self.message.hasPrefix("Decrypting on Mac") {
+                            self.message = DecryptMacRouting.macOnly
+                                ? "Decrypting on Mac… \(max(0, min(99, pct)))%"
+                                : "Running \(max(0, min(99, pct)))%"
+                        }
+                    }
+                    if s["queue"] != nil {
+                        self.queue = Int(self.intValue(s["queue"]))
+                    }
                     if st == "done" {
                         up = s["up"] as? String
                         name = (s["name"] as? String) ?? name
