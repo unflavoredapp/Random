@@ -23,6 +23,7 @@ const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
 const publicDl = require("./mac-tg-public-dl");
+const ipatoolExtras = require("./mac-ipatool-extras");
 
 const PORT = Number(process.env.MAC_API_PORT || 8787);
 const OPEN = String(process.env.MAC_API_OPEN || "1") !== "0";
@@ -103,8 +104,18 @@ async function runJob(j) {
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
   j.status = "running";
   j.msg = "Starting";
+  j.progress = 2;
+  const session = ipatoolExtras.sessionWatch();
+  if (!session.ready) {
+    j.status = "error";
+    j.error = session.error || session.hint || "ipatool session missing";
+    j.msg = "Failed";
+    return;
+  }
   const say = (t) => {
     j.msg = String(t).slice(0, 140);
+    const stage = ipatoolExtras.mapProgressStage(t);
+    if (stage != null) j.progress = Math.max(j.progress || 0, stage);
     console.log("[api]", j.id, j.msg);
   };
   try {
@@ -114,6 +125,11 @@ async function runJob(j) {
       dir,
       say,
       vreq: j.vreq || "",
+      storefront: j.storefront || "",
+      onProgress: (pct, msg) => {
+        j.progress = Math.max(j.progress || 0, Number(pct) || 0);
+        if (msg) j.msg = String(msg).slice(0, 140);
+      },
     });
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
@@ -130,6 +146,7 @@ async function runJob(j) {
     Object.assign(j, {
       status: "done",
       msg: "Done",
+      progress: 100,
       up,
       name: result.name || "App",
       bid: result.bid || "",
@@ -189,6 +206,8 @@ async function handle(req, res) {
         ? `https://${viaHost.replace(/\/+$/, "")}`
         : "";
     const macApi = (liveBase || publicBase || "").replace(/\/+$/, "");
+    const session = ipatoolExtras.sessionWatch();
+    const purchased = ipatoolExtras.loadPurchased();
     return json(res, 200, {
       ok: true,
       service: "tetherless-mac-https-api",
@@ -199,6 +218,10 @@ async function handle(req, res) {
       model: !!(fp.enrollmentModel && fp.enrollmentModel.ready),
       publicBase: macApi || undefined,
       macApiUrl: macApi ? macApi + "/" : undefined,
+      ipatoolSession: session,
+      purchasedCount: (purchased.items || []).length,
+      purchasedUpdatedAt: purchased.updatedAt || 0,
+      prefetch: ipatoolExtras.listPrefetch().filter((x) => x.status === "queued" || x.status === "running").length,
       resources: resHost
         ? {
             freeDiskGb: Number(resHost.freeDiskGb.toFixed(2)),
@@ -274,26 +297,76 @@ async function handle(req, res) {
       const body = await readBody(req);
       const url = String(body.url || "").trim();
       if (!validUrl(url)) return fail(res, 400, "Paste an App Store link.");
-      // Lightweight: current App Store version via iTunes lookup.
-      const m = /\bid(\d{5,12})\b/i.exec(url);
-      const id = m ? m[1] : "";
-      const cc = ((/apps\.apple\.com\/([a-z]{2})\//i.exec(url) || [])[1] || "us").toLowerCase();
-      const lookup = await fetch(`https://itunes.apple.com/lookup?id=${id}&country=${cc}`).then((r) => r.json());
-      const a = lookup && lookup.results && lookup.results[0];
-      if (!a) return fail(res, 404, "App not found.");
-      const ver = String(a.version || "1.0");
-      const row = { v: ver, version: ver, label: ver, id: ver, index: 0, current: true };
+      const listed = await ipatoolExtras.listVersions({
+        url,
+        storefront: body.storefront || body.country || "",
+      });
+      const versions = listed.versions || [];
       return json(res, 200, {
         ok: true,
-        title: String(a.trackName || "App").slice(0, 80),
-        versions: [row],
-        items: [row],
+        title: listed.title || "App",
+        bundle: listed.bundle || "",
+        source: listed.source || "itunes",
+        versions,
+        items: versions,
         page: 1,
         pages: 1,
-        total: 1,
+        total: versions.length,
       });
     } catch (e) {
       return fail(res, 502, String(e.message || e).slice(0, 160));
+    }
+  }
+
+  if (p === "/api/ipatool/purchased" && req.method === "GET") {
+    const uid = actor(req);
+    if (!uid) return fail(res, 401, "Unauthorized.");
+    const q = String(u.searchParams.get("q") || "").trim();
+    const sync = u.searchParams.get("sync") === "1";
+    if (sync) ipatoolExtras.syncPurchasedLibrary();
+    const items = q ? ipatoolExtras.searchPurchased(q) : ipatoolExtras.loadPurchased().items;
+    const db = ipatoolExtras.loadPurchased();
+    return json(res, 200, {
+      ok: true,
+      updatedAt: db.updatedAt || 0,
+      count: items.length,
+      items: items.slice(0, 100),
+    });
+  }
+
+  if (p === "/api/ipatool/purchased/sync" && req.method === "POST") {
+    const uid = actor(req);
+    if (!uid) return fail(res, 401, "Unauthorized.");
+    const result = ipatoolExtras.syncPurchasedLibrary();
+    return json(res, result.ok ? 200 : 502, { ok: !!result.ok, ...result });
+  }
+
+  if (p === "/api/ipatool/session" && req.method === "GET") {
+    return json(res, 200, { ok: true, ...ipatoolExtras.sessionWatch({ force: u.searchParams.get("force") === "1" }) });
+  }
+
+  if (p === "/api/ipatool/prefetch" && req.method === "GET") {
+    const uid = actor(req);
+    if (!uid) return fail(res, 401, "Unauthorized.");
+    return json(res, 200, { ok: true, items: ipatoolExtras.listPrefetch() });
+  }
+
+  if (p === "/api/ipatool/prefetch" && req.method === "POST") {
+    const uid = actor(req);
+    if (!uid) return fail(res, 401, "Unauthorized.");
+    try {
+      const body = await readBody(req);
+      const url = String(body.url || "").trim();
+      if (!validUrl(url)) return fail(res, 400, "Paste an App Store link.");
+      const item = ipatoolExtras.enqueuePrefetch({
+        url,
+        version: body.version || "",
+        storefront: body.storefront || body.country || "",
+        priority: Number(body.priority) || 1,
+      });
+      return json(res, 200, { ok: true, item });
+    } catch (e) {
+      return fail(res, 400, String(e.message || e).slice(0, 160));
     }
   }
 
@@ -304,8 +377,13 @@ async function handle(req, res) {
       const body = await readBody(req);
       const url = String(body.url || "").trim();
       const vreq = String(body.version || "").trim();
+      const storefront = String(body.storefront || body.country || "").trim().toLowerCase();
       if (!validUrl(url)) return fail(res, 400, "Paste an App Store link.");
       if (vreq && !/^[0-9][0-9A-Za-z._-]{0,29}$/.test(vreq)) return fail(res, 400, "Bad version.");
+      const session = ipatoolExtras.sessionWatch();
+      if (!session.ready) {
+        return fail(res, 503, session.error || session.hint || "ipatool not logged in on Mac.");
+      }
       for (const j of jobs.values()) {
         if (j.uid === uid && (j.status === "queued" || j.status === "running")) {
           return fail(res, 429, "You already have a decrypt running.");
@@ -317,11 +395,19 @@ async function handle(req, res) {
         uid,
         url,
         vreq,
+        storefront,
         status: "queued",
-        msg: "Queued",
+        msg: "Queued on Mac…",
+        progress: 1,
         error: "",
       };
       jobs.set(id, j);
+      // Warm encrypted cache for this adam in the background for re-runs.
+      try {
+        ipatoolExtras.enqueuePrefetch({ url, version: vreq, storefront, priority: 0 });
+      } catch {
+        /* ignore */
+      }
       runJob(j);
       return json(res, 200, {
         ok: true,
@@ -339,9 +425,15 @@ async function handle(req, res) {
     if (!uid) return fail(res, 401, "Unauthorized.");
     const j = jobs.get(jobMatch[1]);
     if (!j || j.uid !== uid) return fail(res, 404, "Not found.");
-    const out = { ok: true, status: j.status, msg: j.msg, error: j.error || "" };
+    const out = {
+      ok: true,
+      status: j.status,
+      msg: j.msg,
+      error: j.error || "",
+      progress: j.progress || 0,
+    };
     if (j.status === "queued" || j.status === "running") out.queue = 0;
-    if (j.status === "done") Object.assign(out, { up: j.up, name: j.name, bid: j.bid, ver: j.ver, size: j.size });
+    if (j.status === "done") Object.assign(out, { up: j.up, name: j.name, bid: j.bid, ver: j.ver, size: j.size, progress: 100 });
     return json(res, 200, out);
   }
 
@@ -383,4 +475,15 @@ server.listen(PORT, "127.0.0.1", () => {
   console.log(`host=${fp.host} decrypt=${!!(fp.unfairplay && fp.unfairplay.ready)} model=${!!(fp.enrollmentModel && fp.enrollmentModel.ready)}`);
   console.log("Expose with: cloudflared tunnel --url http://127.0.0.1:" + PORT);
   console.log("Then set iOS Decrypt site URL to that https://….trycloudflare.com/");
+  try {
+    ipatoolExtras.startPrefetchLoop();
+    const sess = ipatoolExtras.sessionWatch({ force: true });
+    console.log(
+      sess.ready
+        ? `ipatool session: ${sess.email || "ok"}`
+        : `ipatool session: missing — ${sess.hint || sess.error || ""}`
+    );
+  } catch (e) {
+    console.warn("ipatool extras:", e.message || e);
+  }
 });

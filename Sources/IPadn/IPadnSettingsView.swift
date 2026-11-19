@@ -310,6 +310,7 @@ private struct PhoneDecryptWorkerInline: View {
 private struct FairPlayDecryptHostField: View {
     @AppStorage("as_site_base") private var siteBase = ""
     @AppStorage("tetherless.decrypt.macOnly") private var macOnly = true
+    @AppStorage("tetherless.ipatool.storefront") private var storefront = "us"
     @State private var draft = ""
     @State private var note = ""
 
@@ -354,6 +355,20 @@ private struct FairPlayDecryptHostField: View {
                     clearHost(reason: "Using tetherless.dev (not MacDuty unfairplay).")
                 }
                 .buttonStyle(.bordered)
+            }
+            HStack {
+                Text("ipatool storefront")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("us", text: $storefront)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    .font(.footnote.monospaced())
+                    .frame(maxWidth: 64)
+                    .onChange(of: storefront) { new in
+                        let cleaned = String(new.lowercased().prefix(2))
+                        if cleaned != storefront { storefront = cleaned }
+                    }
             }
             Text(
                 siteBase.isEmpty
@@ -503,6 +518,19 @@ private struct DecryptBackendsStatusRow: View {
                         out.append("✓ ipatool" + (email.isEmpty ? "" : " · \(email)"))
                     } else {
                         out.append("✗ ipatool — \(note.isEmpty ? "not logged in" : note)")
+                        out.append("Re-auth: zsh ~/tetherless/server/mac-ssh.sh unlock && ipatool auth login")
+                    }
+                }
+                // Soft-probe session + purchased count from Mac API extras (best-effort).
+                if let sessionURL = URL(string: base + "api/ipatool/session") {
+                    if let (sData, sResp) = try? await URLSession.shared.data(from: sessionURL),
+                       ((sResp as? HTTPURLResponse)?.statusCode ?? 500) < 400,
+                       let sJson = try? JSONSerialization.jsonObject(with: sData) as? [String: Any] {
+                        let ready = (sJson["ready"] as? Bool) == true
+                        if !ready {
+                            let hint = (sJson["hint"] as? String) ?? (sJson["error"] as? String) ?? "session missing"
+                            out.append("Session: \(hint)")
+                        }
                     }
                 }
                 for key in ["fairplay-decrypt", "unfairplay", "ipadecrypt", "ipa-decrypter", "unfaird", "phone"] {

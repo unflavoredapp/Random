@@ -628,13 +628,38 @@ function adamFromStoreUrl(url) {
   return m ? m[1] : "";
 }
 
+function resolveIpatoolStorefront(explicit, url) {
+  try {
+    const x = require("./mac-ipatool-extras");
+    return x.resolveStorefront(explicit, url);
+  } catch {
+    const fromEnv = String(process.env.FAIRPLAY_IPATOOL_STOREFRONT || "").trim().toLowerCase();
+    const fromBody = String(explicit || "").trim().toLowerCase();
+    const m = /apps\.apple\.com\/([a-z]{2})\//i.exec(String(url || ""));
+    return (fromBody || fromEnv || (m && m[1]) || "us").slice(0, 2);
+  }
+}
+
+/** Only pass --country when the caller/env set it explicitly (ipatool builds vary). */
+function explicitIpatoolStorefront(explicit) {
+  const fromBody = String(explicit || "").trim().toLowerCase().slice(0, 2);
+  const fromEnv = String(process.env.FAIRPLAY_IPATOOL_STOREFRONT || "").trim().toLowerCase().slice(0, 2);
+  if (fromBody) return fromBody;
+  if (fromEnv) return fromEnv;
+  return "";
+}
+
 /** ipatool ≥2.x uses --app-id (not legacy --adam-id). */
-function ipatoolDownloadArgs(encPath, { url, vreq, purchase = true } = {}) {
+function ipatoolDownloadArgs(encPath, { url, vreq, purchase = true, storefront } = {}) {
   const adam = adamFromStoreUrl(url);
   const platform = String(process.env.FAIRPLAY_IPATOOL_PLATFORM || "iphone").trim();
+  const sf = explicitIpatoolStorefront(storefront);
   const args = ["download", "--non-interactive", "-o", encPath];
   if (purchase) args.splice(1, 0, "--purchase");
   if (platform) args.push("--platform", platform);
+  if (sf && String(process.env.FAIRPLAY_IPATOOL_COUNTRY_FLAG || "1") !== "0") {
+    args.push("--country", sf);
+  }
   if (adam) args.push("--app-id", adam);
   else args.push(String(url || "").trim());
   if (vreq) args.push("--external-version-id", String(vreq));
@@ -683,17 +708,35 @@ function loadIpaCache() {
  *   2) encrypted disk cache (skip Apple download)
  *   3) ipatool download (auth preflight · retries · collect IPA) → encrypted cache
  */
-async function ensureEncryptedSource({ url, dir, say, vreq }) {
+async function ensureEncryptedSource({ url, dir, say, vreq, storefront, onProgress } = {}) {
   const enc = path.join(dir, "encrypted-source.ipa");
   if (fs.existsSync(enc) && fs.statSync(enc).size >= 100) return enc;
 
   const adam = adamFromStoreUrl(url);
   const ver = String(vreq || "").trim() || "latest";
+  const sf = explicitIpatoolStorefront(storefront) || resolveIpatoolStorefront(storefront, url);
+  const report = (pct, msg) => {
+    if (typeof onProgress === "function") {
+      try {
+        onProgress(pct, msg);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+  let extras = null;
+  try {
+    extras = require("./mac-ipatool-extras");
+  } catch {
+    /* optional */
+  }
+
   const ipaCache = loadIpaCache();
   if (ipaCache && adam) {
     const hit = ipaCache.getEncryptedPath(adam, ver);
     if (hit) {
       say("encrypted IPA cache hit — skipping App Store download…");
+      report(40, "encrypted cache hit");
       ipaCache.linkOrCopy(hit, enc);
       return enc;
     }
@@ -713,6 +756,8 @@ async function ensureEncryptedSource({ url, dir, say, vreq }) {
     throw new Error(auth.error || "ipatool is not logged in — run: ipatool auth login");
   }
   if (auth.email) say(`ipatool: ${auth.email}`);
+  report(8, "ipatool auth ok");
+  if (explicitIpatoolStorefront(storefront)) say(`storefront ${sf}`);
 
   const timeoutMs = Math.min(
     90 * 60 * 1000,
@@ -729,15 +774,23 @@ async function ensureEncryptedSource({ url, dir, say, vreq }) {
         : `ipatool retry ${attempt}/${maxAttempts}${purchase ? "" : " (no --purchase)"}…`
     );
     try {
-      await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq, purchase }), {
+      await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq, purchase, storefront: sf }), {
         cwd: dir,
         timeoutMs,
         onLine: (line) => {
           // Surface useful progress; skip noisy JSON blobs.
           if (line.length > 160) return;
+          const pct = extras && extras.parseDownloadPercent ? extras.parseDownloadPercent(line) : null;
+          if (pct != null) {
+            report(Math.min(55, 15 + Math.round(pct * 0.4)), line.slice(0, 100));
+            say(`download ${pct}%`);
+            return;
+          }
           if (/^(error|failed|panic)/i.test(line)) say(line.slice(0, 120));
           else if (/%|download|purchas|writing|done|success|app.?id/i.test(line)) {
             say(line.slice(0, 120));
+            const stage = extras && extras.mapProgressStage ? extras.mapProgressStage(line) : null;
+            if (stage != null) report(stage, line.slice(0, 100));
           }
         },
       });
@@ -814,9 +867,27 @@ function brandBackend(name) {
  * Throws only when a configured backend hard-fails and no further backends remain
  * (caller still may try phone).
  */
-async function tryRemoteBackends({ url, dir, say, vreq, skip = [] }) {
+async function tryRemoteBackends({ url, dir, say, vreq, skip = [], storefront, onProgress } = {}) {
   const backends = configuredBackends().filter((b) => b !== "phone" && !skip.includes(b));
   if (!backends.length) return null;
+  // Stash for ensureEncryptedSource via closure on runUnfairplay / runFairplayDecrypt —
+  // pass through env for this job so nested helpers see the storefront.
+  if (storefront) {
+    process.env.FAIRPLAY_IPATOOL_STOREFRONT = String(storefront).trim().toLowerCase().slice(0, 2);
+  }
+  const sayWrapped = (t) => {
+    say(t);
+    if (typeof onProgress === "function") {
+      try {
+        const extras = require("./mac-ipatool-extras");
+        const stage = extras.mapProgressStage(t);
+        if (stage != null) onProgress(stage, t);
+      } catch {
+        /* ignore */
+      }
+    }
+  };
+  say = sayWrapped;
 
   // fairplay-decrypt needs 16-byte credential.bin.
   // unfairplay needs a model file/dir, or a Mac host with local Tetherless setup.

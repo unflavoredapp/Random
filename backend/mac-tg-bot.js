@@ -2112,6 +2112,64 @@ async function handleMessage(msg) {
     return;
   }
 
+  // Quiet ops: purchased sync / session / prefetch (WebSSH-friendly).
+  if (/^\/(?:purchased|owned)(?:\s+(.+))?$/i.test(text)) {
+    try {
+      const extras = require("./mac-ipatool-extras");
+      const q = (text.match(/^\/(?:purchased|owned)(?:\s+(.+))?$/i) || [])[1] || "";
+      if (/^sync\b/i.test(q) || !extras.loadPurchased().items.length) {
+        extras.syncPurchasedLibrary();
+      }
+      const items = extras.searchPurchased(/^sync\b/i.test(q) ? "" : q);
+      const lines = items.slice(0, 20).map((it) => `• ${it.name} · id${it.adam}`);
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text:
+          (lines.length ? lines.join("\n") : "No purchased apps cached.") +
+          "\n\nSync: /purchased sync",
+      });
+    } catch (e) {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: String((e && e.message) || e).slice(0, 200),
+      });
+    }
+    return;
+  }
+  if (/^\/session\b/i.test(text)) {
+    try {
+      const extras = require("./mac-ipatool-extras");
+      const s = extras.sessionWatch({ force: true });
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: s.ready
+          ? `ipatool OK · ${s.email || s.name || "logged in"}`
+          : `ipatool session missing\n${s.hint || s.error || ""}`,
+      });
+    } catch (e) {
+      await tgApi("sendMessage", { chat_id: chatId, text: String(e.message || e).slice(0, 200) });
+    }
+    return;
+  }
+  if (/^\/prefetch\s+/i.test(text)) {
+    try {
+      const extras = require("./mac-ipatool-extras");
+      const link = text.split(/\s+/).find((t) => isStoreUrl(t));
+      if (!link) {
+        await tgApi("sendMessage", { chat_id: chatId, text: "Usage: /prefetch https://apps.apple.com/…" });
+        return;
+      }
+      const item = extras.enqueuePrefetch({ url: link, priority: 2 });
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: `Prefetch queued · ${item.adam || link} (${item.status})`,
+      });
+    } catch (e) {
+      await tgApi("sendMessage", { chat_id: chatId, text: String(e.message || e).slice(0, 200) });
+    }
+    return;
+  }
+
   if (/^decrypt\s+/i.test(text) || (/^[\w./-]+\.ipa$/i.test(text) && !/^https?:/i.test(text))) {
     const ipaPath = resolveDropPath(text);
     await withWorker(chatId, async () => {
@@ -2244,6 +2302,18 @@ async function boot() {
   if (typeof fairplayBackends.unlockKeychain === "function") {
     const unlocked = fairplayBackends.unlockKeychain();
     console.log(unlocked ? "Keychain: unlocked (tetherless.keychain-db)" : "Keychain: skipped (set TETHERLESS_KEYCHAIN_PASSWORD)");
+  }
+  try {
+    const extras = require("./mac-ipatool-extras");
+    extras.startPrefetchLoop();
+    const sess = extras.sessionWatch({ force: true });
+    console.log(
+      sess.ready
+        ? `ipatool session: ${sess.email || "ok"}`
+        : `ipatool session: missing — ${sess.hint || sess.error || ""}`
+    );
+  } catch (e) {
+    console.warn("ipatool extras:", (e && e.message) || e);
   }
   // Kick the next poll when the previous finishes (no overlapping getUpdates).
   const pump = () => {
