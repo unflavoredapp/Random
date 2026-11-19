@@ -463,9 +463,9 @@ async function renderDownloadThumb({ iconPath, dest, size } = {}) {
 }
 
 /**
- * Version picker sharp card — versions live on the image (not a text button list).
- * Top center: VERSIONS · app name · icon · numbered builds · page footer.
- * @param {{ title?: string, iconPath?: string, versions?: Array<{n:number,label:string}>, page?: number, pages?: number, total?: number, dest?: string }} opts
+ * Version picker sharp card — each build row shows THAT version’s app icon
+ * (from the IPA when we have it), plus a number the user can type.
+ * @param {{ title?: string, iconPath?: string, versions?: Array<{n:number,label:string,iconPath?:string,current?:boolean}>, page?: number, pages?: number, total?: number, dest?: string }} opts
  */
 async function renderVersionPickerBanner(opts = {}) {
   const sharp = loadSharp();
@@ -479,17 +479,19 @@ async function renderVersionPickerBanner(opts = {}) {
   const page = Math.max(1, Number(opts.page) || 1);
   const pages = Math.max(1, Number(opts.pages) || 1);
   const total = Math.max(0, Number(opts.total) || 0);
-  const versions = Array.isArray(opts.versions) ? opts.versions : [];
-  const iconPath = opts.iconPath || "";
+  const versions = Array.isArray(opts.versions) ? opts.versions.slice(0, 8) : [];
+  const fallbackIcon = opts.iconPath || "";
+  const heroIcon =
+    (versions.find((v) => v && v.iconPath && fs.existsSync(v.iconPath)) || {}).iconPath ||
+    fallbackIcon;
 
   try {
     fs.mkdirSync(path.dirname(out), { recursive: true });
 
     const layers = [];
 
-    // Soft icon blur background.
-    if (iconPath && fs.existsSync(iconPath)) {
-      const blurBuf = await sharp(iconPath)
+    if (heroIcon && fs.existsSync(heroIcon)) {
+      const blurBuf = await sharp(heroIcon)
         .resize(W, H, { fit: "cover" })
         .blur(32)
         .modulate({ brightness: 0.4, saturation: 0.75 })
@@ -498,7 +500,6 @@ async function renderVersionPickerBanner(opts = {}) {
       layers.push({ input: blurBuf, left: 0, top: 0 });
     }
 
-    // Dark scrim so text stays readable.
     const scrim = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -511,39 +512,33 @@ async function renderVersionPickerBanner(opts = {}) {
 </svg>`);
     layers.push({ input: await sharp(scrim).png().toBuffer(), left: 0, top: 0 });
 
-    // App icon (left).
-    const iconSize = 220;
-    const iconLeft = 72;
-    const iconTop = 200;
-    let iconBuf;
-    if (iconPath && fs.existsSync(iconPath)) {
-      iconBuf = await roundedPng(sharp, iconPath, iconSize);
-    } else {
-      iconBuf = await sharp(placeholderIconSvg(iconSize)).png().toBuffer();
-    }
-    layers.push({ input: iconBuf, left: iconLeft, top: iconTop });
-
-    // Numbered version rows (right of icon).
-    const rowLines = versions
-      .slice(0, 8)
-      .map((v, idx) => {
-        const n = Number(v.n != null ? v.n : idx + 1);
-        const label = sanitize(String(v.label || "—").replace(/^v/i, ""), 28);
-        const star = v.current ? "  *" : "";
-        return { n, label: `v${label}${star}` };
-      });
+    // Rows: [build icon] [number] [version] — full width so older icons are visible.
+    const rowH = 52;
+    const listTop = 168;
+    const iconSize = 40;
+    const iconLeft = 110;
+    const numCx = 190;
+    const labelX = 230;
 
     let rowsSvg = "";
-    const listLeft = 360;
-    const listTop = 175;
-    const rowH = 48;
-    rowLines.forEach((row, i) => {
+    const rowIcons = [];
+    for (let i = 0; i < versions.length; i++) {
+      const v = versions[i] || {};
+      const n = Number(v.n != null ? v.n : i + 1);
+      const label = sanitize(String(v.label || "—").replace(/^v/i, ""), 28);
+      const star = v.current ? "  *" : "";
       const y = listTop + i * rowH;
+      const cy = y;
       rowsSvg += `
-  <circle cx="${listLeft}" cy="${y}" r="18" fill="#1e2a44" stroke="#3d7cff" stroke-width="2"/>
-  <text x="${listLeft}" y="${y + 7}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">${row.n}</text>
-  <text x="${listLeft + 36}" y="${y + 8}" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600">${row.label}</text>`;
-    });
+  <circle cx="${numCx}" cy="${cy}" r="18" fill="#1e2a44" stroke="#3d7cff" stroke-width="2"/>
+  <text x="${numCx}" y="${cy + 7}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">${n}</text>
+  <text x="${labelX}" y="${cy + 8}" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600">v${label}${star}</text>`;
+      rowIcons.push({
+        path: (v.iconPath && fs.existsSync(v.iconPath) && v.iconPath) || fallbackIcon || "",
+        left: iconLeft,
+        top: cy - Math.round(iconSize / 2),
+      });
+    }
 
     const panel = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
@@ -555,7 +550,16 @@ async function renderVersionPickerBanner(opts = {}) {
 </svg>`);
     layers.push({ input: await sharp(panel).png().toBuffer(), left: 0, top: 0 });
 
-    // Small Delvek mark top-left.
+    for (const row of rowIcons) {
+      let buf;
+      if (row.path && fs.existsSync(row.path)) {
+        buf = await roundedPng(sharp, row.path, iconSize);
+      } else {
+        buf = await sharp(placeholderIconSvg(iconSize)).png().toBuffer();
+      }
+      layers.push({ input: buf, left: row.left, top: row.top });
+    }
+
     const delvekIconPath = resolveDelvekIcon();
     if (delvekIconPath) {
       const delvekRounded = await roundedPng(sharp, delvekIconPath, 48);
