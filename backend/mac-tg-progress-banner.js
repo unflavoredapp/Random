@@ -519,7 +519,7 @@ async function renderDownloadThumb({ iconPath, dest, size } = {}) {
 /**
  * Version picker sharp card —
  * Left: big app icon · Right rows: [build icon] [app name] [version] [n]
- * Top-left stack: DELvEK.NeT + Tetherless.Dev (icons + names)
+ * Top-left: DELvEK icon + DELvEK.NeT · Top-right: Tetherless icon + Tetherless.Dev
  * @param {{ title?: string, iconPath?: string, versions?: Array<{n:number,label:string,iconPath?:string,current?:boolean}>, page?: number, pages?: number, total?: number, dest?: string }} opts
  */
 async function renderVersionPickerBanner(opts = {}) {
@@ -612,14 +612,20 @@ async function renderVersionPickerBanner(opts = {}) {
       });
     }
 
-    // Both brands on the left: DELvEK.NeT + Tetherless.Dev
+    // Top-left DELvEK.NeT · Top-right Tetherless.Dev (icon left of each label).
     const brandDelvek = sanitize("DELvEK.NeT", 18);
     const brandTether = sanitize("Tetherless.Dev", 18);
+    const brandIcon = 44;
+    const delvekIconLeft = 40;
+    const delvekTextX = delvekIconLeft + brandIcon + 14;
+    // Right-corner group: [icon] Tetherless.Dev — icon left of the text.
+    const tetherGroupIconLeft = W - 40 - brandIcon - 170;
+    const tetherTextX = tetherGroupIconLeft + brandIcon + 14;
     const panel = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-  <text x="100" y="58" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" letter-spacing="1">${brandDelvek}</text>
-  <text x="100" y="96" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">${brandTether}</text>
-  <text x="${W / 2}" y="78" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="800" letter-spacing="3">VERSIONS</text>
+  <text x="${delvekTextX}" y="66" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" letter-spacing="1">${brandDelvek}</text>
+  <text x="${tetherTextX}" y="66" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">${brandTether}</text>
+  <text x="${W / 2}" y="108" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="800" letter-spacing="3">VERSIONS</text>
   <text x="${W / 2}" y="146" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="600">${title}</text>
   ${rowsSvg}
   <text x="${W / 2}" y="${H - 48}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">page ${page}/${pages} · ${total} builds · reply with a number</text>
@@ -637,16 +643,17 @@ async function renderVersionPickerBanner(opts = {}) {
       layers.push({ input: buf, left: row.left, top: row.top });
     }
 
-    // Left stack: DELvEK icon + Tetherless icon (labels are in the SVG).
+    // DELvEK icon left of DELvEK.NeT (top-left).
     const delvekIconPath = resolveDelvekIcon();
     if (delvekIconPath) {
-      const delvekRounded = await roundedPng(sharp, delvekIconPath, 40);
-      layers.push({ input: delvekRounded, left: 40, top: 28 });
+      const delvekRounded = await roundedPng(sharp, delvekIconPath, brandIcon);
+      layers.push({ input: delvekRounded, left: delvekIconLeft, top: 34 });
     }
+    // Tetherless icon left of Tetherless.Dev (top-right corner group).
     const tetherIconPath = resolveTetherlessIcon();
     if (tetherIconPath) {
-      const tetherRounded = await roundedPng(sharp, tetherIconPath, 40);
-      layers.push({ input: tetherRounded, left: 40, top: 66 });
+      const tetherRounded = await roundedPng(sharp, tetherIconPath, brandIcon);
+      layers.push({ input: tetherRounded, left: tetherGroupIconLeft, top: 34 });
     }
 
     await sharp({
