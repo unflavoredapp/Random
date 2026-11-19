@@ -156,6 +156,9 @@ function friendlyIpatoolError(err) {
   if (/rate.?limit|too many requests|429|try again later|slow down/i.test(s)) {
     return "App Store rate-limited ipatool — wait a minute and paste the link again.";
   }
+  if (/unknown flag:\s*--country/i.test(s)) {
+    return "This ipatool build doesn’t support --country — update the Mac host and retry.";
+  }
   if (/version.*(not found|unavailable|invalid)|external.version|no matching version/i.test(s)) {
     return "That app version isn’t available for this Apple ID — try latest or another owned version.";
   }
@@ -652,6 +655,43 @@ function explicitIpatoolStorefront(explicit) {
   return "";
 }
 
+/** Cached probe — many ipatool builds have no --country (exit: unknown flag). */
+let ipatoolCountryFlagOk = null;
+function ipatoolSupportsCountryFlag() {
+  if (String(process.env.FAIRPLAY_IPATOOL_COUNTRY_FLAG || "").trim() === "0") return false;
+  if (ipatoolCountryFlagOk === false) return false;
+  if (ipatoolCountryFlagOk === true) return true;
+  const bin = ipatoolBin();
+  if (!bin) {
+    ipatoolCountryFlagOk = false;
+    return false;
+  }
+  try {
+    const r = spawnSync(bin, ["download", "--help"], {
+      encoding: "utf8",
+      timeout: 8000,
+      env: process.env,
+    });
+    const out = `${r.stdout || ""}\n${r.stderr || ""}`;
+    ipatoolCountryFlagOk = /\-\-country\b/.test(out);
+  } catch {
+    ipatoolCountryFlagOk = false;
+  }
+  return ipatoolCountryFlagOk;
+}
+
+function disableIpatoolCountryFlag(reason) {
+  ipatoolCountryFlagOk = false;
+  process.env.FAIRPLAY_IPATOOL_COUNTRY_FLAG = "0";
+  if (reason) console.warn("[ipatool] disabling --country:", reason);
+}
+
+function isUnknownCountryFlagError(err) {
+  return /unknown flag:\s*--country|flag provided but not defined:\s*-country/i.test(
+    String((err && err.message) || err || "")
+  );
+}
+
 /** ipatool ≥2.x uses --app-id (not legacy --adam-id). */
 function ipatoolDownloadArgs(encPath, { url, vreq, purchase = true, storefront } = {}) {
   const adam = adamFromStoreUrl(url);
@@ -660,7 +700,8 @@ function ipatoolDownloadArgs(encPath, { url, vreq, purchase = true, storefront }
   const args = ["download", "--non-interactive", "-o", encPath];
   if (purchase) args.splice(1, 0, "--purchase");
   if (platform) args.push("--platform", platform);
-  if (sf && String(process.env.FAIRPLAY_IPATOOL_COUNTRY_FLAG || "1") !== "0") {
+  // Never pass URL-derived storefront as --country — only env/body + builds that support it.
+  if (sf && ipatoolSupportsCountryFlag()) {
     args.push("--country", sf);
   }
   if (adam) args.push("--app-id", adam);
@@ -717,7 +758,10 @@ async function ensureEncryptedSource({ url, dir, say, vreq, storefront, onProgre
 
   const adam = adamFromStoreUrl(url);
   const ver = String(vreq || "").trim() || "latest";
-  const sf = explicitIpatoolStorefront(storefront) || resolveIpatoolStorefront(storefront, url);
+  // Resolved storefront is for cache keys / logs only — do NOT feed it into
+  // ipatoolDownloadArgs or older ipatools die with "unknown flag: --country".
+  const explicitSf = explicitIpatoolStorefront(storefront);
+  const sf = explicitSf || resolveIpatoolStorefront(storefront, url);
   const report = (pct, msg) => {
     if (typeof onProgress === "function") {
       try {
@@ -760,7 +804,7 @@ async function ensureEncryptedSource({ url, dir, say, vreq, storefront, onProgre
   }
   if (auth.email) say(`ipatool: ${auth.email}`);
   report(8, "ipatool auth ok");
-  if (explicitIpatoolStorefront(storefront)) say(`storefront ${sf}`);
+  if (explicitSf) say(`storefront ${explicitSf}`);
 
   const timeoutMs = Math.min(
     90 * 60 * 1000,
@@ -777,7 +821,10 @@ async function ensureEncryptedSource({ url, dir, say, vreq, storefront, onProgre
         : `ipatool retry ${attempt}/${maxAttempts}${purchase ? "" : " (no --purchase)"}…`
     );
     try {
-      await runCmd(ipatool, ipatoolDownloadArgs(enc, { url, vreq, purchase, storefront: sf }), {
+      await runCmd(
+        ipatool,
+        ipatoolDownloadArgs(enc, { url, vreq, purchase, storefront: explicitSf }),
+        {
         cwd: dir,
         timeoutMs,
         onLine: (line) => {
@@ -796,11 +843,17 @@ async function ensureEncryptedSource({ url, dir, say, vreq, storefront, onProgre
             if (stage != null) report(stage, line.slice(0, 100));
           }
         },
-      });
+      }
+      );
       lastErr = null;
       break;
     } catch (e) {
       lastErr = e;
+      if (isUnknownCountryFlagError(e)) {
+        disableIpatoolCountryFlag(String((e && e.message) || e).slice(0, 120));
+        say("ipatool has no --country — retrying without it…");
+        continue;
+      }
       if (purchase && isPurchaseAlreadyOwnedFailure(e)) {
         purchase = false;
         say("already owned — retrying ipatool without --purchase…");
@@ -1229,6 +1282,8 @@ module.exports = {
   friendlyDecryptError,
   ipatoolBin,
   ipatoolAuthStatus,
+  ipatoolDownloadArgs,
+  ipatoolSupportsCountryFlag,
   isTransientIpatoolFailure,
   hostResources,
   suggestedWorkers,

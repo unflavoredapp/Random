@@ -14,12 +14,23 @@ const os = require("os");
 const path = require("path");
 const http = require("http");
 const https = require("https");
+const crypto = require("crypto");
 const { spawn, spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
+const ipatoolExtras = require("./mac-ipatool-extras");
 const ipaCache = require("./mac-tg-ipa-cache");
 const urlLog = require("./mac-tg-url-log");
 const { renderProgressBanner, renderDownloadThumb } = require("./mac-tg-progress-banner");
 const publicDl = require("./mac-tg-public-dl");
+
+/** token → { chatId, url, picks:[{label,ext}], expires } — version sheet before sharp card. */
+const pendingVerPicks = new Map();
+function pruneVerPicks() {
+  const now = Date.now();
+  for (const [k, v] of pendingVerPicks) {
+    if (!v || v.expires < now) pendingVerPicks.delete(k);
+  }
+}
 
 const API_ROOT = String(process.env.TELEGRAM_API_ROOT || "https://api.telegram.org").replace(/\/+$/, "");
 const LOCAL_API =
@@ -1314,6 +1325,179 @@ function rememberStoreUrl(chatId, link, vreq) {
   });
 }
 
+/**
+ * Resolve a typed version (marketing "8.12.0" or numeric external id) to the
+ * external-version-id ipatool expects. Empty → latest.
+ */
+async function resolveExternalVersionId(link, vreq) {
+  const raw = String(vreq || "").trim();
+  if (!raw) return "";
+  if (/^\d{6,}$/.test(raw)) return raw;
+  try {
+    const listed = await ipatoolExtras.listVersions({ url: link });
+    const versions = (listed && listed.versions) || [];
+    const hit = versions.find(
+      (v) =>
+        String(v.v || "") === raw ||
+        String(v.version || "") === raw ||
+        String(v.label || "") === raw ||
+        String(v.externalVersionId || v.external_id || "") === raw
+    );
+    if (hit) {
+      return String(hit.externalVersionId || hit.external_id || "").trim();
+    }
+  } catch (e) {
+    console.warn("[versions] resolve failed:", (e && e.message) || e);
+  }
+  // Fall through — ipatool may accept marketing version on some builds.
+  return raw;
+}
+
+/** Timbrd/Bilin/iosdump version sheet — pick before the sharp progress card. */
+async function offerVersionPick(chatId, link) {
+  pruneVerPicks();
+  const wait = await tgApi("sendMessage", {
+    chat_id: chatId,
+    text: "Loading versions…",
+  }).catch(() => null);
+  const waitId = wait && wait.ok && wait.result && wait.result.message_id;
+
+  let listed;
+  try {
+    listed = await ipatoolExtras.listVersions({ url: link });
+  } catch (e) {
+    console.warn("[versions] list failed:", (e && e.message) || e);
+    listed = { title: "App", versions: [] };
+  }
+  const versions = Array.isArray(listed.versions) ? listed.versions : [];
+  const title = String((listed && listed.title) || "App").replace(/[*_`\[\]]/g, "");
+
+  // No history feeds → decrypt latest immediately (same as before).
+  if (!versions.length) {
+    if (waitId) {
+      await tgApi("deleteMessage", { chat_id: chatId, message_id: waitId }).catch(() => {});
+    }
+    await withWorker(chatId, async () => {
+      await decryptStoreUrl(chatId, link, "");
+    });
+    return;
+  }
+
+  const picks = versions.slice(0, 12).map((v, i) => {
+    const ver = String(v.v || v.version || v.label || "—").slice(0, 24);
+    const ext = String(v.externalVersionId || v.external_id || "").trim();
+    const label = v.current ? `⭐ Latest · ${ver}` : `v${ver}`;
+    return { i, label: label.slice(0, 64), ext, current: !!v.current };
+  });
+
+  const token = crypto.randomBytes(5).toString("hex");
+  pendingVerPicks.set(token, {
+    chatId,
+    url: link,
+    picks,
+    expires: Date.now() + 20 * 60 * 1000,
+  });
+
+  const rows = [
+    [
+      {
+        text: "⭐ Latest",
+        callback_data: `ver:${token}:L`.slice(0, 64),
+      },
+    ],
+    ...picks.map((p) => [
+      {
+        text: p.label,
+        callback_data: `ver:${token}:${p.i}`.slice(0, 64),
+      },
+    ]),
+  ];
+
+  const text =
+    `*${title}* — pick a version\n` +
+    `_Timbrd / Bilin / iosdump · tap Latest or an older build_`;
+
+  if (waitId) {
+    await tgApi("editMessageText", {
+      chat_id: chatId,
+      message_id: waitId,
+      text,
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: rows },
+      disable_web_page_preview: true,
+    }).catch(async () => {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text,
+        parse_mode: "Markdown",
+        reply_markup: { inline_keyboard: rows },
+        disable_web_page_preview: true,
+      });
+    });
+  } else {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text,
+      parse_mode: "Markdown",
+      reply_markup: { inline_keyboard: rows },
+      disable_web_page_preview: true,
+    });
+  }
+}
+
+async function handleVersionPick(cq, data) {
+  const chatId = cq.message && cq.message.chat && cq.message.chat.id;
+  const parts = data.split(":");
+  // ver:<token>:L | ver:<token>:<index>
+  const token = parts[1] || "";
+  const which = parts[2] || "";
+  pruneVerPicks();
+  const pending = pendingVerPicks.get(token);
+  if (!pending || pending.chatId !== chatId) {
+    await tgApi("answerCallbackQuery", {
+      callback_query_id: cq.id,
+      text: "Version list expired — paste the link again",
+      show_alert: true,
+    }).catch(() => {});
+    return;
+  }
+  pendingVerPicks.delete(token);
+
+  let vreq = "";
+  let label = "Latest";
+  if (which !== "L") {
+    const pick = pending.picks[Number(which)];
+    if (!pick) {
+      await tgApi("answerCallbackQuery", {
+        callback_query_id: cq.id,
+        text: "Unknown version",
+        show_alert: true,
+      }).catch(() => {});
+      return;
+    }
+    vreq = pick.ext || "";
+    label = pick.label || vreq || "version";
+  }
+
+  await tgApi("answerCallbackQuery", {
+    callback_query_id: cq.id,
+    text: `Decrypting ${label}…`,
+  }).catch(() => {});
+
+  // Drop the picker message so the sharp card is the next thing in chat.
+  if (cq.message && cq.message.message_id) {
+    await tgApi("deleteMessage", {
+      chat_id: chatId,
+      message_id: cq.message.message_id,
+    }).catch(() => {});
+  }
+
+  rememberStoreUrl(chatId, pending.url, vreq || "latest");
+  await withWorker(chatId, async () => {
+    await decryptStoreUrl(chatId, pending.url, vreq);
+  });
+}
+
 async function sendHistoryList(chatId) {
   const items = urlLog.list(chatId, 20);
   if (!items.length) {
@@ -2004,6 +2188,10 @@ async function handleCallback(cq) {
     await sendStart(chatId);
     return;
   }
+  if (data.startsWith("ver:")) {
+    await handleVersionPick(cq, data);
+    return;
+  }
   if (data.startsWith("hist:")) {
     const id = data.slice(5);
     const entry = urlLog.getById(chatId, id);
@@ -2023,7 +2211,8 @@ async function handleCallback(cq) {
     // Refresh log timestamp / bump to top
     urlLog.add(chatId, entry);
     await withWorker(chatId, async () => {
-      await decryptStoreUrl(chatId, entry.storeUrl, vreq);
+      const resolved = await resolveExternalVersionId(entry.storeUrl, vreq);
+      await decryptStoreUrl(chatId, entry.storeUrl, resolved);
     });
     return;
   }
@@ -2199,10 +2388,16 @@ async function handleMessage(msg) {
   const vreq = verMatch ? verMatch[1] : "";
   // Clean chat: drop the pasted URL, keep it in History for re-decrypt.
   await deleteUserMessage(chatId, msg.message_id);
-  rememberStoreUrl(chatId, link, vreq);
-  await withWorker(chatId, async () => {
-    await decryptStoreUrl(chatId, link, vreq);
-  });
+  rememberStoreUrl(chatId, link, vreq || "latest");
+  // Typed version → decrypt that build. Bare link → version sheet first (not sharp card).
+  if (vreq) {
+    await withWorker(chatId, async () => {
+      const resolved = await resolveExternalVersionId(link, vreq);
+      await decryptStoreUrl(chatId, link, resolved);
+    });
+    return;
+  }
+  await offerVersionPick(chatId, link);
 }
 
 /** Only one getUpdates in flight — overlapping polls re-delivered the same URL → duplicate cards. */
