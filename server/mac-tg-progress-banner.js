@@ -518,8 +518,8 @@ async function renderDownloadThumb({ iconPath, dest, size } = {}) {
 
 /**
  * Version picker sharp card —
- * Left: big app icon · Right rows: [build icon] [app name] [n] [version]
- * Top-left: DELvEK icon + DELvEK.NeT · Top-right: Tetherless icon + name
+ * Left: big app icon · Right rows: [build icon] [app name] [version] [n]
+ * Top-left stack: DELvEK.NeT + Tetherless.Dev (icons + names)
  * @param {{ title?: string, iconPath?: string, versions?: Array<{n:number,label:string,iconPath?:string,current?:boolean}>, page?: number, pages?: number, total?: number, dest?: string }} opts
  */
 async function renderVersionPickerBanner(opts = {}) {
@@ -581,14 +581,14 @@ async function renderVersionPickerBanner(opts = {}) {
       layers.push({ input: iconBuf, left: bigLeft, top: bigTop });
     }
 
-    // Rows right of big icon: [build icon] [app name] [n] [version]
+    // Rows right of big icon: [build icon] [app name] [version] [n]
     const rowH = 48;
     const listTop = 188;
     const rowIconSize = 36;
     const rowIconLeft = 320;
     const nameX = 372;
-    const numCx = 700;
-    const verX = 740;
+    const verX = 640;
+    const numCx = 860;
 
     let rowsSvg = "";
     const rowIcons = [];
@@ -599,12 +599,12 @@ async function renderVersionPickerBanner(opts = {}) {
       const star = v.current ? " *" : "";
       const y = listTop + i * rowH;
       const cy = y;
-      const nameSafe = sanitize(title, 22);
+      const nameSafe = sanitize(title, 20);
       rowsSvg += `
   <text x="${nameX}" y="${cy + 7}" fill="#e8eef8" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${nameSafe}</text>
+  <text x="${verX}" y="${cy + 7}" text-anchor="end" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="600">v${ver}${star}</text>
   <circle cx="${numCx}" cy="${cy}" r="16" fill="#1e2a44" stroke="#3d7cff" stroke-width="2"/>
-  <text x="${numCx}" y="${cy + 6}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">${n}</text>
-  <text x="${verX}" y="${cy + 7}" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="600">v${ver}${star}</text>`;
+  <text x="${numCx}" y="${cy + 6}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">${n}</text>`;
       rowIcons.push({
         path: (v.iconPath && fs.existsSync(v.iconPath) && v.iconPath) || fallbackIcon || "",
         left: rowIconLeft,
@@ -612,15 +612,14 @@ async function renderVersionPickerBanner(opts = {}) {
       });
     }
 
-  const brandLeft = sanitize("DELvEK.NeT", 18);
-  const brandRight = sanitize("Tetherless", 18);
-  // Tetherless label ends just left of the top-right icon.
-  const tetherTextX = W - 40 - 44 - 14;
-  const panel = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+    // Both brands on the left: DELvEK.NeT + Tetherless.Dev
+    const brandDelvek = sanitize("DELvEK.NeT", 18);
+    const brandTether = sanitize("Tetherless.Dev", 18);
+    const panel = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-  <text x="100" y="66" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" letter-spacing="1">${brandLeft}</text>
-  <text x="${tetherTextX}" y="66" text-anchor="end" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">${brandRight}</text>
-  <text x="${W / 2}" y="108" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="800" letter-spacing="3">VERSIONS</text>
+  <text x="100" y="58" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" letter-spacing="1">${brandDelvek}</text>
+  <text x="100" y="96" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">${brandTether}</text>
+  <text x="${W / 2}" y="78" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="800" letter-spacing="3">VERSIONS</text>
   <text x="${W / 2}" y="146" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="600">${title}</text>
   ${rowsSvg}
   <text x="${W / 2}" y="${H - 48}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">page ${page}/${pages} · ${total} builds · reply with a number</text>
@@ -638,18 +637,16 @@ async function renderVersionPickerBanner(opts = {}) {
       layers.push({ input: buf, left: row.left, top: row.top });
     }
 
-    // Top-left: DELvEK icon (text DELvEK.NeT is in the SVG).
+    // Left stack: DELvEK icon + Tetherless icon (labels are in the SVG).
     const delvekIconPath = resolveDelvekIcon();
     if (delvekIconPath) {
-      const delvekRounded = await roundedPng(sharp, delvekIconPath, 44);
-      layers.push({ input: delvekRounded, left: 40, top: 34 });
+      const delvekRounded = await roundedPng(sharp, delvekIconPath, 40);
+      layers.push({ input: delvekRounded, left: 40, top: 28 });
     }
-
-    // Top-right: Tetherless icon (name is in the SVG, end-anchored).
     const tetherIconPath = resolveTetherlessIcon();
     if (tetherIconPath) {
-      const tetherRounded = await roundedPng(sharp, tetherIconPath, 44);
-      layers.push({ input: tetherRounded, left: W - 40 - 44, top: 34 });
+      const tetherRounded = await roundedPng(sharp, tetherIconPath, 40);
+      layers.push({ input: tetherRounded, left: 40, top: 66 });
     }
 
     await sharp({
