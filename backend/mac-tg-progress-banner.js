@@ -587,19 +587,21 @@ async function renderVersionPickerBanner(opts = {}) {
     const rowIconSize = 36;
     const rowIconLeft = 320;
     const nameX = 372;
-    const verX = 640;
-    const numCx = 860;
+    // Version sits just left of the pick number (end-anchored) so long names don't collide.
+    const numCx = 980;
+    const verX = numCx - 36;
 
     let rowsSvg = "";
     const rowIcons = [];
     for (let i = 0; i < versions.length; i++) {
       const v = versions[i] || {};
       const n = Number(v.n != null ? v.n : i + 1);
-      const ver = sanitize(String(v.label || "—").replace(/^v/i, ""), 18);
+      const ver = sanitize(String(v.label || "—").replace(/^v/i, ""), 14);
       const star = v.current ? " *" : "";
       const y = listTop + i * rowH;
       const cy = y;
-      const nameSafe = sanitize(title, 20);
+      // Keep name short so it stays left of the version column.
+      const nameSafe = sanitize(title, 16);
       rowsSvg += `
   <text x="${nameX}" y="${cy + 7}" fill="#e8eef8" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${nameSafe}</text>
   <text x="${verX}" y="${cy + 7}" text-anchor="end" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="600">v${ver}${star}</text>
