@@ -96,7 +96,130 @@ function mapProgressStage(msg) {
   return null;
 }
 
-// ─── 1) Version history ───────────────────────────────────────────────
+// ─── 1) Version history (same feeds as iOS Version Sources) ───────────
+// Timbrd / Bilin / iosdump — mirrors Sources/IPadn/IPadnVersionHistory.swift
+
+const VERSION_FEEDS = [
+  {
+    name: "Timbrd",
+    urlTemplate: "https://api.timbrd.com/apple/app-version/index.php?id={id}",
+    containerKey: "",
+    reverse: true,
+  },
+  {
+    name: "Bilin",
+    urlTemplate: "https://apis.bilin.eu.org/history/{id}",
+    containerKey: "data",
+    reverse: false,
+  },
+  {
+    name: "iosdump",
+    urlTemplate: "https://iosdump.apdoilaan.work/history/{appId}",
+    containerKey: "data",
+    reverse: false,
+  },
+];
+
+function feedUrl(template, adam) {
+  return String(template || "")
+    .replace(/\{id\}/gi, adam)
+    .replace(/\{appId\}/gi, adam)
+    .replace(/\{appid\}/gi, adam)
+    .replace(/\{APPID\}/g, adam);
+}
+
+function sanitizeVersion(raw, rejectingId) {
+  const t = String(raw || "").trim();
+  if (!t) return "—";
+  if (rejectingId && t === rejectingId) return "—";
+  return t;
+}
+
+function preference(raw, rejectingId) {
+  const v = sanitizeVersion(raw, rejectingId);
+  if (v === "—" || !v) return 0;
+  if (v === rejectingId) return 1;
+  if (v.includes(".")) return 3;
+  return 2;
+}
+
+async function fetchVersionFeed(adam, source) {
+  const url = feedUrl(source.urlTemplate, adam);
+  if (!url.startsWith("https://")) return [];
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 20000);
+  try {
+    const res = await fetch(url, {
+      signal: ac.signal,
+      headers: { Accept: "application/json", "User-Agent": "Tetherless/1.0" },
+      cache: "no-store",
+    });
+    if (!res.ok) return [];
+    const object = await res.json();
+    const value = source.containerKey
+      ? object && object[source.containerKey]
+      : object;
+    if (!Array.isArray(value)) return [];
+    const ordered = source.reverse
+      ? value.slice(-2000).reverse()
+      : value.slice(0, 2000);
+    const seen = new Set();
+    const out = [];
+    for (const row of ordered) {
+      if (!row || typeof row !== "object") continue;
+      const ext = String(
+        row.external_identifier ?? row.externalVersionId ?? row.external_id ?? ""
+      ).trim();
+      if (!ext || !/^\d+$/.test(ext) || seen.has(ext)) continue;
+      seen.add(ext);
+      const ver = sanitizeVersion(row.bundle_version ?? row.version ?? "", ext);
+      out.push({
+        v: ver,
+        version: ver,
+        label: ver === "—" ? ext : ver,
+        id: ext,
+        index: out.length,
+        current: false,
+        externalVersionId: ext,
+        external_id: ext,
+        source: source.name,
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function mergeVersionFeeds(lists) {
+  const byExt = new Map();
+  const order = [];
+  for (const list of lists) {
+    for (const item of list) {
+      const key = String(item.externalVersionId || item.id || "").trim();
+      if (!key) continue;
+      const existing = byExt.get(key);
+      if (!existing) {
+        byExt.set(key, item);
+        order.push(key);
+      } else if (
+        preference(item.v, key) > preference(existing.v, key)
+      ) {
+        byExt.set(key, {
+          ...existing,
+          ...item,
+          current: !!(existing.current || item.current),
+          v: item.v,
+          version: item.version,
+          label: item.label,
+        });
+      }
+    }
+  }
+  return order.map((k, i) => ({ ...byExt.get(k), index: i }));
+}
 
 async function itunesCurrentVersion(adam, country) {
   const id = String(adam || "").trim();
@@ -120,73 +243,78 @@ async function itunesCurrentVersion(adam, country) {
         index: 0,
         current: true,
         externalVersionId: "",
+        external_id: "",
       },
     ],
   };
 }
 
 /**
- * Best-effort version list. ipatool history varies by version; always include iTunes current.
+ * Version history for Mac API / bot:
+ *   1) Timbrd + Bilin + iosdump (same as iOS Account › Version Sources)
+ *   2) iTunes current build for title + "Latest" marker
  */
-async function listVersions({ url, storefront } = {}) {
-  const adam = adamFromStoreUrl(url);
+async function listVersions({ url, storefront, adam: adamOverride } = {}) {
+  const adam = String(adamOverride || adamFromStoreUrl(url) || "").trim();
   const cc = resolveStorefront(storefront, url);
-  const itunes = await itunesCurrentVersion(adam, cc);
-  const versions = (itunes && itunes.versions) || [];
-  const bin = ipatoolBin();
-  if (bin && adam) {
-    unlockKeychain();
-    // Newer ipatool: `ipatool download --app-id X --external-version-id` needs known ids.
-    // Some builds expose `ipatool get-version-metadata` / history — probe softly.
-    const probes = [
-      ["list-versions", "--app-id", adam],
-      ["get-version-metadata", "--app-id", adam],
-      ["history", "--app-id", adam],
-    ];
-    for (const args of probes) {
-      const r = spawnSync(bin, args, { encoding: "utf8", timeout: 45000, env: process.env });
-      const out = stripAnsi(`${r.stdout || ""}\n${r.stderr || ""}`);
-      if (r.status !== 0) continue;
-      const found = [];
-      const re = /(?:version|externalVersionId|external.version)["'\s:=]+([0-9][0-9A-Za-z._-]{0,29})/gi;
-      let m;
-      while ((m = re.exec(out))) {
-        const id = m[1];
-        if (!found.some((x) => x.id === id || x.v === id)) {
-          found.push({
-            v: id,
-            version: id,
-            label: id,
-            id,
-            index: found.length,
-            current: false,
-            externalVersionId: id,
-          });
-        }
-      }
-      if (found.length) {
-        // Prefer iTunes current first, then history.
-        const cur = versions[0];
-        const merged = [];
-        if (cur) merged.push({ ...cur, current: true, index: 0 });
-        for (const f of found) {
-          if (cur && (f.v === cur.v || f.id === cur.v)) continue;
-          merged.push({ ...f, index: merged.length });
-        }
-        return {
-          title: (itunes && itunes.title) || "App",
-          bundle: (itunes && itunes.bundle) || "",
-          versions: merged,
-          source: "ipatool+" + args[0],
-        };
-      }
-    }
+  if (!adam || !/^\d+$/.test(adam)) {
+    return { title: "App", bundle: "", versions: [], source: "none" };
   }
+
+  const [itunes, ...feedLists] = await Promise.all([
+    itunesCurrentVersion(adam, cc).catch(() => null),
+    ...VERSION_FEEDS.map((src) => fetchVersionFeed(adam, src)),
+  ]);
+
+  const fromFeeds = mergeVersionFeeds(feedLists);
+  const usedFeeds = VERSION_FEEDS.filter((_, i) => (feedLists[i] || []).length > 0).map(
+    (s) => s.name
+  );
+
+  const curVer = itunes && itunes.versions && itunes.versions[0];
+  const merged = [];
+  const seenExt = new Set();
+  const seenVer = new Set();
+
+  if (curVer) {
+    // Prefer a feed row that matches the marketing version for external id.
+    const match = fromFeeds.find(
+      (f) => f.v === curVer.v || f.version === curVer.v || f.label === curVer.v
+    );
+    merged.push({
+      ...curVer,
+      current: true,
+      index: 0,
+      externalVersionId: (match && match.externalVersionId) || "",
+      external_id: (match && match.externalVersionId) || "",
+      id: (match && match.externalVersionId) || curVer.v,
+      source: match ? match.source + "+itunes" : "itunes",
+    });
+    if (match) seenExt.add(match.externalVersionId);
+    seenVer.add(curVer.v);
+  }
+
+  for (const f of fromFeeds) {
+    const ext = f.externalVersionId || f.id;
+    if (ext && seenExt.has(ext)) continue;
+    if (f.v && f.v !== "—" && seenVer.has(f.v) && !ext) continue;
+    if (ext) seenExt.add(ext);
+    if (f.v && f.v !== "—") seenVer.add(f.v);
+    merged.push({ ...f, current: false, index: merged.length });
+  }
+
+  if (!merged.length && curVer) merged.push({ ...curVer, index: 0 });
+
   return {
     title: (itunes && itunes.title) || "App",
     bundle: (itunes && itunes.bundle) || "",
-    versions,
-    source: "itunes",
+    versions: merged,
+    source: usedFeeds.length
+      ? usedFeeds.join("+") + (itunes ? "+itunes" : "")
+      : itunes
+        ? "itunes"
+        : "none",
+    feeds: VERSION_FEEDS.map((s) => s.name),
   };
 }
 
@@ -438,6 +566,7 @@ function startPrefetchLoop() {
 
 module.exports = {
   STATE_DIR,
+  VERSION_FEEDS,
   resolveStorefront,
   parseDownloadPercent,
   mapProgressStage,
