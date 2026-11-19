@@ -171,31 +171,6 @@ function homescreenOverlaySvg({ pct, S }) {
 </svg>`);
 }
 
-/** Telegram-style white download arrow over a dimmed icon (for IPA document thumb). */
-function downloadArrowOverlaySvg(S) {
-  const cx = S / 2;
-  const cy = S / 2;
-  const corner = Math.round(S * 0.223);
-  const stroke = Math.max(14, Math.round(S * 0.085));
-  const shaftTop = cy - S * 0.22;
-  const shaftBot = cy + S * 0.06;
-  const headY = cy + S * 0.22;
-  const headW = S * 0.2;
-  return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <clipPath id="squircle">
-      <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}"/>
-    </clipPath>
-  </defs>
-  <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="rgba(0,0,0,0.38)" clip-path="url(#squircle)"/>
-  <!-- Shaft -->
-  <path d="M ${cx} ${shaftTop} L ${cx} ${shaftBot}" fill="none" stroke="#ffffff" stroke-width="${stroke}" stroke-linecap="round"/>
-  <!-- Arrow head -->
-  <path d="M ${cx - headW} ${cy + S * 0.02} L ${cx} ${headY} L ${cx + headW} ${cy + S * 0.02}" fill="none" stroke="#ffffff" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>`);
-}
-
 function placeholderIconSvg(S) {
   const r = Math.round(S * 0.223);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
@@ -294,13 +269,13 @@ async function renderProgressBanner({
       .composite([{ input: iconRoundMask, blend: "dest-in" }])
       .png()
       .toBuffer();
-    const overlay = isDone
-      ? downloadArrowOverlaySvg(S)
-      : homescreenOverlaySvg({ pct: p, S });
-    const withOverlay = await sharp(rounded)
-      .composite([{ input: overlay, top: 0, left: 0 }])
-      .png()
-      .toBuffer();
+    // Done: clean app icon (Telegram draws its own download UI). In-progress: % ring.
+    const withOverlay = isDone
+      ? rounded
+      : await sharp(rounded)
+          .composite([{ input: homescreenOverlaySvg({ pct: p, S }), top: 0, left: 0 }])
+          .png()
+          .toBuffer();
     layers.push({ input: withOverlay, left: iconLeft, top: iconTop });
 
     layers.push({
@@ -353,8 +328,8 @@ async function renderProgressBanner({
 }
 
 /**
- * IPA document thumbnail (Telegram: JPEG ≤320px, ≤200KB) — app icon + download arrow.
- * Tapping the document in chat starts the IPA download.
+ * IPA document thumbnail (Telegram: JPEG ≤320px, ≤200KB) — clean app icon only.
+ * No download-arrow overlay; Telegram already draws its own download control.
  * @returns {Promise<string>} dest path on success, "" on failure
  */
 async function renderDownloadThumb({ iconPath, dest, size } = {}) {
@@ -380,12 +355,8 @@ async function renderDownloadThumb({ iconPath, dest, size } = {}) {
 <svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
   <rect width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="white"/>
 </svg>`);
-    const rounded = await sharp(iconBase)
+    await sharp(iconBase)
       .composite([{ input: mask, blend: "dest-in" }])
-      .png()
-      .toBuffer();
-    await sharp(rounded)
-      .composite([{ input: downloadArrowOverlaySvg(S), top: 0, left: 0 }])
       .flatten({ background: { r: 20, g: 20, b: 28 } })
       .jpeg({ quality: 82, mozjpeg: true })
       .toFile(out);
@@ -405,6 +376,126 @@ async function renderDownloadThumb({ iconPath, dest, size } = {}) {
   }
 }
 
+/**
+ * Version picker sharp card — versions live on the image (not a text button list).
+ * Top center: VERSIONS · app name · icon · numbered builds · page footer.
+ * @param {{ title?: string, iconPath?: string, versions?: Array<{n:number,label:string}>, page?: number, pages?: number, total?: number, dest?: string }} opts
+ */
+async function renderVersionPickerBanner(opts = {}) {
+  const sharp = loadSharp();
+  if (!sharp) return "";
+  const out = path.resolve(opts.dest || "");
+  if (!out) return "";
+
+  const W = 1200;
+  const H = 630;
+  const title = sanitize(opts.title || "App", 36);
+  const page = Math.max(1, Number(opts.page) || 1);
+  const pages = Math.max(1, Number(opts.pages) || 1);
+  const total = Math.max(0, Number(opts.total) || 0);
+  const versions = Array.isArray(opts.versions) ? opts.versions : [];
+  const iconPath = opts.iconPath || "";
+
+  try {
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+
+    const layers = [];
+
+    // Soft icon blur background.
+    if (iconPath && fs.existsSync(iconPath)) {
+      const blurBuf = await sharp(iconPath)
+        .resize(W, H, { fit: "cover" })
+        .blur(32)
+        .modulate({ brightness: 0.4, saturation: 0.75 })
+        .png()
+        .toBuffer();
+      layers.push({ input: blurBuf, left: 0, top: 0 });
+    }
+
+    // Dark scrim so text stays readable.
+    const scrim = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#080a10" stop-opacity="0.72"/>
+      <stop offset="100%" stop-color="#080a10" stop-opacity="0.88"/>
+    </linearGradient>
+  </defs>
+  <rect width="${W}" height="${H}" fill="url(#g)"/>
+</svg>`);
+    layers.push({ input: await sharp(scrim).png().toBuffer(), left: 0, top: 0 });
+
+    // App icon (left).
+    const iconSize = 220;
+    const iconLeft = 72;
+    const iconTop = 200;
+    let iconBuf;
+    if (iconPath && fs.existsSync(iconPath)) {
+      iconBuf = await roundedPng(sharp, iconPath, iconSize);
+    } else {
+      iconBuf = await sharp(placeholderIconSvg(iconSize)).png().toBuffer();
+    }
+    layers.push({ input: iconBuf, left: iconLeft, top: iconTop });
+
+    // Numbered version rows (right of icon).
+    const rowLines = versions
+      .slice(0, 8)
+      .map((v, idx) => {
+        const n = Number(v.n != null ? v.n : idx + 1);
+        const label = sanitize(String(v.label || "—").replace(/^v/i, ""), 28);
+        const star = v.current ? "  *" : "";
+        return { n, label: `v${label}${star}` };
+      });
+
+    let rowsSvg = "";
+    const listLeft = 360;
+    const listTop = 175;
+    const rowH = 48;
+    rowLines.forEach((row, i) => {
+      const y = listTop + i * rowH;
+      rowsSvg += `
+  <circle cx="${listLeft}" cy="${y}" r="18" fill="#1e2a44" stroke="#3d7cff" stroke-width="2"/>
+  <text x="${listLeft}" y="${y + 7}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">${row.n}</text>
+  <text x="${listLeft + 36}" y="${y + 8}" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600">${row.label}</text>`;
+    });
+
+    const panel = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+  <text x="${W / 2}" y="78" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="42" font-weight="800" letter-spacing="3">VERSIONS</text>
+  <text x="${W / 2}" y="122" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="26" font-weight="600">${title}</text>
+  ${rowsSvg}
+  <text x="${W / 2}" y="${H - 48}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">page ${page}/${pages} · ${total} builds · reply with a number</text>
+  <text x="${W - 56}" y="${H - 20}" text-anchor="end" fill="#6b7385" font-family="Arial, Helvetica, sans-serif" font-size="18">@DELvEKBot</text>
+</svg>`);
+    layers.push({ input: await sharp(panel).png().toBuffer(), left: 0, top: 0 });
+
+    // Small Delvek mark top-left.
+    const delvekIconPath = resolveDelvekIcon();
+    if (delvekIconPath) {
+      const delvekRounded = await roundedPng(sharp, delvekIconPath, 48);
+      layers.push({ input: delvekRounded, left: 40, top: 36 });
+    }
+
+    await sharp({
+      create: {
+        width: W,
+        height: H,
+        channels: 3,
+        background: { r: 11, g: 13, b: 20 },
+      },
+    })
+      .composite(layers)
+      .jpeg({ quality: 90, mozjpeg: true })
+      .toFile(out);
+
+    if (!fs.existsSync(out) || fs.statSync(out).size < 800) return "";
+    return out;
+  } catch (e) {
+    console.warn("[banner] version picker failed:", String((e && e.message) || e).slice(0, 160));
+    return "";
+  }
+}
+
 function whichConvert() {
   return loadSharp() ? "sharp" : "";
 }
@@ -412,6 +503,7 @@ function whichConvert() {
 module.exports = {
   renderProgressBanner,
   renderDownloadThumb,
+  renderVersionPickerBanner,
   whichConvert,
   sharpTag,
   loadSharp,
