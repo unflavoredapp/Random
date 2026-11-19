@@ -114,6 +114,7 @@ function put(entry) {
     fromChatId: entry.fromChatId || "",
     bytes: entry.bytes || 0,
     diskPath: entry.diskPath || "",
+    iconPath: entry.iconPath || "",
     savedAt: Date.now(),
   };
   db.items[keyFor(adam, version)] = item;

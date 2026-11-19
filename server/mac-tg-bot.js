@@ -417,11 +417,91 @@ function fetchStoreIcon(storeUrl) {
 }
 
 /**
- * Telegram document thumbnail: app icon + white download arrow (done-card art).
- * Falls back to plain store icon if sharp thumb render fails.
+ * Pull this build’s AppIcon out of the IPA (Payload/*.app).
+ * Un-crushes Apple CgBI PNGs the same way the site decrypt queue does —
+ * older versions keep their era’s icon instead of today’s App Store art.
  */
-async function buildIpaDocumentThumb(storeUrl) {
-  const iconPath = storeUrl ? fetchStoreIcon(storeUrl) : "";
+function extractIpaIcon(ipaPath, destPath) {
+  const ipa = path.resolve(String(ipaPath || ""));
+  const out = path.resolve(String(destPath || ""));
+  if (!ipa || !out || !fs.existsSync(ipa)) return "";
+  try {
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    const py = [
+      "import zipfile,plistlib,sys,re,zlib,struct,os",
+      "z=zipfile.ZipFile(sys.argv[1]);names=z.namelist()",
+      "ip=[x for x in names if re.match(r'^Payload/[^/]+\\.app/Info\\.plist$',x)]",
+      "if not ip: sys.exit(1)",
+      "base=ip[0][:-len('Info.plist')];d=plistlib.loads(z.read(ip[0]))",
+      "want=[]",
+      "def grab(o):",
+      " if isinstance(o,dict):",
+      "  for k,v in o.items():",
+      "   if k in('CFBundleIconFiles','CFBundleIconFile','CFBundleIconName'): want.extend(v if isinstance(v,list) else [v])",
+      "   else: grab(v)",
+      " elif isinstance(o,list):",
+      "  for v in o: grab(v)",
+      "grab(d)",
+      "want=[os.path.splitext(str(w))[0] for w in want]+['AppIcon','Icon','iTunesArtwork']",
+      "pn=[n for n in names if n.startswith(base) and n.count('/')==base.count('/') and n.lower().endswith(('.png','.jpg','.jpeg'))]",
+      "c=[n for n in pn if any(os.path.basename(n).startswith(w) for w in want)]",
+      "pool=c or [n for n in pn if re.search(r'(?i)appicon|icon|itunesartwork', os.path.basename(n))]",
+      "if not pool: sys.exit(1)",
+      "best=max(pool,key=lambda n:z.getinfo(n).file_size)",
+      "b=z.read(best)",
+      "ext=os.path.splitext(best)[1].lower()",
+      "if ext in ('.jpg','.jpeg') or (len(b)>8 and b[8+4:8+8]!=b'CgBI'):",
+      " open(sys.argv[2],'wb').write(b);sys.exit(0)",
+      "def chunks(b):",
+      " p=8",
+      " while p<len(b):",
+      "  l,t=struct.unpack('>I4s',b[p:p+8]);yield t,b[p+8:p+8+l];p+=12+l",
+      "ch=list(chunks(b));ihdr=[d for t,d in ch if t==b'IHDR'][0]",
+      "w,h=struct.unpack('>II',ihdr[:8])",
+      "raw=zlib.decompress(b''.join(d for t,d in ch if t==b'IDAT'),-15)",
+      "bpp=4;st=w*bpp;prev=bytearray(st);rows=[];p=0",
+      "for y in range(h):",
+      " f=raw[p];line=bytearray(raw[p+1:p+1+st]);p+=1+st",
+      " for i in range(st):",
+      "  a=line[i-bpp] if i>=bpp else 0;bb=prev[i];c2=prev[i-bpp] if i>=bpp else 0",
+      "  if f==1:line[i]=(line[i]+a)&255",
+      "  elif f==2:line[i]=(line[i]+bb)&255",
+      "  elif f==3:line[i]=(line[i]+((a+bb)>>1))&255",
+      "  elif f==4:",
+      "   pa=abs(bb-c2);pb=abs(a-c2);pc=abs(a+bb-2*c2)",
+      "   pr=a if (pa<=pb and pa<=pc) else (bb if pb<=pc else c2)",
+      "   line[i]=(line[i]+pr)&255",
+      " prev=line;o=bytearray(st)",
+      " for x in range(0,st,4):",
+      "  B,G,R,A=line[x],line[x+1],line[x+2],line[x+3]",
+      "  if A and A<255: R=min(255,R*255//A);G=min(255,G*255//A);B=min(255,B*255//A)",
+      "  o[x]=R;o[x+1]=G;o[x+2]=B;o[x+3]=A",
+      " rows.append(b'\\x00'+bytes(o))",
+      "def ck(t,d):",
+      " c=struct.pack('>I',len(d))+t+d;return c+struct.pack('>I',zlib.crc32(t+d)&0xffffffff)",
+      "ih=struct.pack('>IIBBBBB',w,h,8,6,0,0,0)",
+      "open(sys.argv[2],'wb').write(b'\\x89PNG\\r\\n\\x1a\\n'+ck(b'IHDR',ih)+ck(b'IDAT',zlib.compress(b''.join(rows),6))+ck(b'IEND',b''))",
+    ].join("\n");
+    const r = spawnSync("python3", ["-I", "-c", py, ipa, out], {
+      timeout: 45000,
+      encoding: "utf8",
+      maxBuffer: 4 * 1024 * 1024,
+    });
+    if (r.status === 0 && fs.existsSync(out) && fs.statSync(out).size > 100) return out;
+  } catch (e) {
+    console.warn("[icon] extract failed:", (e && e.message) || e);
+  }
+  return "";
+}
+
+/**
+ * Telegram document thumbnail: this build’s icon + white download arrow.
+ * Prefer an IPA-extracted icon (older builds) over today’s App Store art.
+ */
+async function buildIpaDocumentThumb(storeUrl, iconOverride) {
+  let iconPath = "";
+  if (iconOverride && fs.existsSync(iconOverride)) iconPath = iconOverride;
+  if (!iconPath && storeUrl) iconPath = fetchStoreIcon(storeUrl) || "";
   const dest = path.join(
     os.tmpdir(),
     `delvek-ipa-thumb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
@@ -640,6 +720,25 @@ function createProgressCard(chatId) {
           hasPhoto = true;
         }
       }
+    },
+    /** Swap to an IPA-extracted icon (this build’s artwork) and repaint. */
+    async setIcon(nextIcon, stage, pct) {
+      if (closed) return;
+      const next = String(nextIcon || "");
+      if (!next || !fs.existsSync(next)) return;
+      iconPath = next;
+      const p =
+        pct != null
+          ? Math.max(lastPct < 0 ? 0 : lastPct, Math.max(0, Math.min(99, Math.round(Number(pct) || 0))))
+          : lastPct < 0
+            ? 0
+            : lastPct;
+      lastPct = p;
+      if (stage) lastStage = stage;
+      await paintBanner(stage || lastStage || "Working…", p);
+    },
+    get iconPath() {
+      return iconPath;
     },
     async setStage(stage, pct) {
       if (closed) return;
@@ -1384,15 +1483,17 @@ async function resolveExternalVersionId(link, vreq) {
 /** Versions per Telegram picker page (plus Latest + Next/Prev). */
 const VER_PAGE_SIZE = 8;
 
+/** Caption under the version sharp card (HTML). */
 function versionPickText(pending, page) {
-  const title = String(pending.title || "App").replace(/[*_`\[\]]/g, "");
+  const title = String(pending.title || "App").trim() || "App";
   const total = pending.picks.length;
   const pages = Math.max(1, Math.ceil(total / VER_PAGE_SIZE));
   const p = Math.max(0, Math.min(pages - 1, page));
-  return (
-    `*${title}* — pick a version\n` +
-    `_Timbrd / Bilin / iosdump · page ${p + 1}/${pages} · ${total} builds_`
-  );
+  return [
+    `<b>${escapeHtml(title)}</b>`,
+    "Pick a version",
+    `<i>Timbrd / Bilin / iosdump · page ${p + 1}/${pages} · ${total} builds</i>`,
+  ].join("\n");
 }
 
 function versionPickKeyboard(token, pending, page) {
@@ -1429,7 +1530,7 @@ function versionPickKeyboard(token, pending, page) {
   return { inline_keyboard: rows };
 }
 
-/** Timbrd/Bilin/iosdump version sheet — pick before the sharp progress card. */
+/** Timbrd/Bilin/iosdump version sheet — sharp card + pick buttons before decrypt. */
 async function offerVersionPick(chatId, link) {
   pruneVerPicks();
   const wait = await tgApi("sendMessage", {
@@ -1446,7 +1547,12 @@ async function offerVersionPick(chatId, link) {
     listed = { title: "App", versions: [] };
   }
   const versions = Array.isArray(listed.versions) ? listed.versions : [];
-  const title = String((listed && listed.title) || "App").replace(/[*_`\[\]]/g, "");
+  const storeMeta = lookupStoreApp(link);
+  const title = String(
+    (listed && listed.title) || storeMeta.name || "App"
+  )
+    .replace(/[*_`\[\]]/g, "")
+    .trim() || "App";
 
   // No history feeds → decrypt latest immediately (same as before).
   if (!versions.length) {
@@ -1481,39 +1587,57 @@ async function offerVersionPick(chatId, link) {
     title,
     picks,
     page: 0,
+    hasPhoto: false,
     expires: Date.now() + 20 * 60 * 1000,
   };
   pendingVerPicks.set(token, pending);
 
-  const text = versionPickText(pending, 0);
+  const caption = versionPickText(pending, 0);
   const reply_markup = versionPickKeyboard(token, pending, 0);
 
+  // Drop the plain "Loading…" bubble — version sheet is a sharp card with icon.
   if (waitId) {
-    await tgApi("editMessageText", {
-      chat_id: chatId,
-      message_id: waitId,
-      text,
-      parse_mode: "Markdown",
-      reply_markup,
-      disable_web_page_preview: true,
-    }).catch(async () => {
-      await tgApi("sendMessage", {
-        chat_id: chatId,
-        text,
-        parse_mode: "Markdown",
-        reply_markup,
-        disable_web_page_preview: true,
-      });
-    });
-  } else {
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text,
-      parse_mode: "Markdown",
-      reply_markup,
-      disable_web_page_preview: true,
-    });
+    await tgApi("deleteMessage", { chat_id: chatId, message_id: waitId }).catch(() => {});
   }
+
+  const bannerDest = path.join(WORK, `verpick-${chatId}-${token}.jpg`);
+  let photoPath = "";
+  try {
+    photoPath = await renderProgressBanner({
+      name: title,
+      stage: "Pick a version",
+      pct: 0,
+      iconPath: storeMeta.iconPath || "",
+      dest: bannerDest,
+      tag: "delvek",
+      brand: "DELVEK",
+    });
+  } catch (e) {
+    console.warn("[versions] banner failed:", (e && e.message) || e);
+  }
+  if (!photoPath || !fs.existsSync(photoPath)) {
+    photoPath = storeMeta.iconPath || "";
+  }
+
+  if (photoPath && fs.existsSync(photoPath)) {
+    const sent = await sendPhotoBotApi(chatId, photoPath, caption, reply_markup).catch((e) => {
+      console.warn("[versions] sendPhoto failed:", (e && e.message) || e);
+      return null;
+    });
+    if (sent && sent.ok && sent.result && sent.result.message_id) {
+      pending.hasPhoto = true;
+      return;
+    }
+  }
+
+  // Text fallback if sharp/icon unavailable.
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text: caption,
+    parse_mode: "HTML",
+    reply_markup,
+    disable_web_page_preview: true,
+  });
 }
 
 async function handleVersionPick(cq, data) {
@@ -1542,14 +1666,30 @@ async function handleVersionPick(cq, data) {
     pending.expires = Date.now() + 20 * 60 * 1000;
     await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     if (cq.message && cq.message.message_id) {
-      await tgApi("editMessageText", {
-        chat_id: chatId,
-        message_id: cq.message.message_id,
-        text: versionPickText(pending, page),
-        parse_mode: "Markdown",
-        reply_markup: versionPickKeyboard(token, pending, page),
-        disable_web_page_preview: true,
-      }).catch(() => {});
+      const caption = versionPickText(pending, page);
+      const reply_markup = versionPickKeyboard(token, pending, page);
+      const isPhoto =
+        pending.hasPhoto ||
+        !!(cq.message.photo && cq.message.photo.length) ||
+        !!(cq.message.document && /image\//i.test(cq.message.document.mime_type || ""));
+      if (isPhoto) {
+        await tgApi("editMessageCaption", {
+          chat_id: chatId,
+          message_id: cq.message.message_id,
+          caption,
+          parse_mode: "HTML",
+          reply_markup,
+        }).catch(() => {});
+      } else {
+        await tgApi("editMessageText", {
+          chat_id: chatId,
+          message_id: cq.message.message_id,
+          text: caption,
+          parse_mode: "HTML",
+          reply_markup,
+          disable_web_page_preview: true,
+        }).catch(() => {});
+      }
     }
     return;
   }
@@ -1756,6 +1896,22 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     await card.setStage("Sending…", 90);
   }
 
+  let iconPath =
+    (entry.iconPath && fs.existsSync(entry.iconPath) && entry.iconPath) || "";
+  if (!iconPath && hasDisk) {
+    const iconDest = path.join(
+      path.dirname(entry.diskPath),
+      `${path.basename(entry.diskPath, ".ipa")}.icon.png`
+    );
+    iconPath =
+      (fs.existsSync(iconDest) && iconDest) ||
+      extractIpaIcon(entry.diskPath, iconDest) ||
+      "";
+  }
+  if (iconPath && typeof card.setIcon === "function") {
+    await card.setIcon(iconPath, "Sending…", 90);
+  }
+
   const pending = {
     diskPath: hasDisk ? entry.diskPath : "",
     // Skip stale file_id when we must rename via disk.
@@ -1769,6 +1925,7 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     name: entry.name || "",
     minIos: entry.minIos || "",
     bytes: entry.bytes || 0,
+    iconPath: iconPath || "",
   };
   const sent = await deliverIpaAsDocument(chatId, pending, { card });
   if (sent && sent.ok) {
@@ -1822,6 +1979,18 @@ async function decryptStoreUrl(chatId, link, vreq, opts = {}) {
       vreq,
     });
 
+    // Capture this build’s icon from the encrypted IPA (older versions differ).
+    const encPath = path.join(dir, "encrypted-source.ipa");
+    let buildIcon = "";
+    if (fs.existsSync(encPath)) {
+      const iconDest = path.join(dir, `icon-build-${Date.now()}.png`);
+      buildIcon = extractIpaIcon(encPath, iconDest);
+      if (buildIcon) {
+        await card.setIcon(buildIcon, "Downloading…", 40);
+        console.log("[icon] captured from encrypted IPA", buildIcon);
+      }
+    }
+
     const say = (t) => {
       card.fromBackendLine(t);
     };
@@ -1836,11 +2005,18 @@ async function decryptStoreUrl(chatId, link, vreq, opts = {}) {
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
+    // Prefer clear IPA icon if encrypted extract missed (Assets.car-only apps).
+    if (!buildIcon || !fs.existsSync(buildIcon)) {
+      const iconDest = path.join(dir, `icon-clear-${Date.now()}.png`);
+      buildIcon = extractIpaIcon(result.file, iconDest) || buildIcon;
+      if (buildIcon) await card.setIcon(buildIcon, "Uploading…", 74);
+    }
     await card.setStage("Uploading…", 74);
     await deliverResult(chatId, result, {
       storeUrl: link,
       versionHint: vreq,
       versionLabel,
+      iconPath: buildIcon || card.iconPath || "",
       card,
     });
   } catch (e) {
@@ -1892,6 +2068,29 @@ async function deliverResult(chatId, result, opts = {}) {
     fs.copyFileSync(result.file, keep);
   }
 
+  // Persist this build’s icon next to the IPA for thumbs / re-sends.
+  let iconPath = "";
+  if (opts.iconPath && fs.existsSync(opts.iconPath)) {
+    iconPath = opts.iconPath;
+  } else {
+    const iconDest = path.join(path.dirname(keep), `${path.basename(keep, ".ipa")}.icon.png`);
+    iconPath = extractIpaIcon(keep, iconDest);
+  }
+  if (iconPath && adam) {
+    const durableIcon = path.join(path.dirname(keep), `${path.basename(keep, ".ipa")}.icon.png`);
+    if (path.resolve(iconPath) !== path.resolve(durableIcon)) {
+      try {
+        fs.copyFileSync(iconPath, durableIcon);
+        iconPath = durableIcon;
+      } catch {
+        /* keep temp path */
+      }
+    }
+  }
+  if (iconPath && card && typeof card.setIcon === "function") {
+    await card.setIcon(iconPath, "Uploading…", 92);
+  }
+
   if (adam) {
     ipaCache.put({
       adam,
@@ -1904,6 +2103,7 @@ async function deliverResult(chatId, result, opts = {}) {
       caption,
       bytes,
       diskPath: keep,
+      iconPath: iconPath || "",
     });
     console.log("[cache] stored disk-ready", adam, version || "latest", keep);
   }
@@ -1948,6 +2148,7 @@ async function deliverResult(chatId, result, opts = {}) {
     name,
     minIos,
     bytes,
+    iconPath: iconPath || "",
   }, { card });
 
   if (!sent || !sent.ok) {
@@ -2105,7 +2306,15 @@ async function deliverIpaAsDocument(chatId, pending, { card, cardMessageId } = {
     Number(cardMessageId || pending.cardMessageId || (card && card.messageId) || 0) || 0;
   const disk = pending.diskPath && fs.existsSync(pending.diskPath) ? pending.diskPath : "";
   const bytes = pending.bytes || (disk ? fs.statSync(disk).size : 0);
-  const thumbPath = await buildIpaDocumentThumb(pending.storeUrl || "");
+  let buildIcon = pending.iconPath && fs.existsSync(pending.iconPath) ? pending.iconPath : "";
+  if (!buildIcon && disk) {
+    const iconDest = path.join(
+      os.tmpdir(),
+      `delvek-ipa-icon-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.png`
+    );
+    buildIcon = extractIpaIcon(disk, iconDest);
+  }
+  const thumbPath = await buildIpaDocumentThumb(pending.storeUrl || "", buildIcon || "");
 
   // 1) Direct in-place when we already have file_id or the file fits Bot API.
   const canDirectEdit =
