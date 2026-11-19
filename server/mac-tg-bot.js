@@ -154,6 +154,34 @@ function buildIpaFileName({ name, version }) {
   return `${n}${v}-[DELvEK.NeT].ipa`;
 }
 
+/** Apple external-version-id is a long digit string — not a marketing version. */
+function isExternalVersionId(value) {
+  return /^\d{6,}$/.test(String(value || "").trim());
+}
+
+/**
+ * Caption / filename should show CFBundleShortVersionString (e.g. 8.12.0),
+ * never the raw external-version-id used for ipatool (`840234580`).
+ */
+function displayAppVersion({ versionHint, versionLabel, ipaVersion } = {}) {
+  const fromIpa = String(ipaVersion || "").trim();
+  const fromLabel = String(versionLabel || "")
+    .trim()
+    .replace(/^⭐\s*Latest\s*·\s*/i, "")
+    .replace(/^v/i, "")
+    .trim();
+  const fromHint = String(versionHint || "").trim().replace(/^v/i, "");
+  if (fromIpa && !isExternalVersionId(fromIpa)) return fromIpa.slice(0, 40);
+  if (fromLabel && !isExternalVersionId(fromLabel) && fromLabel.toLowerCase() !== "latest") {
+    return fromLabel.slice(0, 40);
+  }
+  if (fromHint && !isExternalVersionId(fromHint) && fromHint.toLowerCase() !== "latest") {
+    return fromHint.slice(0, 40);
+  }
+  if (fromIpa) return fromIpa.slice(0, 40);
+  return "";
+}
+
 /** Progress-card stage lines — cruel reminders that you suck at sideloading. */
 function cruelReminder(pct, _hint) {
   const lines = [
@@ -1435,8 +1463,15 @@ async function offerVersionPick(chatId, link) {
   const picks = versions.map((v, i) => {
     const ver = String(v.v || v.version || v.label || "—").slice(0, 24);
     const ext = String(v.externalVersionId || v.external_id || "").trim();
+    const marketing = isExternalVersionId(ver) ? "" : ver;
     const label = v.current ? `⭐ Latest · ${ver}` : `v${ver}`;
-    return { i, label: label.slice(0, 64), ext, current: !!v.current };
+    return {
+      i,
+      label: label.slice(0, 64),
+      ext,
+      marketing,
+      current: !!v.current,
+    };
   });
 
   const token = crypto.randomBytes(5).toString("hex");
@@ -1523,6 +1558,7 @@ async function handleVersionPick(cq, data) {
 
   let vreq = "";
   let label = "Latest";
+  let versionLabel = "";
   if (kind !== "L") {
     // Support ver:token:i:N and legacy ver:token:N
     const idx = kind === "i" ? Number(arg) : Number(kind);
@@ -1536,7 +1572,8 @@ async function handleVersionPick(cq, data) {
       return;
     }
     vreq = pick.ext || "";
-    label = pick.label || vreq || "version";
+    versionLabel = pick.marketing || "";
+    label = versionLabel ? `v${versionLabel}` : pick.label || "version";
   }
 
   await tgApi("answerCallbackQuery", {
@@ -1552,9 +1589,9 @@ async function handleVersionPick(cq, data) {
     }).catch(() => {});
   }
 
-  rememberStoreUrl(chatId, pending.url, vreq || "latest");
+  rememberStoreUrl(chatId, pending.url, versionLabel || "latest");
   await withWorker(chatId, async () => {
-    await decryptStoreUrl(chatId, pending.url, vreq);
+    await decryptStoreUrl(chatId, pending.url, vreq, { versionLabel });
   });
 }
 
@@ -1671,20 +1708,45 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   const hasFileId = !!entry.fileId;
   if (!hasDisk && !hasFileId) return false;
 
-  // Prefer disk when cached name still says Tetherless / bare DELvEK.
+  // Prefer marketing version from Info.plist when cache stored an external-version-id.
+  let version = displayAppVersion({ versionHint: entry.version });
+  let bid = entry.bid || "";
+  let minIos = entry.minIos || "";
+  if ((!version || isExternalVersionId(entry.version)) && hasDisk) {
+    const meta = readIpaMeta(entry.diskPath);
+    version = displayAppVersion({
+      versionHint: entry.version,
+      ipaVersion: meta.version,
+    });
+    if (!bid && meta.bid) bid = meta.bid;
+    if (!minIos && meta.minIos) minIos = meta.minIos;
+  }
+
+  // Prefer disk when cached name still says Tetherless / bare DELvEK / raw ext-id.
   const cachedName = String(entry.fileName || "");
   const needsDelvekName =
     /Tetherless\.ipa$/i.test(cachedName) ||
     (/DELvEK\.ipa$/i.test(cachedName) && !/\[DELvEK\.NeT\]\.ipa$/i.test(cachedName));
-  const fileName = displayIpaFileName(
-    needsDelvekName && hasDisk
-      ? path.basename(entry.diskPath)
-      : entry.fileName || (hasDisk ? path.basename(entry.diskPath) : "App.ipa")
-  );
+  const needsVersionRename =
+    !!version && /_v\d{6,}-\[DELvEK\.NeT\]\.ipa$/i.test(cachedName);
+  let fileName;
+  if ((needsDelvekName || needsVersionRename) && version) {
+    const baseName =
+      entry.name ||
+      String(cachedName).replace(/_v[\w.-]*-\[DELvEK\.NeT\]\.ipa$/i, "") ||
+      "App";
+    fileName = buildIpaFileName({ name: baseName, version });
+  } else {
+    fileName = displayIpaFileName(
+      needsDelvekName && hasDisk
+        ? path.basename(entry.diskPath)
+        : entry.fileName || (hasDisk ? path.basename(entry.diskPath) : "App.ipa")
+    );
+  }
   const caption = buildCaption({
-    bid: entry.bid,
-    version: entry.version,
-    minIos: entry.minIos,
+    bid,
+    version,
+    minIos,
     storeUrl: entry.storeUrl,
   });
 
@@ -1723,7 +1785,7 @@ async function trySendCached(chatId, storeUrl, vreq) {
   return sendCachedEntry(chatId, entry);
 }
 
-async function decryptStoreUrl(chatId, link, vreq) {
+async function decryptStoreUrl(chatId, link, vreq, opts = {}) {
   if (isAppleSystemApp(link, "")) {
     await tgApi("sendMessage", {
       chat_id: chatId,
@@ -1735,6 +1797,7 @@ async function decryptStoreUrl(chatId, link, vreq) {
 
   const card = createProgressCard(chatId);
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
+  const versionLabel = String(opts.versionLabel || "").trim();
 
   try {
     // SSH sessions need the dedicated keychain unlocked before ipatool.
@@ -1774,7 +1837,12 @@ async function decryptStoreUrl(chatId, link, vreq) {
       throw new Error("Decrypt produced no IPA");
     }
     await card.setStage("Uploading…", 74);
-    await deliverResult(chatId, result, { storeUrl: link, versionHint: vreq, card });
+    await deliverResult(chatId, result, {
+      storeUrl: link,
+      versionHint: vreq,
+      versionLabel,
+      card,
+    });
   } catch (e) {
     await card.fail((e && e.message) || e);
     throw markReported(e);
@@ -1790,7 +1858,12 @@ async function decryptStoreUrl(chatId, link, vreq) {
 async function deliverResult(chatId, result, opts = {}) {
   const ipaMeta = readIpaMeta(result.file);
   const name = opts.label || ipaMeta.name || result.name || (opts.card && opts.card.name) || "App";
-  const version = opts.versionHint || ipaMeta.version || "";
+  // Prefer Info.plist / picker marketing version — never show external-version-id gibberish.
+  const version = displayAppVersion({
+    versionHint: opts.versionHint,
+    versionLabel: opts.versionLabel,
+    ipaVersion: ipaMeta.version,
+  });
   const bid = ipaMeta.bid || "";
   const minIos = ipaMeta.minIos || "";
   const storeUrl = opts.storeUrl || "";
