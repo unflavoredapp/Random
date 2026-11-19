@@ -20,15 +20,24 @@ const fairplayBackends = require("./fairplayBackends");
 const ipatoolExtras = require("./mac-ipatool-extras");
 const ipaCache = require("./mac-tg-ipa-cache");
 const urlLog = require("./mac-tg-url-log");
-const { renderProgressBanner, renderDownloadThumb } = require("./mac-tg-progress-banner");
+const {
+  renderProgressBanner,
+  renderDownloadThumb,
+  renderVersionPickerBanner,
+} = require("./mac-tg-progress-banner");
 const publicDl = require("./mac-tg-public-dl");
 
-/** token → { chatId, url, picks:[{label,ext}], expires } — version sheet before sharp card. */
+/** token → version sharp-card carousel state (before decrypt progress card). */
 const pendingVerPicks = new Map();
+/** chatId → token — so a plain number reply can pick from the open carousel. */
+const activeVerPickByChat = new Map();
 function pruneVerPicks() {
   const now = Date.now();
   for (const [k, v] of pendingVerPicks) {
-    if (!v || v.expires < now) pendingVerPicks.delete(k);
+    if (!v || v.expires < now) {
+      pendingVerPicks.delete(k);
+      if (v && v.chatId) activeVerPickByChat.delete(v.chatId);
+    }
   }
 }
 
@@ -1480,59 +1489,142 @@ async function resolveExternalVersionId(link, vreq) {
   return raw;
 }
 
-/** Versions per Telegram picker page (plus Latest + Next/Prev). */
+/** Versions painted on each sharp-card page (numbered 1…N for typed replies). */
 const VER_PAGE_SIZE = 8;
 
-/** Caption under the version sharp card (HTML). */
-function versionPickText(pending, page) {
-  const title = String(pending.title || "App").trim() || "App";
-  const total = pending.picks.length;
-  const pages = Math.max(1, Math.ceil(total / VER_PAGE_SIZE));
-  const p = Math.max(0, Math.min(pages - 1, page));
-  return [
-    `<b>${escapeHtml(title)}</b>`,
-    "Pick a version",
-    `<i>Timbrd / Bilin / iosdump · page ${p + 1}/${pages} · ${total} builds</i>`,
-  ].join("\n");
+function versionCarouselPages(pending) {
+  return Math.max(1, Math.ceil((pending.picks || []).length / VER_PAGE_SIZE));
 }
 
-function versionPickKeyboard(token, pending, page) {
-  const total = pending.picks.length;
-  const pages = Math.max(1, Math.ceil(total / VER_PAGE_SIZE));
+function versionCarouselSlice(pending, page) {
+  const pages = versionCarouselPages(pending);
   const p = Math.max(0, Math.min(pages - 1, page));
   const start = p * VER_PAGE_SIZE;
-  const slice = pending.picks.slice(start, start + VER_PAGE_SIZE);
+  return {
+    page: p,
+    pages,
+    start,
+    slice: (pending.picks || []).slice(start, start + VER_PAGE_SIZE),
+  };
+}
 
-  const rows = [
-    [{ text: "⭐ Latest", callback_data: `ver:${token}:L`.slice(0, 64) }],
-    ...slice.map((pick) => [
-      {
-        text: pick.label,
-        callback_data: `ver:${token}:i:${pick.i}`.slice(0, 64),
-      },
-    ]),
-  ];
-
-  if (pages > 1) {
-    const nav = [];
-    if (p > 0) {
-      nav.push({ text: "◀ Prev", callback_data: `ver:${token}:p:${p - 1}`.slice(0, 64) });
-    }
-    nav.push({
-      text: `${p + 1}/${pages}`,
-      callback_data: `ver:${token}:p:${p}`.slice(0, 64), // no-op refresh
-    });
-    if (p < pages - 1) {
-      nav.push({ text: "Next ▶", callback_data: `ver:${token}:p:${p + 1}`.slice(0, 64) });
-    }
-    rows.push(nav);
+/** Nav only — versions are on the sharp card; user replies with a number. */
+function versionPickKeyboard(token, pending, page) {
+  const { pages, page: p } = versionCarouselSlice(pending, page);
+  const rows = [[{ text: "⭐ Latest", callback_data: `ver:${token}:L`.slice(0, 64) }]];
+  const nav = [];
+  if (p > 0) {
+    nav.push({ text: "◀ Back", callback_data: `ver:${token}:p:${p - 1}`.slice(0, 64) });
   }
+  nav.push({
+    text: `${p + 1}/${pages}`,
+    callback_data: `ver:${token}:p:${p}`.slice(0, 64),
+  });
+  if (p < pages - 1) {
+    nav.push({ text: "Next ▶", callback_data: `ver:${token}:p:${p + 1}`.slice(0, 64) });
+  }
+  rows.push(nav);
   return { inline_keyboard: rows };
 }
 
-/** Timbrd/Bilin/iosdump version sheet — sharp card + pick buttons before decrypt. */
+async function renderVersionCarouselPage(pending, page) {
+  const { page: p, pages, slice } = versionCarouselSlice(pending, page);
+  const dest = path.join(
+    WORK,
+    `verpick-${pending.chatId}-${pending.token || "x"}-p${p}.jpg`
+  );
+  const versions = slice.map((pick, idx) => ({
+    n: idx + 1,
+    label: pick.marketing || String(pick.label || "").replace(/^⭐\s*Latest\s*·\s*/i, "") || "—",
+    current: !!pick.current,
+  }));
+  return renderVersionPickerBanner({
+    title: pending.title,
+    iconPath: pending.iconPath || "",
+    versions,
+    page: p + 1,
+    pages,
+    total: pending.picks.length,
+    dest,
+  });
+}
+
+async function paintVersionCarousel(pending, page, { messageId } = {}) {
+  const { page: p } = versionCarouselSlice(pending, page);
+  pending.page = p;
+  pending.expires = Date.now() + 20 * 60 * 1000;
+  const reply_markup = versionPickKeyboard(pending.token, pending, p);
+  // Caption stays minimal — versions are painted on the card.
+  const caption =
+    `<b>${escapeHtml(pending.title || "App")}</b>\n` +
+    `Reply with a number · or Next / Back`;
+
+  const img = await renderVersionCarouselPage(pending, p);
+  if (img && fs.existsSync(img)) {
+    if (messageId) {
+      const edited = await editMessageMediaBotApi(
+        pending.chatId,
+        messageId,
+        img,
+        caption,
+        reply_markup
+      );
+      if (edited && edited.ok) {
+        pending.hasPhoto = true;
+        pending.messageId = messageId;
+        return true;
+      }
+    } else {
+      const sent = await sendPhotoBotApi(pending.chatId, img, caption, reply_markup);
+      if (sent && sent.ok && sent.result && sent.result.message_id) {
+        pending.hasPhoto = true;
+        pending.messageId = sent.result.message_id;
+        return true;
+      }
+    }
+  }
+
+  // Text fallback.
+  const lines = versionCarouselSlice(pending, p).slice.map(
+    (pick, idx) => `${idx + 1}. ${pick.label}`
+  );
+  const text = `*VERSIONS*\n${pending.title}\n\n${lines.join("\n")}\n\n_Reply with a number_`;
+  if (messageId && !pending.hasPhoto) {
+    await tgApi("editMessageText", {
+      chat_id: pending.chatId,
+      message_id: messageId,
+      text,
+      parse_mode: "Markdown",
+      reply_markup,
+    }).catch(() => {});
+  } else {
+    await tgApi("sendMessage", {
+      chat_id: pending.chatId,
+      text,
+      parse_mode: "Markdown",
+      reply_markup,
+    });
+  }
+  return false;
+}
+
+/** Timbrd/Bilin/iosdump — version sharp-card carousel before decrypt progress card. */
 async function offerVersionPick(chatId, link) {
   pruneVerPicks();
+  // Close any prior carousel for this chat.
+  const prevTok = activeVerPickByChat.get(chatId);
+  if (prevTok && pendingVerPicks.has(prevTok)) {
+    const prev = pendingVerPicks.get(prevTok);
+    if (prev && prev.messageId) {
+      await tgApi("deleteMessage", {
+        chat_id: chatId,
+        message_id: prev.messageId,
+      }).catch(() => {});
+    }
+    pendingVerPicks.delete(prevTok);
+  }
+  activeVerPickByChat.delete(chatId);
+
   const wait = await tgApi("sendMessage", {
     chat_id: chatId,
     text: "Loading versions…",
@@ -1554,18 +1646,18 @@ async function offerVersionPick(chatId, link) {
     .replace(/[*_`\[\]]/g, "")
     .trim() || "App";
 
+  if (waitId) {
+    await tgApi("deleteMessage", { chat_id: chatId, message_id: waitId }).catch(() => {});
+  }
+
   // No history feeds → decrypt latest immediately (same as before).
   if (!versions.length) {
-    if (waitId) {
-      await tgApi("deleteMessage", { chat_id: chatId, message_id: waitId }).catch(() => {});
-    }
     await withWorker(chatId, async () => {
       await decryptStoreUrl(chatId, link, "");
     });
     return;
   }
 
-  // Keep the full list — Next/Prev pages through it.
   const picks = versions.map((v, i) => {
     const ver = String(v.v || v.version || v.label || "—").slice(0, 24);
     const ext = String(v.externalVersionId || v.external_id || "").trim();
@@ -1582,68 +1674,78 @@ async function offerVersionPick(chatId, link) {
 
   const token = crypto.randomBytes(5).toString("hex");
   const pending = {
+    token,
     chatId,
     url: link,
     title,
+    iconPath: storeMeta.iconPath || "",
     picks,
     page: 0,
     hasPhoto: false,
+    messageId: 0,
     expires: Date.now() + 20 * 60 * 1000,
   };
   pendingVerPicks.set(token, pending);
+  activeVerPickByChat.set(chatId, token);
 
-  const caption = versionPickText(pending, 0);
-  const reply_markup = versionPickKeyboard(token, pending, 0);
+  await paintVersionCarousel(pending, 0);
+}
 
-  // Drop the plain "Loading…" bubble — version sheet is a sharp card with icon.
-  if (waitId) {
-    await tgApi("deleteMessage", { chat_id: chatId, message_id: waitId }).catch(() => {});
+async function startDecryptFromVersionPick(pending, { vreq, versionLabel, label }) {
+  const chatId = pending.chatId;
+  pendingVerPicks.delete(pending.token);
+  activeVerPickByChat.delete(chatId);
+  if (pending.messageId) {
+    await tgApi("deleteMessage", {
+      chat_id: chatId,
+      message_id: pending.messageId,
+    }).catch(() => {});
   }
-
-  const bannerDest = path.join(WORK, `verpick-${chatId}-${token}.jpg`);
-  let photoPath = "";
-  try {
-    photoPath = await renderProgressBanner({
-      name: title,
-      stage: "Pick a version",
-      pct: 0,
-      iconPath: storeMeta.iconPath || "",
-      dest: bannerDest,
-      tag: "delvek",
-      brand: "DELVEK",
+  rememberStoreUrl(chatId, pending.url, versionLabel || "latest");
+  await withWorker(chatId, async () => {
+    await decryptStoreUrl(chatId, pending.url, vreq || "", {
+      versionLabel: versionLabel || "",
     });
-  } catch (e) {
-    console.warn("[versions] banner failed:", (e && e.message) || e);
-  }
-  if (!photoPath || !fs.existsSync(photoPath)) {
-    photoPath = storeMeta.iconPath || "";
-  }
-
-  if (photoPath && fs.existsSync(photoPath)) {
-    const sent = await sendPhotoBotApi(chatId, photoPath, caption, reply_markup).catch((e) => {
-      console.warn("[versions] sendPhoto failed:", (e && e.message) || e);
-      return null;
-    });
-    if (sent && sent.ok && sent.result && sent.result.message_id) {
-      pending.hasPhoto = true;
-      return;
-    }
-  }
-
-  // Text fallback if sharp/icon unavailable.
-  await tgApi("sendMessage", {
-    chat_id: chatId,
-    text: caption,
-    parse_mode: "HTML",
-    reply_markup,
-    disable_web_page_preview: true,
   });
+  console.log("[versions] picked", label || versionLabel || "latest", "→ decrypt card");
+}
+
+/** Typed number while a version carousel is open (1…pageSize on the current card). */
+async function tryHandleVersionNumberReply(chatId, text, messageId) {
+  pruneVerPicks();
+  const token = activeVerPickByChat.get(chatId);
+  if (!token) return false;
+  const pending = pendingVerPicks.get(token);
+  if (!pending || pending.chatId !== chatId) {
+    activeVerPickByChat.delete(chatId);
+    return false;
+  }
+  const raw = String(text || "").trim();
+  if (!/^\d{1,2}$/.test(raw)) return false;
+  const n = Number(raw);
+  const { slice } = versionCarouselSlice(pending, pending.page || 0);
+  if (n < 1 || n > slice.length) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: `Reply with 1–${slice.length} for this page (or tap Next / Back).`,
+      reply_to_message_id: messageId || undefined,
+    }).catch(() => {});
+    return true;
+  }
+  const pick = slice[n - 1];
+  await deleteUserMessage(chatId, messageId);
+  await startDecryptFromVersionPick(pending, {
+    vreq: pick.ext || "",
+    versionLabel: pick.marketing || "",
+    label: pick.marketing ? `v${pick.marketing}` : pick.label,
+  });
+  return true;
 }
 
 async function handleVersionPick(cq, data) {
   const chatId = cq.message && cq.message.chat && cq.message.chat.id;
   const parts = data.split(":");
-  // ver:<token>:L | ver:<token>:p:<page> | ver:<token>:i:<index>
+  // ver:<token>:L | ver:<token>:p:<page>
   const token = parts[1] || "";
   const kind = parts[2] || "";
   const arg = parts[3] || "";
@@ -1658,81 +1760,34 @@ async function handleVersionPick(cq, data) {
     return;
   }
 
-  // Page navigation — keep the picker open.
+  // Flip the sharp card to another page of versions.
   if (kind === "p") {
-    const pages = Math.max(1, Math.ceil(pending.picks.length / VER_PAGE_SIZE));
+    const pages = versionCarouselPages(pending);
     const page = Math.max(0, Math.min(pages - 1, Number(arg) || 0));
-    pending.page = page;
-    pending.expires = Date.now() + 20 * 60 * 1000;
     await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
-    if (cq.message && cq.message.message_id) {
-      const caption = versionPickText(pending, page);
-      const reply_markup = versionPickKeyboard(token, pending, page);
-      const isPhoto =
-        pending.hasPhoto ||
-        !!(cq.message.photo && cq.message.photo.length) ||
-        !!(cq.message.document && /image\//i.test(cq.message.document.mime_type || ""));
-      if (isPhoto) {
-        await tgApi("editMessageCaption", {
-          chat_id: chatId,
-          message_id: cq.message.message_id,
-          caption,
-          parse_mode: "HTML",
-          reply_markup,
-        }).catch(() => {});
-      } else {
-        await tgApi("editMessageText", {
-          chat_id: chatId,
-          message_id: cq.message.message_id,
-          text: caption,
-          parse_mode: "HTML",
-          reply_markup,
-          disable_web_page_preview: true,
-        }).catch(() => {});
-      }
-    }
+    const mid = (cq.message && cq.message.message_id) || pending.messageId;
+    await paintVersionCarousel(pending, page, { messageId: mid });
     return;
   }
 
-  pendingVerPicks.delete(token);
-
-  let vreq = "";
-  let label = "Latest";
-  let versionLabel = "";
-  if (kind !== "L") {
-    // Support ver:token:i:N and legacy ver:token:N
-    const idx = kind === "i" ? Number(arg) : Number(kind);
-    const pick = pending.picks[idx];
-    if (!pick) {
-      await tgApi("answerCallbackQuery", {
-        callback_query_id: cq.id,
-        text: "Unknown version",
-        show_alert: true,
-      }).catch(() => {});
-      return;
-    }
-    vreq = pick.ext || "";
-    versionLabel = pick.marketing || "";
-    label = versionLabel ? `v${versionLabel}` : pick.label || "version";
+  if (kind === "L") {
+    await tgApi("answerCallbackQuery", {
+      callback_query_id: cq.id,
+      text: "Decrypting Latest…",
+    }).catch(() => {});
+    await startDecryptFromVersionPick(pending, {
+      vreq: "",
+      versionLabel: "",
+      label: "Latest",
+    });
+    return;
   }
 
   await tgApi("answerCallbackQuery", {
     callback_query_id: cq.id,
-    text: `Decrypting ${label}…`,
+    text: "Reply with a number on the card",
+    show_alert: true,
   }).catch(() => {});
-
-  // Drop the picker message so the sharp card is the next thing in chat.
-  if (cq.message && cq.message.message_id) {
-    await tgApi("deleteMessage", {
-      chat_id: chatId,
-      message_id: cq.message.message_id,
-    }).catch(() => {});
-  }
-
-  rememberStoreUrl(chatId, pending.url, versionLabel || "latest");
-  await withWorker(chatId, async () => {
-    await decryptStoreUrl(chatId, pending.url, vreq, { versionLabel });
-  });
 }
 
 async function sendHistoryList(chatId) {
@@ -2643,6 +2698,11 @@ async function handleMessage(msg) {
     return;
   }
 
+  // Version sharp-card carousel: reply with 1…N to pick a build on the current page.
+  if (await tryHandleVersionNumberReply(chatId, text, msg.message_id)) {
+    return;
+  }
+
   // Quiet ops: purchased sync / session / prefetch (WebSSH-friendly).
   if (/^\/(?:purchased|owned)(?:\s+(.+))?$/i.test(text)) {
     try {
@@ -2731,7 +2791,7 @@ async function handleMessage(msg) {
   // Clean chat: drop the pasted URL, keep it in History for re-decrypt.
   await deleteUserMessage(chatId, msg.message_id);
   rememberStoreUrl(chatId, link, vreq || "latest");
-  // Typed version → decrypt that build. Bare link → version sheet first (not sharp card).
+  // Typed version → decrypt that build. Bare link → version sharp-card carousel first.
   if (vreq) {
     await withWorker(chatId, async () => {
       const resolved = await resolveExternalVersionId(link, vreq);
