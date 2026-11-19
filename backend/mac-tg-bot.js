@@ -1353,6 +1353,54 @@ async function resolveExternalVersionId(link, vreq) {
   return raw;
 }
 
+/** Versions per Telegram picker page (plus Latest + Next/Prev). */
+const VER_PAGE_SIZE = 8;
+
+function versionPickText(pending, page) {
+  const title = String(pending.title || "App").replace(/[*_`\[\]]/g, "");
+  const total = pending.picks.length;
+  const pages = Math.max(1, Math.ceil(total / VER_PAGE_SIZE));
+  const p = Math.max(0, Math.min(pages - 1, page));
+  return (
+    `*${title}* — pick a version\n` +
+    `_Timbrd / Bilin / iosdump · page ${p + 1}/${pages} · ${total} builds_`
+  );
+}
+
+function versionPickKeyboard(token, pending, page) {
+  const total = pending.picks.length;
+  const pages = Math.max(1, Math.ceil(total / VER_PAGE_SIZE));
+  const p = Math.max(0, Math.min(pages - 1, page));
+  const start = p * VER_PAGE_SIZE;
+  const slice = pending.picks.slice(start, start + VER_PAGE_SIZE);
+
+  const rows = [
+    [{ text: "⭐ Latest", callback_data: `ver:${token}:L`.slice(0, 64) }],
+    ...slice.map((pick) => [
+      {
+        text: pick.label,
+        callback_data: `ver:${token}:i:${pick.i}`.slice(0, 64),
+      },
+    ]),
+  ];
+
+  if (pages > 1) {
+    const nav = [];
+    if (p > 0) {
+      nav.push({ text: "◀ Prev", callback_data: `ver:${token}:p:${p - 1}`.slice(0, 64) });
+    }
+    nav.push({
+      text: `${p + 1}/${pages}`,
+      callback_data: `ver:${token}:p:${p}`.slice(0, 64), // no-op refresh
+    });
+    if (p < pages - 1) {
+      nav.push({ text: "Next ▶", callback_data: `ver:${token}:p:${p + 1}`.slice(0, 64) });
+    }
+    rows.push(nav);
+  }
+  return { inline_keyboard: rows };
+}
+
 /** Timbrd/Bilin/iosdump version sheet — pick before the sharp progress card. */
 async function offerVersionPick(chatId, link) {
   pruneVerPicks();
@@ -1383,7 +1431,8 @@ async function offerVersionPick(chatId, link) {
     return;
   }
 
-  const picks = versions.slice(0, 12).map((v, i) => {
+  // Keep the full list — Next/Prev pages through it.
+  const picks = versions.map((v, i) => {
     const ver = String(v.v || v.version || v.label || "—").slice(0, 24);
     const ext = String(v.externalVersionId || v.external_id || "").trim();
     const label = v.current ? `⭐ Latest · ${ver}` : `v${ver}`;
@@ -1391,31 +1440,18 @@ async function offerVersionPick(chatId, link) {
   });
 
   const token = crypto.randomBytes(5).toString("hex");
-  pendingVerPicks.set(token, {
+  const pending = {
     chatId,
     url: link,
+    title,
     picks,
+    page: 0,
     expires: Date.now() + 20 * 60 * 1000,
-  });
+  };
+  pendingVerPicks.set(token, pending);
 
-  const rows = [
-    [
-      {
-        text: "⭐ Latest",
-        callback_data: `ver:${token}:L`.slice(0, 64),
-      },
-    ],
-    ...picks.map((p) => [
-      {
-        text: p.label,
-        callback_data: `ver:${token}:${p.i}`.slice(0, 64),
-      },
-    ]),
-  ];
-
-  const text =
-    `*${title}* — pick a version\n` +
-    `_Timbrd / Bilin / iosdump · tap Latest or an older build_`;
+  const text = versionPickText(pending, 0);
+  const reply_markup = versionPickKeyboard(token, pending, 0);
 
   if (waitId) {
     await tgApi("editMessageText", {
@@ -1423,14 +1459,14 @@ async function offerVersionPick(chatId, link) {
       message_id: waitId,
       text,
       parse_mode: "Markdown",
-      reply_markup: { inline_keyboard: rows },
+      reply_markup,
       disable_web_page_preview: true,
     }).catch(async () => {
       await tgApi("sendMessage", {
         chat_id: chatId,
         text,
         parse_mode: "Markdown",
-        reply_markup: { inline_keyboard: rows },
+        reply_markup,
         disable_web_page_preview: true,
       });
     });
@@ -1439,7 +1475,7 @@ async function offerVersionPick(chatId, link) {
       chat_id: chatId,
       text,
       parse_mode: "Markdown",
-      reply_markup: { inline_keyboard: rows },
+      reply_markup,
       disable_web_page_preview: true,
     });
   }
@@ -1448,9 +1484,10 @@ async function offerVersionPick(chatId, link) {
 async function handleVersionPick(cq, data) {
   const chatId = cq.message && cq.message.chat && cq.message.chat.id;
   const parts = data.split(":");
-  // ver:<token>:L | ver:<token>:<index>
+  // ver:<token>:L | ver:<token>:p:<page> | ver:<token>:i:<index>
   const token = parts[1] || "";
-  const which = parts[2] || "";
+  const kind = parts[2] || "";
+  const arg = parts[3] || "";
   pruneVerPicks();
   const pending = pendingVerPicks.get(token);
   if (!pending || pending.chatId !== chatId) {
@@ -1461,12 +1498,35 @@ async function handleVersionPick(cq, data) {
     }).catch(() => {});
     return;
   }
+
+  // Page navigation — keep the picker open.
+  if (kind === "p") {
+    const pages = Math.max(1, Math.ceil(pending.picks.length / VER_PAGE_SIZE));
+    const page = Math.max(0, Math.min(pages - 1, Number(arg) || 0));
+    pending.page = page;
+    pending.expires = Date.now() + 20 * 60 * 1000;
+    await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+    if (cq.message && cq.message.message_id) {
+      await tgApi("editMessageText", {
+        chat_id: chatId,
+        message_id: cq.message.message_id,
+        text: versionPickText(pending, page),
+        parse_mode: "Markdown",
+        reply_markup: versionPickKeyboard(token, pending, page),
+        disable_web_page_preview: true,
+      }).catch(() => {});
+    }
+    return;
+  }
+
   pendingVerPicks.delete(token);
 
   let vreq = "";
   let label = "Latest";
-  if (which !== "L") {
-    const pick = pending.picks[Number(which)];
+  if (kind !== "L") {
+    // Support ver:token:i:N and legacy ver:token:N
+    const idx = kind === "i" ? Number(arg) : Number(kind);
+    const pick = pending.picks[idx];
     if (!pick) {
       await tgApi("answerCallbackQuery", {
         callback_query_id: cq.id,
