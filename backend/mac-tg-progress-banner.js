@@ -3,12 +3,40 @@
 /**
  * DELvEK progress card via `sharp`.
  *
- * Left: Delvek icon + DELVEK · transparent terminal log · centered-lower Tetherless mark
+ * Left: Delvek icon + DELvEK.NeT · repo app count · transparent terminal · Tetherless mark
  * Right: app name above icon · Home Screen % ring · version by the divider
  * No hashtag · no delvek.net footer
  */
 const fs = require("fs");
 const path = require("path");
+
+const REPO_JSON_URL =
+  process.env.DELVEK_REPO_JSON_URL || "https://delvek.net/repo.json";
+let _repoAppCountCache = { n: 0, at: 0 };
+
+/** Cached count of apps in https://delvek.net/repo.json (5 min TTL). */
+async function fetchRepoAppCount() {
+  const now = Date.now();
+  if (_repoAppCountCache.n > 0 && now - _repoAppCountCache.at < 5 * 60 * 1000) {
+    return _repoAppCountCache.n;
+  }
+  try {
+    const ac = new AbortController();
+    const t = setTimeout(() => ac.abort(), 8000);
+    const res = await fetch(REPO_JSON_URL, {
+      signal: ac.signal,
+      headers: { Accept: "application/json" },
+    });
+    clearTimeout(t);
+    if (!res.ok) return _repoAppCountCache.n || 0;
+    const j = await res.json();
+    const n = Array.isArray(j && j.apps) ? j.apps.length : 0;
+    if (n > 0) _repoAppCountCache = { n, at: now };
+    return n || _repoAppCountCache.n || 0;
+  } catch {
+    return _repoAppCountCache.n || 0;
+  }
+}
 
 function loadSharp() {
   try {
@@ -94,13 +122,30 @@ function terminalLogSvg({ logLines, W, H, rightLeft }) {
 </svg>`);
 }
 
-function leftPanelSvg({ brand, W, H, creditIconLeft, creditIconTop, creditIconSize }) {
+function leftPanelSvg({
+  brand,
+  repoAppCount,
+  W,
+  H,
+  rightLeft,
+  creditIconLeft,
+  creditIconTop,
+  creditIconSize,
+}) {
   const ix = creditIconLeft != null ? creditIconLeft : CREDIT_ICON_LEFT;
   const iy = creditIconTop != null ? creditIconTop : CREDIT_ICON_TOP;
   const isz = creditIconSize != null ? creditIconSize : CREDIT_ICON;
   const creditCx = ix + isz / 2;
   const creditTy = iy + isz + 26;
   const brandTextX = BRAND_ICON_LEFT + BRAND_ICON + 16;
+  const leftEdge = rightLeft != null ? rightLeft : Math.round(W * 0.46);
+  // Repo app count — top-right of the left half (by the divider).
+  const countN = Math.max(0, Math.round(Number(repoAppCount) || 0));
+  const countLabel =
+    countN > 0
+      ? `${countN.toLocaleString("en-US")} apps`
+      : "";
+  const countSafe = sanitize(countLabel, 24);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
   <defs>
@@ -111,7 +156,12 @@ function leftPanelSvg({ brand, W, H, creditIconLeft, creditIconTop, creditIconSi
     </linearGradient>
   </defs>
   <rect x="0" y="0" width="${Math.round(W * 0.52)}" height="${H}" fill="url(#leftFade)"/>
-  <text x="${brandTextX}" y="74" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" letter-spacing="2">${brand}</text>
+  <text x="${brandTextX}" y="74" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" letter-spacing="1">${brand}</text>
+  ${
+    countSafe
+      ? `<text x="${leftEdge - 24}" y="74" text-anchor="end" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">${countSafe}</text>`
+      : ""
+  }
   <text x="${creditCx}" y="${creditTy}" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="600">Made by Tetherless.Dev</text>
   <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@DELvEKBot</text>
 </svg>`);
@@ -274,7 +324,8 @@ async function renderProgressBanner({
   const isDone = !!done;
   const title = String(name || "App").trim() || "App";
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-  const brandLabel = sanitize(brand || "DELVEK", 18).toUpperCase();
+  // Keep DELvEK.NeT casing — do not force uppercase.
+  const brandLabel = sanitize(brand || "DELvEK.NeT", 18);
   const termLines = Array.isArray(logLines) && logLines.length
     ? logLines
     : [stage || (isDone ? "done" : "starting…")];
@@ -289,6 +340,7 @@ async function renderProgressBanner({
   const creditSize = CREDIT_ICON;
   const creditLeft = Math.round((rightLeft - creditSize) / 2);
   const creditTop = CREDIT_ICON_TOP;
+  const repoAppCount = await fetchRepoAppCount();
 
   try {
     fs.mkdirSync(path.dirname(out), { recursive: true });
@@ -343,8 +395,10 @@ async function renderProgressBanner({
     layers.push({
       input: leftPanelSvg({
         brand: brandLabel,
+        repoAppCount,
         W,
         H,
+        rightLeft,
         creditIconLeft: creditLeft,
         creditIconTop: creditTop,
         creditIconSize: creditSize,
