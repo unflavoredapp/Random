@@ -60,7 +60,21 @@ function friendlyIpatoolError(err) {
       "WebSSH: zsh ~/tetherless/server/mac-ssh.sh unlock && ipatool auth login"
     );
   }
-  return s;
+  // Paid / license / purchase failures — never dump STDQ / guest-bridge noise to chat.
+  if (
+    /failed to purchase|purchase item|STDQ|license|not owned|do not own|haven't purchased|have not purchased|no current price|payment|volumePurchase|store request|guest bridge|unknown format obj|password token|auth.*fail|forbidden|access denied/i.test(
+      s
+    )
+  ) {
+    return (
+      "Not owned by this Apple ID — free apps need a working Mac login; " +
+      "paid apps only work if that Apple ID already purchased them. Paste an App Store link you own."
+    );
+  }
+  // Keep other failures short for the progress-card ❌ bubble.
+  const oneLine = s.replace(/\s+/g, " ").trim();
+  if (oneLine.length > 180) return oneLine.slice(0, 177) + "…";
+  return oneLine || "App Store download failed";
 }
 
 const DEFAULT_CREDENTIAL_PATH = "/var/lib/tetherless/credential.bin";
