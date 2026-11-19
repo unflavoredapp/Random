@@ -581,16 +581,20 @@ async function renderVersionPickerBanner(opts = {}) {
       layers.push({ input: iconBuf, left: bigLeft, top: bigTop });
     }
 
-    // Rows right of big icon: [build icon] [full app name] [version] [n]
-    // Version is placed just after the name (approx width) so they never overlap.
+    // Rows: [build icon] [full app name] [version] · gap · [n]
+    // Number sits beside the version with readable breathing room (not jammed).
     const rowH = 48;
     const listTop = 188;
     const rowIconSize = 36;
     const rowIconLeft = 320;
     const nameX = 372;
-    const numCx = 1040;
     const nameFont = 20;
     const verFont = 22;
+    const numR = 16;
+    const nameVerGap = 28;
+    // Space between end of version text and left edge of the number circle.
+    const verNumGap = 36;
+    const rightLimit = W - 48;
     const approxW = (s, fs) => Math.ceil(String(s || "").length * fs * 0.56);
 
     let rowsSvg = "";
@@ -603,19 +607,20 @@ async function renderVersionPickerBanner(opts = {}) {
       }`;
       const y = listTop + i * rowH;
       const cy = y;
-      // Prefer the full title; only trim if name+version would hit the number.
-      let nameSafe = sanitize(title, 42);
-      const gap = 28;
       const verW = approxW(verLabel, verFont);
-      const maxNameW = Math.max(80, numCx - 28 - verW - gap - nameX);
+      // Reserve room for version + gap + number circle before trimming the name.
+      const reservedAfterName = nameVerGap + verW + verNumGap + numR * 2 + 8;
+      let nameSafe = sanitize(title, 42);
+      const maxNameW = Math.max(80, rightLimit - nameX - reservedAfterName);
       while (nameSafe.length > 8 && approxW(nameSafe, nameFont) > maxNameW) {
         nameSafe = nameSafe.slice(0, -1).trim();
       }
-      const verX = nameX + approxW(nameSafe, nameFont) + gap;
+      const verX = nameX + approxW(nameSafe, nameFont) + nameVerGap;
+      const numCx = Math.min(rightLimit - numR, verX + verW + verNumGap + numR);
       rowsSvg += `
   <text x="${nameX}" y="${cy + 7}" fill="#e8eef8" font-family="Arial, Helvetica, sans-serif" font-size="${nameFont}" font-weight="600">${nameSafe}</text>
   <text x="${verX}" y="${cy + 7}" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="${verFont}" font-weight="600">${verLabel}</text>
-  <circle cx="${numCx}" cy="${cy}" r="16" fill="#1e2a44" stroke="#3d7cff" stroke-width="2"/>
+  <circle cx="${numCx}" cy="${cy}" r="${numR}" fill="#1e2a44" stroke="#3d7cff" stroke-width="2"/>
   <text x="${numCx}" y="${cy + 6}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">${n}</text>`;
       rowIcons.push({
         path: (v.iconPath && fs.existsSync(v.iconPath) && v.iconPath) || fallbackIcon || "",
