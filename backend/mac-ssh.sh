@@ -321,7 +321,18 @@ cmd_status() {
   fi
   if command -v ipatool >/dev/null 2>&1; then
     echo -n "ipatool: "
-    ipatool auth info 2>&1 | head -2 || echo "not logged in"
+    # Prefer JSON-ish / email line from auth info; fall back to first two lines.
+    local info
+    info="$(ipatool auth info 2>&1 || true)"
+    if echo "$info" | grep -qiE 'email|logged|name@|@[a-z0-9.-]+\.[a-z]'; then
+      echo "$info" | head -3
+    elif [[ -z "$info" ]]; then
+      echo "not logged in — run: ipatool auth login"
+    else
+      echo "$info" | head -2
+    fi
+  else
+    echo "ipatool: missing on PATH"
   fi
   if [[ -f "$REPO/server/fairplayBackends.js" ]]; then
     node -e '

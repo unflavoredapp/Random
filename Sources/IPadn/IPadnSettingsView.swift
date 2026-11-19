@@ -495,6 +495,16 @@ private struct DecryptBackendsStatusRow: View {
                     let ready = (model["ready"] as? Bool) == true
                     out.append(ready ? "✓ enrollment model" : "· enrollment model")
                 }
+                if let ipa = status["ipatool"] as? [String: Any] {
+                    let ready = (ipa["ready"] as? Bool) == true
+                    let email = (ipa["email"] as? String) ?? ""
+                    let note = (ipa["note"] as? String) ?? (ipa["error"] as? String) ?? ""
+                    if ready {
+                        out.append("✓ ipatool" + (email.isEmpty ? "" : " · \(email)"))
+                    } else {
+                        out.append("✗ ipatool — \(note.isEmpty ? "not logged in" : note)")
+                    }
+                }
                 for key in ["fairplay-decrypt", "unfairplay", "ipadecrypt", "ipa-decrypter", "unfaird", "phone"] {
                     guard let row = status[key] as? [String: Any] else { continue }
                     let ready = (row["ready"] as? Bool) == true
