@@ -142,10 +142,7 @@ function friendlyIpatoolError(err) {
   if (decryptHint) return decryptHint;
   const s = String((err && err.message) || err || "");
   if (/maximum call stack|call stack size exceeded|RangeError/i.test(s)) {
-    return (
-      "Apple system apps (TestFlight, App Store, …) can’t be decrypted — or Store verification crashed. " +
-      "Try a third-party App Store title."
-    );
+    return "Mac decrypt hit a Store/progress bug — update the Mac host and retry.";
   }
   if (/keyring|keychain|failed to get account|failed to get item|specified item could not be found/i.test(s)) {
     return (
@@ -881,8 +878,12 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [], storefront, o
   if (storefront) {
     process.env.FAIRPLAY_IPATOOL_STOREFRONT = String(storefront).trim().toLowerCase().slice(0, 2);
   }
+  // Capture the caller's reporter before rebinding — `say(t)` inside an arrow that
+  // closes over the `say` parameter would recurse forever after `say = sayWrapped`
+  // ("Maximum call stack size exceeded" on every Mac decrypt).
+  const sayOriginal = typeof say === "function" ? say : () => {};
   const sayWrapped = (t) => {
-    say(t);
+    sayOriginal(t);
     if (typeof onProgress === "function") {
       try {
         const extras = require("./mac-ipatool-extras");
