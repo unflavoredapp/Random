@@ -37,6 +37,13 @@ enum DecryptMacRouting {
             DecryptClient.shared.message = DecryptClient.shared.error ?? ""
             return
         }
+        if AppleSystemAppGate.isBlocked(bundleID: nil, storeURL: url) {
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = AppleSystemAppGate.userMessage
+            DecryptClient.shared.message = AppleSystemAppGate.userMessage
+            DecryptClient.shared.finishedName = name.isEmpty ? "App" : name
+            return
+        }
         if !macSiteConfigured {
             DecryptClient.shared.phase = .failed
             DecryptClient.shared.error =

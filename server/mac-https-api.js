@@ -91,6 +91,22 @@ function validUrl(u) {
   return /^https:\/\/(?:apps|itunes)\.apple\.com\//i.test(String(u || "").trim());
 }
 
+/** Apple first-party apps — refuse before ipatool/unfairplay (opaque JS stack overflows). */
+function isAppleSystemApp(storeUrl, bid) {
+  const b = String(bid || "").toLowerCase();
+  if (b.startsWith("com.apple.")) return true;
+  const adam = ((/\bid(\d{5,12})\b/i.exec(String(storeUrl || "")) || [])[1] || "");
+  const blocked = new Set([
+    "899247664", // TestFlight
+    "1231336508", // Apple Store
+    "1146562112", // Apple TV
+  ]);
+  return !!(adam && blocked.has(adam));
+}
+
+const APPLE_SYSTEM_MSG =
+  "Apple system apps (TestFlight, App Store, …) can’t be decrypted. Pick a third-party App Store title.";
+
 function unlockKeychain() {
   const pass = String(process.env.TETHERLESS_KEYCHAIN_PASSWORD || "").trim();
   const kc = path.join(os.homedir(), "Library/Keychains/tetherless.keychain-db");
@@ -380,6 +396,9 @@ async function handle(req, res) {
       const storefront = String(body.storefront || body.country || "").trim().toLowerCase();
       if (!validUrl(url)) return fail(res, 400, "Paste an App Store link.");
       if (vreq && !/^[0-9][0-9A-Za-z._-]{0,29}$/.test(vreq)) return fail(res, 400, "Bad version.");
+      if (isAppleSystemApp(url, body.bundle || body.bid || "")) {
+        return fail(res, 400, APPLE_SYSTEM_MSG);
+      }
       const session = ipatoolExtras.sessionWatch();
       if (!session.ready) {
         return fail(res, 503, session.error || session.hint || "ipatool not logged in on Mac.");

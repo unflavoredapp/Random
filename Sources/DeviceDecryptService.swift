@@ -679,6 +679,13 @@ final class DeviceDecryptService: ObservableObject {
         if !app.countryCode.isEmpty {
             AppleIDStore.shared.selectAccountMatching(countryCode: app.countryCode)
         }
+        if AppleSystemAppGate.isBlocked(app) {
+            DecryptClient.shared.select(app)
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = AppleSystemAppGate.userMessage
+            DecryptClient.shared.message = AppleSystemAppGate.userMessage
+            return
+        }
         switch DecryptChannel.current {
         case .telegram:
             DecryptClient.shared.select(app)
