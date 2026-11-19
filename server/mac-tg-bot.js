@@ -24,6 +24,8 @@ const {
   renderProgressBanner,
   renderDownloadThumb,
   renderVersionPickerBanner,
+  renderLibraryListBanner,
+  renderLibraryAppBanner,
 } = require("./mac-tg-progress-banner");
 const publicDl = require("./mac-tg-public-dl");
 
@@ -1520,7 +1522,8 @@ function startScreenText() {
   return (
     `Hi, I'm <b>DELvEK</b>, the decryption bot. I'm fully static and capable of decrypting ` +
     `iOS, iPadOS, macOS, tvOS, and visionOS 26/27 apps, and I'm cute too!\n\n` +
-    `Just <b>paste an App Store link</b> here and I'll send the decrypted IPA.\n\n` +
+    `Just <b>paste an App Store link</b> here and I'll send the decrypted IPA.\n` +
+    `Use /library to see decrypted apps on this Mac.\n\n` +
     `Mention me in any group or chat with:\n` +
     `<code>@DELvEKBot &lt;App Store App Link&gt;</code>\n` +
     `to get a download link.\n\n` +
@@ -2122,6 +2125,203 @@ async function sendCacheList(chatId) {
   await tgApi("sendMessage", {
     chat_id: chatId,
     text: `*Cache* (${items.length})\n\n` + lines.join("\n"),
+    parse_mode: "Markdown",
+  });
+}
+
+/**
+ * Group decrypted IPA cache entries into library apps (by adam).
+ * Skips external-version-id noise and the synthetic "latest" key.
+ */
+function libraryAppsFromCache() {
+  const byAdam = new Map();
+  for (const it of ipaCache.list()) {
+    if (!it || !it.adam) continue;
+    const ver = String(it.version || "")
+      .trim()
+      .replace(/^v/i, "");
+    if (!ver || ver.toLowerCase() === "latest" || isExternalVersionId(ver)) continue;
+    let app = byAdam.get(it.adam);
+    if (!app) {
+      app = {
+        adam: it.adam,
+        name: it.name || "App",
+        bid: it.bid || "",
+        storeUrl: it.storeUrl || "",
+        iconPath: "",
+        versions: [],
+        latest: "",
+        _latestAt: 0,
+      };
+      byAdam.set(it.adam, app);
+    }
+    if (!app.versions.includes(ver)) app.versions.push(ver);
+    if (it.name) app.name = it.name;
+    if (it.bid) app.bid = it.bid;
+    if (it.storeUrl) app.storeUrl = it.storeUrl;
+    if (it.iconPath && fs.existsSync(it.iconPath)) app.iconPath = it.iconPath;
+    const savedAt = Number(it.savedAt) || 0;
+    if (!app.latest || savedAt >= app._latestAt) {
+      app.latest = ver;
+      app._latestAt = savedAt;
+    }
+  }
+  return [...byAdam.values()]
+    .map((app) => {
+      const versions = [...app.versions].sort((a, b) => {
+        // Prefer newest-saved first via latest; otherwise lexicographic reverse.
+        if (a === app.latest) return -1;
+        if (b === app.latest) return 1;
+        return String(b).localeCompare(String(a), undefined, { numeric: true, sensitivity: "base" });
+      });
+      return {
+        adam: app.adam,
+        name: app.name,
+        bid: app.bid,
+        storeUrl: app.storeUrl,
+        iconPath: app.iconPath,
+        versions,
+        latest: app.latest || versions[0] || "",
+        decrypted: versions.length,
+      };
+    })
+    .sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || ""), undefined, {
+        sensitivity: "base",
+      })
+    );
+}
+
+function findLibraryApp(apps, query) {
+  const q = String(query || "")
+    .trim()
+    .toLowerCase();
+  if (!q) return null;
+  const exact = apps.find((a) => String(a.name || "").toLowerCase() === q);
+  if (exact) return exact;
+  const starts = apps.filter((a) => String(a.name || "").toLowerCase().startsWith(q));
+  if (starts.length === 1) return starts[0];
+  if (starts.length > 1) return { ambiguous: starts };
+  const contains = apps.filter((a) => String(a.name || "").toLowerCase().includes(q));
+  if (contains.length === 1) return contains[0];
+  if (contains.length > 1) return { ambiguous: contains };
+  const byBid = apps.find((a) => String(a.bid || "").toLowerCase() === q);
+  if (byBid) return byBid;
+  const byAdam = apps.find((a) => String(a.adam || "") === q.replace(/^id/i, ""));
+  if (byAdam) return byAdam;
+  return null;
+}
+
+async function sendLibrary(chatId, query) {
+  const apps = libraryAppsFromCache();
+  const q = String(query || "").trim();
+
+  if (!apps.length) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text:
+        "Library is empty — paste an App Store URL to decrypt an app, then /library will list it here.",
+    });
+    return;
+  }
+
+  if (q) {
+    const hit = findLibraryApp(apps, q);
+    if (!hit) {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text:
+          `No library match for “${q.slice(0, 40)}”.\n` +
+          `Try /library for the full list, or paste an Apple Store URL.`,
+      });
+      return;
+    }
+    if (hit.ambiguous) {
+      const names = hit.ambiguous
+        .slice(0, 8)
+        .map((a) => `• ${a.name}`)
+        .join("\n");
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: `Several matches for “${q.slice(0, 40)}”:\n${names}\n\nType /library ExactName`,
+      });
+      return;
+    }
+
+    const dest = path.join(WORK, `library-app-${chatId}-${Date.now()}.jpg`);
+    const img = await renderLibraryAppBanner({
+      name: hit.name,
+      bid: hit.bid,
+      versions: hit.versions,
+      latest: hit.latest,
+      iconPath: hit.iconPath,
+      dest,
+    });
+    const caption =
+      `<b>${escapeHtml(hit.name || "App")}</b>\n` +
+      `${hit.decrypted} decrypted · /library for all apps`;
+    if (img && fs.existsSync(img)) {
+      const sent = await sendPhotoBotApi(chatId, img, caption);
+      try {
+        fs.rmSync(img, { force: true });
+      } catch {
+        /* ignore */
+      }
+      if (sent && sent.ok) return;
+    }
+    const lines = hit.versions.slice(0, 8).map((v) => {
+      const mark = v === hit.latest ? " · latest" : "";
+      return `• v${v}${mark}`;
+    });
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text:
+        `*LIBRARY* — ${hit.name}\n` +
+        `${hit.decrypted} decrypted\n\n` +
+        lines.join("\n") +
+        `\n\n_Paste the Apple Store URL · pick on VERSIONS_`,
+      parse_mode: "Markdown",
+    });
+    return;
+  }
+
+  const totalBuilds = apps.reduce((s, a) => s + (a.decrypted || 0), 0);
+  const page = apps.slice(0, 8);
+  const dest = path.join(WORK, `library-list-${chatId}-${Date.now()}.jpg`);
+  const img = await renderLibraryListBanner({
+    apps: page.map((a) => ({
+      name: a.name,
+      decrypted: a.decrypted,
+      latest: a.latest,
+    })),
+    totalBuilds,
+    totalApps: apps.length,
+    dest,
+  });
+  const caption =
+    `<b>LIBRARY</b> · ${apps.length} apps · ${totalBuilds} decrypted\n` +
+    `Type <code>/library AppName</code> for versions`;
+  if (img && fs.existsSync(img)) {
+    const sent = await sendPhotoBotApi(chatId, img, caption);
+    try {
+      fs.rmSync(img, { force: true });
+    } catch {
+      /* ignore */
+    }
+    if (sent && sent.ok) return;
+  }
+  const lines = page.map(
+    (a) => `• *${(a.name || "App").replace(/[*_`]/g, "")}* · ${a.decrypted} decrypted`
+  );
+  const more =
+    apps.length > page.length ? `\n_…and ${apps.length - page.length} more — /library Name_` : "";
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text:
+      `*LIBRARY* (${apps.length} apps · ${totalBuilds} decrypted)\n\n` +
+      lines.join("\n") +
+      more +
+      `\n\n_Paste an Apple Store URL · pick on VERSIONS_`,
     parse_mode: "Markdown",
   });
 }
@@ -2978,6 +3178,12 @@ async function handleMessage(msg) {
     return;
   }
 
+  if (/^\/library(?:@\w+)?(?:\s+(.+))?$/i.test(text)) {
+    const q = (text.match(/^\/library(?:@\w+)?(?:\s+(.+))?$/i) || [])[1] || "";
+    await sendLibrary(chatId, q);
+    return;
+  }
+
   // Version sharp-card carousel: reply with 1…N to pick a build on the current page.
   if (await tryHandleVersionNumberReply(chatId, text, msg.message_id)) {
     return;
@@ -3145,10 +3351,13 @@ async function resolveBotIdentity() {
 
 async function boot() {
   await resolveBotIdentity();
-  // Only /start — clear any cached help/status/cache commands + default menu.
+  // /start + /library — clear any cached help/status/cache commands + default menu.
   await tgApi("deleteMyCommands", {}).catch(() => {});
   await tgApi("setMyCommands", {
-    commands: [{ command: "start", description: "Start DELvEK" }],
+    commands: [
+      { command: "start", description: "Start DELvEK" },
+      { command: "library", description: "See decrypted apps & version counts" },
+    ],
   }).catch(() => {});
   await tgApi("setChatMenuButton", {
     menu_button: { type: "commands" },
