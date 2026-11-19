@@ -1491,6 +1491,156 @@ async function resolveExternalVersionId(link, vreq) {
 
 /** Versions painted on each sharp-card page (numbered 1…N for typed replies). */
 const VER_PAGE_SIZE = 8;
+const VERSION_ICON_DIR =
+  process.env.MAC_TG_VERSION_ICON_DIR ||
+  path.join(os.homedir(), "tetherless-ipa-cache", "version-icons");
+
+function versionIconCachePath(adam, extOrVer) {
+  const a = String(adam || "app").replace(/[^\w.-]+/g, "_") || "app";
+  const v = String(extOrVer || "latest").replace(/[^\w.-]+/g, "_") || "latest";
+  return path.join(VERSION_ICON_DIR, a, `${v}.png`);
+}
+
+function rememberVersionIcon(adam, keys, iconPath) {
+  if (!adam || !iconPath || !fs.existsSync(iconPath)) return "";
+  try {
+    fs.mkdirSync(path.join(VERSION_ICON_DIR, String(adam).replace(/[^\w.-]+/g, "_") || "app"), {
+      recursive: true,
+    });
+    let saved = "";
+    for (const key of keys || []) {
+      const k = String(key || "").trim();
+      if (!k) continue;
+      const dest = versionIconCachePath(adam, k);
+      try {
+        fs.copyFileSync(iconPath, dest);
+        saved = dest;
+      } catch {
+        /* ignore */
+      }
+    }
+    return saved || iconPath;
+  } catch {
+    return iconPath;
+  }
+}
+
+/**
+ * Resolve THIS build’s icon for the version sharp card:
+ * cached icon → clear IPA cache → encrypted IPA cache → extract.
+ */
+function resolveVersionBuildIcon(adam, pick, fallbackIcon) {
+  const keys = [
+    pick && pick.ext,
+    pick && pick.marketing,
+    pick && pick.marketing && `v${pick.marketing}`,
+  ].filter(Boolean);
+  for (const key of keys) {
+    const cached = versionIconCachePath(adam, key);
+    if (fs.existsSync(cached) && fs.statSync(cached).size > 100) return cached;
+  }
+
+  // Clear IPA cache entry (by marketing version).
+  try {
+    const hit =
+      (pick && pick.marketing && ipaCache.get(adam, pick.marketing)) ||
+      (pick && pick.ext && ipaCache.get(adam, pick.ext)) ||
+      null;
+    if (hit) {
+      if (hit.iconPath && fs.existsSync(hit.iconPath)) {
+        return rememberVersionIcon(adam, keys, hit.iconPath);
+      }
+      if (hit.diskPath && fs.existsSync(hit.diskPath)) {
+        const dest = versionIconCachePath(adam, pick.ext || pick.marketing || "x");
+        const got = extractIpaIcon(hit.diskPath, dest);
+        if (got) return rememberVersionIcon(adam, keys, got);
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Encrypted IPA cache for this build.
+  try {
+    for (const key of [pick && pick.marketing, pick && pick.ext, "latest"]) {
+      if (!key) continue;
+      const enc = ipaCache.getEncryptedPath(adam, key);
+      if (!enc) continue;
+      // Don't use "latest" encrypted for non-current older rows — wrong icon.
+      if (key === "latest" && pick && !pick.current) continue;
+      const dest = versionIconCachePath(adam, pick.ext || pick.marketing || key);
+      const got = extractIpaIcon(enc, dest);
+      if (got) return rememberVersionIcon(adam, keys, got);
+    }
+  } catch {
+    /* ignore */
+  }
+
+  return (fallbackIcon && fs.existsSync(fallbackIcon) && fallbackIcon) || "";
+}
+
+/** Pull missing build icons from encrypted IPA (ipatool) then refresh the card. */
+function warmVersionIconsForPage(pending, slice) {
+  const adam = pending.adam || ipaCache.adamFromStoreUrl(pending.url) || "";
+  if (!adam || !slice || !slice.length) return;
+  const missing = slice.filter((p) => !p.iconPath || !fs.existsSync(p.iconPath));
+  if (!missing.length) return;
+
+  const run = async () => {
+    let changed = false;
+    for (const pick of missing.slice(0, VER_PAGE_SIZE)) {
+      // Still the same carousel page?
+      if (!pendingVerPicks.has(pending.token)) return;
+      if ((pending.page || 0) !== (pending._warmingPage ?? (pending.page || 0))) return;
+      try {
+        const dir = fs.mkdtempSync(path.join(WORK, "iconwarm-"));
+        try {
+          if (typeof fairplayBackends.unlockKeychain === "function") {
+            fairplayBackends.unlockKeychain();
+          }
+          await fairplayBackends.ensureEncryptedSource({
+            url: pending.url,
+            dir,
+            say: () => {},
+            vreq: pick.ext || "",
+          });
+          const enc = path.join(dir, "encrypted-source.ipa");
+          if (!fs.existsSync(enc)) continue;
+          const dest = versionIconCachePath(adam, pick.ext || pick.marketing || "x");
+          const got = extractIpaIcon(enc, dest);
+          if (got) {
+            pick.iconPath = rememberVersionIcon(
+              adam,
+              [pick.ext, pick.marketing],
+              got
+            );
+            changed = true;
+            console.log("[icon] warmed version", pick.marketing || pick.ext, pick.iconPath);
+          }
+        } finally {
+          try {
+            fs.rmSync(dir, { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch (e) {
+        console.warn("[icon] warm failed:", (e && e.message) || e);
+      }
+    }
+    if (changed && pendingVerPicks.has(pending.token) && pending.messageId) {
+      await paintVersionCarousel(pending, pending.page || 0, {
+        messageId: pending.messageId,
+        warm: false,
+      }).catch(() => {});
+    }
+  };
+
+  pending._warmingPage = pending.page || 0;
+  Promise.resolve()
+    .then(run)
+    .catch((e) => console.warn("[icon] warm:", (e && e.message) || e));
+}
 
 function versionCarouselPages(pending) {
   return Math.max(1, Math.ceil((pending.picks || []).length / VER_PAGE_SIZE));
@@ -1529,14 +1679,21 @@ function versionPickKeyboard(token, pending, page) {
 
 async function renderVersionCarouselPage(pending, page) {
   const { page: p, pages, slice } = versionCarouselSlice(pending, page);
+  const adam = pending.adam || ipaCache.adamFromStoreUrl(pending.url) || "";
   const dest = path.join(
     WORK,
-    `verpick-${pending.chatId}-${pending.token || "x"}-p${p}.jpg`
+    `verpick-${pending.chatId}-${pending.token || "x"}-p${p}-${Date.now()}.jpg`
   );
+  // Attach each build’s real icon when we have/can extract it.
+  for (const pick of slice) {
+    if (pick.iconPath && fs.existsSync(pick.iconPath)) continue;
+    pick.iconPath = resolveVersionBuildIcon(adam, pick, pending.iconPath || "");
+  }
   const versions = slice.map((pick, idx) => ({
     n: idx + 1,
     label: pick.marketing || String(pick.label || "").replace(/^⭐\s*Latest\s*·\s*/i, "") || "—",
     current: !!pick.current,
+    iconPath: pick.iconPath || "",
   }));
   return renderVersionPickerBanner({
     title: pending.title,
@@ -1549,16 +1706,17 @@ async function renderVersionCarouselPage(pending, page) {
   });
 }
 
-async function paintVersionCarousel(pending, page, { messageId } = {}) {
-  const { page: p } = versionCarouselSlice(pending, page);
+async function paintVersionCarousel(pending, page, { messageId, warm = true } = {}) {
+  const { page: p, slice } = versionCarouselSlice(pending, page);
   pending.page = p;
   pending.expires = Date.now() + 20 * 60 * 1000;
   const reply_markup = versionPickKeyboard(pending.token, pending, p);
-  // Caption stays minimal — versions are painted on the card.
+  // Caption stays minimal — versions + build icons are painted on the card.
   const caption =
     `<b>${escapeHtml(pending.title || "App")}</b>\n` +
     `Reply with a number · or Next / Back`;
 
+  let ok = false;
   const img = await renderVersionCarouselPage(pending, p);
   if (img && fs.existsSync(img)) {
     if (messageId) {
@@ -1572,40 +1730,45 @@ async function paintVersionCarousel(pending, page, { messageId } = {}) {
       if (edited && edited.ok) {
         pending.hasPhoto = true;
         pending.messageId = messageId;
-        return true;
+        ok = true;
       }
     } else {
       const sent = await sendPhotoBotApi(pending.chatId, img, caption, reply_markup);
       if (sent && sent.ok && sent.result && sent.result.message_id) {
         pending.hasPhoto = true;
         pending.messageId = sent.result.message_id;
-        return true;
+        ok = true;
       }
     }
   }
 
-  // Text fallback.
-  const lines = versionCarouselSlice(pending, p).slice.map(
-    (pick, idx) => `${idx + 1}. ${pick.label}`
-  );
-  const text = `*VERSIONS*\n${pending.title}\n\n${lines.join("\n")}\n\n_Reply with a number_`;
-  if (messageId && !pending.hasPhoto) {
-    await tgApi("editMessageText", {
-      chat_id: pending.chatId,
-      message_id: messageId,
-      text,
-      parse_mode: "Markdown",
-      reply_markup,
-    }).catch(() => {});
-  } else {
-    await tgApi("sendMessage", {
-      chat_id: pending.chatId,
-      text,
-      parse_mode: "Markdown",
-      reply_markup,
-    });
+  if (!ok) {
+    // Text fallback.
+    const lines = versionCarouselSlice(pending, p).slice.map(
+      (pick, idx) => `${idx + 1}. ${pick.label}`
+    );
+    const text = `*VERSIONS*\n${pending.title}\n\n${lines.join("\n")}\n\n_Reply with a number_`;
+    if (messageId && !pending.hasPhoto) {
+      await tgApi("editMessageText", {
+        chat_id: pending.chatId,
+        message_id: messageId,
+        text,
+        parse_mode: "Markdown",
+        reply_markup,
+      }).catch(() => {});
+    } else {
+      await tgApi("sendMessage", {
+        chat_id: pending.chatId,
+        text,
+        parse_mode: "Markdown",
+        reply_markup,
+      });
+    }
   }
-  return false;
+
+  // Fetch missing older build icons from encrypted IPAs, then refresh the card.
+  if (warm) warmVersionIconsForPage(pending, slice);
+  return ok;
 }
 
 /** Timbrd/Bilin/iosdump — version sharp-card carousel before decrypt progress card. */
@@ -1677,6 +1840,7 @@ async function offerVersionPick(chatId, link) {
     token,
     chatId,
     url: link,
+    adam: storeMeta.adam || ipaCache.adamFromStoreUrl(link) || "",
     title,
     iconPath: storeMeta.iconPath || "",
     picks,
@@ -2036,11 +2200,14 @@ async function decryptStoreUrl(chatId, link, vreq, opts = {}) {
 
     // Capture this build’s icon from the encrypted IPA (older versions differ).
     const encPath = path.join(dir, "encrypted-source.ipa");
+    const adam = ipaCache.adamFromStoreUrl(link) || "";
     let buildIcon = "";
     if (fs.existsSync(encPath)) {
       const iconDest = path.join(dir, `icon-build-${Date.now()}.png`);
       buildIcon = extractIpaIcon(encPath, iconDest);
       if (buildIcon) {
+        buildIcon =
+          rememberVersionIcon(adam, [vreq, versionLabel], buildIcon) || buildIcon;
         await card.setIcon(buildIcon, "Downloading…", 40);
         console.log("[icon] captured from encrypted IPA", buildIcon);
       }
@@ -2064,7 +2231,13 @@ async function decryptStoreUrl(chatId, link, vreq, opts = {}) {
     if (!buildIcon || !fs.existsSync(buildIcon)) {
       const iconDest = path.join(dir, `icon-clear-${Date.now()}.png`);
       buildIcon = extractIpaIcon(result.file, iconDest) || buildIcon;
-      if (buildIcon) await card.setIcon(buildIcon, "Uploading…", 74);
+      if (buildIcon) {
+        buildIcon =
+          rememberVersionIcon(adam, [vreq, versionLabel], buildIcon) || buildIcon;
+        await card.setIcon(buildIcon, "Uploading…", 74);
+      }
+    } else {
+      rememberVersionIcon(adam, [vreq, versionLabel], buildIcon);
     }
     await card.setStage("Uploading…", 74);
     await deliverResult(chatId, result, {
