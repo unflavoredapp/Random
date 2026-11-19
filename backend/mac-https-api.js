@@ -178,16 +178,27 @@ async function handle(req, res) {
     return res.end();
   }
 
-  if (p === "/" || p === "/health") {
+  if (p === "/" || p === "/health" || p === "/api/mac-host") {
     const fp = fairplayBackends.backendStatus();
     const resHost = fairplayBackends.hostResources ? fairplayBackends.hostResources() : null;
+    const publicBase = publicDl.resolvePublicBase() || "";
+    // Prefer the Host header when the phone hits us through the live tunnel.
+    const viaHost = String(req.headers.host || "").trim();
+    const liveBase =
+      viaHost && !/^127\.0\.0\.1(?::|$)/i.test(viaHost) && !/^localhost(?::|$)/i.test(viaHost)
+        ? `https://${viaHost.replace(/\/+$/, "")}`
+        : "";
+    const macApi = (liveBase || publicBase || "").replace(/\/+$/, "");
     return json(res, 200, {
       ok: true,
       service: "tetherless-mac-https-api",
       build: BUILD,
       host: fp.host,
+      macHost: fp.host === "mac",
       unfairplay: !!(fp.unfairplay && fp.unfairplay.ready),
       model: !!(fp.enrollmentModel && fp.enrollmentModel.ready),
+      publicBase: macApi || undefined,
+      macApiUrl: macApi ? macApi + "/" : undefined,
       resources: resHost
         ? {
             freeDiskGb: Number(resHost.freeDiskGb.toFixed(2)),
@@ -220,7 +231,21 @@ async function handle(req, res) {
 
   if (p === "/api/decrypt/backends" && req.method === "GET") {
     const fp = fairplayBackends.backendStatus();
-    return json(res, 200, { ok: true, backends: fp.backends, status: fp, build: BUILD });
+    const publicBase = publicDl.resolvePublicBase() || "";
+    const viaHost = String(req.headers.host || "").trim();
+    const liveBase =
+      viaHost && !/^127\.0\.0\.1(?::|$)/i.test(viaHost) && !/^localhost(?::|$)/i.test(viaHost)
+        ? `https://${viaHost.replace(/\/+$/, "")}`
+        : "";
+    const macApi = (liveBase || publicBase || "").replace(/\/+$/, "");
+    return json(res, 200, {
+      ok: true,
+      backends: fp.backends,
+      status: { ...fp, publicBase: macApi || undefined, macApiUrl: macApi ? macApi + "/" : undefined },
+      build: BUILD,
+      publicBase: macApi || undefined,
+      macApiUrl: macApi ? macApi + "/" : undefined,
+    });
   }
 
   if (p === "/api/decrypt/quota" && req.method === "GET") {

@@ -90,6 +90,26 @@ function publicBaseFromEnv() {
   return raw.replace(/\/+$/, "");
 }
 
+/** Sidecar written by `mac-ssh.sh api` when the trycloudflare URL appears. */
+function publicBaseFromSidecar() {
+  const candidates = [
+    path.join(os.homedir(), "tetherless-run", "mac-public-url"),
+    path.join(os.homedir(), ".tetherless-mac-public-url"),
+  ];
+  for (const f of candidates) {
+    if (!fs.existsSync(f)) continue;
+    try {
+      const raw = fs.readFileSync(f, "utf8").trim().split(/\r?\n/)[0] || "";
+      const m = raw.match(/https:\/\/[a-zA-Z0-9.-]+\.trycloudflare\.com/);
+      if (m) return m[0].replace(/\/+$/, "");
+      if (/^https:\/\//i.test(raw)) return raw.replace(/\/+$/, "");
+    } catch {
+      /* ignore */
+    }
+  }
+  return "";
+}
+
 /** Best-effort: last trycloudflare URL from cloudflared log. */
 function publicBaseFromCloudflaredLog() {
   const candidates = [
@@ -110,7 +130,7 @@ function publicBaseFromCloudflaredLog() {
 }
 
 function resolvePublicBase() {
-  return publicBaseFromEnv() || publicBaseFromCloudflaredLog() || "";
+  return publicBaseFromEnv() || publicBaseFromSidecar() || publicBaseFromCloudflaredLog() || "";
 }
 
 function downloadUrlFor(token) {

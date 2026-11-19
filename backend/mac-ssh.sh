@@ -176,6 +176,51 @@ cmd_start() {
   fi
 }
 
+# Persist live Mac HTTPS API public URL (trycloudflare) for the iOS Decrypt site URL + bot /d/ links.
+write_mac_public_base() {
+  local url="${1:-}"
+  [[ -n "$url" ]] || return 1
+  url="${url%/}"
+  mkdir -p "$RUN_DIR"
+  printf '%s\n' "$url" >"$RUN_DIR/mac-public-url"
+  printf '%s\n' "$url" >"$HOME/.tetherless-mac-public-url"
+  export MAC_PUBLIC_BASE="$url"
+  local envf="${ENV_FILE:-$HOME/.tetherless-mac.env}"
+  mkdir -p "$(dirname "$envf")"
+  if [[ -f "$envf" ]]; then
+    if grep -q '^MAC_PUBLIC_BASE=' "$envf" 2>/dev/null; then
+      # Avoid sed -i portability issues on macOS.
+      local tmp
+      tmp="$(mktemp)"
+      awk -v u="$url" '
+        BEGIN { done=0 }
+        /^MAC_PUBLIC_BASE=/ { print "MAC_PUBLIC_BASE=" u; done=1; next }
+        { print }
+        END { if (!done) print "MAC_PUBLIC_BASE=" u }
+      ' "$envf" >"$tmp" && mv "$tmp" "$envf"
+    else
+      printf '\nMAC_PUBLIC_BASE=%s\n' "$url" >>"$envf"
+    fi
+  else
+    printf 'MAC_PUBLIC_BASE=%s\n' "$url" >"$envf"
+    ENV_FILE="$envf"
+  fi
+  echo "Mac API (iOS Decrypt site URL): ${url}/"
+}
+
+wait_for_tunnel_url() {
+  local i url=""
+  for i in {1..20}; do
+    url="$(grep -Eo 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -1 || true)"
+    if [[ -n "$url" ]]; then
+      write_mac_public_base "$url"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 cmd_api() {
   unlock_keychain
   cmd_stop_api
@@ -197,16 +242,19 @@ cmd_api() {
     chmod +x "$HOME/bin/cloudflared" 2>/dev/null || true
   fi
 
+  : >"$CF_LOG"
   nohup node server/mac-https-api.js >>"$API_LOG" 2>&1 &
   echo $! >"$API_PID"
   sleep 1
   nohup cloudflared tunnel --url "http://127.0.0.1:${MAC_API_PORT}" >>"$CF_LOG" 2>&1 &
   echo $! >"$CF_PID"
-  sleep 3
   echo "API pid=$(cat "$API_PID" 2>/dev/null) cloudflared pid=$(cat "$CF_PID" 2>/dev/null)"
-  echo "Look for https://….trycloudflare.com in:"
-  echo "  tail -f $CF_LOG"
-  grep -Eo 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -1 || true
+  if wait_for_tunnel_url; then
+    echo "Paste that URL into iOS → Account → FairPlay Decrypt → Mac API URL → Save."
+  else
+    echo "Tunnel URL not ready yet — watch: tail -f $CF_LOG"
+    echo "When https://….trycloudflare.com appears, paste it as the iOS Mac API URL."
+  fi
 }
 
 cmd_logs() {
@@ -254,9 +302,22 @@ cmd_status() {
   fi
   if alive_pid "$CF_PID"; then
     echo "tunnel: running pid $(cat "$CF_PID")"
-    grep -Eo 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -1 || true
+    local tun=""
+    tun="$(grep -Eo 'https://[a-zA-Z0-9.-]+\.trycloudflare\.com' "$CF_LOG" 2>/dev/null | tail -1 || true)"
+    if [[ -n "$tun" ]]; then
+      echo "Mac API: $tun/"
+      # Keep env + sidecar in sync so iOS / bot always see the live host.
+      write_mac_public_base "$tun" >/dev/null || true
+    fi
   else
-    echo "tunnel: stopped"
+    echo "tunnel: stopped — start Mac API: zsh $REPO/server/mac-ssh.sh api"
+  fi
+  if [[ -n "${MAC_PUBLIC_BASE:-}" ]]; then
+    echo "public: $MAC_PUBLIC_BASE"
+  elif [[ -f "$RUN_DIR/mac-public-url" ]]; then
+    echo "public: $(cat "$RUN_DIR/mac-public-url" 2>/dev/null)"
+  elif [[ -f "$HOME/.tetherless-mac-public-url" ]]; then
+    echo "public: $(cat "$HOME/.tetherless-mac-public-url" 2>/dev/null)"
   fi
   if command -v ipatool >/dev/null 2>&1; then
     echo -n "ipatool: "
@@ -276,9 +337,6 @@ cmd_status() {
   if [[ -f "$REPO/server/mac-tg-ipa-cache.js" ]]; then
     node -e "const c=require('./server/mac-tg-ipa-cache'); console.log('cache:  '+c.list().length+' IPA(s) in '+c.CACHE_DIR)" 2>/dev/null \
       || echo "cache:  (unavailable)"
-  fi
-  if [[ -n "${MAC_PUBLIC_BASE:-}" ]]; then
-    echo "public: $MAC_PUBLIC_BASE"
   fi
 }
 
