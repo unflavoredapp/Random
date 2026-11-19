@@ -171,31 +171,6 @@ function homescreenOverlaySvg({ pct, S }) {
 </svg>`);
 }
 
-/** Telegram-style white download arrow over a dimmed icon (for IPA document thumb). */
-function downloadArrowOverlaySvg(S) {
-  const cx = S / 2;
-  const cy = S / 2;
-  const corner = Math.round(S * 0.223);
-  const stroke = Math.max(14, Math.round(S * 0.085));
-  const shaftTop = cy - S * 0.22;
-  const shaftBot = cy + S * 0.06;
-  const headY = cy + S * 0.22;
-  const headW = S * 0.2;
-  return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
-<svg width="${S}" height="${S}" viewBox="0 0 ${S} ${S}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <clipPath id="squircle">
-      <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}"/>
-    </clipPath>
-  </defs>
-  <rect x="0" y="0" width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="rgba(0,0,0,0.38)" clip-path="url(#squircle)"/>
-  <!-- Shaft -->
-  <path d="M ${cx} ${shaftTop} L ${cx} ${shaftBot}" fill="none" stroke="#ffffff" stroke-width="${stroke}" stroke-linecap="round"/>
-  <!-- Arrow head -->
-  <path d="M ${cx - headW} ${cy + S * 0.02} L ${cx} ${headY} L ${cx + headW} ${cy + S * 0.02}" fill="none" stroke="#ffffff" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round"/>
-</svg>`);
-}
-
 function placeholderIconSvg(S) {
   const r = Math.round(S * 0.223);
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
@@ -294,13 +269,14 @@ async function renderProgressBanner({
       .composite([{ input: iconRoundMask, blend: "dest-in" }])
       .png()
       .toBuffer();
-    const overlay = isDone
-      ? downloadArrowOverlaySvg(S)
-      : homescreenOverlaySvg({ pct: p, S });
-    const withOverlay = await sharp(rounded)
-      .composite([{ input: overlay, top: 0, left: 0 }])
-      .png()
-      .toBuffer();
+    // Done cards keep a clean app icon — Telegram already shows its own download UI
+    // on the IPA document; don't paint a fake download arrow over the artwork.
+    const withOverlay = isDone
+      ? rounded
+      : await sharp(rounded)
+          .composite([{ input: homescreenOverlaySvg({ pct: p, S }), top: 0, left: 0 }])
+          .png()
+          .toBuffer();
     layers.push({ input: withOverlay, left: iconLeft, top: iconTop });
 
     layers.push({
@@ -353,8 +329,8 @@ async function renderProgressBanner({
 }
 
 /**
- * IPA document thumbnail (Telegram: JPEG ≤320px, ≤200KB) — app icon + download arrow.
- * Tapping the document in chat starts the IPA download.
+ * IPA document thumbnail (Telegram: JPEG ≤320px, ≤200KB) — clean app icon only.
+ * No download-arrow overlay; Telegram already draws its own download control.
  * @returns {Promise<string>} dest path on success, "" on failure
  */
 async function renderDownloadThumb({ iconPath, dest, size } = {}) {
@@ -380,12 +356,8 @@ async function renderDownloadThumb({ iconPath, dest, size } = {}) {
 <svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
   <rect width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="white"/>
 </svg>`);
-    const rounded = await sharp(iconBase)
+    await sharp(iconBase)
       .composite([{ input: mask, blend: "dest-in" }])
-      .png()
-      .toBuffer();
-    await sharp(rounded)
-      .composite([{ input: downloadArrowOverlaySvg(S), top: 0, left: 0 }])
       .flatten({ background: { r: 20, g: 20, b: 28 } })
       .jpeg({ quality: 82, mozjpeg: true })
       .toFile(out);
