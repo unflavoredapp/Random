@@ -581,30 +581,40 @@ async function renderVersionPickerBanner(opts = {}) {
       layers.push({ input: iconBuf, left: bigLeft, top: bigTop });
     }
 
-    // Rows right of big icon: [build icon] [app name] [version] [n]
+    // Rows right of big icon: [build icon] [full app name] [version] [n]
+    // Version is placed just after the name (approx width) so they never overlap.
     const rowH = 48;
     const listTop = 188;
     const rowIconSize = 36;
     const rowIconLeft = 320;
     const nameX = 372;
-    // Version sits just left of the pick number (end-anchored) so long names don't collide.
-    const numCx = 980;
-    const verX = numCx - 36;
+    const numCx = 1040;
+    const nameFont = 20;
+    const verFont = 22;
+    const approxW = (s, fs) => Math.ceil(String(s || "").length * fs * 0.56);
 
     let rowsSvg = "";
     const rowIcons = [];
     for (let i = 0; i < versions.length; i++) {
       const v = versions[i] || {};
       const n = Number(v.n != null ? v.n : i + 1);
-      const ver = sanitize(String(v.label || "—").replace(/^v/i, ""), 14);
-      const star = v.current ? " *" : "";
+      const verLabel = `v${sanitize(String(v.label || "—").replace(/^v/i, ""), 16)}${
+        v.current ? " *" : ""
+      }`;
       const y = listTop + i * rowH;
       const cy = y;
-      // Keep name short so it stays left of the version column.
-      const nameSafe = sanitize(title, 16);
+      // Prefer the full title; only trim if name+version would hit the number.
+      let nameSafe = sanitize(title, 42);
+      const gap = 28;
+      const verW = approxW(verLabel, verFont);
+      const maxNameW = Math.max(80, numCx - 28 - verW - gap - nameX);
+      while (nameSafe.length > 8 && approxW(nameSafe, nameFont) > maxNameW) {
+        nameSafe = nameSafe.slice(0, -1).trim();
+      }
+      const verX = nameX + approxW(nameSafe, nameFont) + gap;
       rowsSvg += `
-  <text x="${nameX}" y="${cy + 7}" fill="#e8eef8" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${nameSafe}</text>
-  <text x="${verX}" y="${cy + 7}" text-anchor="end" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="600">v${ver}${star}</text>
+  <text x="${nameX}" y="${cy + 7}" fill="#e8eef8" font-family="Arial, Helvetica, sans-serif" font-size="${nameFont}" font-weight="600">${nameSafe}</text>
+  <text x="${verX}" y="${cy + 7}" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="${verFont}" font-weight="600">${verLabel}</text>
   <circle cx="${numCx}" cy="${cy}" r="16" fill="#1e2a44" stroke="#3d7cff" stroke-width="2"/>
   <text x="${numCx}" y="${cy + 6}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">${n}</text>`;
       rowIcons.push({
