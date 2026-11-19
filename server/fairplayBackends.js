@@ -141,6 +141,12 @@ function friendlyIpatoolError(err) {
   const decryptHint = friendlyDecryptError(err);
   if (decryptHint) return decryptHint;
   const s = String((err && err.message) || err || "");
+  if (/maximum call stack|call stack size exceeded|RangeError/i.test(s)) {
+    return (
+      "Apple system apps (TestFlight, App Store, …) can’t be decrypted — or Store verification crashed. " +
+      "Try a third-party App Store title."
+    );
+  }
   if (/keyring|keychain|failed to get account|failed to get item|specified item could not be found/i.test(s)) {
     return (
       "App Store login missing on Mac (ipatool keychain). " +

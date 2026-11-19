@@ -16,6 +16,14 @@ enum IPadnDecryptPipeline {
         externalVersionId: String? = nil,
         openDownloads: Bool = true
     ) {
+        if AppleSystemAppGate.isBlocked(app) {
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = AppleSystemAppGate.userMessage
+            DecryptClient.shared.message = AppleSystemAppGate.userMessage
+            DecryptClient.shared.finishedName = app.name
+            if let icon = app.icon { DecryptClient.shared.finishedIcon = icon }
+            return
+        }
         if !app.countryCode.isEmpty {
             AppleIDStore.shared.selectAccountMatching(countryCode: app.countryCode)
         }

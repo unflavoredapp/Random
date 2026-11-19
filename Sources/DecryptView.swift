@@ -1151,6 +1151,14 @@ private struct DecryptVersionsSheet: View {
                                 return StoreDeviceSpoof.compareVersions(min, deviceIOS) != .orderedDescending
                             }()
                             Button {
+                                if AppleSystemAppGate.isBlocked(app) {
+                                    c.phase = .failed
+                                    c.error = AppleSystemAppGate.userMessage
+                                    c.message = AppleSystemAppGate.userMessage
+                                    c.finishedName = app.name
+                                    dismiss()
+                                    return
+                                }
                                 if DecryptChannel.current == .telegram {
                                     c.start(url: app.url, version: v.externalId ?? v.v, display: app.name)
                                 } else {
