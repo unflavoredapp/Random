@@ -1384,15 +1384,17 @@ async function resolveExternalVersionId(link, vreq) {
 /** Versions per Telegram picker page (plus Latest + Next/Prev). */
 const VER_PAGE_SIZE = 8;
 
+/** Caption under the version sharp card (HTML). */
 function versionPickText(pending, page) {
-  const title = String(pending.title || "App").replace(/[*_`\[\]]/g, "");
+  const title = String(pending.title || "App").trim() || "App";
   const total = pending.picks.length;
   const pages = Math.max(1, Math.ceil(total / VER_PAGE_SIZE));
   const p = Math.max(0, Math.min(pages - 1, page));
-  return (
-    `*${title}* — pick a version\n` +
-    `_Timbrd / Bilin / iosdump · page ${p + 1}/${pages} · ${total} builds_`
-  );
+  return [
+    `<b>${escapeHtml(title)}</b>`,
+    "Pick a version",
+    `<i>Timbrd / Bilin / iosdump · page ${p + 1}/${pages} · ${total} builds</i>`,
+  ].join("\n");
 }
 
 function versionPickKeyboard(token, pending, page) {
@@ -1429,7 +1431,7 @@ function versionPickKeyboard(token, pending, page) {
   return { inline_keyboard: rows };
 }
 
-/** Timbrd/Bilin/iosdump version sheet — pick before the sharp progress card. */
+/** Timbrd/Bilin/iosdump version sheet — sharp card + pick buttons before decrypt. */
 async function offerVersionPick(chatId, link) {
   pruneVerPicks();
   const wait = await tgApi("sendMessage", {
@@ -1446,7 +1448,12 @@ async function offerVersionPick(chatId, link) {
     listed = { title: "App", versions: [] };
   }
   const versions = Array.isArray(listed.versions) ? listed.versions : [];
-  const title = String((listed && listed.title) || "App").replace(/[*_`\[\]]/g, "");
+  const storeMeta = lookupStoreApp(link);
+  const title = String(
+    (listed && listed.title) || storeMeta.name || "App"
+  )
+    .replace(/[*_`\[\]]/g, "")
+    .trim() || "App";
 
   // No history feeds → decrypt latest immediately (same as before).
   if (!versions.length) {
@@ -1481,39 +1488,57 @@ async function offerVersionPick(chatId, link) {
     title,
     picks,
     page: 0,
+    hasPhoto: false,
     expires: Date.now() + 20 * 60 * 1000,
   };
   pendingVerPicks.set(token, pending);
 
-  const text = versionPickText(pending, 0);
+  const caption = versionPickText(pending, 0);
   const reply_markup = versionPickKeyboard(token, pending, 0);
 
+  // Drop the plain "Loading…" bubble — version sheet is a sharp card with icon.
   if (waitId) {
-    await tgApi("editMessageText", {
-      chat_id: chatId,
-      message_id: waitId,
-      text,
-      parse_mode: "Markdown",
-      reply_markup,
-      disable_web_page_preview: true,
-    }).catch(async () => {
-      await tgApi("sendMessage", {
-        chat_id: chatId,
-        text,
-        parse_mode: "Markdown",
-        reply_markup,
-        disable_web_page_preview: true,
-      });
-    });
-  } else {
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text,
-      parse_mode: "Markdown",
-      reply_markup,
-      disable_web_page_preview: true,
-    });
+    await tgApi("deleteMessage", { chat_id: chatId, message_id: waitId }).catch(() => {});
   }
+
+  const bannerDest = path.join(WORK, `verpick-${chatId}-${token}.jpg`);
+  let photoPath = "";
+  try {
+    photoPath = await renderProgressBanner({
+      name: title,
+      stage: "Pick a version",
+      pct: 0,
+      iconPath: storeMeta.iconPath || "",
+      dest: bannerDest,
+      tag: "delvek",
+      brand: "DELVEK",
+    });
+  } catch (e) {
+    console.warn("[versions] banner failed:", (e && e.message) || e);
+  }
+  if (!photoPath || !fs.existsSync(photoPath)) {
+    photoPath = storeMeta.iconPath || "";
+  }
+
+  if (photoPath && fs.existsSync(photoPath)) {
+    const sent = await sendPhotoBotApi(chatId, photoPath, caption, reply_markup).catch((e) => {
+      console.warn("[versions] sendPhoto failed:", (e && e.message) || e);
+      return null;
+    });
+    if (sent && sent.ok && sent.result && sent.result.message_id) {
+      pending.hasPhoto = true;
+      return;
+    }
+  }
+
+  // Text fallback if sharp/icon unavailable.
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text: caption,
+    parse_mode: "HTML",
+    reply_markup,
+    disable_web_page_preview: true,
+  });
 }
 
 async function handleVersionPick(cq, data) {
@@ -1542,14 +1567,30 @@ async function handleVersionPick(cq, data) {
     pending.expires = Date.now() + 20 * 60 * 1000;
     await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     if (cq.message && cq.message.message_id) {
-      await tgApi("editMessageText", {
-        chat_id: chatId,
-        message_id: cq.message.message_id,
-        text: versionPickText(pending, page),
-        parse_mode: "Markdown",
-        reply_markup: versionPickKeyboard(token, pending, page),
-        disable_web_page_preview: true,
-      }).catch(() => {});
+      const caption = versionPickText(pending, page);
+      const reply_markup = versionPickKeyboard(token, pending, page);
+      const isPhoto =
+        pending.hasPhoto ||
+        !!(cq.message.photo && cq.message.photo.length) ||
+        !!(cq.message.document && /image\//i.test(cq.message.document.mime_type || ""));
+      if (isPhoto) {
+        await tgApi("editMessageCaption", {
+          chat_id: chatId,
+          message_id: cq.message.message_id,
+          caption,
+          parse_mode: "HTML",
+          reply_markup,
+        }).catch(() => {});
+      } else {
+        await tgApi("editMessageText", {
+          chat_id: chatId,
+          message_id: cq.message.message_id,
+          text: caption,
+          parse_mode: "HTML",
+          reply_markup,
+          disable_web_page_preview: true,
+        }).catch(() => {});
+      }
     }
     return;
   }
