@@ -1766,7 +1766,8 @@ function versionCarouselSlice(pending, page) {
 /** Nav only — versions are on the sharp card; user replies with a number. */
 function versionPickKeyboard(token, pending, page) {
   const { pages, page: p } = versionCarouselSlice(pending, page);
-  const rows = [[{ text: "⭐ Latest", callback_data: `ver:${token}:L`.slice(0, 64) }]];
+  const latestLabel = pending.mode === "library" ? "⬇ Latest" : "⭐ Latest";
+  const rows = [[{ text: latestLabel, callback_data: `ver:${token}:L`.slice(0, 64) }]];
   const nav = [];
   if (p > 0) {
     nav.push({ text: "◀ Back", callback_data: `ver:${token}:p:${p - 1}`.slice(0, 64) });
@@ -1787,7 +1788,9 @@ async function renderVersionCarouselPage(pending, page) {
   const adam = pending.adam || ipaCache.adamFromStoreUrl(pending.url) || "";
   const dest = path.join(
     WORK,
-    `verpick-${pending.chatId}-${pending.token || "x"}-p${p}-${Date.now()}.jpg`
+    `${pending.mode === "library" ? "libpick" : "verpick"}-${pending.chatId}-${
+      pending.token || "x"
+    }-p${p}-${Date.now()}.jpg`
   );
   // Attach each build’s real icon when we have/can extract it.
   for (const pick of slice) {
@@ -1800,6 +1803,18 @@ async function renderVersionCarouselPage(pending, page) {
     current: !!pick.current,
     iconPath: pick.iconPath || "",
   }));
+  if (pending.mode === "library") {
+    return renderLibraryAppBanner({
+      title: pending.title,
+      bid: pending.bid || "",
+      iconPath: pending.iconPath || "",
+      versions,
+      page: p + 1,
+      pages,
+      total: pending.picks.length,
+      dest,
+    });
+  }
   return renderVersionPickerBanner({
     title: pending.title,
     iconPath: pending.iconPath || "",
@@ -1818,8 +1833,11 @@ async function paintVersionCarousel(pending, page, { messageId, warm = true } = 
   const reply_markup = versionPickKeyboard(pending.token, pending, p);
   // Caption stays minimal — versions + build icons are painted on the card.
   const caption =
-    `<b>${escapeHtml(pending.title || "App")}</b>\n` +
-    `Reply with a number · or Next / Back`;
+    pending.mode === "library"
+      ? `<b>${escapeHtml(pending.title || "App")}</b>\n` +
+        `Reply with a number to pull · or Next / Back`
+      : `<b>${escapeHtml(pending.title || "App")}</b>\n` +
+        `Reply with a number · or Next / Back`;
 
   let ok = false;
   const img = await renderVersionCarouselPage(pending, p);
@@ -1852,7 +1870,12 @@ async function paintVersionCarousel(pending, page, { messageId, warm = true } = 
     const lines = versionCarouselSlice(pending, p).slice.map(
       (pick, idx) => `${idx + 1}. ${pick.label}`
     );
-    const text = `*VERSIONS*\n${pending.title}\n\n${lines.join("\n")}\n\n_Reply with a number_`;
+    const heading = pending.mode === "library" ? "LIBRARY" : "VERSIONS";
+    const hint =
+      pending.mode === "library"
+        ? "_Reply with a number to pull_"
+        : "_Reply with a number_";
+    const text = `*${heading}*\n${pending.title}\n\n${lines.join("\n")}\n\n${hint}`;
     if (messageId && !pending.hasPhoto) {
       await tgApi("editMessageText", {
         chat_id: pending.chatId,
@@ -1872,7 +1895,8 @@ async function paintVersionCarousel(pending, page, { messageId, warm = true } = 
   }
 
   // Fetch missing older build icons from encrypted IPAs, then refresh the card.
-  if (warm) warmVersionIconsForPage(pending, slice);
+  // Library pulls from cache only — don't kick ipatool icon warm.
+  if (warm && pending.mode !== "library") warmVersionIconsForPage(pending, slice);
   return ok;
 }
 
@@ -1960,7 +1984,7 @@ async function offerVersionPick(chatId, link) {
   await paintVersionCarousel(pending, 0);
 }
 
-async function startDecryptFromVersionPick(pending, { vreq, versionLabel, label }) {
+async function startDecryptFromVersionPick(pending, { vreq, versionLabel, label, pick }) {
   const chatId = pending.chatId;
   pendingVerPicks.delete(pending.token);
   activeVerPickByChat.delete(chatId);
@@ -1970,6 +1994,38 @@ async function startDecryptFromVersionPick(pending, { vreq, versionLabel, label 
       message_id: pending.messageId,
     }).catch(() => {});
   }
+
+  // /library AppName pick → re-send cached decrypted IPA (no re-decrypt).
+  if (pending.mode === "library") {
+    let entry =
+      (pick && pick.entry) ||
+      (versionLabel && pending.adam && ipaCache.get(pending.adam, versionLabel)) ||
+      null;
+    if (!entry && pick && pick.marketing && pending.adam) {
+      entry = ipaCache.get(pending.adam, pick.marketing);
+    }
+    if (!entry && pending.adam) {
+      // Latest cached for this adam.
+      entry = ipaCache.get(pending.adam, "latest");
+    }
+    if (!entry) {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: "That build isn’t in the library cache anymore — paste the Apple Store URL to decrypt again.",
+      }).catch(() => {});
+      return;
+    }
+    await withWorker(chatId, async () => {
+      await sendCachedEntry(chatId, entry);
+    });
+    console.log(
+      "[library] pulled",
+      label || versionLabel || entry.version || "latest",
+      "→ cache send"
+    );
+    return;
+  }
+
   rememberStoreUrl(chatId, pending.url, versionLabel || "latest");
   await withWorker(chatId, async () => {
     await decryptStoreUrl(chatId, pending.url, vreq || "", {
@@ -2007,6 +2063,7 @@ async function tryHandleVersionNumberReply(chatId, text, messageId) {
     vreq: pick.ext || "",
     versionLabel: pick.marketing || "",
     label: pick.marketing ? `v${pick.marketing}` : pick.label,
+    pick,
   });
   return true;
 }
@@ -2040,14 +2097,17 @@ async function handleVersionPick(cq, data) {
   }
 
   if (kind === "L") {
+    const latestPick =
+      (pending.picks || []).find((p) => p && p.current) || (pending.picks || [])[0] || null;
     await tgApi("answerCallbackQuery", {
       callback_query_id: cq.id,
-      text: "Decrypting Latest…",
+      text: pending.mode === "library" ? "Pulling Latest…" : "Decrypting Latest…",
     }).catch(() => {});
     await startDecryptFromVersionPick(pending, {
-      vreq: "",
-      versionLabel: "",
+      vreq: pending.mode === "library" ? "" : "",
+      versionLabel: (latestPick && latestPick.marketing) || "",
       label: "Latest",
+      pick: latestPick,
     });
     return;
   }
@@ -2130,6 +2190,32 @@ async function sendCacheList(chatId) {
 }
 
 /**
+ * Resolve a durable icon for a library cache entry (iconPath → IPA extract → store).
+ */
+function resolveLibraryEntryIcon(entry, adam, fallbackIcon) {
+  if (!entry) return (fallbackIcon && fs.existsSync(fallbackIcon) && fallbackIcon) || "";
+  if (entry.iconPath && fs.existsSync(entry.iconPath) && fs.statSync(entry.iconPath).size > 100) {
+    return entry.iconPath;
+  }
+  if (entry.diskPath && fs.existsSync(entry.diskPath)) {
+    const dest = versionIconCachePath(
+      adam || entry.adam || "app",
+      entry.version || path.basename(entry.diskPath, ".ipa") || "x"
+    );
+    const got = extractIpaIcon(entry.diskPath, dest);
+    if (got) {
+      try {
+        entry.iconPath = got;
+      } catch {
+        /* ignore */
+      }
+      return got;
+    }
+  }
+  return (fallbackIcon && fs.existsSync(fallbackIcon) && fallbackIcon) || "";
+}
+
+/**
  * Group decrypted IPA cache entries into library apps (by adam).
  * Skips external-version-id noise and the synthetic "latest" key.
  */
@@ -2150,12 +2236,14 @@ function libraryAppsFromCache() {
         storeUrl: it.storeUrl || "",
         iconPath: "",
         versions: [],
+        entries: new Map(),
         latest: "",
         _latestAt: 0,
       };
       byAdam.set(it.adam, app);
     }
     if (!app.versions.includes(ver)) app.versions.push(ver);
+    app.entries.set(ver, it);
     if (it.name) app.name = it.name;
     if (it.bid) app.bid = it.bid;
     if (it.storeUrl) app.storeUrl = it.storeUrl;
@@ -2174,13 +2262,25 @@ function libraryAppsFromCache() {
         if (b === app.latest) return 1;
         return String(b).localeCompare(String(a), undefined, { numeric: true, sensitivity: "base" });
       });
+      let iconPath = app.iconPath || "";
+      if (!iconPath || !fs.existsSync(iconPath)) {
+        for (const ver of versions) {
+          const entry = app.entries.get(ver);
+          iconPath = resolveLibraryEntryIcon(entry, app.adam, "");
+          if (iconPath) break;
+        }
+      }
+      if ((!iconPath || !fs.existsSync(iconPath)) && app.storeUrl) {
+        iconPath = fetchStoreIcon(app.storeUrl) || iconPath;
+      }
       return {
         adam: app.adam,
         name: app.name,
         bid: app.bid,
         storeUrl: app.storeUrl,
-        iconPath: app.iconPath,
+        iconPath: iconPath || "",
         versions,
+        entries: app.entries,
         latest: app.latest || versions[0] || "",
         decrypted: versions.length,
       };
@@ -2248,40 +2348,64 @@ async function sendLibrary(chatId, query) {
       return;
     }
 
-    const dest = path.join(WORK, `library-app-${chatId}-${Date.now()}.jpg`);
-    const img = await renderLibraryAppBanner({
-      name: hit.name,
-      bid: hit.bid,
-      versions: hit.versions,
-      latest: hit.latest,
-      iconPath: hit.iconPath,
-      dest,
-    });
-    const caption =
-      `<b>${escapeHtml(hit.name || "App")}</b>\n` +
-      `${hit.decrypted} decrypted · /library for all apps`;
-    if (img && fs.existsSync(img)) {
-      const sent = await sendPhotoBotApi(chatId, img, caption);
-      try {
-        fs.rmSync(img, { force: true });
-      } catch {
-        /* ignore */
+    // Close any prior version/library carousel for this chat.
+    pruneVerPicks();
+    const prevTok = activeVerPickByChat.get(chatId);
+    if (prevTok && pendingVerPicks.has(prevTok)) {
+      const prev = pendingVerPicks.get(prevTok);
+      if (prev && prev.messageId) {
+        await tgApi("deleteMessage", {
+          chat_id: chatId,
+          message_id: prev.messageId,
+        }).catch(() => {});
       }
-      if (sent && sent.ok) return;
+      pendingVerPicks.delete(prevTok);
     }
-    const lines = hit.versions.slice(0, 8).map((v) => {
-      const mark = v === hit.latest ? " · latest" : "";
-      return `• v${v}${mark}`;
+    activeVerPickByChat.delete(chatId);
+
+    const picks = hit.versions.map((ver, i) => {
+      const entry =
+        (hit.entries && hit.entries.get(ver)) || ipaCache.get(hit.adam, ver) || null;
+      const iconPath = resolveLibraryEntryIcon(entry, hit.adam, hit.iconPath || "");
+      return {
+        i,
+        label: `v${ver}`,
+        marketing: ver,
+        ext: "",
+        current: ver === hit.latest,
+        iconPath,
+        entry,
+      };
     });
-    await tgApi("sendMessage", {
-      chat_id: chatId,
-      text:
-        `*LIBRARY* — ${hit.name}\n` +
-        `${hit.decrypted} decrypted\n\n` +
-        lines.join("\n") +
-        `\n\n_Paste the Apple Store URL · pick on VERSIONS_`,
-      parse_mode: "Markdown",
-    });
+
+    let iconPath = hit.iconPath || "";
+    if (!iconPath || !fs.existsSync(iconPath)) {
+      iconPath =
+        (picks.find((p) => p.iconPath && fs.existsSync(p.iconPath)) || {}).iconPath || "";
+    }
+    if ((!iconPath || !fs.existsSync(iconPath)) && hit.storeUrl) {
+      iconPath = fetchStoreIcon(hit.storeUrl) || iconPath;
+    }
+
+    const token = crypto.randomBytes(5).toString("hex");
+    const pending = {
+      token,
+      chatId,
+      mode: "library",
+      url: hit.storeUrl || "",
+      adam: hit.adam || "",
+      title: hit.name || "App",
+      bid: hit.bid || "",
+      iconPath: iconPath || "",
+      picks,
+      page: 0,
+      hasPhoto: false,
+      messageId: 0,
+      expires: Date.now() + 20 * 60 * 1000,
+    };
+    pendingVerPicks.set(token, pending);
+    activeVerPickByChat.set(chatId, token);
+    await paintVersionCarousel(pending, 0, { warm: false });
     return;
   }
 
@@ -2300,7 +2424,7 @@ async function sendLibrary(chatId, query) {
   });
   const caption =
     `<b>LIBRARY</b> · ${apps.length} apps · ${totalBuilds} decrypted\n` +
-    `Type <code>/library AppName</code> for versions`;
+    `Type <code>/library AppName</code> · reply with a number to pull`;
   if (img && fs.existsSync(img)) {
     const sent = await sendPhotoBotApi(chatId, img, caption);
     try {
@@ -2321,7 +2445,7 @@ async function sendLibrary(chatId, query) {
       `*LIBRARY* (${apps.length} apps · ${totalBuilds} decrypted)\n\n` +
       lines.join("\n") +
       more +
-      `\n\n_Paste an Apple Store URL · pick on VERSIONS_`,
+      `\n\n_/library AppName · reply with a number to pull_`,
     parse_mode: "Markdown",
   });
 }

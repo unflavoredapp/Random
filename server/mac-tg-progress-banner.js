@@ -758,7 +758,7 @@ async function renderLibraryListBanner(opts = {}) {
   <text x="${W / 2}" y="108" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="800" letter-spacing="3">LIBRARY</text>
   <text x="${W / 2}" y="146" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${apps.length} apps · ${totalBuilds} decrypted builds${more}</text>
   ${rows}
-  <text x="${W / 2}" y="${H - 56}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">Want a version? Paste the Apple Store URL · pick it on VERSIONS</text>
+  <text x="${W / 2}" y="${H - 56}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">Type /library AppName · reply with a number to pull</text>
   <text x="${W - 56}" y="${H - 20}" text-anchor="end" fill="#6b7385" font-family="Arial, Helvetica, sans-serif" font-size="18">@DELvEKBot</text>
 </svg>`);
     layers.push({ input: await sharp(panel).png().toBuffer(), left: 0, top: 0 });
@@ -801,8 +801,9 @@ async function renderLibraryListBanner(opts = {}) {
 }
 
 /**
- * /library AppName sharp card — one app’s decrypted versions + reassurance.
- * @param {{ name?: string, bid?: string, versions?: string[], latest?: string, iconPath?: string, dest?: string }} opts
+ * /library AppName sharp card — big app icon + numbered versions to pull.
+ * Same row language as VERSIONS; reply with a number to send the cached IPA.
+ * @param {{ title?: string, bid?: string, iconPath?: string, versions?: Array<{n:number,label:string,iconPath?:string,current?:boolean}>, page?: number, pages?: number, total?: number, dest?: string }} opts
  */
 async function renderLibraryAppBanner(opts = {}) {
   const sharp = loadSharp();
@@ -812,72 +813,143 @@ async function renderLibraryAppBanner(opts = {}) {
 
   const W = 1200;
   const H = 630;
-  const name = sanitize(opts.name || "App", 28);
+  const title = sanitize(opts.title || opts.name || "App", 28);
   const bid = sanitize(opts.bid || "", 40);
-  const versions = Array.isArray(opts.versions)
-    ? opts.versions.map((v) => String(v || "").replace(/^v/i, "").trim()).filter(Boolean).slice(0, 8)
-    : [];
-  const latest = String(opts.latest || versions[0] || "").replace(/^v/i, "").trim();
-  const iconPath = opts.iconPath || "";
+  const page = Math.max(1, Number(opts.page) || 1);
+  const pages = Math.max(1, Number(opts.pages) || 1);
+  const total = Math.max(0, Number(opts.total) || 0);
+  const versions = Array.isArray(opts.versions) ? opts.versions.slice(0, 8) : [];
+  const fallbackIcon = opts.iconPath || "";
+  const heroIcon =
+    (fallbackIcon && fs.existsSync(fallbackIcon) && fallbackIcon) ||
+    (versions.find((v) => v && v.iconPath && fs.existsSync(v.iconPath)) || {}).iconPath ||
+    "";
 
   try {
     fs.mkdirSync(path.dirname(out), { recursive: true });
     const layers = [];
 
-    let verRows = "";
+    if (heroIcon && fs.existsSync(heroIcon)) {
+      const blurBuf = await sharp(heroIcon)
+        .resize(W, H, { fit: "cover" })
+        .blur(32)
+        .modulate({ brightness: 0.4, saturation: 0.75 })
+        .png()
+        .toBuffer();
+      layers.push({ input: blurBuf, left: 0, top: 0 });
+    }
+
+    const scrim = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${W}" height="${H}" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="libScrim" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a080c" stop-opacity="0.78"/>
+      <stop offset="100%" stop-color="#080a10" stop-opacity="0.9"/>
+    </linearGradient>
+  </defs>
+  <rect width="${W}" height="${H}" fill="url(#libScrim)"/>
+</svg>`);
+    layers.push({ input: await sharp(scrim).png().toBuffer(), left: 0, top: 0 });
+
+    const bigSize = 220;
+    const bigLeft = 56;
+    const bigTop = 200;
+    {
+      let iconBuf;
+      if (heroIcon && fs.existsSync(heroIcon)) {
+        iconBuf = await roundedPng(sharp, heroIcon, bigSize);
+      } else {
+        iconBuf = await sharp(placeholderIconSvg(bigSize)).png().toBuffer();
+      }
+      layers.push({ input: iconBuf, left: bigLeft, top: bigTop });
+    }
+
+    const rowH = 48;
+    const listTop = 188;
+    const rowIconSize = 36;
+    const rowIconLeft = 320;
+    const nameX = 372;
+    const nameFont = 20;
+    const verFont = 22;
+    const numR = 16;
+    const nameVerGap = 28;
+    const verNumGap = 36;
+    const rightLimit = W - 48;
+    const approxW = (s, fs) => Math.ceil(String(s || "").length * fs * 0.56);
+
+    let rowsSvg = "";
+    const rowIcons = [];
     for (let i = 0; i < versions.length; i++) {
-      const y = 250 + i * 44;
-      const ver = sanitize(versions[i], 18);
-      const label = ver === latest ? `v${ver} - latest` : `v${ver}`;
-      verRows += `<text x="72" y="${y}" fill="#e8eef8" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="600">${sanitize(
-        label,
-        28
-      )}</text>`;
+      const v = versions[i] || {};
+      const n = Number(v.n != null ? v.n : i + 1);
+      const verLabel = `v${sanitize(String(v.label || "—").replace(/^v/i, ""), 16)}${
+        v.current ? " *" : ""
+      }`;
+      const y = listTop + i * rowH;
+      const cy = y;
+      const verW = approxW(verLabel, verFont);
+      const reservedAfterName = nameVerGap + verW + verNumGap + numR * 2 + 8;
+      let nameSafe = sanitize(title, 42);
+      const maxNameW = Math.max(80, rightLimit - nameX - reservedAfterName);
+      while (nameSafe.length > 8 && approxW(nameSafe, nameFont) > maxNameW) {
+        nameSafe = nameSafe.slice(0, -1).trim();
+      }
+      const verX = nameX + approxW(nameSafe, nameFont) + nameVerGap;
+      const numCx = Math.min(rightLimit - numR, verX + verW + verNumGap + numR);
+      rowsSvg += `
+  <text x="${nameX}" y="${cy + 7}" fill="#e8eef8" font-family="Arial, Helvetica, sans-serif" font-size="${nameFont}" font-weight="600">${nameSafe}</text>
+  <text x="${verX}" y="${cy + 7}" fill="#f2f5fa" font-family="Arial, Helvetica, sans-serif" font-size="${verFont}" font-weight="600">${verLabel}</text>
+  <circle cx="${numCx}" cy="${cy}" r="${numR}" fill="#1e2a44" stroke="#3d7cff" stroke-width="2"/>
+  <text x="${numCx}" y="${cy + 6}" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="700">${n}</text>`;
+      rowIcons.push({
+        path: (v.iconPath && fs.existsSync(v.iconPath) && v.iconPath) || heroIcon || "",
+        left: rowIconLeft,
+        top: cy - Math.round(rowIconSize / 2),
+      });
     }
 
     const brandDelvek = sanitize("DELvEK.NeT", 18);
     const brandTether = sanitize("Tetherless.Dev", 18);
     const brandIcon = 44;
+    const delvekIconLeft = 40;
+    const delvekTextX = delvekIconLeft + brandIcon + 14;
     const tetherGroupIconLeft = W - 40 - brandIcon - 170;
     const tetherTextX = tetherGroupIconLeft + brandIcon + 14;
-    const count = versions.length;
 
     const panel = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-  <defs>
-    <linearGradient id="libAppBg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#2a0a0a"/>
-      <stop offset="55%" stop-color="#0c1018"/>
-      <stop offset="100%" stop-color="#080a10"/>
-    </linearGradient>
-  </defs>
-  <rect width="${W}" height="${H}" fill="url(#libAppBg)"/>
-  <text x="${brandIcon + 40 + 14}" y="66" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">${brandDelvek}</text>
+  <text x="${delvekTextX}" y="66" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" letter-spacing="1">${brandDelvek}</text>
   <text x="${tetherTextX}" y="66" fill="#c5cddc" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">${brandTether}</text>
   <text x="${W / 2}" y="108" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="40" font-weight="800" letter-spacing="3">LIBRARY</text>
-  <text x="${W / 2}" y="148" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="34" font-weight="700">${name}</text>
+  <text x="${W / 2}" y="146" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="28" font-weight="700">${title}</text>
   ${
     bid
-      ? `<text x="${W / 2}" y="186" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${bid}</text>`
+      ? `<text x="${W / 2}" y="176" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="600">${bid}</text>`
       : ""
   }
-  <text x="72" y="230" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700">${count} decrypted version${
-      count === 1 ? "" : "s"
-    } on this Mac</text>
-  ${verRows}
-  <rect x="56" y="400" width="1088" height="140" rx="16" fill="#101722" fill-opacity="0.85" stroke="#ffffff" stroke-opacity="0.12"/>
-  <text x="80" y="442" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700">Want one of these versions?</text>
-  <text x="80" y="482" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">1. Grab the Apple Store URL for ${name}</text>
-  <text x="80" y="516" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">2. Paste it here  ·  3. Pick the version on the VERSIONS card</text>
+  ${rowsSvg}
+  <text x="${W / 2}" y="${H - 48}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">page ${page}/${pages} · ${
+      total || versions.length
+    } builds · reply with a number to pull</text>
   <text x="${W - 56}" y="${H - 20}" text-anchor="end" fill="#6b7385" font-family="Arial, Helvetica, sans-serif" font-size="18">@DELvEKBot</text>
 </svg>`);
     layers.push({ input: await sharp(panel).png().toBuffer(), left: 0, top: 0 });
+
+    for (const row of rowIcons) {
+      let buf;
+      if (row.path && fs.existsSync(row.path)) {
+        buf = await roundedPng(sharp, row.path, rowIconSize);
+      } else {
+        buf = await sharp(placeholderIconSvg(rowIconSize)).png().toBuffer();
+      }
+      layers.push({ input: buf, left: row.left, top: row.top });
+    }
 
     const delvekIconPath = resolveDelvekIcon();
     if (delvekIconPath) {
       layers.push({
         input: await roundedPng(sharp, delvekIconPath, brandIcon),
-        left: 40,
+        left: delvekIconLeft,
         top: 34,
       });
     }
@@ -889,15 +961,6 @@ async function renderLibraryAppBanner(opts = {}) {
         top: 34,
       });
     }
-
-    const bigSize = 180;
-    let iconBuf;
-    if (iconPath && fs.existsSync(iconPath)) {
-      iconBuf = await roundedPng(sharp, iconPath, bigSize);
-    } else {
-      iconBuf = await sharp(placeholderIconSvg(bigSize)).png().toBuffer();
-    }
-    layers.push({ input: iconBuf, left: 960, top: 220 });
 
     await sharp({
       create: {
