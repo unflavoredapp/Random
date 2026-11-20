@@ -95,9 +95,14 @@ nonisolated enum AppIconCordBranding {
         let side = max(32, pixelSide)
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1
-        format.opaque = false
+        format.opaque = true
+        let plate = samplePlateColor(icon) ?? .white
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
         return renderer.image { _ in
+            // Opaque plate first so transparent Store icons keep a real background
+            // (StarDesk white / Auror black) instead of punching through on Telegram.
+            plate.setFill()
+            UIBezierPath(rect: CGRect(x: 0, y: 0, width: side, height: side)).fill()
             icon.draw(in: CGRect(x: 0, y: 0, width: side, height: side))
 
             let cordH = side * cordHeightFraction
@@ -124,6 +129,40 @@ nonisolated enum AppIconCordBranding {
 
             watermark.draw(in: cordRect, blendMode: .normal, alpha: cordOpacity)
         }
+    }
+
+    /// Corner-sample an opaque fill; transparent corners → white (iOS default plate).
+    private static func samplePlateColor(_ icon: UIImage) -> UIColor? {
+        guard let cg = icon.cgImage else { return .white }
+        let w = cg.width
+        let h = cg.height
+        guard w > 0, h > 0 else { return .white }
+        var rgba = [UInt8](repeating: 0, count: 4)
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
+        let points = [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)]
+        for (x, y) in points {
+            guard let ctx = CGContext(
+                data: &rgba,
+                width: 1,
+                height: 1,
+                bitsPerComponent: 8,
+                bytesPerRow: 4,
+                space: colorSpace,
+                bitmapInfo: bitmapInfo
+            ) else { continue }
+            ctx.translateBy(x: -CGFloat(x), y: -CGFloat(y))
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            if rgba[3] >= 200 {
+                return UIColor(
+                    red: CGFloat(rgba[0]) / 255,
+                    green: CGFloat(rgba[1]) / 255,
+                    blue: CGFloat(rgba[2]) / 255,
+                    alpha: 1
+                )
+            }
+        }
+        return .white
     }
 
     // MARK: - Loaders
