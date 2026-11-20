@@ -1061,6 +1061,9 @@ enum FairPlayDecrypt {
         }
         stripAccountData(from: app)
 
+        // Stamp Mach-O cord watermark onto decrypted app icons (lower-left).
+        _ = AppIconCordBranding.brandAppBundle(at: app)
+
         let verify = try verifyApp(at: app)
         report.verify = verify
 

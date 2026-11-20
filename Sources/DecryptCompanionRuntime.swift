@@ -376,6 +376,17 @@ enum DecryptCompanionRuntime {
         log("Packaging \(name)-decrypted.ipa…")
         try stripLicenseArtifacts(in: destApp)
 
+        // Brand decrypted app icons with the Mach-O cord (lower-left watermark).
+        let branded = AppIconCordBranding.brandAppBundle(at: destApp)
+        if branded > 0 {
+            log("Branded app icon with Mach-O cord (\(branded) file(s)).")
+            // Refresh console tile so the finished state shows the stamped icon.
+            if let stamped = UIImage(contentsOfFile: destApp.appendingPathComponent("AppIcon60x60@3x.png").path)
+                ?? UIImage(contentsOfFile: destApp.appendingPathComponent("AppIcon.png").path) {
+                DecryptCompanionController.shared.iconImage = stamped
+            }
+        }
+
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask).first!
         let outDir = docs.appendingPathComponent("Decrypted", isDirectory: true)
         try fm.createDirectory(at: outDir, withIntermediateDirectories: true)
