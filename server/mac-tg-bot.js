@@ -28,6 +28,7 @@ const {
   renderLibraryAppBanner,
 } = require("./mac-tg-progress-banner");
 const publicDl = require("./mac-tg-public-dl");
+const cordBrand = require("./mac-tg-cord-brand");
 
 /** token → version sharp-card carousel state (before decrypt progress card). */
 const pendingVerPicks = new Map();
@@ -543,10 +544,32 @@ function extractIpaIcon(ipaPath, destPath) {
  * Telegram document thumbnail: this build’s icon + white download arrow.
  * Prefer an IPA-extracted icon (older builds) over today’s App Store art.
  */
+/** Stamp cord onto a loose icon file used for Telegram cards / thumbs. */
+async function ensureCordIcon(iconPath) {
+  const src = String(iconPath || "");
+  if (!src || !fs.existsSync(src)) return "";
+  // Already stamped this session.
+  if (/\.cord\.png$/i.test(src) || /cord-thumb-src/i.test(src)) return src;
+  const stampedDest = path.join(
+    path.dirname(src),
+    `${path.basename(src, path.extname(src))}.cord.png`
+  );
+  if (fs.existsSync(stampedDest) && fs.statSync(stampedDest).size > 100) return stampedDest;
+  try {
+    const stamped = await cordBrand.brandIconFile(src, stampedDest);
+    if (stamped && fs.existsSync(stamped)) return stamped;
+  } catch (e) {
+    console.warn("[cord] ensure icon:", (e && e.message) || e);
+  }
+  return src;
+}
+
 async function buildIpaDocumentThumb(storeUrl, iconOverride) {
   let iconPath = "";
   if (iconOverride && fs.existsSync(iconOverride)) iconPath = iconOverride;
   if (!iconPath && storeUrl) iconPath = fetchStoreIcon(storeUrl) || "";
+  // Always stamp cord onto whatever Telegram will show as the document thumb.
+  iconPath = (await ensureCordIcon(iconPath)) || iconPath;
   const dest = path.join(
     os.tmpdir(),
     `delvek-ipa-thumb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
@@ -778,6 +801,7 @@ function createProgressCard(chatId) {
       if (hintVer && !isExternalVersionId(hintVer)) version = hintVer;
       else if (meta.version && !isExternalVersionId(meta.version)) version = meta.version;
       iconPath = (meta.iconPath && fs.existsSync(meta.iconPath) && meta.iconPath) || "";
+      if (iconPath) iconPath = (await ensureCordIcon(iconPath)) || iconPath;
       lastStage = "Fetching…";
       lastPct = 4;
       pushMockStage("Fetching…", 4);
@@ -812,8 +836,9 @@ function createProgressCard(chatId) {
     /** Swap to an IPA-extracted icon (this build’s artwork) and repaint. */
     async setIcon(nextIcon, stage, pct) {
       if (closed) return;
-      const next = String(nextIcon || "");
+      let next = String(nextIcon || "");
       if (!next || !fs.existsSync(next)) return;
+      next = (await ensureCordIcon(next)) || next;
       iconPath = next;
       const p =
         pct != null
@@ -2573,17 +2598,43 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     await card.setStage("Sending…", 90);
   }
 
+  // Re-brand cached IPAs that predate cord stamping (idempotent via TLCordBranded).
+  if (hasDisk) {
+    try {
+      const branded = await cordBrand.brandIpa(entry.diskPath);
+      if (branded && branded.ok && branded.branded > 0) {
+        console.log("[cord] branded cached", branded.branded, path.basename(entry.diskPath));
+      }
+    } catch (e) {
+      console.warn("[cord] cache brand:", (e && e.message) || e);
+    }
+  }
+
   let iconPath =
     (entry.iconPath && fs.existsSync(entry.iconPath) && entry.iconPath) || "";
-  if (!iconPath && hasDisk) {
+  if (hasDisk) {
     const iconDest = path.join(
       path.dirname(entry.diskPath),
       `${path.basename(entry.diskPath, ".ipa")}.icon.png`
     );
     iconPath =
-      (fs.existsSync(iconDest) && iconDest) ||
       extractIpaIcon(entry.diskPath, iconDest) ||
+      (fs.existsSync(iconDest) && iconDest) ||
+      iconPath ||
       "";
+  }
+  // Stamp cord on the Telegram card / thumb source even if IPA extract missed.
+  if (iconPath && fs.existsSync(iconPath)) {
+    try {
+      const stampedDest = path.join(
+        path.dirname(iconPath),
+        `${path.basename(iconPath, path.extname(iconPath))}.cord.png`
+      );
+      const stamped = await cordBrand.brandIconFile(iconPath, stampedDest);
+      if (stamped) iconPath = stamped;
+    } catch {
+      /* keep unbranded */
+    }
   }
   if (iconPath && typeof card.setIcon === "function") {
     await card.setIcon(iconPath, "Sending…", 90);
@@ -2757,13 +2808,34 @@ async function deliverResult(chatId, result, opts = {}) {
     fs.copyFileSync(result.file, keep);
   }
 
+  // Stamp Mach-O cord onto decrypted app icons before thumbs / upload.
+  try {
+    if (card) await card.setStage("Branding icon…", 88);
+    const branded = await cordBrand.brandIpa(keep);
+    if (branded && branded.ok && branded.branded > 0) {
+      console.log("[cord] branded", branded.branded, "icon file(s) in", path.basename(keep));
+    } else if (branded && branded.error) {
+      console.warn("[cord] brand skipped:", branded.error);
+    }
+  } catch (e) {
+    console.warn("[cord] brand failed:", (e && e.message) || e);
+  }
+
   // Persist this build’s icon next to the IPA for thumbs / re-sends.
   let iconPath = "";
-  if (opts.iconPath && fs.existsSync(opts.iconPath)) {
+  const iconDest = path.join(path.dirname(keep), `${path.basename(keep, ".ipa")}.icon.png`);
+  // Prefer cord-branded flat AppIcon from the IPA; fall back to store art / extract.
+  iconPath = extractIpaIcon(keep, iconDest) || "";
+  if (!iconPath && opts.iconPath && fs.existsSync(opts.iconPath)) {
     iconPath = opts.iconPath;
-  } else {
-    const iconDest = path.join(path.dirname(keep), `${path.basename(keep, ".ipa")}.icon.png`);
-    iconPath = extractIpaIcon(keep, iconDest);
+  }
+  if (iconPath && fs.existsSync(iconPath)) {
+    try {
+      const stamped = await cordBrand.brandIconFile(iconPath, iconDest);
+      if (stamped) iconPath = stamped;
+    } catch {
+      /* keep prior icon */
+    }
   }
   if (iconPath && adam) {
     const durableIcon = path.join(path.dirname(keep), `${path.basename(keep, ".ipa")}.icon.png`);
