@@ -793,16 +793,23 @@ nonisolated enum Signer {
 
         // Icon replacement (write one PNG at the standard names; zsign re-signs the bundle after).
         if let png = o.iconPNG {
+            // Stamp Mach-O cord onto the replacement icon so signed installs match decrypt branding.
+            let stamped = AppIconCordBranding.brandPNGData(png) ?? png
             for name in ["AppIcon60x60@2x.png", "AppIcon60x60@3x.png", "AppIcon76x76@2x~ipad.png", "AppIcon.png"] {
-                try? png.write(to: appURL.appendingPathComponent(name))
+                try? stamped.write(to: appURL.appendingPathComponent(name))
             }
-            // point Info.plist at a flat icon file too
+            // point Info.plist at a flat icon file too (no CFBundleIconName → Assets.car)
             if let dict = NSMutableDictionary(contentsOf: infoURL) {
                 dict["CFBundleIconFile"] = "AppIcon"
                 dict["CFBundleIcons"] = ["CFBundlePrimaryIcon": ["CFBundleIconFiles": ["AppIcon60x60"]]]
+                dict["TLCordBranded"] = true
                 dict.write(to: infoURL, atomically: true)
             }
-            onLog?(">>> replaced app icon")
+            onLog?(">>> replaced app icon (cord branded)")
+        } else {
+            // No custom icon — brand whatever icons are already in the Payload.
+            let n = AppIconCordBranding.brandAppBundle(at: appURL)
+            if n > 0 { onLog?(">>> branded app icon with Mach-O cord (\(n) file(s))") }
         }
 
         // AirShare ↔ AVX512 bridge: persist non-secret staff metadata inside the
