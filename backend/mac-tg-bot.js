@@ -544,10 +544,32 @@ function extractIpaIcon(ipaPath, destPath) {
  * Telegram document thumbnail: this build’s icon + white download arrow.
  * Prefer an IPA-extracted icon (older builds) over today’s App Store art.
  */
+/** Stamp cord onto a loose icon file used for Telegram cards / thumbs. */
+async function ensureCordIcon(iconPath) {
+  const src = String(iconPath || "");
+  if (!src || !fs.existsSync(src)) return "";
+  // Already stamped this session.
+  if (/\.cord\.png$/i.test(src) || /cord-thumb-src/i.test(src)) return src;
+  const stampedDest = path.join(
+    path.dirname(src),
+    `${path.basename(src, path.extname(src))}.cord.png`
+  );
+  if (fs.existsSync(stampedDest) && fs.statSync(stampedDest).size > 100) return stampedDest;
+  try {
+    const stamped = await cordBrand.brandIconFile(src, stampedDest);
+    if (stamped && fs.existsSync(stamped)) return stamped;
+  } catch (e) {
+    console.warn("[cord] ensure icon:", (e && e.message) || e);
+  }
+  return src;
+}
+
 async function buildIpaDocumentThumb(storeUrl, iconOverride) {
   let iconPath = "";
   if (iconOverride && fs.existsSync(iconOverride)) iconPath = iconOverride;
   if (!iconPath && storeUrl) iconPath = fetchStoreIcon(storeUrl) || "";
+  // Always stamp cord onto whatever Telegram will show as the document thumb.
+  iconPath = (await ensureCordIcon(iconPath)) || iconPath;
   const dest = path.join(
     os.tmpdir(),
     `delvek-ipa-thumb-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`
@@ -779,6 +801,7 @@ function createProgressCard(chatId) {
       if (hintVer && !isExternalVersionId(hintVer)) version = hintVer;
       else if (meta.version && !isExternalVersionId(meta.version)) version = meta.version;
       iconPath = (meta.iconPath && fs.existsSync(meta.iconPath) && meta.iconPath) || "";
+      if (iconPath) iconPath = (await ensureCordIcon(iconPath)) || iconPath;
       lastStage = "Fetching…";
       lastPct = 4;
       pushMockStage("Fetching…", 4);
@@ -813,8 +836,9 @@ function createProgressCard(chatId) {
     /** Swap to an IPA-extracted icon (this build’s artwork) and repaint. */
     async setIcon(nextIcon, stage, pct) {
       if (closed) return;
-      const next = String(nextIcon || "");
+      let next = String(nextIcon || "");
       if (!next || !fs.existsSync(next)) return;
+      next = (await ensureCordIcon(next)) || next;
       iconPath = next;
       const p =
         pct != null
