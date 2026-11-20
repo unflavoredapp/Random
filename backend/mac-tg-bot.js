@@ -1950,11 +1950,26 @@ async function offerVersionPick(chatId, link) {
     return;
   }
 
+  const adamForCache = storeMeta.adam || ipaCache.adamFromStoreUrl(link) || "";
   const picks = versions.map((v, i) => {
     const ver = String(v.v || v.version || v.label || "—").slice(0, 24);
     const ext = String(v.externalVersionId || v.external_id || "").trim();
     const marketing = isExternalVersionId(ver) ? "" : ver;
-    const label = v.current ? `⭐ Latest · ${ver}` : `v${ver}`;
+    let label = v.current ? `⭐ Latest · ${ver}` : `v${ver}`;
+    // Speed markers: clear cache = instant pull; encrypted = skip CDN on decrypt.
+    try {
+      const clearHit =
+        (marketing && ipaCache.get(adamForCache, marketing)) ||
+        (ext && ipaCache.get(adamForCache, ext));
+      const encHit =
+        (marketing && ipaCache.getEncryptedPath(adamForCache, marketing)) ||
+        (ext && ipaCache.getEncryptedPath(adamForCache, ext)) ||
+        (v.current && ipaCache.getEncryptedPath(adamForCache, "latest"));
+      if (clearHit) label = `💾 ${label}`;
+      else if (encHit) label = `⬇ ${label}`;
+    } catch {
+      /* ignore */
+    }
     return {
       i,
       label: label.slice(0, 64),
@@ -1963,6 +1978,21 @@ async function offerVersionPick(chatId, link) {
       current: !!v.current,
     };
   });
+  // Warm encrypted cache for latest in the background (feature 2) when missing.
+  try {
+    const extras = require("./mac-ipatool-extras");
+    const latest = picks.find((p) => p.current) || picks[0];
+    const verKey = (latest && (latest.marketing || latest.ext)) || "latest";
+    const enc =
+      adamForCache &&
+      (ipaCache.getEncryptedPath(adamForCache, verKey) ||
+        ipaCache.getEncryptedPath(adamForCache, "latest"));
+    if (!enc && adamForCache) {
+      extras.enqueuePrefetch({ url: link, version: (latest && latest.ext) || "", priority: 3 });
+    }
+  } catch {
+    /* ignore */
+  }
 
   const token = crypto.randomBytes(5).toString("hex");
   const pending = {
@@ -3352,12 +3382,57 @@ async function handleMessage(msg) {
     }
     return;
   }
-  if (/^\/prefetch\s+/i.test(text)) {
+  if (/^\/speed\b/i.test(text)) {
     try {
       const extras = require("./mac-ipatool-extras");
-      const link = text.split(/\s+/).find((t) => isStoreUrl(t));
+      const st = extras.speedFeatureStatus();
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: extras.formatSpeedStatusText(st),
+        parse_mode: "Markdown",
+      });
+    } catch (e) {
+      await tgApi("sendMessage", { chat_id: chatId, text: String(e.message || e).slice(0, 200) });
+    }
+    return;
+  }
+  if (/^\/prefetch(?:@\w+)?(?:\s+(.+))?$/i.test(text)) {
+    try {
+      const extras = require("./mac-ipatool-extras");
+      const arg = String(
+        (text.match(/^\/prefetch(?:@\w+)?(?:\s+(.+))?$/i) || [])[1] || ""
+      ).trim();
+      if (!arg) {
+        const st = extras.prefetchStats();
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text:
+            `*Prefetch*\n` +
+            `queued ${st.queued || 0} · running ${st.running || 0} · done ${st.done || 0} · err ${st.error || 0}\n\n` +
+            `Usage:\n` +
+            `/prefetch https://apps.apple.com/…\n` +
+            `/prefetch purchased`,
+          parse_mode: "Markdown",
+        });
+        return;
+      }
+      if (/^purchased\b/i.test(arg)) {
+        const limitMatch = arg.match(/\b(\d{1,2})\b/);
+        const limit = Math.max(1, Math.min(30, Number(limitMatch && limitMatch[1]) || 12));
+        const r = extras.enqueuePrefetchPurchased({ limit, priority: 1 });
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text:
+            `Prefetch purchased → queued ${r.queued.length} · already cached ${r.skipped.length} · library ${r.purchased}`,
+        });
+        return;
+      }
+      const link = arg.split(/\s+/).find((t) => isStoreUrl(t));
       if (!link) {
-        await tgApi("sendMessage", { chat_id: chatId, text: "Usage: /prefetch https://apps.apple.com/…" });
+        await tgApi("sendMessage", {
+          chat_id: chatId,
+          text: "Usage: /prefetch https://apps.apple.com/…  or  /prefetch purchased",
+        });
         return;
       }
       const item = extras.enqueuePrefetch({ url: link, priority: 2 });
@@ -3515,13 +3590,43 @@ async function boot() {
   }
   try {
     const extras = require("./mac-ipatool-extras");
+    // 3) Purchased library — refresh if stale so owned → skip --purchase works.
+    try {
+      const purchased = extras.ensurePurchasedFresh();
+      console.log(
+        purchased.skipped
+          ? `purchased library: ${purchased.items.length} (fresh)`
+          : `purchased library: synced ${purchased.items.length}${
+              purchased.ok ? "" : " · " + (purchased.error || "partial")
+            }`
+      );
+    } catch (e) {
+      console.warn("purchased sync:", (e && e.message) || e);
+    }
+    // 2) Encrypted prefetch loop (idle → busy interval when queue has work).
     extras.startPrefetchLoop();
+    // 4) Session / keychain health.
     const sess = extras.sessionWatch({ force: true });
     console.log(
       sess.ready
         ? `ipatool session: ${sess.email || "ok"}`
         : `ipatool session: missing — ${sess.hint || sess.error || ""}`
     );
+    // 1–6 dashboard line for WebSSH logs.
+    try {
+      const st = extras.speedFeatureStatus();
+      console.log(
+        `ipatool speed: cache clear=${st.encryptedCache.clear} enc=${st.encryptedCache.encrypted}` +
+          ` · prefetch q=${st.prefetch.queued || 0}` +
+          ` · purchased=${st.purchased.count}` +
+          ` · session=${st.session.ready ? "ok" : "down"}` +
+          ` · storefront=${st.storefront.env}` +
+          ` · version-first=on` +
+          ` · skip-purchase-if-owned=${st.bypasses.skipPurchaseWhenOwned ? "on" : "off"}`
+      );
+    } catch {
+      /* ignore */
+    }
   } catch (e) {
     console.warn("ipatool extras:", (e && e.message) || e);
   }

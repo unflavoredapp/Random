@@ -420,6 +420,23 @@ function searchPurchased(q) {
     .slice(0, 40);
 }
 
+/** True when this adam appears in the last purchased sync (owned → skip --purchase). */
+function isPurchasedAdam(adam) {
+  const id = String(adam || "").replace(/\D/g, "");
+  if (!id) return false;
+  return loadPurchased().items.some((it) => String(it.adam || "") === id);
+}
+
+/** Sync purchased when missing or older than maxAgeMs (default 24h). */
+function ensurePurchasedFresh({ maxAgeMs = 24 * 60 * 60 * 1000, limit = 500 } = {}) {
+  const cur = loadPurchased();
+  const age = Date.now() - (Number(cur.updatedAt) || 0);
+  if (cur.items && cur.items.length && age >= 0 && age < maxAgeMs) {
+    return { ok: true, skipped: true, reason: "fresh", ...cur };
+  }
+  return syncPurchasedLibrary({ limit });
+}
+
 // ─── 5) Session watch ─────────────────────────────────────────────────
 
 let _sessionCache = null;
@@ -551,17 +568,145 @@ function listPrefetch() {
   return loadPrefetch().items;
 }
 
+/**
+ * Queue encrypted prefetches for purchased apps that are not already cached.
+ * Safe speed path: warm CDN downloads before chat demand.
+ */
+function enqueuePrefetchPurchased({ limit = 12, priority = 1 } = {}) {
+  let ipaCache = null;
+  try {
+    ipaCache = require("./mac-tg-ipa-cache");
+  } catch {
+    /* optional */
+  }
+  const purchased = loadPurchased().items || [];
+  const queued = [];
+  const skipped = [];
+  for (const it of purchased) {
+    if (queued.length >= limit) break;
+    const adam = String(it.adam || "").replace(/\D/g, "");
+    if (!adam) continue;
+    if (ipaCache && typeof ipaCache.getEncryptedPath === "function") {
+      const hit = ipaCache.getEncryptedPath(adam, "latest");
+      if (hit) {
+        skipped.push({ adam, reason: "encrypted-cache" });
+        continue;
+      }
+    }
+    const url = `https://apps.apple.com/us/app/id${adam}`;
+    const item = enqueuePrefetch({
+      url,
+      version: "",
+      storefront: resolveStorefront("", url),
+      priority,
+    });
+    queued.push(item);
+  }
+  return { queued, skipped, purchased: purchased.length };
+}
+
+function prefetchStats() {
+  const items = listPrefetch();
+  const by = { queued: 0, running: 0, done: 0, error: 0 };
+  for (const it of items) {
+    const s = String(it.status || "queued");
+    if (by[s] == null) by[s] = 0;
+    by[s] += 1;
+  }
+  return { total: items.length, ...by, items: items.slice(0, 20) };
+}
+
 function startPrefetchLoop() {
   if (String(process.env.MAC_IPATOOL_PREFETCH || "1") === "0") return;
+  const baseMs = Number(process.env.MAC_IPATOOL_PREFETCH_MS) || 45_000;
+  const busyMs = Number(process.env.MAC_IPATOOL_PREFETCH_BUSY_MS) || 12_000;
   const tick = async () => {
+    let hasWork = false;
     try {
+      const stats = prefetchStats();
+      hasWork = (stats.queued || 0) + (stats.error || 0) > 0;
       await runPrefetchOnce(() => {});
     } catch {
       /* ignore */
     }
-    setTimeout(tick, Number(process.env.MAC_IPATOOL_PREFETCH_MS) || 45_000).unref?.();
+    setTimeout(tick, hasWork ? busyMs : baseMs).unref?.();
   };
-  setTimeout(tick, 15_000).unref?.();
+  setTimeout(tick, 8_000).unref?.();
+}
+
+/**
+ * Ops dashboard for the six ipatool speed features.
+ * 1 encrypted cache · 2 prefetch · 3 purchased · 4 session · 5 storefront · 6 version-first
+ */
+function speedFeatureStatus() {
+  let clearN = 0;
+  let encN = 0;
+  let cacheDir = "";
+  try {
+    const ipaCache = require("./mac-tg-ipa-cache");
+    clearN = ipaCache.list().length;
+    encN = ipaCache.listEncrypted().length;
+    cacheDir = ipaCache.CACHE_DIR || "";
+  } catch {
+    /* ignore */
+  }
+  const purchased = loadPurchased();
+  const session = sessionWatch({ force: false });
+  const prefetch = prefetchStats();
+  const storefrontEnv = String(process.env.FAIRPLAY_IPATOOL_STOREFRONT || "").trim() || "(auto · never from URL)";
+  const purchasedAgeH =
+    purchased.updatedAt > 0
+      ? Math.round((Date.now() - purchased.updatedAt) / 3600000)
+      : null;
+  return {
+    encryptedCache: { clear: clearN, encrypted: encN, dir: cacheDir },
+    prefetch,
+    purchased: {
+      count: (purchased.items || []).length,
+      updatedAt: purchased.updatedAt || 0,
+      ageHours: purchasedAgeH,
+    },
+    session: {
+      ready: !!session.ready,
+      email: session.email || "",
+      error: session.error || "",
+      hint: session.hint || "",
+    },
+    storefront: {
+      policy: "explicit env/body only — URL country never passed as --country",
+      env: storefrontEnv,
+    },
+    versionFirst: {
+      enabled: true,
+      note: "Bare App Store links open VERSIONS card before ipatool download",
+    },
+    bypasses: {
+      clearCacheSkipDecrypt: true,
+      encryptedCacheSkipCdn: true,
+      skipPurchaseWhenOwned: String(process.env.MAC_IPATOOL_SKIP_PURCHASE_IF_OWNED || "1") !== "0",
+      note: "No DRM/account bypass — only skip work we already paid for on this Mac",
+    },
+  };
+}
+
+function formatSpeedStatusText(st) {
+  const s = st || speedFeatureStatus();
+  const sess = s.session.ready
+    ? `ok${s.session.email ? " · " + s.session.email : ""}`
+    : `missing · ${s.session.hint || s.session.error || "?"}`;
+  const age =
+    s.purchased.ageHours == null ? "never" : `${s.purchased.ageHours}h ago`;
+  return (
+    `*ipatool speed*\n` +
+    `1. Cache — clear ${s.encryptedCache.clear} · encrypted ${s.encryptedCache.encrypted}\n` +
+    `2. Prefetch — q${s.prefetch.queued || 0} run${s.prefetch.running || 0} done${s.prefetch.done || 0} err${s.prefetch.error || 0}\n` +
+    `3. Purchased — ${s.purchased.count} apps · synced ${age}\n` +
+    `4. Session — ${sess}\n` +
+    `5. Storefront — ${s.storefront.env}\n` +
+    `6. Version-first — on\n\n` +
+    `_Bypass (safe): clear-cache · encrypted-cache · skip --purchase when owned_\n` +
+    `Ops: /prefetch · /prefetch purchased · /purchased sync · /session`
+  );
 }
 
 module.exports = {
@@ -572,12 +717,18 @@ module.exports = {
   mapProgressStage,
   listVersions,
   syncPurchasedLibrary,
+  ensurePurchasedFresh,
   loadPurchased,
   searchPurchased,
+  isPurchasedAdam,
   sessionWatch,
   enqueuePrefetch,
+  enqueuePrefetchPurchased,
   runPrefetchOnce,
   listPrefetch,
+  prefetchStats,
   startPrefetchLoop,
+  speedFeatureStatus,
+  formatSpeedStatusText,
   adamFromStoreUrl,
 };
