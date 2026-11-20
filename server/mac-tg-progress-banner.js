@@ -495,9 +495,30 @@ async function renderDownloadThumb({ iconPath, dest, size } = {}) {
 <svg width="${S}" height="${S}" xmlns="http://www.w3.org/2000/svg">
   <rect width="${S}" height="${S}" rx="${corner}" ry="${corner}" fill="white"/>
 </svg>`);
+    // Flatten on the icon’s own plate color (white StarDesk / black Auror), not dark —
+    // dark fill looked like “background removed” on Telegram document thumbs.
+    let plate = { r: 255, g: 255, b: 255 };
+    try {
+      const raw = await sharp(iconBase)
+        .ensureAlpha()
+        .raw()
+        .toBuffer({ resolveWithObject: true });
+      const d = raw.data;
+      const w = raw.info.width;
+      const h = raw.info.height;
+      const corners = [0, (w - 1) * 4, (h - 1) * w * 4, ((h - 1) * w + (w - 1)) * 4];
+      for (const i of corners) {
+        if (d[i + 3] >= 200) {
+          plate = { r: d[i], g: d[i + 1], b: d[i + 2] };
+          break;
+        }
+      }
+    } catch {
+      /* keep white */
+    }
     await sharp(iconBase)
       .composite([{ input: mask, blend: "dest-in" }])
-      .flatten({ background: { r: 20, g: 20, b: 28 } })
+      .flatten({ background: plate })
       .jpeg({ quality: 82, mozjpeg: true })
       .toFile(out);
 

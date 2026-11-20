@@ -14,7 +14,46 @@ const { spawnSync } = require("child_process");
 const CORD_HEIGHT_FRAC = 340 / 1024;
 const MARGIN_FRAC = 0.028;
 const CORD_OPACITY = 0.94;
-const MARKER_KEY = "TLCordBranded";
+// V2: flatten icons opaque before cord (V1 left transparent bgs → dark Telegram thumbs).
+const MARKER_KEY = "TLCordBrandedV2";
+
+/**
+ * Sample a fill color from corner pixels (opaque corners win; else white).
+ * Keeps StarDesk white / Auror black instead of punching through to Telegram’s dark bubble.
+ */
+async function sampleIconBackground(sharp, input, side) {
+  const resized = await sharp(input)
+    .resize(side, side, { fit: "cover", position: "centre" })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { data, info } = resized;
+  const w = info.width;
+  const h = info.height;
+  const corners = [
+    0,
+    (w - 1) * 4,
+    (h - 1) * w * 4,
+    ((h - 1) * w + (w - 1)) * 4,
+  ];
+  for (const i of corners) {
+    if (data[i + 3] >= 200) {
+      return { r: data[i], g: data[i + 1], b: data[i + 2] };
+    }
+  }
+  return { r: 255, g: 255, b: 255 };
+}
+
+/** Build an opaque square icon buffer on the sampled plate color. */
+async function opaqueIconBase(sharp, input, side, bg) {
+  const fill = bg || (await sampleIconBackground(sharp, input, side));
+  return sharp(input)
+    .resize(side, side, { fit: "cover", position: "centre" })
+    .flatten({ background: fill })
+    .ensureAlpha()
+    .png()
+    .toBuffer();
+}
 
 function watermarkPath() {
   const candidates = [
@@ -25,6 +64,18 @@ function watermarkPath() {
     if (fs.existsSync(p) && fs.statSync(p).size > 100) return p;
   }
   return "";
+}
+
+function loadSharp() {
+  try {
+    return require("sharp");
+  } catch {
+    try {
+      return require(path.join(__dirname, "node_modules", "sharp"));
+    } catch {
+      return null;
+    }
+  }
 }
 
 /**
@@ -41,10 +92,8 @@ async function brandIpa(ipaPath, { force = false } = {}) {
     return { ok: false, branded: 0, iconPath: "", error: "MachOCordWatermark.png missing" };
   }
 
-  let sharp;
-  try {
-    sharp = require("sharp");
-  } catch (e) {
+  const sharp = loadSharp();
+  if (!sharp) {
     return { ok: false, branded: 0, iconPath: "", error: "sharp not installed" };
   }
 
@@ -150,12 +199,8 @@ async function brandAppDir(appDir, wmPath, sharp, { force }) {
     const margin = Math.max(2, Math.round(side * MARGIN_FRAC));
     const left = margin;
     const top = side - cordH - margin;
-
-    const base = await sharp(source)
-      .resize(side, side, { fit: "cover", position: "centre" })
-      .ensureAlpha()
-      .png()
-      .toBuffer();
+    const plate = await sampleIconBackground(sharp, source, side);
+    const base = await opaqueIconBase(sharp, source, side, plate);
 
     // Resize cord and scale alpha toward CORD_OPACITY.
     const cord = await sharp(wmPath)
@@ -165,8 +210,10 @@ async function brandAppDir(appDir, wmPath, sharp, { force }) {
       .png()
       .toBuffer();
 
+    // Flatten on the original plate color so white/black app icons keep their bg.
     return sharp(base)
       .composite([{ input: cord, left, top, blend: "over" }])
+      .flatten({ background: plate })
       .png()
       .toBuffer();
   }
@@ -325,12 +372,8 @@ async function brandIconFile(iconPath, destPath) {
   const dest = path.resolve(String(destPath || iconPath || ""));
   const wm = watermarkPath();
   if (!src || !dest || !wm || !fs.existsSync(src) || !fs.existsSync(wm)) return "";
-  let sharp;
-  try {
-    sharp = require("sharp");
-  } catch {
-    return "";
-  }
+  const sharp = loadSharp();
+  if (!sharp) return "";
   try {
     const meta = await sharp(src).metadata();
     const side = Math.max(meta.width || 0, meta.height || 0, 180);
@@ -338,18 +381,17 @@ async function brandIconFile(iconPath, destPath) {
     const wmMeta = await sharp(wm).metadata();
     const cordW = Math.max(8, Math.round((cordH * (wmMeta.width || 1)) / (wmMeta.height || 1)));
     const margin = Math.max(2, Math.round(side * MARGIN_FRAC));
+    const plate = await sampleIconBackground(sharp, src, side);
     const cord = await sharp(wm)
       .resize(cordW, cordH, { fit: "contain", background: { r: 0, g: 0, b: 0, alpha: 0 } })
       .ensureAlpha()
+      .linear([1, 1, 1, CORD_OPACITY], [0, 0, 0, 0])
       .png()
       .toBuffer();
-    const base = await sharp(src)
-      .resize(side, side, { fit: "cover", position: "centre" })
-      .ensureAlpha()
-      .png()
-      .toBuffer();
+    const base = await opaqueIconBase(sharp, src, side, plate);
     await sharp(base)
       .composite([{ input: cord, left: margin, top: side - cordH - margin, blend: "over" }])
+      .flatten({ background: plate })
       .png()
       .toFile(dest);
     return dest;
