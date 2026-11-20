@@ -49,6 +49,17 @@ export FAIRPLAY_IPATOOL_BIN=ipatool
 # Encrypted cache: ipatool downloads are kept under ~/tetherless-ipa-cache/encrypted —
 # same adam/version later skips the App Store download (still decrypts unless clear-cached).
 #
+# ipatool speed pack (WebSSH ops — not in the public bot menu):
+#   /speed                 → dashboard for all 6 features
+#   /prefetch URL          → queue encrypted download before demand
+#   /prefetch purchased    → warm top purchased apps missing from enc cache
+#   /purchased sync        → refresh owned list (enables skip --purchase)
+#   /session               → ipatool auth health
+# Safe bypasses only: clear-cache skip decrypt · encrypted-cache skip CDN ·
+# skip --purchase when adam is in purchased sync. No DRM/account bypass.
+# Storefront: FAIRPLAY_IPATOOL_STOREFRONT only — never URL-derived --country.
+# Version-first: bare App Store links open VERSIONS before ipatool download.
+#
 # If login Keychain password is unknown (MacDuty padlock dialogs), use a dedicated
 # keychain instead (macOS cannot unlock without a password):
 #   export TETHERLESS_KEYCHAIN_PASSWORD='pick-a-strong-pass'

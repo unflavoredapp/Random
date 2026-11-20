@@ -196,6 +196,14 @@ function isPurchaseAlreadyOwnedFailure(err) {
   return /already.*(purchased|owned)|have already|duplicate.*purchase|item is free|no current price/i.test(s);
 }
 
+/** True when plain download failed because Store wants a purchase first. */
+function isPurchaseRequiredFailure(err) {
+  const s = String((err && err.message) || err || "");
+  return /failed to purchase|license.*required|not owned|do not own|haven't purchased|have not purchased|please purchase|must purchase|obtain a license/i.test(
+    s
+  );
+}
+
 function ipatoolBin() {
   return which(process.env.FAIRPLAY_IPATOOL_BIN || "ipatool");
 }
@@ -812,7 +820,19 @@ async function ensureEncryptedSource({ url, dir, say, vreq, storefront, onProgre
   );
   const maxAttempts = Math.max(1, Math.min(4, Number(process.env.FAIRPLAY_IPATOOL_RETRIES) || 3));
   let lastErr = null;
-  let purchase = true;
+  // Safe bypass: if purchased sync says we own it, skip --purchase on the first try
+  // (avoids a failed purchase round-trip). Still retries with --purchase if needed? No —
+  // owned downloads should work without purchase; purchase-fail path still flips this off.
+  const skipPurchaseIfOwned =
+    String(process.env.MAC_IPATOOL_SKIP_PURCHASE_IF_OWNED || "1") !== "0";
+  const owned =
+    skipPurchaseIfOwned &&
+    adam &&
+    extras &&
+    typeof extras.isPurchasedAdam === "function" &&
+    extras.isPurchasedAdam(adam);
+  let purchase = !owned;
+  if (owned) say("owned (purchased sync) — downloading without --purchase…");
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     say(
@@ -857,6 +877,11 @@ async function ensureEncryptedSource({ url, dir, say, vreq, storefront, onProgre
       if (purchase && isPurchaseAlreadyOwnedFailure(e)) {
         purchase = false;
         say("already owned — retrying ipatool without --purchase…");
+        continue;
+      }
+      if (!purchase && isPurchaseRequiredFailure(e)) {
+        purchase = true;
+        say("license needed — retrying ipatool with --purchase…");
         continue;
       }
       if (attempt < maxAttempts && isTransientIpatoolFailure(e)) {
