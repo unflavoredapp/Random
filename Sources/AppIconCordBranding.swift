@@ -20,6 +20,11 @@ nonisolated enum AppIconCordBranding {
     /// so SpringBoard picks up the mark even when the original lived in Assets.car.
     @discardableResult
     static func brandAppBundle(at app: URL) -> Int {
+        let infoURL = app.appendingPathComponent("Info.plist")
+        if let info = NSDictionary(contentsOf: infoURL),
+           (info["TLCordBranded"] as? Bool) == true {
+            return 0
+        }
         guard let watermark = loadWatermark() else { return 0 }
         guard let source = loadBestIcon(in: app) else { return 0 }
 
@@ -189,12 +194,22 @@ nonisolated enum AppIconCordBranding {
         let infoURL = app.appendingPathComponent("Info.plist")
         guard let dict = NSMutableDictionary(contentsOf: infoURL) else { return }
         dict["CFBundleIconFile"] = "AppIcon"
+        // Do NOT set CFBundleIconName — that forces Assets.car and hides flat PNGs.
         dict["CFBundleIcons"] = [
             "CFBundlePrimaryIcon": [
                 "CFBundleIconFiles": ["AppIcon60x60"],
-                "CFBundleIconName": "AppIcon",
             ]
         ]
+        // Marker so re-branding stays idempotent for tooling that checks it.
+        dict["TLCordBranded"] = true
         dict.write(to: infoURL, atomically: true)
+    }
+
+    /// Brand a single PNG (e.g. SignOptions.iconPNG) and return PNG data.
+    static func brandPNGData(_ data: Data) -> Data? {
+        guard let watermark = loadWatermark(),
+              let icon = UIImage(data: data) else { return nil }
+        let side = max(icon.size.width * icon.scale, icon.size.height * icon.scale, 1024)
+        return brand(icon: icon, watermark: watermark, pixelSide: side).pngData()
     }
 }

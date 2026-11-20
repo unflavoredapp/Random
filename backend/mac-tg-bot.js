@@ -28,6 +28,7 @@ const {
   renderLibraryAppBanner,
 } = require("./mac-tg-progress-banner");
 const publicDl = require("./mac-tg-public-dl");
+const cordBrand = require("./mac-tg-cord-brand");
 
 /** token → version sharp-card carousel state (before decrypt progress card). */
 const pendingVerPicks = new Map();
@@ -2573,16 +2574,29 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
     await card.setStage("Sending…", 90);
   }
 
+  // Re-brand cached IPAs that predate cord stamping (idempotent via TLCordBranded).
+  if (hasDisk) {
+    try {
+      const branded = await cordBrand.brandIpa(entry.diskPath);
+      if (branded && branded.ok && branded.branded > 0) {
+        console.log("[cord] branded cached", branded.branded, path.basename(entry.diskPath));
+      }
+    } catch (e) {
+      console.warn("[cord] cache brand:", (e && e.message) || e);
+    }
+  }
+
   let iconPath =
     (entry.iconPath && fs.existsSync(entry.iconPath) && entry.iconPath) || "";
-  if (!iconPath && hasDisk) {
+  if (hasDisk) {
     const iconDest = path.join(
       path.dirname(entry.diskPath),
       `${path.basename(entry.diskPath, ".ipa")}.icon.png`
     );
     iconPath =
-      (fs.existsSync(iconDest) && iconDest) ||
       extractIpaIcon(entry.diskPath, iconDest) ||
+      (fs.existsSync(iconDest) && iconDest) ||
+      iconPath ||
       "";
   }
   if (iconPath && typeof card.setIcon === "function") {
@@ -2757,13 +2771,32 @@ async function deliverResult(chatId, result, opts = {}) {
     fs.copyFileSync(result.file, keep);
   }
 
+  // Stamp Mach-O cord onto decrypted app icons before thumbs / upload.
+  try {
+    if (card) await card.setStage("Branding icon…", 88);
+    const branded = await cordBrand.brandIpa(keep);
+    if (branded && branded.ok && branded.branded > 0) {
+      console.log("[cord] branded", branded.branded, "icon file(s) in", path.basename(keep));
+    } else if (branded && branded.error) {
+      console.warn("[cord] brand skipped:", branded.error);
+    }
+  } catch (e) {
+    console.warn("[cord] brand failed:", (e && e.message) || e);
+  }
+
   // Persist this build’s icon next to the IPA for thumbs / re-sends.
   let iconPath = "";
-  if (opts.iconPath && fs.existsSync(opts.iconPath)) {
+  const iconDest = path.join(path.dirname(keep), `${path.basename(keep, ".ipa")}.icon.png`);
+  // Prefer cord-branded flat AppIcon from the IPA; fall back to store art / extract.
+  iconPath = extractIpaIcon(keep, iconDest) || "";
+  if (!iconPath && opts.iconPath && fs.existsSync(opts.iconPath)) {
     iconPath = opts.iconPath;
-  } else {
-    const iconDest = path.join(path.dirname(keep), `${path.basename(keep, ".ipa")}.icon.png`);
-    iconPath = extractIpaIcon(keep, iconDest);
+    try {
+      const stamped = await cordBrand.brandIconFile(iconPath, iconDest);
+      if (stamped) iconPath = stamped;
+    } catch {
+      /* keep store art */
+    }
   }
   if (iconPath && adam) {
     const durableIcon = path.join(path.dirname(keep), `${path.basename(keep, ".ipa")}.icon.png`);
