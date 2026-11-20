@@ -138,7 +138,7 @@ enum IPadnStoreError: LocalizedError {
 enum IPadnStoreClient {
     /// Regions tried when an App ID has no listing in the selected storefront (delisted / regional).
     static let fallbackCountries = [
-        "US", "CN", "HK", "TW", "JP", "GB", "SG", "CA", "AU", "KR", "DE", "FR"
+        "US", "RU", "CN", "HK", "TW", "JP", "GB", "SG", "CA", "AU", "KR", "DE", "FR"
     ]
 
     static func search(

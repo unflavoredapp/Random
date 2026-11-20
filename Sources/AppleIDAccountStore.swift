@@ -897,16 +897,36 @@ final class AppleIDStore: ObservableObject {
 
     func switchTo(id: String) { selectAccount(id: id) }
 
+    /// ISO country code for a linked account’s storefront session (`ru`, `us`, …).
+    func storefrontCountryCode(for accountID: String) -> String? {
+        guard let account = accounts.first(where: { $0.id == accountID }),
+              let data = account.storeSessionJSON,
+              let session = try? JSONDecoder().decode(StorefrontSession.self, from: data) else {
+            return nil
+        }
+        return StorefrontCountry.code(fromStoreFront: session.storeFront)
+    }
+
+    /// Active account’s storefront ISO code, when a Store session exists.
+    func activeStorefrontCountryCode() -> String? {
+        guard let id = activeAccountID else { return nil }
+        return storefrontCountryCode(for: id)
+    }
+
+    /// Menu / chip title: `email · RU` when the storefront is known.
+    func accountPickerLabel(for account: AppleIDAccount) -> String {
+        if let code = storefrontCountryCode(for: account.id) {
+            return "\(account.email) · \(StorefrontCountry.label(forCode: code))"
+        }
+        return account.email
+    }
+
     /// Distinct ISO country codes for every linked account that has a storefront session.
     func linkedStorefrontCountryCodes() -> [String] {
         var codes: [String] = []
         var seen = Set<String>()
         for account in accounts {
-            guard let data = account.storeSessionJSON,
-                  let session = try? JSONDecoder().decode(StorefrontSession.self, from: data),
-                  let code = StorefrontCountry.code(fromStoreFront: session.storeFront) else {
-                continue
-            }
+            guard let code = storefrontCountryCode(for: account.id) else { continue }
             if seen.insert(code).inserted {
                 codes.append(code)
             }
@@ -914,24 +934,31 @@ final class AppleIDStore: ObservableObject {
         return codes
     }
 
-    /// Activate the linked Apple ID whose storefront matches `countryCode` (e.g. `jp`).
+    /// Activate the linked Apple ID whose storefront matches `countryCode` (e.g. `jp` / `ru`).
+    /// Also writes the Search region preference so the next lookup uses that storefront.
     @discardableResult
     func selectAccountMatching(countryCode: String) -> Bool {
         let want = countryCode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard !want.isEmpty else { return false }
         for account in accounts {
-            guard let data = account.storeSessionJSON,
-                  let session = try? JSONDecoder().decode(StorefrontSession.self, from: data),
-                  let code = StorefrontCountry.code(fromStoreFront: session.storeFront),
-                  code == want else {
+            guard let code = storefrontCountryCode(for: account.id), code == want else {
                 continue
             }
             if account.id != activeAccountID {
                 selectAccount(id: account.id)
             }
+            UserDefaults.standard.set(code.uppercased(), forKey: IPadnOptional.countryKey)
             return true
         }
         return false
+    }
+
+    /// Switch download/decrypt account and align Search’s store region with its storefront.
+    func selectAccountForSearch(id: String) {
+        selectAccount(id: id)
+        if let code = storefrontCountryCode(for: id) {
+            UserDefaults.standard.set(code.uppercased(), forKey: IPadnOptional.countryKey)
+        }
     }
 
     func removeAccount(id: String) {
