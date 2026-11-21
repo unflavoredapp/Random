@@ -435,11 +435,14 @@ async function sendStatus(chatId) {
   const encN = ipaCache.listEncrypted().length;
   const premOn = preferPremiumUpload();
   const ch = premiumUploadChannel() || "";
+  const sessLoaded = premiumUploadConfigured();
   const uploadLine = premOn
     ? ch
       ? `☁️ Upload: Premium → channel <code>${escapeHtml(ch)}</code> → bot`
-      : `☁️ Upload: Premium → bot DM (set TELEGRAM_UPLOAD_CHANNEL for large IPAs)`
-    : `☁️ Upload: Bot API only (~50 MB) — run <code>mac-ssh.sh session</code> + set channel`;
+      : `☁️ Upload: Premium session OK · set <code>TELEGRAM_UPLOAD_CHANNEL</code> for large IPAs`
+    : sessLoaded
+      ? `☁️ Upload: Premium session loaded but disabled (<code>TELEGRAM_PREMIUM_UPLOAD=0</code>)`
+      : `☁️ Upload: Bot API only (~50 MB) — session not in env (reuse DELvEK <code>TELEGRAM_SESSION</code> + restart)`;
   const text =
     `<b>${escapeHtml(botBrandName())} status</b>\n\n` +
     `🤖 Bot: @${escapeHtml(BOT_USERNAME || "?")}\n` +
@@ -1912,11 +1915,11 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
   if (stat.size > TG_DOC_MAX) {
     const hint = premiumUploadConfigured()
       ? premiumChannelConfigured()
-        ? "Premium+channel upload failed — check bot is admin on TELEGRAM_UPLOAD_CHANNEL."
-        : "Premium session present but upload failed — set TELEGRAM_UPLOAD_CHANNEL to a private channel (bot = admin)."
+        ? "Premium+channel upload failed — check @bot is admin on TELEGRAM_UPLOAD_CHANNEL."
+        : "Premium session is loaded — set TELEGRAM_UPLOAD_CHANNEL to a private channel (add @bot as admin), then restart."
       : LOCAL_API
         ? `Local Bot API cap is ~${Math.round(TG_DOC_MAX / 1024 / 1024)} MB.`
-        : "Cloud Bot API caps ~50 MB. On Mac: `zsh server/mac-ssh.sh session` then set TELEGRAM_UPLOAD_CHANNEL (private channel, bot admin)";
+        : "Cloud Bot API caps ~50 MB. Reuse your DELvEK TELEGRAM_SESSION in ~/.tetherless-mac.env (no re-login needed if still valid), set TELEGRAM_UPLOAD_CHANNEL, restart";
     return {
       ok: false,
       description: `IPA is ${mb} MB — ${hint}. Saved on Mac: ${filePath}`,
