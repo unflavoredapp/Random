@@ -1,20 +1,21 @@
 //
 //  AppIconCordBranding.swift
-//  Brand: Tetherless · https://tetherless.dev
+//  Brand: FastDecrypt · https://fastdecrypt.bot
 //
-//  Stamps the Mach-O cord watermark onto app icons inside decrypted Payload
-//  bundles (lower-left, ~33% of icon height — same scale as the Alpha/Orbit mockups).
+//  Stamps the FastDecrypt orange-blades watermark onto app icons inside
+//  decrypted Payload bundles (lower-left, ~33% of icon height).
 //
 
 import Foundation
 import UIKit
 
 nonisolated enum AppIconCordBranding {
-    /// Cord height as a fraction of the icon’s short side (340 / 1024).
+    /// Mark height as a fraction of the icon’s short side (340 / 1024).
     static let cordHeightFraction: CGFloat = 340.0 / 1024.0
     static let marginFraction: CGFloat = 0.028
     static let cordOpacity: CGFloat = 0.94
-    static let assetName = "MachOCordWatermark"
+    static let assetName = "FastDecryptBladesWatermark"
+    static let legacyAssetName = "MachOCordWatermark"
 
     /// Brand every loose app-icon PNG in `app` and write standard AppIcon names
     /// so SpringBoard picks up the mark even when the original lived in Assets.car.
@@ -168,16 +169,19 @@ nonisolated enum AppIconCordBranding {
     // MARK: - Loaders
 
     static func loadWatermark() -> UIImage? {
-        if let named = UIImage(named: assetName) { return named }
-        if let url = Bundle.main.url(forResource: assetName, withExtension: "png"),
-           let img = UIImage(contentsOfFile: url.path) {
-            return img
-        }
-        // Imageset file may be registered without the catalog name on thin builds.
-        if let url = Bundle.main.url(forResource: "MachOCordWatermark", withExtension: "png",
-                                     subdirectory: "MachOCordWatermark.imageset"),
-           let img = UIImage(contentsOfFile: url.path) {
-            return img
+        for name in [assetName, legacyAssetName] {
+            if let named = UIImage(named: name) { return named }
+            if let url = Bundle.main.url(forResource: name, withExtension: "png"),
+               let img = UIImage(contentsOfFile: url.path) {
+                return img
+            }
+            if let url = Bundle.main.url(
+                forResource: name,
+                withExtension: "png",
+                subdirectory: "\(name).imageset"
+            ), let img = UIImage(contentsOfFile: url.path) {
+                return img
+            }
         }
         return nil
     }

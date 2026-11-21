@@ -1,9 +1,9 @@
-// Brand: Tetherless · https://tetherless.dev
+// Brand: FastDecrypt · https://fastdecrypt.bot
 "use strict";
 /**
- * Stamp the Mach-O cord watermark onto decrypted IPA app icons (lower-left,
- * ~33% height — same scale as the Alpha/Orbit mockups). Used by DELvEKBot
- * before upload so Telegram thumbs + SpringBoard both show the mark.
+ * Stamp the FastDecrypt orange-blades watermark onto decrypted IPA app icons
+ * (lower-left, ~33% height). Used by @FastDecryptAI before upload so Telegram
+ * thumbs + SpringBoard both show the mark.
  */
 
 const fs = require("fs");
@@ -14,8 +14,8 @@ const { spawnSync } = require("child_process");
 const CORD_HEIGHT_FRAC = 340 / 1024;
 const MARGIN_FRAC = 0.028;
 const CORD_OPACITY = 0.94;
-// V2: flatten icons opaque before cord (V1 left transparent bgs → dark Telegram thumbs).
-const MARKER_KEY = "TLCordBrandedV2";
+// V3: orange blades mark (replaces Mach-O cord). Rebrand so old cord stamps refresh.
+const MARKER_KEY = "FDBladesBrandedV1";
 
 /**
  * Sample a fill color from corner pixels (opaque corners win; else white).
@@ -57,8 +57,23 @@ async function opaqueIconBase(sharp, input, side, bg) {
 
 function watermarkPath() {
   const candidates = [
+    path.join(__dirname, "assets", "FastDecryptBladesWatermark.png"),
+    path.join(
+      __dirname,
+      "..",
+      "Assets.xcassets",
+      "FastDecryptBladesWatermark.imageset",
+      "FastDecryptBladesWatermark.png"
+    ),
+    // Legacy filename (now also blades pixels).
     path.join(__dirname, "assets", "MachOCordWatermark.png"),
-    path.join(__dirname, "..", "Assets.xcassets", "MachOCordWatermark.imageset", "MachOCordWatermark.png"),
+    path.join(
+      __dirname,
+      "..",
+      "Assets.xcassets",
+      "MachOCordWatermark.imageset",
+      "MachOCordWatermark.png"
+    ),
   ];
   for (const p of candidates) {
     if (fs.existsSync(p) && fs.statSync(p).size > 100) return p;
@@ -89,7 +104,7 @@ async function brandIpa(ipaPath, { force = false } = {}) {
   }
   const wm = watermarkPath();
   if (!wm) {
-    return { ok: false, branded: 0, iconPath: "", error: "MachOCordWatermark.png missing" };
+    return { ok: false, branded: 0, iconPath: "", error: "FastDecryptBladesWatermark.png missing" };
   }
 
   const sharp = loadSharp();

@@ -201,9 +201,9 @@ function brandSiteDefault() {
   return isFastDecryptBrand() ? "https://fastdecrypt.bot" : "https://delvek.net";
 }
 
-/** IPA / banner mark — [FastDecrypt.bot] or [DELvEK.NeT]. */
+/** IPA / banner mark — [FastDecrypt.Bot] or [DELvEK.NeT]. */
 function brandIpaTag() {
-  return isFastDecryptBrand() ? "FastDecrypt.bot" : "DELvEK.NeT";
+  return isFastDecryptBrand() ? "FastDecrypt.Bot" : "DELvEK.NeT";
 }
 
 function buildIpaFileName({ name, version }) {
@@ -292,7 +292,8 @@ function displayIpaFileName(name) {
       .replace(/-DELvEK\.ipa$/i, `-[${tag}].ipa`)
       .replace(/-FastDecrypt\.ipa$/i, `-[${tag}].ipa`)
       .replace(/-\[DELvEK\.NeT\]\.ipa$/i, `-[${tag}].ipa`)
-      .replace(/-\[FastDecrypt\.bot\]\.ipa$/i, `-[${tag}].ipa`);
+      .replace(/-\[FastDecrypt\.bot\]\.ipa$/i, `-[${tag}].ipa`)
+      .replace(/-\[FastDecrypt\.Bot\]\.ipa$/i, `-[${tag}].ipa`);
   }
   return buildIpaFileName({ name: raw.replace(/\.ipa$/i, "") });
 }
@@ -2969,7 +2970,7 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   const needsDelvekName =
     /Tetherless\.ipa$/i.test(cachedName) ||
     (/DELvEK\.ipa$/i.test(cachedName) && !/\[DELvEK\.NeT\]\.ipa$/i.test(cachedName)) ||
-    (/FastDecrypt\.ipa$/i.test(cachedName) && !/\[FastDecrypt\.bot\]\.ipa$/i.test(cachedName)) ||
+    (/FastDecrypt\.ipa$/i.test(cachedName) && !/\[FastDecrypt\.(?:bot|Bot)\]\.ipa$/i.test(cachedName)) ||
     (isFastDecryptBrand() && /\[DELvEK\.NeT\]\.ipa$/i.test(cachedName));
   const needsVersionRename =
     !!version && new RegExp(`_v\\d{6,}-\\[${tagRe}\\]\\.ipa$`, "i").test(cachedName);
@@ -2977,7 +2978,7 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
   if ((needsDelvekName || needsVersionRename) && version) {
     const baseName =
       entry.name ||
-      String(cachedName).replace(/_v[\w.-]*-\[(?:DELvEK\.NeT|FastDecrypt\.bot)\]\.ipa$/i, "") ||
+      String(cachedName).replace(/_v[\w.-]*-\[(?:DELvEK\.NeT|FastDecrypt\.(?:bot|Bot))\]\.ipa$/i, "") ||
       "App";
     fileName = buildIpaFileName({ name: baseName, version });
   } else {
@@ -3760,7 +3761,7 @@ async function handleMessage(msg) {
   const docName = (doc && doc.file_name) || "";
   if (doc && /\.ipa$/i.test(docName)) {
     // Premium/cache echo: our clear IPA uploads come back as user documents — don't re-decrypt.
-    if (/-(?:DELvEK|Tetherless|FastDecrypt|\[DELvEK\.NeT\]|\[FastDecrypt\.bot\])\.ipa$/i.test(docName)) {
+    if (/-(?:DELvEK|Tetherless|FastDecrypt|\[DELvEK\.NeT\]|\[FastDecrypt\.(?:bot|Bot)\])\.ipa$/i.test(docName)) {
       // Clear IPA echoes (bot/Premium upload) — don't re-decrypt.
       return;
     }

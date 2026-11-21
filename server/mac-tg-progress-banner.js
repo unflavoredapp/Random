@@ -3,7 +3,7 @@
 /**
  * DELvEK progress card via `sharp`.
  *
- * Left: Delvek icon + DELvEK.NeT · repo app count · transparent terminal · Tetherless mark
+ * Left: Delvek icon + FastDecrypt.Bot · repo app count · transparent terminal · FastDecrypt mark
  * Right: app name above icon · Home Screen % ring · version by the divider
  * No hashtag · no delvek.net footer
  */
@@ -71,7 +71,7 @@ function sharpTag(tag) {
   );
 }
 
-/** Tetherless mark — centered in the left panel, lower on the card. */
+/** FastDecrypt mark — centered in the left panel, lower on the card. */
 const CREDIT_ICON = 132;
 const CREDIT_ICON_LEFT = 164;
 const CREDIT_ICON_TOP = 455;
@@ -162,8 +162,8 @@ function leftPanelSvg({
       ? `<text x="${leftEdge - 24}" y="74" text-anchor="end" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">${countSafe}</text>`
       : ""
   }
-  <text x="${creditCx}" y="${creditTy}" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="600">Made by Tetherless.Dev</text>
-  <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@DELvEKBot</text>
+  <text x="${creditCx}" y="${creditTy}" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="18" font-weight="600">Made by FastDecrypt.Bot</text>
+  <text x="${W - 56}" y="${H - 36}" text-anchor="end" fill="#8a93a6" font-family="Arial, Helvetica, sans-serif" font-size="20">@FastDecryptAI</text>
 </svg>`);
 }
 
@@ -206,11 +206,21 @@ function resolveAsset(names) {
 }
 
 function resolveTetherlessIcon() {
-  return resolveAsset(["tetherless-icon.png", "icon-1024.png"]);
+  // FastDecrypt blades mark (legacy tetherless/delvek icon names fall back).
+  return resolveAsset([
+    "FastDecryptBladesWatermark.png",
+    "tetherless-icon.png",
+    "icon-1024.png",
+  ]);
 }
 
 function resolveDelvekIcon() {
-  return resolveAsset(["delvek-icon.png", "DelvekBadge@3x.png", "DelvekBadge@2x.png"]);
+  return resolveAsset([
+    "FastDecryptBladesWatermark.png",
+    "delvek-icon.png",
+    "DelvekBadge@3x.png",
+    "DelvekBadge@2x.png",
+  ]);
 }
 
 async function roundedPng(sharp, srcPath, size) {
@@ -324,8 +334,8 @@ async function renderProgressBanner({
   const isDone = !!done;
   const title = String(name || "App").trim() || "App";
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-  // Keep DELvEK.NeT casing — do not force uppercase.
-  const brandLabel = sanitize(brand || "DELvEK.NeT", 18);
+  // Keep FastDecrypt.Bot casing — do not force uppercase.
+  const brandLabel = sanitize(brand || "FastDecrypt.Bot", 18);
   const termLines = Array.isArray(logLines) && logLines.length
     ? logLines
     : [stage || (isDone ? "done" : "starting…")];
@@ -440,7 +450,7 @@ async function renderProgressBanner({
       layers.push({ input: delvekRounded, left: BRAND_ICON_LEFT, top: BRAND_ICON_TOP });
     }
 
-    // Tetherless mark — centered lower in the left panel.
+    // FastDecrypt mark — centered lower in the left panel.
     const creditIconPath = resolveTetherlessIcon();
     if (creditIconPath) {
       const creditRounded = await roundedPng(sharp, creditIconPath, creditSize);
@@ -540,7 +550,7 @@ async function renderDownloadThumb({ iconPath, dest, size } = {}) {
 /**
  * Version picker sharp card —
  * Left: big app icon · Right rows: [build icon] [app name] [version] [n]
- * Top-left: DELvEK icon + DELvEK.NeT · Top-right: Tetherless icon + Tetherless.Dev
+ * Top-left / top-right: FastDecrypt blades + FastDecrypt.Bot
  * @param {{ title?: string, iconPath?: string, versions?: Array<{n:number,label:string,iconPath?:string,current?:boolean}>, page?: number, pages?: number, total?: number, dest?: string }} opts
  */
 async function renderVersionPickerBanner(opts = {}) {
@@ -650,13 +660,13 @@ async function renderVersionPickerBanner(opts = {}) {
       });
     }
 
-    // Top-left DELvEK.NeT · Top-right Tetherless.Dev (icon left of each label).
-    const brandDelvek = sanitize("DELvEK.NeT", 18);
-    const brandTether = sanitize("Tetherless.Dev", 18);
+    // Top-left / top-right FastDecrypt.Bot (blades icon left of each label).
+    const brandDelvek = sanitize("FastDecrypt.Bot", 18);
+    const brandTether = sanitize("FastDecrypt.Bot", 18);
     const brandIcon = 44;
     const delvekIconLeft = 40;
     const delvekTextX = delvekIconLeft + brandIcon + 14;
-    // Right-corner group: [icon] Tetherless.Dev — icon left of the text.
+    // Right-corner group: [icon] FastDecrypt.Bot — icon left of the text.
     const tetherGroupIconLeft = W - 40 - brandIcon - 170;
     const tetherTextX = tetherGroupIconLeft + brandIcon + 14;
     const panel = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
@@ -667,7 +677,7 @@ async function renderVersionPickerBanner(opts = {}) {
   <text x="${W / 2}" y="146" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="600">${title}</text>
   ${rowsSvg}
   <text x="${W / 2}" y="${H - 48}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">page ${page}/${pages} · ${total} builds · reply with a number</text>
-  <text x="${W - 56}" y="${H - 20}" text-anchor="end" fill="#6b7385" font-family="Arial, Helvetica, sans-serif" font-size="18">@DELvEKBot</text>
+  <text x="${W - 56}" y="${H - 20}" text-anchor="end" fill="#6b7385" font-family="Arial, Helvetica, sans-serif" font-size="18">@FastDecryptAI</text>
 </svg>`);
     layers.push({ input: await sharp(panel).png().toBuffer(), left: 0, top: 0 });
 
@@ -681,13 +691,13 @@ async function renderVersionPickerBanner(opts = {}) {
       layers.push({ input: buf, left: row.left, top: row.top });
     }
 
-    // DELvEK icon left of DELvEK.NeT (top-left).
+    // DELvEK icon left of FastDecrypt.Bot (top-left).
     const delvekIconPath = resolveDelvekIcon();
     if (delvekIconPath) {
       const delvekRounded = await roundedPng(sharp, delvekIconPath, brandIcon);
       layers.push({ input: delvekRounded, left: delvekIconLeft, top: 34 });
     }
-    // Tetherless icon left of Tetherless.Dev (top-right corner group).
+    // Tetherless icon left of FastDecrypt.Bot (top-right corner group).
     const tetherIconPath = resolveTetherlessIcon();
     if (tetherIconPath) {
       const tetherRounded = await roundedPng(sharp, tetherIconPath, brandIcon);
@@ -754,8 +764,8 @@ async function renderLibraryListBanner(opts = {}) {
   <text x="1128" y="${y}" text-anchor="end" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${hint}</text>`;
     }
 
-    const brandDelvek = sanitize("DELvEK.NeT", 18);
-    const brandTether = sanitize("Tetherless.Dev", 18);
+    const brandDelvek = sanitize("FastDecrypt.Bot", 18);
+    const brandTether = sanitize("FastDecrypt.Bot", 18);
     const brandIcon = 44;
     const tetherGroupIconLeft = W - 40 - brandIcon - 170;
     const tetherTextX = tetherGroupIconLeft + brandIcon + 14;
@@ -780,7 +790,7 @@ async function renderLibraryListBanner(opts = {}) {
   <text x="${W / 2}" y="146" text-anchor="middle" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${apps.length} apps · ${totalBuilds} decrypted builds${more}</text>
   ${rows}
   <text x="${W / 2}" y="${H - 56}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">Type /library AppName · reply with a number to pull</text>
-  <text x="${W - 56}" y="${H - 20}" text-anchor="end" fill="#6b7385" font-family="Arial, Helvetica, sans-serif" font-size="18">@DELvEKBot</text>
+  <text x="${W - 56}" y="${H - 20}" text-anchor="end" fill="#6b7385" font-family="Arial, Helvetica, sans-serif" font-size="18">@FastDecryptAI</text>
 </svg>`);
     layers.push({ input: await sharp(panel).png().toBuffer(), left: 0, top: 0 });
 
@@ -929,8 +939,8 @@ async function renderLibraryAppBanner(opts = {}) {
       });
     }
 
-    const brandDelvek = sanitize("DELvEK.NeT", 18);
-    const brandTether = sanitize("Tetherless.Dev", 18);
+    const brandDelvek = sanitize("FastDecrypt.Bot", 18);
+    const brandTether = sanitize("FastDecrypt.Bot", 18);
     const brandIcon = 44;
     const delvekIconLeft = 40;
     const delvekTextX = delvekIconLeft + brandIcon + 14;
@@ -952,7 +962,7 @@ async function renderLibraryAppBanner(opts = {}) {
   <text x="${W / 2}" y="${H - 48}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">page ${page}/${pages} · ${
       total || versions.length
     } builds · reply with a number to pull</text>
-  <text x="${W - 56}" y="${H - 20}" text-anchor="end" fill="#6b7385" font-family="Arial, Helvetica, sans-serif" font-size="18">@DELvEKBot</text>
+  <text x="${W - 56}" y="${H - 20}" text-anchor="end" fill="#6b7385" font-family="Arial, Helvetica, sans-serif" font-size="18">@FastDecryptAI</text>
 </svg>`);
     layers.push({ input: await sharp(panel).png().toBuffer(), left: 0, top: 0 });
 
