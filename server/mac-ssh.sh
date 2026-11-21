@@ -264,18 +264,44 @@ cmd_logs() {
 }
 
 cmd_session() {
+  local py_args=()
+  local invite=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --code|code|-c) py_args+=(--code); shift ;;
+      *) invite="$1"; shift ;;
+    esac
+  done
   echo "Installing pyrogram (Premium user uploads ≤4 GB)…"
-  python3 -m pip install --user -q pyrogram tgcrypto
+  python3 -m pip install --user -q pyrogram tgcrypto qrcode
   echo
-  echo "Get api_id + api_hash from https://my.telegram.org (same account with Premium)."
-  if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" ]]; then
-    echo "Tip: you can pre-set them in ~/.tetherless-mac.env before running this."
+  if (( ${#py_args[@]} )); then
+    echo "Phone + login-code mode (if codes never arrive, use QR instead — omit --code)."
+  else
+    echo "QR login (recommended): Telegram → Settings → Devices → Link Desktop Device"
+    echo "Phone-code instead: zsh $REPO/server/mac-ssh.sh session --code"
   fi
-  python3 "$REPO/server/mac-tg-session-setup.py"
+  if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" ]]; then
+    echo "Tip: set TELEGRAM_API_ID / TELEGRAM_API_HASH in ~/.tetherless-mac.env first."
+  fi
+  python3 "$REPO/server/mac-tg-session-setup.py" "${py_args[@]}"
+  # Reload env so channel step sees the fresh TELEGRAM_SESSION.
+  if [[ -n "${ENV_FILE:-}" && -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
+  fi
+  if [[ -n "$invite" ]]; then
+    echo
+    echo "Wiring staging channel from invite…"
+    cmd_channel "$invite"
+    return
+  fi
   echo
-  echo "Next (recommended for large IPAs):"
+  echo "Next (large IPAs):"
   echo "  zsh $REPO/server/mac-ssh.sh channel 'https://t.me/+YOUR_INVITE'"
-  echo "  (adds TELEGRAM_UPLOAD_CHANNEL; then make @${TELEGRAM_BOT_USERNAME:-FastDecryptAI} channel admin)"
+  echo "  (then make @${TELEGRAM_BOT_USERNAME:-FastDecryptAI} a channel admin — Post messages)"
   echo
   echo "Restarting bot so it uses your Premium session…"
   cmd_start
@@ -288,8 +314,8 @@ cmd_channel() {
     exit 1
   fi
   if [[ -z "${TELEGRAM_SESSION:-}${TELEGRAM_SESSION_STRING:-}" || -z "${TELEGRAM_API_ID:-}" ]]; then
-    echo "Premium session missing — reuse DELvEK TELEGRAM_SESSION in ~/.tetherless-mac.env"
-    echo "or run: zsh $REPO/server/mac-ssh.sh session"
+    echo "Premium session missing. Log in first (optionally pass this invite):"
+    echo "  zsh $REPO/server/mac-ssh.sh session '$invite'"
     exit 1
   fi
   python3 -m pip install --user -q pyrogram tgcrypto
@@ -320,7 +346,7 @@ cmd_status() {
       echo "channel: unset — add TELEGRAM_UPLOAD_CHANNEL=-100… (private channel, bot admin)"
     fi
   else
-    echo "upload: Bot API only — session missing from env (reuse DELvEK TELEGRAM_SESSION or: zsh $REPO/server/mac-ssh.sh session)"
+    echo "upload: Bot API only — session missing. Run: zsh $REPO/server/mac-ssh.sh session 'https://t.me/+YOUR_INVITE'"
   fi
   if alive_pid "$API_PID"; then
     echo "api:    running pid $(cat "$API_PID") :${MAC_API_PORT:-8787}"
@@ -387,7 +413,8 @@ Tetherless Mac SSH helper (no desktop)
   zsh $REPO/server/mac-ssh.sh status
   zsh $REPO/server/mac-ssh.sh logs
   zsh $REPO/server/mac-ssh.sh session   # link YOUR Premium Telegram account (≤4 GB)
-  zsh $REPO/server/mac-ssh.sh channel 'https://t.me/+…'  # secret staging channel for big IPAs
+  zsh $REPO/server/mac-ssh.sh session 'https://t.me/+…'  # login + wire staging channel
+  zsh $REPO/server/mac-ssh.sh channel 'https://t.me/+…'  # secret staging channel (session already set)
   zsh $REPO/server/mac-ssh.sh api
   zsh $REPO/server/mac-ssh.sh stop-api
   zsh $REPO/server/mac-ssh.sh unlock
@@ -407,7 +434,7 @@ case "$cmd" in
   stop-api) cmd_stop_api ;;
   status) cmd_status ;;
   logs) shift || true; cmd_logs "${1:-80}" ;;
-  session) cmd_session ;;
+  session) shift || true; cmd_session "$@" ;;
   channel) shift || true; cmd_channel "${1:-}" ;;
   api) cmd_api ;;
   unlock) cmd_unlock ;;
