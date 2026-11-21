@@ -3,7 +3,7 @@
 /**
  * DELvEK progress card via `sharp`.
  *
- * Left: Delvek icon + FastDecrypt.Bot · repo app count · transparent terminal · FastDecrypt mark
+ * Left: Delvek icon + DELvEK.NeT · repo app count · transparent terminal · FastDecrypt.Bot mark
  * Right: app name above icon · Home Screen % ring · version by the divider
  * No hashtag · no delvek.net footer
  */
@@ -206,7 +206,7 @@ function resolveAsset(names) {
 }
 
 function resolveTetherlessIcon() {
-  // FastDecrypt blades mark (legacy tetherless/delvek icon names fall back).
+  // Right-side mark: FastDecrypt blades (was Tetherless).
   return resolveAsset([
     "FastDecryptBladesWatermark.png",
     "tetherless-icon.png",
@@ -215,8 +215,8 @@ function resolveTetherlessIcon() {
 }
 
 function resolveDelvekIcon() {
+  // Left-side DELvEK.NeT badge — keep Delvek assets first.
   return resolveAsset([
-    "FastDecryptBladesWatermark.png",
     "delvek-icon.png",
     "DelvekBadge@3x.png",
     "DelvekBadge@2x.png",
@@ -550,7 +550,7 @@ async function renderDownloadThumb({ iconPath, dest, size } = {}) {
 /**
  * Version picker sharp card —
  * Left: big app icon · Right rows: [build icon] [app name] [version] [n]
- * Top-left / top-right: FastDecrypt blades + FastDecrypt.Bot
+ * Top-left: DELvEK icon + DELvEK.NeT · Top-right: FastDecrypt blades + FastDecrypt.Bot
  * @param {{ title?: string, iconPath?: string, versions?: Array<{n:number,label:string,iconPath?:string,current?:boolean}>, page?: number, pages?: number, total?: number, dest?: string }} opts
  */
 async function renderVersionPickerBanner(opts = {}) {
@@ -660,13 +660,13 @@ async function renderVersionPickerBanner(opts = {}) {
       });
     }
 
-    // Top-left / top-right FastDecrypt.Bot (blades icon left of each label).
-    const brandDelvek = sanitize("FastDecrypt.Bot", 18);
+    // Top-left DELvEK.NeT · Top-right FastDecrypt.Bot (icon left of each label).
+    const brandDelvek = sanitize("DELvEK.NeT", 18);
     const brandTether = sanitize("FastDecrypt.Bot", 18);
     const brandIcon = 44;
     const delvekIconLeft = 40;
     const delvekTextX = delvekIconLeft + brandIcon + 14;
-    // Right-corner group: [icon] FastDecrypt.Bot — icon left of the text.
+    // Right-corner group: [blades] FastDecrypt.Bot — icon left of the text.
     const tetherGroupIconLeft = W - 40 - brandIcon - 170;
     const tetherTextX = tetherGroupIconLeft + brandIcon + 14;
     const panel = Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
@@ -691,13 +691,13 @@ async function renderVersionPickerBanner(opts = {}) {
       layers.push({ input: buf, left: row.left, top: row.top });
     }
 
-    // DELvEK icon left of FastDecrypt.Bot (top-left).
+    // DELvEK icon left of DELvEK.NeT (top-left).
     const delvekIconPath = resolveDelvekIcon();
     if (delvekIconPath) {
       const delvekRounded = await roundedPng(sharp, delvekIconPath, brandIcon);
       layers.push({ input: delvekRounded, left: delvekIconLeft, top: 34 });
     }
-    // Tetherless icon left of FastDecrypt.Bot (top-right corner group).
+    // FastDecrypt blades left of FastDecrypt.Bot (top-right corner group).
     const tetherIconPath = resolveTetherlessIcon();
     if (tetherIconPath) {
       const tetherRounded = await roundedPng(sharp, tetherIconPath, brandIcon);
@@ -764,7 +764,7 @@ async function renderLibraryListBanner(opts = {}) {
   <text x="1128" y="${y}" text-anchor="end" fill="#b8c0d0" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${hint}</text>`;
     }
 
-    const brandDelvek = sanitize("FastDecrypt.Bot", 18);
+    const brandDelvek = sanitize("DELvEK.NeT", 18);
     const brandTether = sanitize("FastDecrypt.Bot", 18);
     const brandIcon = 44;
     const tetherGroupIconLeft = W - 40 - brandIcon - 170;
@@ -939,7 +939,7 @@ async function renderLibraryAppBanner(opts = {}) {
       });
     }
 
-    const brandDelvek = sanitize("FastDecrypt.Bot", 18);
+    const brandDelvek = sanitize("DELvEK.NeT", 18);
     const brandTether = sanitize("FastDecrypt.Bot", 18);
     const brandIcon = 44;
     const delvekIconLeft = 40;
