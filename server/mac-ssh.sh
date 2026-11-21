@@ -297,10 +297,15 @@ cmd_status() {
     if [[ "$flag" == "0" || "$flag" == "false" || "$flag" == "off" ]]; then
       echo "upload: Premium session present but disabled (TELEGRAM_PREMIUM_UPLOAD=$flag)"
     else
-      echo "upload: Premium user session (≤4 GB + cloud storage; larger → /d/ link)"
+      echo "upload: Premium user session (≤4 GB)"
+    fi
+    if [[ -n "${TELEGRAM_UPLOAD_CHANNEL:-}${TELEGRAM_PREMIUM_CHANNEL:-}" ]]; then
+      echo "channel: ${TELEGRAM_UPLOAD_CHANNEL:-$TELEGRAM_PREMIUM_CHANNEL}"
+    else
+      echo "channel: unset — add TELEGRAM_UPLOAD_CHANNEL=-100… (private channel, bot admin)"
     fi
   else
-    echo "upload: Bot API only — run: zsh $REPO/server/mac-ssh.sh session"
+    echo "upload: Bot API only — session missing from env (reuse DELvEK TELEGRAM_SESSION or: zsh $REPO/server/mac-ssh.sh session)"
   fi
   if alive_pid "$API_PID"; then
     echo "api:    running pid $(cat "$API_PID") :${MAC_API_PORT:-8787}"
