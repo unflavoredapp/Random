@@ -47,6 +47,15 @@ function pruneVerPicks() {
   }
 }
 
+/** token → App Store name-search results (pick when several matches). */
+const pendingAppPicks = new Map();
+function pruneAppPicks() {
+  const now = Date.now();
+  for (const [k, v] of pendingAppPicks) {
+    if (!v || v.expires < now) pendingAppPicks.delete(k);
+  }
+}
+
 const API_ROOT = String(process.env.TELEGRAM_API_ROOT || "https://api.telegram.org").replace(/\/+$/, "");
 const LOCAL_API =
   process.env.TELEGRAM_LOCAL_API === "1" ||
@@ -600,6 +609,257 @@ function lookupStoreApp(storeUrl) {
     /* ignore */
   }
   return out;
+}
+
+/** Countries to try for name search (FastDecrypt region list, capped). */
+function searchCountries() {
+  const raw = String(
+    process.env.MAC_TG_SEARCH_COUNTRIES ||
+      process.env.FAIRPLAY_IPATOOL_STOREFRONT ||
+      "us,hk,jp,de,fr,au,ca,cn,pl,vn,ru"
+  );
+  const list = raw
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase())
+    .filter((s) => /^[a-z]{2}$/.test(s));
+  return (list.length ? list : ["us"]).slice(0, 8);
+}
+
+/**
+ * Parse free-text "App Name" or "App Name 1.2.3" / "App Name v1.2.3".
+ * Returns null when the text looks like a URL, command, or IPA path.
+ */
+function parseAppNameQuery(text) {
+  let t = String(text || "").trim();
+  if (!t) return null;
+  if (/^https?:\/\//i.test(t) || isStoreUrl(t) || isTestFlightUrl(t)) return null;
+  if (/^\/\w+/i.test(t)) return null;
+  if (/\.ipa$/i.test(t)) return null;
+  if (/^decrypt\s+/i.test(t)) return null;
+
+  let version = "";
+  let name = t;
+  let m = t.match(
+    /^(.+?)\s+(?:v|version)[=:\s]+([0-9][0-9A-Za-z._-]{0,29})\s*$/i
+  );
+  if (m) {
+    name = m[1].trim();
+    version = m[2];
+  } else {
+    m = t.match(/^(.+?)\s+([0-9]+\.[0-9A-Za-z._-]{0,28})\s*$/);
+    if (m && m[1].trim().length >= 2) {
+      name = m[1].trim();
+      version = m[2];
+    }
+  }
+  name = name.replace(/\s+/g, " ").trim();
+  if (name.length < 2 || name.length > 80) return null;
+  return { name, version };
+}
+
+function searchItunesCountry(term, country, limit) {
+  const url =
+    `https://itunes.apple.com/search?term=${encodeURIComponent(term)}` +
+    `&entity=software&limit=${limit}&country=${encodeURIComponent(country)}`;
+  const r = spawnSync("curl", ["-fsSL", "--max-time", "12", url], {
+    encoding: "utf8",
+    maxBuffer: 2 * 1024 * 1024,
+  });
+  if (r.status !== 0) return [];
+  try {
+    const j = JSON.parse(r.stdout || "{}");
+    const rows = Array.isArray(j.results) ? j.results : [];
+    return rows
+      .filter((a) => a && a.trackId && a.trackName)
+      .map((a) => {
+        const adam = String(a.trackId);
+        const cc = String(country || "us").toLowerCase();
+        return {
+          adam,
+          name: String(a.trackName || a.trackCensoredName || "").trim().slice(0, 80),
+          bid: String(a.bundleId || "").trim().slice(0, 120),
+          version: String(a.version || "").trim().slice(0, 40),
+          developer: String(a.artistName || "").trim().slice(0, 60),
+          country: cc,
+          url:
+            String(a.trackViewUrl || "").trim() ||
+            `https://apps.apple.com/${cc}/app/id${adam}`,
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
+/** Search App Store by name; prefer exact title matches, then fill from more regions. */
+function searchAppsByName(term, { limit = 8 } = {}) {
+  const q = String(term || "").trim();
+  if (q.length < 2) return [];
+  const byAdam = new Map();
+  for (const cc of searchCountries()) {
+    for (const hit of searchItunesCountry(q, cc, Math.min(12, limit + 4))) {
+      if (!byAdam.has(hit.adam)) byAdam.set(hit.adam, hit);
+    }
+    if (byAdam.size >= limit) break;
+  }
+  const items = [...byAdam.values()];
+  const want = q.toLowerCase();
+  items.sort((a, b) => {
+    const ae = a.name.toLowerCase() === want ? 0 : a.name.toLowerCase().startsWith(want) ? 1 : 2;
+    const be = b.name.toLowerCase() === want ? 0 : b.name.toLowerCase().startsWith(want) ? 1 : 2;
+    if (ae !== be) return ae - be;
+    return a.name.localeCompare(b.name);
+  });
+  return items.slice(0, limit);
+}
+
+function pickBestAppMatch(items, name) {
+  const list = Array.isArray(items) ? items : [];
+  if (!list.length) return null;
+  if (list.length === 1) return list[0];
+  const want = String(name || "").trim().toLowerCase();
+  const exact = list.filter((it) => it.name.toLowerCase() === want);
+  if (exact.length === 1) return exact[0];
+  // "Vinted" → "Vinted: Pre-loved marketplace"
+  const titled = list.filter((it) => {
+    const n = it.name.toLowerCase();
+    return (
+      n.startsWith(want + ":") ||
+      n.startsWith(want + " -") ||
+      n.startsWith(want + " –") ||
+      n.startsWith(want + " —")
+    );
+  });
+  if (titled.length === 1) return titled[0];
+  return null;
+}
+
+async function beginDecryptFromStore(chatId, link, vreq) {
+  rememberStoreUrl(chatId, link, vreq || "latest");
+  if (vreq) {
+    await withWorker(chatId, async () => {
+      const resolved = await resolveExternalVersionId(link, vreq);
+      await decryptStoreUrl(chatId, link, resolved);
+    });
+    return;
+  }
+  await offerVersionPick(chatId, link);
+}
+
+async function offerAppNamePick(chatId, items, { name, version } = {}) {
+  pruneAppPicks();
+  const token = crypto.randomBytes(4).toString("hex");
+  const picks = (items || []).slice(0, 8);
+  pendingAppPicks.set(token, {
+    chatId,
+    version: String(version || "").trim(),
+    items: picks,
+    expires: Date.now() + 15 * 60 * 1000,
+  });
+  const lines = picks.map((it, i) => {
+    const ver = it.version ? ` · v${it.version}` : "";
+    const bid = it.bid ? ` · <code>${escapeHtml(it.bid)}</code>` : "";
+    return `${i + 1}. <b>${escapeHtml(it.name)}</b>${ver}${bid}`;
+  });
+  const rows = picks.map((it, i) => [
+    {
+      text: `${i + 1}. ${it.name}`.slice(0, 64),
+      callback_data: `app:${token}:${i}`.slice(0, 64),
+    },
+  ]);
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text:
+      `Several apps match “${escapeHtml(String(name || "").slice(0, 40))}” — pick one:\n\n` +
+      lines.join("\n"),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: { inline_keyboard: rows },
+  });
+}
+
+async function handleAppNamePick(cq, data) {
+  // app:<token>:<index>
+  const parts = String(data || "").split(":");
+  const token = parts[1] || "";
+  const idx = Number(parts[2]);
+  pruneAppPicks();
+  const pending = pendingAppPicks.get(token);
+  await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
+  if (!pending || !Array.isArray(pending.items)) {
+    await tgApi("sendMessage", {
+      chat_id: cq.message && cq.message.chat && cq.message.chat.id,
+      text: "That search expired — send the app name again.",
+    }).catch(() => {});
+    return;
+  }
+  const chatId = pending.chatId;
+  const pick = pending.items[idx];
+  if (!pick || !pick.url) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: "Invalid pick — send the app name again.",
+    }).catch(() => {});
+    return;
+  }
+  pendingAppPicks.delete(token);
+  if (cq.message && cq.message.message_id) {
+    await tgApi("deleteMessage", {
+      chat_id: chatId,
+      message_id: cq.message.message_id,
+    }).catch(() => {});
+  }
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text: `Decrypting <b>${escapeHtml(pick.name)}</b>…`,
+    parse_mode: "HTML",
+  }).catch(() => {});
+  await beginDecryptFromStore(chatId, pick.url, pending.version || "");
+}
+
+async function handleAppNameMessage(chatId, text, messageId) {
+  const parsed = parseAppNameQuery(text);
+  if (!parsed) return false;
+  const wait = await tgApi("sendMessage", {
+    chat_id: chatId,
+    text: `Searching App Store for “${parsed.name.slice(0, 40)}”…`,
+  }).catch(() => null);
+  const waitId = wait && wait.ok && wait.result && wait.result.message_id;
+  let items = [];
+  try {
+    items = searchAppsByName(parsed.name, { limit: 8 });
+  } catch (e) {
+    console.warn("[search]", (e && e.message) || e);
+  }
+  if (waitId) {
+    await tgApi("deleteMessage", { chat_id: chatId, message_id: waitId }).catch(() => {});
+  }
+  if (!items.length) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text:
+        `No App Store apps found for “${parsed.name.slice(0, 40)}”.\n` +
+        `Try another name, or paste an App Store link.`,
+    });
+    return true;
+  }
+  const best = pickBestAppMatch(items, parsed.name);
+  await deleteUserMessage(chatId, messageId);
+  if (best) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text:
+        `Found <b>${escapeHtml(best.name)}</b>` +
+        (parsed.version ? ` · v${escapeHtml(parsed.version)}` : "") +
+        `…`,
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+    }).catch(() => {});
+    await beginDecryptFromStore(chatId, best.url, parsed.version || "");
+    return true;
+  }
+  await offerAppNamePick(chatId, items, parsed);
+  return true;
 }
 
 function fetchStoreIcon(storeUrl) {
@@ -1691,7 +1951,8 @@ function startScreenText() {
   return (
     `👋 Welcome! This bot can decrypt iOS apps from the App Store.\n\n` +
     `📌 <b>To get started:</b>\n` +
-    `• Send me any valid App Store link to begin a decryption.\n` +
+    `• Send an App Store link <b>or just the app name</b> (e.g. <code>Vinted</code>).\n` +
+    `• Optional version: <code>Vinted 26.45.0</code> or <code>Vinted v26.45.0</code>.\n` +
     `• Free users get 3 decryptions per day (up to 1 GB each).\n` +
     `• ⭐ VIP users get unlimited decryptions with no size restrictions.\n` +
     `• ⭐ VIP users can also decrypt TestFlight apps — just send a TestFlight invite link!\n` +
@@ -3424,6 +3685,10 @@ async function handleCallback(cq) {
     await handleVersionPick(cq, data);
     return;
   }
+  if (data.startsWith("app:")) {
+    await handleAppNamePick(cq, data);
+    return;
+  }
   if (data.startsWith("hist:")) {
     const id = data.slice(5);
     const entry = urlLog.getById(chatId, id);
@@ -3686,9 +3951,13 @@ async function handleMessage(msg) {
 
   const link = text.split(/\s+/).find((t) => isStoreUrl(t) || isTestFlightUrl(t));
   if (!link) {
+    // Free text → App Store name search (optional version), e.g. "Vinted" / "Vinted 26.45.0".
+    if (await handleAppNameMessage(chatId, text, msg.message_id)) return;
     await tgApi("sendMessage", {
       chat_id: chatId,
-      text: "Paste an App Store link (paid apps must already be owned by this Apple ID).",
+      text:
+        "Send an App Store link, or just the app name (optional version like `Vinted 26.45.0`).",
+      parse_mode: "Markdown",
     });
     return;
   }
@@ -3705,16 +3974,8 @@ async function handleMessage(msg) {
   const vreq = verMatch ? verMatch[1] : "";
   // Clean chat: drop the pasted URL, keep it in History for re-decrypt.
   await deleteUserMessage(chatId, msg.message_id);
-  rememberStoreUrl(chatId, link, vreq || "latest");
   // Typed version → decrypt that build. Bare link → version sharp-card carousel first.
-  if (vreq) {
-    await withWorker(chatId, async () => {
-      const resolved = await resolveExternalVersionId(link, vreq);
-      await decryptStoreUrl(chatId, link, resolved);
-    });
-    return;
-  }
-  await offerVersionPick(chatId, link);
+  await beginDecryptFromStore(chatId, link, vreq);
 }
 
 /** Only one getUpdates in flight — overlapping polls re-delivered the same URL → duplicate cards. */
