@@ -98,17 +98,20 @@ async def main() -> None:
     print("Logging in as your Telegram Premium user…")
     print("Phone must be international, e.g. +15551234567 (include + and country code).")
     print()
-    print("Where the login CODE appears (usually NOT SMS):")
-    print("  1) Open the Telegram app on your phone / desktop (already logged in)")
-    print("  2) Open the chat with the official account named “Telegram”")
-    print("  3) You’ll see a message like: Login code: 12345")
-    print("  4) Type that code here when prompted")
-    print("If 2FA is on, you’ll also be asked for your cloud password after the code.")
+    print("Where the APP login code appears (usually NOT SMS):")
+    print("  1) Open Telegram on a device already logged in")
+    print("  2) Chat with the official account “Telegram”")
+    print("  3) Look for a NEW message like:  Login code: 12345  (digits only)")
+    print()
+    print("IGNORE messages titled “Web login code” / my.telegram.org — those are")
+    print("only for the website (api_id). They will NOT work at this prompt.")
+    print("If 2FA is on, you’ll be asked for your cloud password after the code.")
     print()
 
     def phone_code_callback() -> str:
         print()
-        print("→ Check Telegram app → chat “Telegram” for the login code (not your SMS inbox).")
+        print("→ Telegram app → chat “Telegram” → numeric “Login code: …”")
+        print("  (NOT the my.telegram.org “Web login code”)")
         return input("Enter login code: ").strip()
 
     async with Client(
