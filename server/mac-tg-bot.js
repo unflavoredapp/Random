@@ -4060,16 +4060,15 @@ async function boot() {
   console.log(
     `User usage log: ${userLog.LOG_DIR} (${userLog.listUsers().length} users)`
   );
-  // AppAssassin-style Menu button: /status /enc /vip /version (+ start/library).
+  // AppAssassin-style Menu: /status /enc /vip /version (+ start). /library kept as /enc alias only.
   await tgApi("deleteMyCommands", {}).catch(() => {});
   await tgApi("setMyCommands", {
     commands: [
       { command: "status", description: "Check active jobs and bot status" },
       { command: "enc", description: "Previous decryption results — Available to all" },
       { command: "vip", description: "View current vip status or time remaining" },
-      { command: "version", description: "Use with url to choose version to decrypt" },
+      { command: "version", description: "Use with url or app name to choose version" },
       { command: "start", description: `Start ${botBrandName()}` },
-      { command: "library", description: "See decrypted apps & version counts" },
     ],
   }).catch(() => {});
   await tgApi("setChatMenuButton", {
