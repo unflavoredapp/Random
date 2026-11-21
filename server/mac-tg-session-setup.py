@@ -94,13 +94,29 @@ async def main() -> None:
         sys.exit(1)
     api_id = int(api_id_s)
 
-    print("Logging in as your Telegram user (Premium account)…")
-    print("Enter phone (international) and login code when prompted.")
+    print()
+    print("Logging in as your Telegram Premium user…")
+    print("Phone must be international, e.g. +15551234567 (include + and country code).")
+    print()
+    print("Where the login CODE appears (usually NOT SMS):")
+    print("  1) Open the Telegram app on your phone / desktop (already logged in)")
+    print("  2) Open the chat with the official account named “Telegram”")
+    print("  3) You’ll see a message like: Login code: 12345")
+    print("  4) Type that code here when prompted")
+    print("If 2FA is on, you’ll also be asked for your cloud password after the code.")
+    print()
+
+    def phone_code_callback() -> str:
+        print()
+        print("→ Check Telegram app → chat “Telegram” for the login code (not your SMS inbox).")
+        return input("Enter login code: ").strip()
+
     async with Client(
         name="tetherless_session_setup",
         api_id=api_id,
         api_hash=api_hash,
         in_memory=True,
+        phone_code_callback=phone_code_callback,
     ) as app:
         me = await app.get_me()
         session = await app.export_session_string()
