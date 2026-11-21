@@ -248,6 +248,71 @@ async function handle(req, res) {
     });
   }
 
+  // Premium session link-login page (written by mac-tg-session-setup.py).
+  // Open on cellular via the Cloudflare public URL — no LAN / QR needed.
+  if ((p === "/tg-login" || p === "/tg-login/") && req.method === "GET") {
+    const loginFile =
+      process.env.TELEGRAM_LOGIN_FILE ||
+      path.join(os.homedir(), "tetherless-run", "tg-login.json");
+    let tg = "";
+    try {
+      if (fs.existsSync(loginFile)) {
+        const j = JSON.parse(fs.readFileSync(loginFile, "utf8"));
+        tg = String((j && j.url) || "").trim();
+      }
+    } catch {
+      /* ignore */
+    }
+    const safe = tg.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    const html = `<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<meta http-equiv="refresh" content="8"/>
+<title>FastDecrypt · Link Telegram</title>
+<style>
+body{font-family:-apple-system,system-ui,sans-serif;background:#0b0d14;color:#e8eef8;margin:0;padding:28px;text-align:center}
+a.btn{display:inline-block;margin-top:24px;padding:16px 22px;background:#2AABEE;color:#fff;text-decoration:none;font-weight:700;border-radius:12px;font-size:18px}
+p{opacity:.85;line-height:1.45;max-width:28rem;margin:12px auto}
+code{word-break:break-all;font-size:12px;opacity:.7}
+.muted{opacity:.55;font-size:13px}
+</style></head><body>
+<h1>Link Premium session</h1>
+${
+  tg
+    ? `<p>Tap the button to open Telegram and approve this Mac.</p>
+<p><a class="btn" href="${safe}">Open Telegram</a></p>
+<p class="muted">Page auto-refreshes. Keep the SSH <code>session</code> command running.</p>
+<p><code>${safe}</code></p>`
+    : `<p>Waiting for login token… keep <code>mac-ssh.sh session</code> running on the Mac, then refresh.</p>`
+}
+</body></html>`;
+    const body = Buffer.from(html, "utf8");
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Content-Length": body.length,
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+    });
+    res.end(body);
+    return;
+  }
+
+  if (p === "/tg-login.json" && req.method === "GET") {
+    const loginFile =
+      process.env.TELEGRAM_LOGIN_FILE ||
+      path.join(os.homedir(), "tetherless-run", "tg-login.json");
+    try {
+      if (fs.existsSync(loginFile)) {
+        const j = JSON.parse(fs.readFileSync(loginFile, "utf8"));
+        return json(res, 200, { ok: true, url: String((j && j.url) || "") });
+      }
+    } catch {
+      /* ignore */
+    }
+    return json(res, 200, { ok: false, url: "" });
+  }
+
   // Public tokenized IPA download (bot stages >4 GB files here).
   const dlMatch = /^\/d\/([a-f0-9]+)$/i.exec(p);
   if (dlMatch && req.method === "GET") {
