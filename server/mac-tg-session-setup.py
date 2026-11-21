@@ -2,29 +2,26 @@
 # Brand: FastDecrypt · https://fastdecrypt.bot
 """
 Create a Pyrogram StringSession so the Mac bot uploads IPAs as *you*
-(Telegram Premium → ≤4 GB docs + cloud storage).
+(Telegram Premium → ≤4 GB).
 
-WebSSH (one iPhone — no second camera needed):
+One iPhone (recommended) — public HTTPS page via Mac API + Cloudflare:
   zsh ~/tetherless/server/mac-ssh.sh session
-  → open the http://… link in Safari on the phone → tap “Open Telegram”
+  → open https://….trycloudflare.com/tg-login in Safari → Open Telegram
 
 Optional:
-  zsh ~/tetherless/server/mac-ssh.sh session --code   # phone + login code
+  zsh ~/tetherless/server/mac-ssh.sh session --code
 
-Needs api_id / api_hash from https://my.telegram.org (same Premium account).
-Writes TELEGRAM_* into ~/.tetherless-mac.env automatically.
+Writes TELEGRAM_* into ~/.tetherless-mac.env.
 """
 from __future__ import annotations
 
 import asyncio
 import base64
-import http.server
+import json
 import os
 import re
-import socket
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -35,6 +32,16 @@ def env_paths() -> list[Path]:
         home / ".tetherless-mac.env",
         Path("/users/client/.tetherless-mac.env"),
     ]
+
+
+def run_dir() -> Path:
+    return Path(os.environ.get("MAC_SSH_RUN_DIR") or (Path.home() / "tetherless-run"))
+
+
+def login_file() -> Path:
+    return Path(
+        os.environ.get("TELEGRAM_LOGIN_FILE") or (run_dir() / "tg-login.json")
+    )
 
 
 def read_existing() -> dict[str, str]:
@@ -49,7 +56,13 @@ def read_existing() -> dict[str, str]:
             k, v = s.split("=", 1)
             out[k.strip()] = v.strip().strip("'").strip('"')
         break
-    for k in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION", "TELEGRAM_SESSION_STRING"):
+    for k in (
+        "TELEGRAM_API_ID",
+        "TELEGRAM_API_HASH",
+        "TELEGRAM_SESSION",
+        "TELEGRAM_SESSION_STRING",
+        "MAC_PUBLIC_BASE",
+    ):
         if os.environ.get(k):
             out[k] = os.environ[k].strip()
     return out
@@ -83,75 +96,57 @@ def upsert_env(updates: dict[str, str]) -> Path:
     return path
 
 
-def lan_ips() -> list[str]:
-    ips: list[str] = []
+def write_login_token(url: str) -> None:
+    path = login_file()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"url": url, "updated": int(time.time())}) + "\n",
+        encoding="utf-8",
+    )
+
+
+def clear_login_token() -> None:
+    path = login_file()
     try:
-        out = subprocess.check_output(["ifconfig"], text=True, stderr=subprocess.DEVNULL)
-        for m in re.finditer(r"inet (192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)", out):
-            ip = m.group(1)
-            if ip not in ips:
-                ips.append(ip)
-    except Exception:
+        if path.is_file():
+            path.unlink()
+    except OSError:
         pass
-    return ips
 
 
-class _LoginPageState:
-    def __init__(self) -> None:
-        self.url = ""
-        self.lock = threading.Lock()
-
-    def set_url(self, url: str) -> None:
-        with self.lock:
-            self.url = url
-
-    def html(self) -> bytes:
-        with self.lock:
-            tg = self.url or "tg://"
-        body = f"""<!DOCTYPE html>
-<html><head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>FastDecrypt · Link Telegram</title>
-<style>
-body{{font-family:-apple-system,system-ui,sans-serif;background:#0b0d14;color:#e8eef8;
-margin:0;padding:28px;text-align:center}}
-a.btn{{display:inline-block;margin-top:24px;padding:16px 22px;background:#2AABEE;color:#fff;
-text-decoration:none;font-weight:700;border-radius:12px;font-size:18px}}
-p{{opacity:.85;line-height:1.45}}
-code{{word-break:break-all;font-size:12px;opacity:.7}}
-</style></head><body>
-<h1>Link Premium session</h1>
-<p>You only need this phone — tap the button to open Telegram and approve.</p>
-<p><a class="btn" href="{tg}">Open Telegram</a></p>
-<p>If the button does nothing, copy this into Safari’s address bar:</p>
-<p><code>{tg}</code></p>
-</body></html>"""
-        return body.encode("utf-8")
+def resolve_public_base(existing: dict[str, str]) -> str:
+    candidates = [
+        (existing.get("MAC_PUBLIC_BASE") or "").strip().rstrip("/"),
+        "",
+        "",
+    ]
+    for p in (
+        run_dir() / "mac-public-url",
+        Path.home() / ".tetherless-mac-public-url",
+    ):
+        try:
+            if p.is_file():
+                u = p.read_text(encoding="utf-8", errors="replace").strip().rstrip("/")
+                if u.startswith("https://"):
+                    return u
+        except OSError:
+            pass
+    cf = run_dir() / "cloudflared.log"
+    try:
+        if cf.is_file():
+            txt = cf.read_text(encoding="utf-8", errors="replace")
+            ms = re.findall(r"https://[a-zA-Z0-9.-]+\.trycloudflare\.com", txt)
+            if ms:
+                return ms[-1].rstrip("/")
+    except OSError:
+        pass
+    for c in candidates:
+        if c.startswith("https://"):
+            return c
+    return ""
 
 
-def start_login_http(state: _LoginPageState, port: int = 8766):
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):  # noqa: N802
-            data = state.html()
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(data)))
-            self.send_header("Cache-Control", "no-store")
-            self.end_headers()
-            self.wfile.write(data)
-
-        def log_message(self, fmt, *args):  # noqa: A003
-            return
-
-    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    t = threading.Thread(target=server.serve_forever, daemon=True)
-    t.start()
-    return server
-
-
-async def login_link(api_id: int, api_hash: str):
-    """Authorize via tg:// link — works on one iPhone (no QR camera needed)."""
+async def login_link(api_id: int, api_hash: str, public_base: str):
     from pyrogram import Client
     from pyrogram.errors import SessionPasswordNeeded
     from pyrogram.raw import functions, types
@@ -163,24 +158,17 @@ async def login_link(api_id: int, api_hash: str):
         in_memory=True,
     )
     await app.connect()
-    state = _LoginPageState()
-    httpd = None
-    port = int(os.environ.get("TELEGRAM_LOGIN_HTTP_PORT") or "8766")
     try:
-        try:
-            httpd = start_login_http(state, port=port)
-        except OSError as e:
-            print(f"(Could not bind login page on :{port}: {e})")
-            httpd = None
-
+        page = f"{public_base}/tg-login" if public_base else ""
         print()
-        print("One-phone login (no QR scan needed)")
+        print("Premium login via public HTTPS page (works on cellular — no QR / LAN)")
         print("1) Keep this SSH session open")
-        print("2) On the iPhone, open ONE of these in Safari:")
-        for ip in lan_ips() or ["<mac-lan-ip>"]:
-            print(f"      http://{ip}:{port}/")
-        print("3) Tap “Open Telegram” and approve the new device")
-        print("   (Or long-press/tap the tg:// link printed below if your SSH app makes it blue)")
+        if page:
+            print(f"2) On your iPhone Safari open:\n      {page}")
+        else:
+            print("2) No public URL yet — run: zsh ~/tetherless/server/mac-ssh.sh api")
+            print("   then re-run session (needs the trycloudflare link)")
+        print("3) Tap Open Telegram → approve")
         print()
 
         last_url = ""
@@ -201,13 +189,15 @@ async def login_link(api_id: int, api_hash: str):
             if isinstance(r, types.auth.LoginToken):
                 token_b64 = base64.urlsafe_b64encode(r.token).decode("utf-8").rstrip("=")
                 url = f"tg://login?token={token_b64}"
-                state.set_url(url)
+                write_login_token(url)
                 if url != last_url:
                     last_url = url
-                    print("Approve link (refreshes every ~20s):")
-                    print(url)
+                    if page:
+                        print(f"Waiting… open {page}")
+                    else:
+                        print("Approve link:")
+                        print(url)
                     print()
-                    # If Telegram Desktop/macOS is installed & logged in, this can approve too.
                     try:
                         subprocess.Popen(
                             ["open", url],
@@ -229,11 +219,7 @@ async def login_link(api_id: int, api_hash: str):
         session = await app.export_session_string()
         return me, session
     finally:
-        if httpd is not None:
-            try:
-                httpd.shutdown()
-            except Exception:
-                pass
+        clear_login_token()
         await app.disconnect()
 
 
@@ -241,16 +227,11 @@ async def login_code(api_id: int, api_hash: str):
     from pyrogram import Client
 
     print()
-    print("Phone + code login…")
-    print("Phone must be international, e.g. +15551234567")
-    print()
-    print("APP login code = digits in official “Telegram” chat (NOT my.telegram.org web codes).")
-    print("With only one phone, codes are flaky — prefer the default link login instead.")
+    print("Phone + code login (often flaky)…")
+    print("Use numeric Login code from official Telegram chat — not my.telegram.org web codes.")
     print()
 
     def phone_code_callback() -> str:
-        print()
-        print("→ Numeric “Login code: …” only (not my.telegram.org web code)")
         return input("Enter login code: ").strip()
 
     async with Client(
@@ -282,12 +263,20 @@ async def main() -> None:
         print("api_id and api_hash are required.", file=sys.stderr)
         sys.exit(1)
     api_id = int(api_id_s)
+    public_base = resolve_public_base(existing)
 
     if want_code:
         me, session = await login_code(api_id, api_hash)
     else:
+        if not public_base:
+            print(
+                "WARN: no MAC_PUBLIC_BASE / trycloudflare URL — start API first:\n"
+                "  zsh ~/tetherless/server/mac-ssh.sh api\n"
+                "Then re-run session so Safari can use https://…/tg-login",
+                file=sys.stderr,
+            )
         try:
-            me, session = await login_link(api_id, api_hash)
+            me, session = await login_link(api_id, api_hash, public_base)
         except Exception as e:
             print(f"Link login failed ({e}). Falling back to phone code…", file=sys.stderr)
             me, session = await login_code(api_id, api_hash)

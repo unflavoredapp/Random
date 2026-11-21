@@ -276,13 +276,32 @@ cmd_session() {
   python3 -m pip install --user -q pyrogram tgcrypto
   echo
   if (( ${#py_args[@]} )); then
-    echo "Phone + login-code mode (flaky on one iPhone — prefer default link login)."
+    echo "Phone + login-code mode (flaky — prefer HTTPS /tg-login)."
   else
-    echo "One-phone login: open http://MAC-LAN-IP:8766/ in Safari → tap Open Telegram."
+    # Public HTTPS page via Mac API + Cloudflare (works on cellular, one iPhone).
+    if ! alive_pid "$API_PID" || ! alive_pid "$CF_PID"; then
+      echo "Starting public Mac API (Cloudflare HTTPS) for /tg-login…"
+      cmd_api
+    else
+      wait_for_tunnel_url || true
+    fi
+    if [[ -n "${MAC_PUBLIC_BASE:-}" ]]; then
+      echo "Open on your iPhone Safari:"
+      echo "  ${MAC_PUBLIC_BASE%/}/tg-login"
+    else
+      echo "WARN: tunnel URL missing — check: tail -f $CF_LOG"
+    fi
     echo "Phone-code instead: zsh $REPO/server/mac-ssh.sh session --code"
   fi
   if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" ]]; then
     echo "Tip: set TELEGRAM_API_ID / TELEGRAM_API_HASH in ~/.tetherless-mac.env first."
+  fi
+  # Reload env so Python sees MAC_PUBLIC_BASE from cmd_api.
+  if [[ -n "${ENV_FILE:-}" && -f "$ENV_FILE" ]]; then
+    set -a
+    # shellcheck disable=SC1090
+    source "$ENV_FILE"
+    set +a
   fi
   python3 "$REPO/server/mac-tg-session-setup.py" "${py_args[@]}"
   # Reload env so channel step sees the fresh TELEGRAM_SESSION.
@@ -412,7 +431,7 @@ Tetherless Mac SSH helper (no desktop)
   zsh $REPO/server/mac-ssh.sh stop
   zsh $REPO/server/mac-ssh.sh status
   zsh $REPO/server/mac-ssh.sh logs
-  zsh $REPO/server/mac-ssh.sh session   # Premium login via Safari link (one iPhone OK)
+  zsh $REPO/server/mac-ssh.sh session   # Premium login via https://…/tg-login (cellular OK)
   zsh $REPO/server/mac-ssh.sh session 'https://t.me/+…'  # login + wire staging channel
   zsh $REPO/server/mac-ssh.sh channel 'https://t.me/+…'  # secret staging channel (session already set)
   zsh $REPO/server/mac-ssh.sh api
