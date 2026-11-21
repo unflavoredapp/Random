@@ -1687,24 +1687,17 @@ function isTestFlightUrl(t) {
 }
 
 function startScreenText() {
-  const brand = escapeHtml(botBrandName());
-  const handle = escapeHtml(BOT_USERNAME || "FastDecryptAI");
-  const vip = escapeHtml(vipContactHandle());
-  // Single /start blurb — paste links only; menu has /status /enc /vip /version.
+  // AppAssassin-style /start welcome.
   return (
-    `Hi, I'm <b>${brand}</b>, the decryption bot. I'm fully static and capable of decrypting ` +
-    `iOS, iPadOS, macOS, tvOS, and visionOS 26/27 apps, and I'm cute too!\n\n` +
-    `Just <b>paste an App Store link</b> here and I'll send the decrypted IPA.\n` +
-    `Use /enc or /library to see decrypted apps on this Mac.\n\n` +
-    `Mention me in any group or chat with:\n` +
-    `<code>@${handle} &lt;App Store App Link&gt;</code>\n` +
-    `to get a download link.\n\n` +
-    `Free apps work with the Mac’s App Store session. Paid apps only if that Apple ID already owns them.\n\n` +
-    `There are subscription options that allow you to decrypt TestFlight betas, apps up to 4 GB, ` +
-    `paid applications, older app versions, and select platforms - all without the 3 apps/day limit. ` +
-    `An HTTP API is also available for automation. Contact @${vip} to subscribe, or if you have other questions.\n\n` +
-    `And for personal use, it's always free. Moreover, cached applications don't count towards your limit! ` +
-    `However, using multiple accounts or engaging in other suspicious activity will result in a ban of all associated accounts.`
+    `👋 Welcome! This bot can decrypt iOS apps from the App Store.\n\n` +
+    `📌 <b>To get started:</b>\n` +
+    `• Send me any valid App Store link to begin a decryption.\n` +
+    `• Free users get 3 decryptions per day (up to 1 GB each).\n` +
+    `• ⭐ VIP users get unlimited decryptions with no size restrictions.\n` +
+    `• ⭐ VIP users can also decrypt TestFlight apps — just send a TestFlight invite link!\n` +
+    `• ⭐ VIP users can use /version to browse &amp; decrypt older app versions.\n` +
+    `• Use /vip to check your VIP status or learn how to upgrade.\n` +
+    `🌍 Supported App Store regions: HK, US, CA, PL, CN, AU, DE, FR, VN, JP, RU`
   );
 }
 
