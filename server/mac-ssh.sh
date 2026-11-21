@@ -264,16 +264,27 @@ cmd_logs() {
 }
 
 cmd_session() {
-  local invite="${1:-}"
+  local py_args=()
+  local invite=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --code|code|-c) py_args+=(--code); shift ;;
+      *) invite="$1"; shift ;;
+    esac
+  done
   echo "Installing pyrogram (Premium user uploads ≤4 GB)…"
-  python3 -m pip install --user -q pyrogram tgcrypto
+  python3 -m pip install --user -q pyrogram tgcrypto qrcode
   echo
-  echo "Log in as your Telegram Premium user (phone + login code)."
-  echo "api_id / api_hash: https://my.telegram.org (reuse from DELvEK if still in env)."
-  if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" ]]; then
-    echo "Tip: you can pre-set TELEGRAM_API_ID / TELEGRAM_API_HASH in ~/.tetherless-mac.env."
+  if (( ${#py_args[@]} )); then
+    echo "Phone + login-code mode (if codes never arrive, use QR instead — omit --code)."
+  else
+    echo "QR login (recommended): Telegram → Settings → Devices → Link Desktop Device"
+    echo "Phone-code instead: zsh $REPO/server/mac-ssh.sh session --code"
   fi
-  python3 "$REPO/server/mac-tg-session-setup.py"
+  if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" ]]; then
+    echo "Tip: set TELEGRAM_API_ID / TELEGRAM_API_HASH in ~/.tetherless-mac.env first."
+  fi
+  python3 "$REPO/server/mac-tg-session-setup.py" "${py_args[@]}"
   # Reload env so channel step sees the fresh TELEGRAM_SESSION.
   if [[ -n "${ENV_FILE:-}" && -f "$ENV_FILE" ]]; then
     set -a
@@ -423,7 +434,7 @@ case "$cmd" in
   stop-api) cmd_stop_api ;;
   status) cmd_status ;;
   logs) shift || true; cmd_logs "${1:-80}" ;;
-  session) shift || true; cmd_session "${1:-}" ;;
+  session) shift || true; cmd_session "$@" ;;
   channel) shift || true; cmd_channel "${1:-}" ;;
   api) cmd_api ;;
   unlock) cmd_unlock ;;

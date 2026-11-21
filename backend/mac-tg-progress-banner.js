@@ -334,8 +334,8 @@ async function renderProgressBanner({
   const isDone = !!done;
   const title = String(name || "App").trim() || "App";
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-  // Keep FastDecrypt.Bot casing — do not force uppercase.
-  const brandLabel = sanitize(brand || "FastDecrypt.Bot", 18);
+  // Top-left label next to Delvek icon is always DELvEK.NeT (FastDecrypt stays on credit / @).
+  const brandLabel = sanitize("DELvEK.NeT", 18);
   const termLines = Array.isArray(logLines) && logLines.length
     ? logLines
     : [stage || (isDone ? "done" : "starting…")];

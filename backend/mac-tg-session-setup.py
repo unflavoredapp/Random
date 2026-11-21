@@ -1,25 +1,24 @@
 #!/usr/bin/env python3
-# Brand: Tetherless · https://tetherless.dev
+# Brand: FastDecrypt · https://fastdecrypt.bot
 """
-One-time: create a Pyrogram StringSession so the Mac bot uploads IPAs as *you*
+Create a Pyrogram StringSession so the Mac bot uploads IPAs as *you*
 (Telegram Premium → ≤4 GB docs + cloud storage).
 
 WebSSH:
-  zsh ~/tetherless/server/mac-ssh.sh session
+  zsh ~/tetherless/server/mac-ssh.sh session          # QR login (recommended)
+  zsh ~/tetherless/server/mac-ssh.sh session --code   # phone + login code
 
-Or:
-  python3 -m pip install --user pyrogram tgcrypto
-  python3 server/mac-tg-session-setup.py
-
-Needs api_id / api_hash from https://my.telegram.org (same account that has Premium).
+Needs api_id / api_hash from https://my.telegram.org (same Premium account).
 Writes TELEGRAM_* into ~/.tetherless-mac.env automatically.
 """
 from __future__ import annotations
 
 import asyncio
+import base64
 import os
 import re
 import sys
+import time
 from pathlib import Path
 
 
@@ -43,7 +42,6 @@ def read_existing() -> dict[str, str]:
             k, v = s.split("=", 1)
             out[k.strip()] = v.strip().strip("'").strip('"')
         break
-    # Process env wins
     for k in ("TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION", "TELEGRAM_SESSION_STRING"):
         if os.environ.get(k):
             out[k] = os.environ[k].strip()
@@ -70,8 +68,7 @@ def upsert_env(updates: dict[str, str]) -> Path:
     for k, v in updates.items():
         if k not in seen:
             new_lines.append(f"{k}={v}")
-    text = "\n".join(new_lines).rstrip() + "\n"
-    path.write_text(text, encoding="utf-8")
+    path.write_text("\n".join(new_lines).rstrip() + "\n", encoding="utf-8")
     try:
         os.chmod(path, 0o600)
     except OSError:
@@ -79,39 +76,93 @@ def upsert_env(updates: dict[str, str]) -> Path:
     return path
 
 
-async def main() -> None:
+def print_qr(url: str) -> None:
     try:
-        from pyrogram import Client
-    except Exception:
-        print("Install: python3 -m pip install --user pyrogram tgcrypto", file=sys.stderr)
-        sys.exit(1)
+        import qrcode  # type: ignore
 
-    existing = read_existing()
-    api_id_s = existing.get("TELEGRAM_API_ID") or input("TELEGRAM_API_ID (my.telegram.org): ").strip()
-    api_hash = existing.get("TELEGRAM_API_HASH") or input("TELEGRAM_API_HASH: ").strip()
-    if not api_id_s or not api_hash:
-        print("api_id and api_hash are required.", file=sys.stderr)
-        sys.exit(1)
-    api_id = int(api_id_s)
+        qr = qrcode.QRCode(border=1)
+        qr.add_data(url)
+        qr.make(fit=True)
+        qr.print_ascii(invert=True)
+    except Exception:
+        print("(Install qrcode for ASCII QR: python3 -m pip install --user qrcode)")
+        print(f"Open on phone Telegram: {url}")
+
+
+async def login_qr(api_id: int, api_hash: str):
+    from pyrogram import Client
+    from pyrogram.errors import SessionPasswordNeeded
+    from pyrogram.raw import functions, types
+
+    app = Client(
+        name="tetherless_session_setup_qr",
+        api_id=api_id,
+        api_hash=api_hash,
+        in_memory=True,
+    )
+    await app.connect()
+    try:
+        print()
+        print("QR login — no SMS / in-app code needed.")
+        print("On your phone: Telegram → Settings → Devices → Link Desktop Device")
+        print("Scan the QR below (refreshes automatically).")
+        print()
+
+        while True:
+            try:
+                r = await app.invoke(
+                    functions.auth.ExportLoginToken(
+                        api_id=api_id,
+                        api_hash=api_hash,
+                        except_ids=[],
+                    )
+                )
+            except SessionPasswordNeeded:
+                pw = input("Two-step verification password: ").strip()
+                await app.check_password(pw)
+                break
+
+            if isinstance(r, types.auth.LoginToken):
+                token_b64 = base64.urlsafe_b64encode(r.token).decode("utf-8").rstrip("=")
+                url = f"tg://login?token={token_b64}"
+                print("\n--- scan this QR ---\n")
+                print_qr(url)
+                print(f"\nOr open: {url}")
+                print("Waiting for scan…\n")
+                wait = max(5, min(25, int(getattr(r, "expires", time.time() + 30) - time.time() - 2)))
+                await asyncio.sleep(wait)
+                continue
+            if isinstance(r, types.auth.LoginTokenMigrateTo):
+                await app._switch_dc(r.dc_id)  # noqa: SLF001 — required for QR DC migrate
+                continue
+            if isinstance(r, types.auth.LoginTokenSuccess):
+                break
+            raise RuntimeError(f"Unexpected login token response: {type(r)!r}")
+
+        me = await app.get_me()
+        session = await app.export_session_string()
+        return me, session
+    finally:
+        await app.disconnect()
+
+
+async def login_code(api_id: int, api_hash: str):
+    from pyrogram import Client
 
     print()
-    print("Logging in as your Telegram Premium user…")
-    print("Phone must be international, e.g. +15551234567 (include + and country code).")
+    print("Phone + code login…")
+    print("Phone must be international, e.g. +15551234567")
     print()
     print("Where the APP login code appears (usually NOT SMS):")
-    print("  1) Open Telegram on a device already logged in")
-    print("  2) Chat with the official account “Telegram”")
-    print("  3) Look for a NEW message like:  Login code: 12345  (digits only)")
-    print()
-    print("IGNORE messages titled “Web login code” / my.telegram.org — those are")
-    print("only for the website (api_id). They will NOT work at this prompt.")
-    print("If 2FA is on, you’ll be asked for your cloud password after the code.")
+    print("  Telegram app → official chat “Telegram” → “Login code: 12345” (digits)")
+    print("IGNORE “Web login code” / my.telegram.org messages — those will not work here.")
+    print("If nothing new appears after several tries, Ctrl+C and use QR:")
+    print("  zsh ~/tetherless/server/mac-ssh.sh session")
     print()
 
     def phone_code_callback() -> str:
         print()
-        print("→ Telegram app → chat “Telegram” → numeric “Login code: …”")
-        print("  (NOT the my.telegram.org “Web login code”)")
+        print("→ Numeric “Login code: …” only (not my.telegram.org web code)")
         return input("Enter login code: ").strip()
 
     async with Client(
@@ -123,11 +174,41 @@ async def main() -> None:
     ) as app:
         me = await app.get_me()
         session = await app.export_session_string()
-        premium = bool(getattr(me, "is_premium", False))
-        uname = getattr(me, "username", None) or ""
-        name = " ".join(
-            x for x in [getattr(me, "first_name", None) or "", getattr(me, "last_name", None) or ""] if x
-        ).strip()
+        return me, session
+
+
+async def main() -> None:
+    try:
+        from pyrogram import Client  # noqa: F401
+    except Exception:
+        print("Install: python3 -m pip install --user pyrogram tgcrypto qrcode", file=sys.stderr)
+        sys.exit(1)
+
+    args = [a.strip().lower() for a in sys.argv[1:] if a.strip()]
+    want_code = any(a in ("--code", "code", "-c") for a in args)
+
+    existing = read_existing()
+    api_id_s = existing.get("TELEGRAM_API_ID") or input("TELEGRAM_API_ID (my.telegram.org): ").strip()
+    api_hash = existing.get("TELEGRAM_API_HASH") or input("TELEGRAM_API_HASH: ").strip()
+    if not api_id_s or not api_hash:
+        print("api_id and api_hash are required.", file=sys.stderr)
+        sys.exit(1)
+    api_id = int(api_id_s)
+
+    if want_code:
+        me, session = await login_code(api_id, api_hash)
+    else:
+        try:
+            me, session = await login_qr(api_id, api_hash)
+        except Exception as e:
+            print(f"QR login failed ({e}). Falling back to phone code…", file=sys.stderr)
+            me, session = await login_code(api_id, api_hash)
+
+    premium = bool(getattr(me, "is_premium", False))
+    uname = getattr(me, "username", None) or ""
+    name = " ".join(
+        x for x in [getattr(me, "first_name", None) or "", getattr(me, "last_name", None) or ""] if x
+    ).strip()
 
     path = upsert_env(
         {
