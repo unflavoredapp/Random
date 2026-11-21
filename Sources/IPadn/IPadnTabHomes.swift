@@ -588,16 +588,24 @@ struct AccountHomeView: View {
         } else {
             ForEach(store.accounts) { account in
                 Button {
-                    store.selectAccount(id: account.id)
+                    store.selectAccountForSearch(id: account.id)
                 } label: {
                     HStack(spacing: 12) {
                         Text(String(account.email.prefix(1)).uppercased())
                             .font(.caption.weight(.bold))
                             .frame(width: 36, height: 36)
                             .background(Color.primary.opacity(0.08), in: Circle())
-                        Text(account.email)
-                            .lineLimit(1)
-                            .foregroundStyle(.primary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(account.email)
+                                .lineLimit(1)
+                                .foregroundStyle(.primary)
+                            if let code = store.storefrontCountryCode(for: account.id) {
+                                Text("Storefront \(StorefrontCountry.label(forCode: code)) — used for Search & decrypt")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
                         Spacer()
                         if account.id == store.activeAccountID {
                             Image(systemName: "checkmark")
@@ -609,7 +617,7 @@ struct AccountHomeView: View {
                 }
                 .buttonStyle(.plain)
             }
-            Text("Tap to switch the download account.")
+            Text("Tap to switch the download account. Search uses that storefront (e.g. RU for a Russia Apple ID).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Button {

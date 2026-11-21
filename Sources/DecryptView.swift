@@ -512,12 +512,26 @@ struct DecryptView: View {
                     }
                 )
 
-                // Region / platform chips (iPadn filter row).
+                // Account / region / platform chips (pick Russia account → RU search + decrypt).
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
+                        IPadnAccountFilterChip()
                         Menu {
-                            Picker("Store region", selection: $country) {
-                                ForEach(IPadnBrowserModel.countries, id: \.self) { Text($0).tag($0) }
+                            // Linked storefronts first (RU/US/…) then the rest of the region list.
+                            ForEach(
+                                IPadnBrowserModel.countriesForPicker(linked: store.linkedStorefrontCountryCodes()),
+                                id: \.self
+                            ) { code in
+                                Button {
+                                    country = code
+                                    _ = store.selectAccountMatching(countryCode: code)
+                                } label: {
+                                    if country.uppercased() == code {
+                                        Label(code, systemImage: "checkmark.circle.fill")
+                                    } else {
+                                        Text(code)
+                                    }
+                                }
                             }
                         } label: {
                             IPadnFilterChip(title: country, symbol: "globe")
@@ -538,6 +552,17 @@ struct DecryptView: View {
                                 .allowsHitTesting(false)
                                 .opacity(0.85)
                         }
+                    }
+                }
+                .onChange(of: country) { newValue in
+                    // Region chip → matching Apple ID (e.g. RU → Russia account) for Get/decrypt.
+                    _ = store.selectAccountMatching(countryCode: newValue)
+                }
+                .onChange(of: store.activeAccountID) { _ in
+                    // Account chip → keep region in sync with that storefront.
+                    if let code = store.activeStorefrontCountryCode()?.uppercased(),
+                       country.uppercased() != code {
+                        country = code
                     }
                 }
 
@@ -648,6 +673,11 @@ struct DecryptView: View {
         .onAppear {
             recentSearches = DecryptSearchHistory.load()
             IPadnOptional.registerDefaults()
+            // Align region chip with the active download account (e.g. Russia → RU).
+            if let code = store.activeStorefrontCountryCode()?.uppercased(),
+               country.uppercased() != code {
+                country = code
+            }
             consumePendingQuery()
             Task { await warmStoreSessionForNiche() }
         }

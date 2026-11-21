@@ -366,14 +366,22 @@ final class DeviceDecryptService: ObservableObject {
         guard !q.isEmpty else { return [] }
 
         let linked = AppleIDStore.shared.linkedStorefrontCountryCodes()
+        // Prefer the account the user picked in Search (e.g. Russia) over an arbitrary linked code.
+        let activeCountry = AppleIDStore.shared.activeStorefrontCountryCode()
         guard IPadnOptional.isEnabled else {
             if DecryptClient.isStoreLink(q) {
                 return try await [appInfo(url: q)]
             }
-            return try await legacyItunesSearch(q, countries: linked.isEmpty ? ["us"] : linked)
+            let countries: [String]
+            if linked.isEmpty {
+                countries = [activeCountry ?? "us"]
+            } else {
+                countries = linked
+            }
+            return try await legacyItunesSearch(q, countries: countries)
         }
 
-        let accountCountry = linked.first?.uppercased()
+        let accountCountry = (activeCountry ?? linked.first)?.uppercased()
         let country = UserDefaults.standard.string(forKey: IPadnOptional.countryKey)
             ?? accountCountry
             ?? "US"
@@ -391,9 +399,10 @@ final class DeviceDecryptService: ObservableObject {
             if !apps.isEmpty {
                 return apps.map { $0.asDecryptApp() }
             }
-            // Empty keyword search — try legacy multi-storefront iTunes as a second pass.
+            // Empty keyword search — try every linked storefront (US + RU + …).
             if let parsed = try? IPadnSearchQuery.parse(q), case .keyword = parsed {
-                return try await legacyItunesSearch(q, countries: linked.isEmpty ? ["us"] : linked)
+                let countries = linked.isEmpty ? [country.lowercased()] : linked
+                return try await legacyItunesSearch(q, countries: countries)
             }
             return []
         } catch is CancellationError {
@@ -402,7 +411,8 @@ final class DeviceDecryptService: ObservableObject {
             if DecryptClient.isStoreLink(q) {
                 return try await [appInfo(url: q)]
             }
-            return try await legacyItunesSearch(q, countries: linked.isEmpty ? ["us"] : linked)
+            let countries = linked.isEmpty ? [country.lowercased()] : linked
+            return try await legacyItunesSearch(q, countries: countries)
         }
     }
 
