@@ -273,12 +273,12 @@ cmd_session() {
     esac
   done
   echo "Installing pyrogram (Premium user uploads ≤4 GB)…"
-  python3 -m pip install --user -q pyrogram tgcrypto qrcode
+  python3 -m pip install --user -q pyrogram tgcrypto
   echo
   if (( ${#py_args[@]} )); then
-    echo "Phone + login-code mode (if codes never arrive, use QR instead — omit --code)."
+    echo "Phone + login-code mode (flaky on one iPhone — prefer default link login)."
   else
-    echo "QR login (recommended): Telegram → Settings → Devices → Link Desktop Device"
+    echo "One-phone login: open http://MAC-LAN-IP:8766/ in Safari → tap Open Telegram."
     echo "Phone-code instead: zsh $REPO/server/mac-ssh.sh session --code"
   fi
   if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" ]]; then
@@ -412,7 +412,7 @@ Tetherless Mac SSH helper (no desktop)
   zsh $REPO/server/mac-ssh.sh stop
   zsh $REPO/server/mac-ssh.sh status
   zsh $REPO/server/mac-ssh.sh logs
-  zsh $REPO/server/mac-ssh.sh session   # link YOUR Premium Telegram account (≤4 GB)
+  zsh $REPO/server/mac-ssh.sh session   # Premium login via Safari link (one iPhone OK)
   zsh $REPO/server/mac-ssh.sh session 'https://t.me/+…'  # login + wire staging channel
   zsh $REPO/server/mac-ssh.sh channel 'https://t.me/+…'  # secret staging channel (session already set)
   zsh $REPO/server/mac-ssh.sh api

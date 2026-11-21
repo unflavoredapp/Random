@@ -4,8 +4,11 @@
 Create a Pyrogram StringSession so the Mac bot uploads IPAs as *you*
 (Telegram Premium → ≤4 GB docs + cloud storage).
 
-WebSSH:
-  zsh ~/tetherless/server/mac-ssh.sh session          # QR login (recommended)
+WebSSH (one iPhone — no second camera needed):
+  zsh ~/tetherless/server/mac-ssh.sh session
+  → open the http://… link in Safari on the phone → tap “Open Telegram”
+
+Optional:
   zsh ~/tetherless/server/mac-ssh.sh session --code   # phone + login code
 
 Needs api_id / api_hash from https://my.telegram.org (same Premium account).
@@ -15,9 +18,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import http.server
 import os
 import re
+import socket
+import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -76,38 +83,107 @@ def upsert_env(updates: dict[str, str]) -> Path:
     return path
 
 
-def print_qr(url: str) -> None:
+def lan_ips() -> list[str]:
+    ips: list[str] = []
     try:
-        import qrcode  # type: ignore
-
-        qr = qrcode.QRCode(border=1)
-        qr.add_data(url)
-        qr.make(fit=True)
-        qr.print_ascii(invert=True)
+        out = subprocess.check_output(["ifconfig"], text=True, stderr=subprocess.DEVNULL)
+        for m in re.finditer(r"inet (192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)", out):
+            ip = m.group(1)
+            if ip not in ips:
+                ips.append(ip)
     except Exception:
-        print("(Install qrcode for ASCII QR: python3 -m pip install --user qrcode)")
-        print(f"Open on phone Telegram: {url}")
+        pass
+    return ips
 
 
-async def login_qr(api_id: int, api_hash: str):
+class _LoginPageState:
+    def __init__(self) -> None:
+        self.url = ""
+        self.lock = threading.Lock()
+
+    def set_url(self, url: str) -> None:
+        with self.lock:
+            self.url = url
+
+    def html(self) -> bytes:
+        with self.lock:
+            tg = self.url or "tg://"
+        body = f"""<!DOCTYPE html>
+<html><head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>FastDecrypt · Link Telegram</title>
+<style>
+body{{font-family:-apple-system,system-ui,sans-serif;background:#0b0d14;color:#e8eef8;
+margin:0;padding:28px;text-align:center}}
+a.btn{{display:inline-block;margin-top:24px;padding:16px 22px;background:#2AABEE;color:#fff;
+text-decoration:none;font-weight:700;border-radius:12px;font-size:18px}}
+p{{opacity:.85;line-height:1.45}}
+code{{word-break:break-all;font-size:12px;opacity:.7}}
+</style></head><body>
+<h1>Link Premium session</h1>
+<p>You only need this phone — tap the button to open Telegram and approve.</p>
+<p><a class="btn" href="{tg}">Open Telegram</a></p>
+<p>If the button does nothing, copy this into Safari’s address bar:</p>
+<p><code>{tg}</code></p>
+</body></html>"""
+        return body.encode("utf-8")
+
+
+def start_login_http(state: _LoginPageState, port: int = 8766):
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            data = state.html()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, fmt, *args):  # noqa: A003
+            return
+
+    server = http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    t = threading.Thread(target=server.serve_forever, daemon=True)
+    t.start()
+    return server
+
+
+async def login_link(api_id: int, api_hash: str):
+    """Authorize via tg:// link — works on one iPhone (no QR camera needed)."""
     from pyrogram import Client
     from pyrogram.errors import SessionPasswordNeeded
     from pyrogram.raw import functions, types
 
     app = Client(
-        name="tetherless_session_setup_qr",
+        name="tetherless_session_setup_link",
         api_id=api_id,
         api_hash=api_hash,
         in_memory=True,
     )
     await app.connect()
+    state = _LoginPageState()
+    httpd = None
+    port = int(os.environ.get("TELEGRAM_LOGIN_HTTP_PORT") or "8766")
     try:
+        try:
+            httpd = start_login_http(state, port=port)
+        except OSError as e:
+            print(f"(Could not bind login page on :{port}: {e})")
+            httpd = None
+
         print()
-        print("QR login — no SMS / in-app code needed.")
-        print("On your phone: Telegram → Settings → Devices → Link Desktop Device")
-        print("Scan the QR below (refreshes automatically).")
+        print("One-phone login (no QR scan needed)")
+        print("1) Keep this SSH session open")
+        print("2) On the iPhone, open ONE of these in Safari:")
+        for ip in lan_ips() or ["<mac-lan-ip>"]:
+            print(f"      http://{ip}:{port}/")
+        print("3) Tap “Open Telegram” and approve the new device")
+        print("   (Or long-press/tap the tg:// link printed below if your SSH app makes it blue)")
         print()
 
+        last_url = ""
         while True:
             try:
                 r = await app.invoke(
@@ -125,15 +201,25 @@ async def login_qr(api_id: int, api_hash: str):
             if isinstance(r, types.auth.LoginToken):
                 token_b64 = base64.urlsafe_b64encode(r.token).decode("utf-8").rstrip("=")
                 url = f"tg://login?token={token_b64}"
-                print("\n--- scan this QR ---\n")
-                print_qr(url)
-                print(f"\nOr open: {url}")
-                print("Waiting for scan…\n")
-                wait = max(5, min(25, int(getattr(r, "expires", time.time() + 30) - time.time() - 2)))
-                await asyncio.sleep(wait)
+                state.set_url(url)
+                if url != last_url:
+                    last_url = url
+                    print("Approve link (refreshes every ~20s):")
+                    print(url)
+                    print()
+                    # If Telegram Desktop/macOS is installed & logged in, this can approve too.
+                    try:
+                        subprocess.Popen(
+                            ["open", url],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                        )
+                    except Exception:
+                        pass
+                await asyncio.sleep(3)
                 continue
             if isinstance(r, types.auth.LoginTokenMigrateTo):
-                await app._switch_dc(r.dc_id)  # noqa: SLF001 — required for QR DC migrate
+                await app._switch_dc(r.dc_id)  # noqa: SLF001
                 continue
             if isinstance(r, types.auth.LoginTokenSuccess):
                 break
@@ -143,6 +229,11 @@ async def login_qr(api_id: int, api_hash: str):
         session = await app.export_session_string()
         return me, session
     finally:
+        if httpd is not None:
+            try:
+                httpd.shutdown()
+            except Exception:
+                pass
         await app.disconnect()
 
 
@@ -153,11 +244,8 @@ async def login_code(api_id: int, api_hash: str):
     print("Phone + code login…")
     print("Phone must be international, e.g. +15551234567")
     print()
-    print("Where the APP login code appears (usually NOT SMS):")
-    print("  Telegram app → official chat “Telegram” → “Login code: 12345” (digits)")
-    print("IGNORE “Web login code” / my.telegram.org messages — those will not work here.")
-    print("If nothing new appears after several tries, Ctrl+C and use QR:")
-    print("  zsh ~/tetherless/server/mac-ssh.sh session")
+    print("APP login code = digits in official “Telegram” chat (NOT my.telegram.org web codes).")
+    print("With only one phone, codes are flaky — prefer the default link login instead.")
     print()
 
     def phone_code_callback() -> str:
@@ -181,7 +269,7 @@ async def main() -> None:
     try:
         from pyrogram import Client  # noqa: F401
     except Exception:
-        print("Install: python3 -m pip install --user pyrogram tgcrypto qrcode", file=sys.stderr)
+        print("Install: python3 -m pip install --user pyrogram tgcrypto", file=sys.stderr)
         sys.exit(1)
 
     args = [a.strip().lower() for a in sys.argv[1:] if a.strip()]
@@ -199,9 +287,9 @@ async def main() -> None:
         me, session = await login_code(api_id, api_hash)
     else:
         try:
-            me, session = await login_qr(api_id, api_hash)
+            me, session = await login_link(api_id, api_hash)
         except Exception as e:
-            print(f"QR login failed ({e}). Falling back to phone code…", file=sys.stderr)
+            print(f"Link login failed ({e}). Falling back to phone code…", file=sys.stderr)
             me, session = await login_code(api_id, api_hash)
 
     premium = bool(getattr(me, "is_premium", False))
