@@ -442,7 +442,7 @@ async function sendStatus(chatId) {
       : `☁️ Upload: Premium session OK · set <code>TELEGRAM_UPLOAD_CHANNEL</code> for large IPAs`
     : sessLoaded
       ? `☁️ Upload: Premium session loaded but disabled (<code>TELEGRAM_PREMIUM_UPLOAD=0</code>)`
-      : `☁️ Upload: Bot API only (~50 MB) — session not in env (reuse DELvEK <code>TELEGRAM_SESSION</code> + restart)`;
+      : `☁️ Upload: Bot API only (~50 MB) — run <code>zsh server/mac-ssh.sh session 'https://t.me/+…'</code>`;
   const text =
     `<b>${escapeHtml(botBrandName())} status</b>\n\n` +
     `🤖 Bot: @${escapeHtml(BOT_USERNAME || "?")}\n` +
@@ -1919,7 +1919,7 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
         : "Premium session is loaded — set TELEGRAM_UPLOAD_CHANNEL to a private channel (add @bot as admin), then restart."
       : LOCAL_API
         ? `Local Bot API cap is ~${Math.round(TG_DOC_MAX / 1024 / 1024)} MB.`
-        : "Cloud Bot API caps ~50 MB. Reuse your DELvEK TELEGRAM_SESSION in ~/.tetherless-mac.env (no re-login needed if still valid), set TELEGRAM_UPLOAD_CHANNEL, restart";
+        : "Cloud Bot API caps ~50 MB. On Mac: zsh server/mac-ssh.sh session 'https://t.me/+YOUR_INVITE' (Premium login + staging channel), add @bot as channel admin, restart";
     return {
       ok: false,
       description: `IPA is ${mb} MB — ${hint}. Saved on Mac: ${filePath}`,
