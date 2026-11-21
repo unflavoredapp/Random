@@ -68,6 +68,17 @@ const ALLOWED = String(process.env.TELEGRAM_ALLOWED_IDS || "")
   .split(",")
   .map((s) => s.trim())
   .filter(Boolean);
+/** VIP buyers contact (@username without @). FastDecrypt → set TELEGRAM_VIP_CONTACT. */
+const VIP_CONTACT = String(
+  process.env.TELEGRAM_VIP_CONTACT || process.env.DELVEK_VIP_CONTACT || "mrzefie"
+).replace(/^@/, "");
+/** Telegram user ids with VIP (comma-separated). Empty = nobody has VIP yet. */
+const VIP_IDS = new Set(
+  String(process.env.TELEGRAM_VIP_IDS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 const WORK = process.env.MAC_TG_WORK_DIR || path.join(os.tmpdir(), "tetherless-mac-tg");
 const DROP = process.env.MAC_TG_DROP_DIR || path.join(os.homedir(), "tetherless-drop");
 const PREMIUM_UPLOAD = path.join(__dirname, "mac-tg-premium-upload.py");
@@ -289,6 +300,21 @@ function httpsUrl(raw, fallback) {
   return u.replace(/\/+$/, "") || fallback;
 }
 
+function botBrandName() {
+  const env = String(process.env.TELEGRAM_BOT_BRAND || "").trim();
+  if (env) return env;
+  if (/fastdecrypt/i.test(BOT_USERNAME || "")) return "FastDecrypt";
+  return "DELvEK";
+}
+
+function vipContactHandle() {
+  return VIP_CONTACT || "mrzefie";
+}
+
+function userHasVip(chatId) {
+  return VIP_IDS.has(String(chatId));
+}
+
 function siteLinkButtons() {
   const site = httpsUrl(
     process.env.DELVEK_SITE_URL || process.env.TETHERLESS_SITE_URL,
@@ -298,19 +324,95 @@ function siteLinkButtons() {
     process.env.DELVEK_PATCH_URL || process.env.TETHERLESS_PATCH_URL,
     `${site}/`
   );
-  const vip = httpsUrl(
-    process.env.DELVEK_VIP_URL || process.env.TETHERLESS_VIP_URL,
-    `${site}/vip`
-  );
+  // AppAssassin-style: Patch Help + Get VIP (VIP opens seller DM by default).
+  const vipUrl = (() => {
+    const raw = String(
+      process.env.DELVEK_VIP_URL || process.env.TETHERLESS_VIP_URL || ""
+    ).trim();
+    if (raw) return httpsUrl(raw, `https://t.me/${vipContactHandle()}`);
+    return `https://t.me/${vipContactHandle()}`;
+  })();
   return [
-    { text: "🧩 Patch", url: patch.endsWith("/") ? patch : `${patch}/` },
-    { text: "⭐ Get VIP", url: vip },
+    { text: "✨ Patch Help ↗️", url: patch.endsWith("/") ? patch : `${patch}/` },
+    { text: "⭐ Get VIP ↗️", url: vipUrl },
   ];
 }
 
-/** Final IPA buttons only: Patch · Get VIP (inline tabs under the document). */
+/** Final IPA buttons only: Patch Help · Get VIP (inline tabs under the document). */
 function resultKeyboard() {
   return { inline_keyboard: [siteLinkButtons()] };
+}
+
+function vipStatusText(chatId) {
+  const who = vipContactHandle();
+  if (userHasVip(chatId)) {
+    return (
+      `⭐ <b>VIP active</b>\n\n` +
+      `You have VIP access on this bot.\n` +
+      `Questions? Contact @${escapeHtml(who)}.`
+    );
+  }
+  return (
+    `🔐 You do not have VIP access. Contact <b>@${escapeHtml(who)}</b> to purchase VIP access.\n\n` +
+    `VIP perks include:\n` +
+    `✅ Unlimited decryptions (no daily limit)\n` +
+    `✅ No file size restrictions\n` +
+    `✅ TestFlight app decryption\n` +
+    `✅ Decrypt older app versions`
+  );
+}
+
+async function sendVip(chatId) {
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text: vipStatusText(chatId),
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "⭐ Get VIP ↗️", url: `https://t.me/${vipContactHandle()}` }],
+      ],
+    },
+  });
+}
+
+async function sendStatus(chatId) {
+  const st =
+    (fairplayBackends.backendStatus && fairplayBackends.backendStatus()) || {};
+  const decryptReady = !!(st.unfairplay && st.unfairplay.ready);
+  const modelReady = !!(st.enrollmentModel && st.enrollmentModel.ready);
+  const clearN = ipaCache.list().length;
+  const encN = ipaCache.listEncrypted().length;
+  const text =
+    `<b>${escapeHtml(botBrandName())} status</b>\n\n` +
+    `🤖 Bot: @${escapeHtml(BOT_USERNAME || "?")}\n` +
+    `⚙️ Workers: ${activeWorkers}/${MAX_WORKERS} active` +
+    (jobWaiters.length ? ` · ${jobWaiters.length} queued` : "") +
+    `\n` +
+    `🔓 Decrypt: ${decryptReady ? "ready" : "not ready"}\n` +
+    `🧠 Model: ${modelReady ? "ready" : "not ready"}\n` +
+    `📦 Cache: ${clearN} clear · ${encN} encrypted\n` +
+    `⭐ VIP: ${userHasVip(chatId) ? "yes" : "no"}`;
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  });
+}
+
+async function sendVersionHelp(chatId) {
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text:
+      `<b>/version</b> — pick an older build to decrypt.\n\n` +
+      `Paste an App Store URL, then choose a version from the list.\n` +
+      `Or send:\n` +
+      `<code>/version https://apps.apple.com/…</code>\n\n` +
+      `VIP unlocks older versions without the free-tier limits — /vip`,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+  });
 }
 
 /** Legacy Download-button tokens (pre card→IPA auto-finish). */
@@ -1543,19 +1645,22 @@ function isTestFlightUrl(t) {
 }
 
 function startScreenText() {
-  // Single /start blurb — paste links only; no Mac ops / menu clutter.
+  const brand = escapeHtml(botBrandName());
+  const handle = escapeHtml(BOT_USERNAME || "FastDecryptAI");
+  const vip = escapeHtml(vipContactHandle());
+  // Single /start blurb — paste links only; menu has /status /enc /vip /version.
   return (
-    `Hi, I'm <b>DELvEK</b>, the decryption bot. I'm fully static and capable of decrypting ` +
+    `Hi, I'm <b>${brand}</b>, the decryption bot. I'm fully static and capable of decrypting ` +
     `iOS, iPadOS, macOS, tvOS, and visionOS 26/27 apps, and I'm cute too!\n\n` +
     `Just <b>paste an App Store link</b> here and I'll send the decrypted IPA.\n` +
-    `Use /library to see decrypted apps on this Mac.\n\n` +
+    `Use /enc or /library to see decrypted apps on this Mac.\n\n` +
     `Mention me in any group or chat with:\n` +
-    `<code>@DELvEKBot &lt;App Store App Link&gt;</code>\n` +
+    `<code>@${handle} &lt;App Store App Link&gt;</code>\n` +
     `to get a download link.\n\n` +
     `Free apps work with the Mac’s App Store session. Paid apps only if that Apple ID already owns them.\n\n` +
     `There are subscription options that allow you to decrypt TestFlight betas, apps up to 4 GB, ` +
     `paid applications, older app versions, and select platforms - all without the 3 apps/day limit. ` +
-    `An HTTP API is also available for automation. Contact @mrzefie to subscribe, or if you have other questions.\n\n` +
+    `An HTTP API is also available for automation. Contact @${vip} to subscribe, or if you have other questions.\n\n` +
     `And for personal use, it's always free. Moreover, cached applications don't count towards your limit! ` +
     `However, using multiple accounts or engaging in other suspicious activity will result in a ban of all associated accounts.`
   );
@@ -3404,9 +3509,37 @@ async function handleMessage(msg) {
     return;
   }
 
-  if (/^\/library(?:@\w+)?(?:\s+(.+))?$/i.test(text)) {
-    const q = (text.match(/^\/library(?:@\w+)?(?:\s+(.+))?$/i) || [])[1] || "";
+  if (/^\/vip(?:@\w+)?\b/i.test(text)) {
+    await sendVip(chatId);
+    return;
+  }
+
+  if (/^\/status(?:@\w+)?\b/i.test(text)) {
+    await sendStatus(chatId);
+    return;
+  }
+
+  // /enc — previous decryption results (AppAssassin-style menu alias for /library).
+  if (/^\/(?:enc|library)(?:@\w+)?(?:\s+(.+))?$/i.test(text)) {
+    const q =
+      (text.match(/^\/(?:enc|library)(?:@\w+)?(?:\s+(.+))?$/i) || [])[1] || "";
     await sendLibrary(chatId, q);
+    return;
+  }
+
+  if (/^\/version(?:@\w+)?(?:\s+(.+))?$/i.test(text)) {
+    const arg = String(
+      (text.match(/^\/version(?:@\w+)?(?:\s+(.+))?$/i) || [])[1] || ""
+    ).trim();
+    const link = arg.split(/\s+/).find((t) => isStoreUrl(t));
+    if (link) {
+      await withWorker(chatId, async () => {
+        const resolved = await resolveExternalVersionId(link, "");
+        await decryptStoreUrl(chatId, link, resolved);
+      });
+      return;
+    }
+    await sendVersionHelp(chatId);
     return;
   }
 
@@ -3622,11 +3755,15 @@ async function resolveBotIdentity() {
 
 async function boot() {
   await resolveBotIdentity();
-  // /start + /library — clear any cached help/status/cache commands + default menu.
+  // AppAssassin-style Menu button: /status /enc /vip /version (+ start/library).
   await tgApi("deleteMyCommands", {}).catch(() => {});
   await tgApi("setMyCommands", {
     commands: [
-      { command: "start", description: "Start DELvEK" },
+      { command: "status", description: "Check active jobs and bot status" },
+      { command: "enc", description: "Previous decryption results — Available to all" },
+      { command: "vip", description: "View current vip status or time remaining" },
+      { command: "version", description: "Use with url to choose version to decrypt" },
+      { command: "start", description: `Start ${botBrandName()}` },
       { command: "library", description: "See decrypted apps & version counts" },
     ],
   }).catch(() => {});
