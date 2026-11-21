@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// Brand: DELvEK · https://delvek.net
+// Brand: FastDecrypt · https://fastdecrypt.bot · Telegram @FastDecryptAI (fastdecrypt.ai)
+// Legacy DELvEK · https://delvek.net still works when TELEGRAM_BOT_USERNAME is not FastDecrypt*.
 "use strict";
 /**
- * DELvEK Telegram decrypt bot (@DELvEKBot) — free App Store / TestFlight IPAs.
+ * Telegram decrypt bot — FastDecrypt (@FastDecryptAI) or DELvEK (@DELvEKBot).
+ * Site: https://fastdecrypt.bot · free App Store / TestFlight IPAs.
  *
  * Host ops (WebSSH): zsh server/mac-ssh.sh start | status | logs | session
  *
@@ -171,10 +173,33 @@ function readIpaMeta(ipaPath) {
   return meta;
 }
 
+function isFastDecryptBrand() {
+  const brand = String(process.env.TELEGRAM_BOT_BRAND || "").trim();
+  if (/fastdecrypt/i.test(brand)) return true;
+  if (/fastdecrypt/i.test(BOT_USERNAME || "")) return true;
+  const site = String(
+    process.env.FASTDECRYPT_SITE_URL ||
+      process.env.DELVEK_SITE_URL ||
+      process.env.TETHERLESS_SITE_URL ||
+      ""
+  ).toLowerCase();
+  return site.includes("fastdecrypt");
+}
+
+/** Public site — fastdecrypt.bot for FastDecrypt, delvek.net otherwise. */
+function brandSiteDefault() {
+  return isFastDecryptBrand() ? "https://fastdecrypt.bot" : "https://delvek.net";
+}
+
+/** IPA / banner mark — [FastDecrypt.bot] or [DELvEK.NeT]. */
+function brandIpaTag() {
+  return isFastDecryptBrand() ? "FastDecrypt.bot" : "DELvEK.NeT";
+}
+
 function buildIpaFileName({ name, version }) {
   const n = sanitizeFilePart(name);
   const v = version ? `_v${sanitizeFilePart(version)}` : "";
-  return `${n}${v}-[DELvEK.NeT].ipa`;
+  return `${n}${v}-[${brandIpaTag()}].ipa`;
 }
 
 /** Apple external-version-id is a long digit string — not a marketing version. */
@@ -250,11 +275,14 @@ function cleanTermLine(raw) {
 /** Rewrite legacy Tetherless / DELvEK suffixes when re-sending from cache. */
 function displayIpaFileName(name) {
   const raw = String(name || "App.ipa");
+  const tag = brandIpaTag();
   if (/\.ipa$/i.test(raw)) {
     return raw
-      .replace(/-Tetherless\.ipa$/i, "-[DELvEK.NeT].ipa")
-      .replace(/-DELvEK\.ipa$/i, "-[DELvEK.NeT].ipa")
-      .replace(/-\[DELvEK\.NeT\]\.ipa$/i, "-[DELvEK.NeT].ipa");
+      .replace(/-Tetherless\.ipa$/i, `-[${tag}].ipa`)
+      .replace(/-DELvEK\.ipa$/i, `-[${tag}].ipa`)
+      .replace(/-FastDecrypt\.ipa$/i, `-[${tag}].ipa`)
+      .replace(/-\[DELvEK\.NeT\]\.ipa$/i, `-[${tag}].ipa`)
+      .replace(/-\[FastDecrypt\.bot\]\.ipa$/i, `-[${tag}].ipa`);
   }
   return buildIpaFileName({ name: raw.replace(/\.ipa$/i, "") });
 }
@@ -303,7 +331,7 @@ function httpsUrl(raw, fallback) {
 function botBrandName() {
   const env = String(process.env.TELEGRAM_BOT_BRAND || "").trim();
   if (env) return env;
-  if (/fastdecrypt/i.test(BOT_USERNAME || "")) return "FastDecrypt";
+  if (isFastDecryptBrand()) return "FastDecrypt";
   return "DELvEK";
 }
 
@@ -317,19 +345,28 @@ function userHasVip(chatId) {
 
 function siteLinkButtons() {
   const site = httpsUrl(
-    process.env.DELVEK_SITE_URL || process.env.TETHERLESS_SITE_URL,
-    "https://delvek.net"
+    process.env.FASTDECRYPT_SITE_URL ||
+      process.env.DELVEK_SITE_URL ||
+      process.env.TETHERLESS_SITE_URL,
+    brandSiteDefault()
   );
   const patch = httpsUrl(
-    process.env.DELVEK_PATCH_URL || process.env.TETHERLESS_PATCH_URL,
+    process.env.FASTDECRYPT_PATCH_URL ||
+      process.env.DELVEK_PATCH_URL ||
+      process.env.TETHERLESS_PATCH_URL,
     `${site}/`
   );
-  // AppAssassin-style: Patch Help + Get VIP (VIP opens seller DM by default).
+  // AppAssassin-style: Patch Help + Get VIP.
+  // FastDecrypt → fastdecrypt.bot/vip; else seller DM unless DELVEK_VIP_URL is set.
   const vipUrl = (() => {
     const raw = String(
-      process.env.DELVEK_VIP_URL || process.env.TETHERLESS_VIP_URL || ""
+      process.env.FASTDECRYPT_VIP_URL ||
+        process.env.DELVEK_VIP_URL ||
+        process.env.TETHERLESS_VIP_URL ||
+        ""
     ).trim();
-    if (raw) return httpsUrl(raw, `https://t.me/${vipContactHandle()}`);
+    if (raw) return httpsUrl(raw, `${site}/vip`);
+    if (isFastDecryptBrand()) return `${site.replace(/\/+$/, "")}/vip`;
     return `https://t.me/${vipContactHandle()}`;
   })();
   return [
@@ -363,15 +400,17 @@ function vipStatusText(chatId) {
 }
 
 async function sendVip(chatId) {
+  const vipBtn = siteLinkButtons().find((b) => /VIP/i.test(b.text)) || {
+    text: "⭐ Get VIP ↗️",
+    url: `https://t.me/${vipContactHandle()}`,
+  };
   await tgApi("sendMessage", {
     chat_id: chatId,
     text: vipStatusText(chatId),
     parse_mode: "HTML",
     disable_web_page_preview: true,
     reply_markup: {
-      inline_keyboard: [
-        [{ text: "⭐ Get VIP ↗️", url: `https://t.me/${vipContactHandle()}` }],
-      ],
+      inline_keyboard: [[{ text: vipBtn.text, url: vipBtn.url }]],
     },
   });
 }
@@ -486,12 +525,14 @@ async function ensureIpaButtonTabs(chatId, messageId, { caption, replyMarkup, al
   // Only reply when explicitly allowed — default OFF so we never duplicate
   // Patch/Get VIP under an IPA that already has (or almost has) the tabs.
   if (!allowReply) {
-    console.warn("[job] IPA tabs edit failed; skipping DELvEK.NeT reply to avoid duplicate");
+    console.warn(
+      `[job] IPA tabs edit failed; skipping ${brandIpaTag()} reply to avoid duplicate`
+    );
     return false;
   }
   const reply = await tgApi("sendMessage", {
     chat_id: chatId,
-    text: "DELvEK.NeT",
+    text: brandIpaTag(),
     reply_to_message_id: mid,
     reply_markup: markup,
     disable_web_page_preview: true,
@@ -812,8 +853,8 @@ function createProgressCard(chatId) {
       pct: done ? 100 : pct,
       iconPath,
       dest: bannerFile(),
-      tag: "delvek",
-      brand: "DELvEK.NeT",
+      tag: isFastDecryptBrand() ? "fastdecrypt" : "delvek",
+      brand: brandIpaTag(),
       done: !!done,
     });
   }
@@ -2669,16 +2710,19 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
 
   // Prefer disk when cached name still says Tetherless / bare DELvEK / raw ext-id.
   const cachedName = String(entry.fileName || "");
+  const tagRe = String(brandIpaTag()).replace(/\./g, "\\.");
   const needsDelvekName =
     /Tetherless\.ipa$/i.test(cachedName) ||
-    (/DELvEK\.ipa$/i.test(cachedName) && !/\[DELvEK\.NeT\]\.ipa$/i.test(cachedName));
+    (/DELvEK\.ipa$/i.test(cachedName) && !/\[DELvEK\.NeT\]\.ipa$/i.test(cachedName)) ||
+    (/FastDecrypt\.ipa$/i.test(cachedName) && !/\[FastDecrypt\.bot\]\.ipa$/i.test(cachedName)) ||
+    (isFastDecryptBrand() && /\[DELvEK\.NeT\]\.ipa$/i.test(cachedName));
   const needsVersionRename =
-    !!version && /_v\d{6,}-\[DELvEK\.NeT\]\.ipa$/i.test(cachedName);
+    !!version && new RegExp(`_v\\d{6,}-\\[${tagRe}\\]\\.ipa$`, "i").test(cachedName);
   let fileName;
   if ((needsDelvekName || needsVersionRename) && version) {
     const baseName =
       entry.name ||
-      String(cachedName).replace(/_v[\w.-]*-\[DELvEK\.NeT\]\.ipa$/i, "") ||
+      String(cachedName).replace(/_v[\w.-]*-\[(?:DELvEK\.NeT|FastDecrypt\.bot)\]\.ipa$/i, "") ||
       "App";
     fileName = buildIpaFileName({ name: baseName, version });
   } else {
@@ -3470,7 +3514,7 @@ async function handleMessage(msg) {
   const docName = (doc && doc.file_name) || "";
   if (doc && /\.ipa$/i.test(docName)) {
     // Premium/cache echo: our clear IPA uploads come back as user documents — don't re-decrypt.
-    if (/-(?:DELvEK|Tetherless|\[DELvEK\.NeT\])\.ipa$/i.test(docName)) {
+    if (/-(?:DELvEK|Tetherless|FastDecrypt|\[DELvEK\.NeT\]|\[FastDecrypt\.bot\])\.ipa$/i.test(docName)) {
       // Clear IPA echoes (bot/Premium upload) — don't re-decrypt.
       return;
     }
@@ -3780,7 +3824,7 @@ async function boot() {
     }
   })();
   console.log(
-    `DELvEK TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · workers=${MAX_WORKERS} · decrypt=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
+    `${botBrandName()} TG bot @${BOT_USERNAME || "?"} id=${BOT_ID || "?"} · site=${brandSiteDefault()} · workers=${MAX_WORKERS} · decrypt=${!!(st.unfairplay && st.unfairplay.ready)} · model=${!!(st.enrollmentModel && st.enrollmentModel.ready)}`
   );
   console.log(
     `access=${LOCKDOWN && ALLOWED.length ? `lockdown(${ALLOWED.length} ids)` : "public"} · banner=${bannerMode}`
