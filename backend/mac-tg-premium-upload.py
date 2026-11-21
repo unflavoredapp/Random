@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-# Brand: Tetherless · https://tetherless.dev
+# Brand: FastDecrypt · https://fastdecrypt.bot
 """
 Upload a decrypted IPA as a *Telegram Premium user* (up to 4 GB).
 
 Bot API cannot use Premium limits. This script uses Pyrogram MTProto with your
 user account session.
 
+Preferred staging peer is a private channel (TELEGRAM_UPLOAD_CHANNEL) where the
+bot is an admin — then the bot copyMessage's the file out to the requester.
+
 Invoked by mac-tg-bot.js with env:
-  TG_UPLOAD_CHAT_ID   — preferred peer (bot numeric id or @username)
+  TG_UPLOAD_CHAT_ID   — preferred peer (secret channel id/@, or bot id)
   TG_UPLOAD_BOT_ID    — fallback bot id from getMe
   TG_UPLOAD_BOT_USERNAME — fallback @username from getMe
   TG_UPLOAD_FILE, TG_UPLOAD_FILENAME, TG_UPLOAD_CAPTION
   TG_UPLOAD_THUMB (optional jpg), TG_UPLOAD_REPLY_MARKUP (optional JSON)
-Prints JSON progress lines, then a final {ok:true, message_id, chat_id}.
+Prints JSON progress lines, then a final
+  {ok:true, message_id, chat_id, file_id}  (chat_id = real staging chat id).
 """
 from __future__ import annotations
 
@@ -96,7 +100,12 @@ async def main() -> None:
                     if b.get("url"):
                         buttons.append(InlineKeyboardButton(text, url=b["url"]))
                     elif b.get("callback_data"):
-                        site = os.environ.get("TETHERLESS_SITE_URL") or "https://tetherless.dev"
+                        site = (
+                            os.environ.get("FASTDECRYPT_SITE_URL")
+                            or os.environ.get("DELVEK_SITE_URL")
+                            or os.environ.get("TETHERLESS_SITE_URL")
+                            or "https://fastdecrypt.bot"
+                        )
                         buttons.append(InlineKeyboardButton(text, url=site))
                 if buttons:
                     rows.append(buttons)
@@ -106,7 +115,7 @@ async def main() -> None:
             reply_markup = None
 
     app = Client(
-        name="tetherless_premium_upload",
+        name="fastdecrypt_premium_upload",
         api_id=api_id,
         api_hash=api_hash,
         session_string=session,
@@ -189,12 +198,18 @@ async def main() -> None:
             else:
                 raise
 
+    doc = getattr(msg, "document", None)
+    file_id = getattr(doc, "file_id", None) if doc is not None else None
+    # Prefer the real Telegram chat id (channel -100… / user id) for bot copyMessage.
+    real_chat = getattr(getattr(msg, "chat", None), "id", None)
     emit(
         {
             "ok": True,
             "filename": filename,
             "message_id": getattr(msg, "id", None),
-            "chat_id": str(target),
+            "chat_id": str(real_chat if real_chat is not None else target),
+            "file_id": file_id or "",
+            "peer": str(target),
         }
     )
 

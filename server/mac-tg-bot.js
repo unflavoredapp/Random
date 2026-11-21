@@ -433,6 +433,13 @@ async function sendStatus(chatId) {
   const modelReady = !!(st.enrollmentModel && st.enrollmentModel.ready);
   const clearN = ipaCache.list().length;
   const encN = ipaCache.listEncrypted().length;
+  const premOn = preferPremiumUpload();
+  const ch = premiumUploadChannel() || "";
+  const uploadLine = premOn
+    ? ch
+      ? `☁️ Upload: Premium → channel <code>${escapeHtml(ch)}</code> → bot`
+      : `☁️ Upload: Premium → bot DM (set TELEGRAM_UPLOAD_CHANNEL for large IPAs)`
+    : `☁️ Upload: Bot API only (~50 MB) — run <code>mac-ssh.sh session</code> + set channel`;
   const text =
     `<b>${escapeHtml(botBrandName())} status</b>\n\n` +
     `🤖 Bot: @${escapeHtml(BOT_USERNAME || "?")}\n` +
@@ -442,6 +449,7 @@ async function sendStatus(chatId) {
     `🔓 Decrypt: ${decryptReady ? "ready" : "not ready"}\n` +
     `🧠 Model: ${modelReady ? "ready" : "not ready"}\n` +
     `📦 Cache: ${clearN} clear · ${encN} encrypted\n` +
+    `${uploadLine}\n` +
     `⭐ VIP: ${userHasVip(chatId) ? "yes" : "no"}`;
   await tgApi("sendMessage", {
     chat_id: chatId,
@@ -1513,12 +1521,27 @@ function premiumUploadConfigured() {
 }
 
 /**
- * Peers for Premium user → bot chat (never the numeric *user* chat_id —
- * that lands in Saved Messages). Prefer bot id from getMe; @username is
- * fallback only (env typos like ipaagentbot often 404).
+ * Staging peers for Premium user uploads.
+ * Prefer a private channel (TELEGRAM_UPLOAD_CHANNEL) where the bot is admin —
+ * Premium account posts the IPA there, then the bot copyMessage's it to the user.
+ * Falls back to DM with the bot (legacy).
  */
+function premiumUploadChannel() {
+  return String(
+    process.env.TELEGRAM_UPLOAD_CHANNEL ||
+      process.env.TELEGRAM_PREMIUM_CHANNEL ||
+      ""
+  ).trim();
+}
+
 function premiumPeerCandidates() {
   const out = [];
+  const channel = premiumUploadChannel();
+  if (channel) {
+    if (/^-?\d+$/.test(channel)) out.push(channel);
+    else out.push(channel.startsWith("@") ? channel : `@${channel.replace(/^@/, "")}`);
+  }
+  // Legacy fallback: Premium user → bot DM (only works cleanly when requester == Premium account).
   if (BOT_ID) out.push(String(BOT_ID));
   const uname = String(BOT_USERNAME || "").trim().replace(/^@/, "");
   if (uname) out.push(`@${uname}`);
@@ -1527,6 +1550,10 @@ function premiumPeerCandidates() {
 
 function premiumPeer() {
   return premiumPeerCandidates()[0] || "";
+}
+
+function premiumChannelConfigured() {
+  return !!premiumUploadChannel();
 }
 
 function premiumFailDescription(raw) {
@@ -1620,7 +1647,9 @@ function sendDocumentPremiumOnce(chatId, filePath, fileName, caption, peer, { th
           return;
         }
         if (j && typeof j.ok === "boolean") {
-          if (j.ok) j.chat_id = String(chatId);
+          // Keep staging chat_id from Python (channel / bot DM) — do NOT overwrite
+          // with the requester chatId (that broke copyMessage for other users).
+          if (j.ok && j.chat_id == null) j.chat_id = String(chatId);
           if (!j.ok && j.description) j.description = premiumFailDescription(j.description);
           finish(j);
           return;
@@ -1654,7 +1683,7 @@ function sendDocumentPremiumOnce(chatId, filePath, fileName, caption, peer, { th
         try {
           const lines = out.split(/\n/).filter(Boolean);
           const parsed = JSON.parse(lines[lines.length - 1] || "{}");
-          if (parsed && parsed.ok) parsed.chat_id = String(chatId);
+          if (parsed && parsed.ok && parsed.chat_id == null) parsed.chat_id = String(chatId);
           finish(parsed && typeof parsed.ok === "boolean" ? parsed : { ok: true, chat_id: String(chatId) });
           return;
         } catch {
@@ -1731,12 +1760,16 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
       };
     }
     const peer = premiumPeer() || "unset";
-    console.log(`[job] uploading via Premium session (${mb} MB) → ${peer}`);
+    const stageViaChannel = premiumChannelConfigured();
+    console.log(
+      `[job] uploading via Premium session (${mb} MB) → ${peer}` +
+        (stageViaChannel ? " (secret channel)" : " (bot DM fallback)")
+    );
     if (card) await card.setStage("Uploading…", 76);
     else await say(`uploading via Premium → ${peer} (${mb} MB)…`);
-    // Stage via Premium (user MTProto). User→bot messages usually have no inline
-    // tabs. Bot copies to get a file_id, then sendDocument(file_id) WITH
-    // Patch/Get VIP baked in (edit* alone is not enough on some clients).
+    // Stage via Premium user MTProto into the secret channel (or bot DM).
+    // Bot then copyMessage's from the staging chat into the requester chat and
+    // re-sends by file_id so Patch/Get VIP tabs stick.
     const markup = extras.replyMarkup || resultKeyboard();
     const prem = await sendDocumentPremium(chatId, filePath, fileName, caption || "", {
       thumbPath: extras.thumbPath,
@@ -1747,13 +1780,16 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
     });
     if (prem && prem.ok && prem.message_id) {
       const stagedId = Number(prem.message_id);
+      const stageChat = String(prem.chat_id || peer || "");
+      const keepStage =
+        String(process.env.TELEGRAM_UPLOAD_CHANNEL_KEEP || "").trim() === "1";
       let copied = null;
       for (let attempt = 0; attempt < 6; attempt++) {
         if (attempt) await new Promise((r) => setTimeout(r, 700 * attempt));
-        // Bare copy — caption/tabs come from the bot sendDocument(file_id) below.
+        // Copy FROM staging chat (channel / Premium↔bot DM) TO the requester.
         copied = await tgApi("copyMessage", {
           chat_id: chatId,
-          from_chat_id: chatId,
+          from_chat_id: stageChat,
           message_id: stagedId,
         }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
         if (!(copied && copied.ok && copied.result && copied.result.message_id)) continue;
@@ -1762,6 +1798,7 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
         const fileId =
           (copied.result.document && copied.result.document.file_id) ||
           (copied.result.video && copied.result.video.file_id) ||
+          String(prem.file_id || "") ||
           "";
 
         let finalMid = bridgeMid;
@@ -1808,36 +1845,42 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
           }
         }
 
-        await tgApi("deleteMessage", { chat_id: chatId, message_id: stagedId }).catch(() => {});
-        console.log("[job] bot produced IPA with tabs", finalMid, fileId ? "via file_id" : "via copy");
+        if (!keepStage && stageChat) {
+          await tgApi("deleteMessage", {
+            chat_id: stageChat,
+            message_id: stagedId,
+          }).catch(() => {});
+        }
+        console.log(
+          "[job] bot produced IPA with tabs",
+          finalMid,
+          fileId ? "via file_id" : "via copy",
+          `stage=${stageChat}`
+        );
         return {
           ok: true,
           premium: true,
           bot_resent: true,
+          staged_via_channel: stageViaChannel,
           message_id: finalMid,
           chat_id: String(chatId),
           result: finalResult,
         };
       }
-      // Last resort: Premium user bubble often can't take bot markup — allow one reply.
+      // Channel/bot can't copy — leave staged file; don't dump raw Premium bubble on user.
       console.warn(
-        "[job] bot copyMessage failed; keeping Premium IPA + button reply:",
-        (copied && copied.description) || "unknown"
+        "[job] bot copyMessage from stage failed:",
+        (copied && copied.description) || "unknown",
+        `stage=${stageChat} mid=${stagedId}`
       );
-      await ensureIpaButtonTabs(chatId, stagedId, {
-        caption: caption || "",
-        replyMarkup: markup,
-        allowReply: true,
-      });
       return {
-        ...prem,
-        premium: true,
-        message_id: prem.message_id,
-        chat_id: prem.chat_id || chatId,
-        result: {
-          message_id: prem.message_id,
-          document: null,
-        },
+        ok: false,
+        description:
+          `Premium uploaded to stage (${stageChat}) but bot couldn't copy to this chat. ` +
+          `Add @${BOT_USERNAME || "FastDecryptAI"} as admin on TELEGRAM_UPLOAD_CHANNEL. ` +
+          `Saved on Mac: ${filePath}`,
+        tooLarge: true,
+        bytes: stat.size,
       };
     }
     if (prem && prem.ok) {
@@ -1868,13 +1911,15 @@ async function sendDocument(chatId, filePath, fileName, caption, extras = {}) {
 
   if (stat.size > TG_DOC_MAX) {
     const hint = premiumUploadConfigured()
-      ? "Premium session upload failed / disabled and file exceeds Bot API limit."
+      ? premiumChannelConfigured()
+        ? "Premium+channel upload failed — check bot is admin on TELEGRAM_UPLOAD_CHANNEL."
+        : "Premium session present but upload failed — set TELEGRAM_UPLOAD_CHANNEL to a private channel (bot = admin)."
       : LOCAL_API
         ? `Local Bot API cap is ~${Math.round(TG_DOC_MAX / 1024 / 1024)} MB.`
-        : "Cloud Bot API caps ~50 MB. Wire your Premium user session: zsh server/mac-ssh.sh session";
+        : "Cloud Bot API caps ~50 MB. On Mac: `zsh server/mac-ssh.sh session` then set TELEGRAM_UPLOAD_CHANNEL (private channel, bot admin)";
     return {
       ok: false,
-      description: `IPA is ${mb} MB — ${hint} Saved on Mac: ${filePath}`,
+      description: `IPA is ${mb} MB — ${hint}. Saved on Mac: ${filePath}`,
       tooLarge: true,
       bytes: stat.size,
     };
@@ -4091,7 +4136,7 @@ async function boot() {
     `access=${LOCKDOWN && ALLOWED.length ? `lockdown(${ALLOWED.length} ids)` : "public"} · banner=${bannerMode}`
   );
   console.log(
-    `API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${preferPremiumUpload()} · peer=${premiumPeer() || "unset"}`
+    `API ${API_ROOT} · local=${LOCAL_API} · uploadMaxMB=${Math.round(TG_DOC_MAX / 1024 / 1024)} · premiumUser=${preferPremiumUpload()} · channel=${premiumUploadChannel() || "unset"} · peer=${premiumPeer() || "unset"}`
   );
   console.log(
     `IPA cloud cache: ${ipaCache.CACHE_DIR} (${ipaCache.list().length} clear, ${ipaCache.listEncrypted().length} encrypted)`

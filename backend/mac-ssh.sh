@@ -273,6 +273,13 @@ cmd_session() {
   fi
   python3 "$REPO/server/mac-tg-session-setup.py"
   echo
+  echo "Next (recommended for large IPAs):"
+  echo "  1) Create a private Telegram channel"
+  echo "  2) Add @${TELEGRAM_BOT_USERNAME:-FastDecryptAI} as admin (Post messages)"
+  echo "  3) Put in ~/.tetherless-mac.env:"
+  echo "       TELEGRAM_UPLOAD_CHANNEL=-100xxxxxxxxxx"
+  echo "     (forward a channel post to @userinfobot / @getidsbot to see the id)"
+  echo
   echo "Restarting bot so it uses your Premium session…"
   cmd_start
 }
