@@ -274,13 +274,28 @@ cmd_session() {
   python3 "$REPO/server/mac-tg-session-setup.py"
   echo
   echo "Next (recommended for large IPAs):"
-  echo "  1) Create a private Telegram channel"
-  echo "  2) Add @${TELEGRAM_BOT_USERNAME:-FastDecryptAI} as admin (Post messages)"
-  echo "  3) Put in ~/.tetherless-mac.env:"
-  echo "       TELEGRAM_UPLOAD_CHANNEL=-100xxxxxxxxxx"
-  echo "     (forward a channel post to @userinfobot / @getidsbot to see the id)"
+  echo "  zsh $REPO/server/mac-ssh.sh channel 'https://t.me/+YOUR_INVITE'"
+  echo "  (adds TELEGRAM_UPLOAD_CHANNEL; then make @${TELEGRAM_BOT_USERNAME:-FastDecryptAI} channel admin)"
   echo
   echo "Restarting bot so it uses your Premium session…"
+  cmd_start
+}
+
+cmd_channel() {
+  local invite="${1:-}"
+  if [[ -z "$invite" ]]; then
+    echo "Usage: zsh $REPO/server/mac-ssh.sh channel 'https://t.me/+….…'"
+    exit 1
+  fi
+  if [[ -z "${TELEGRAM_SESSION:-}${TELEGRAM_SESSION_STRING:-}" || -z "${TELEGRAM_API_ID:-}" ]]; then
+    echo "Premium session missing — reuse DELvEK TELEGRAM_SESSION in ~/.tetherless-mac.env"
+    echo "or run: zsh $REPO/server/mac-ssh.sh session"
+    exit 1
+  fi
+  python3 -m pip install --user -q pyrogram tgcrypto
+  python3 "$REPO/server/mac-tg-channel-setup.py" "$invite"
+  echo
+  echo "Restarting bot with TELEGRAM_UPLOAD_CHANNEL…"
   cmd_start
 }
 
@@ -372,6 +387,7 @@ Tetherless Mac SSH helper (no desktop)
   zsh $REPO/server/mac-ssh.sh status
   zsh $REPO/server/mac-ssh.sh logs
   zsh $REPO/server/mac-ssh.sh session   # link YOUR Premium Telegram account (≤4 GB)
+  zsh $REPO/server/mac-ssh.sh channel 'https://t.me/+…'  # secret staging channel for big IPAs
   zsh $REPO/server/mac-ssh.sh api
   zsh $REPO/server/mac-ssh.sh stop-api
   zsh $REPO/server/mac-ssh.sh unlock
@@ -380,6 +396,7 @@ Tetherless Mac SSH helper (no desktop)
 Requires $HOME/.tetherless-mac.env with TELEGRAM_BOT_TOKEN and
 TETHERLESS_KEYCHAIN_PASSWORD (dedicated keychain — works over SSH).
 Premium uploads need TELEGRAM_API_ID / HASH / SESSION (mac-ssh.sh session).
+Big IPAs also need TELEGRAM_UPLOAD_CHANNEL (mac-ssh.sh channel <invite>).
 EOF
 }
 
@@ -391,6 +408,7 @@ case "$cmd" in
   status) cmd_status ;;
   logs) shift || true; cmd_logs "${1:-80}" ;;
   session) cmd_session ;;
+  channel) shift || true; cmd_channel "${1:-}" ;;
   api) cmd_api ;;
   unlock) cmd_unlock ;;
   pull) cmd_pull ;;
