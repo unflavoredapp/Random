@@ -22,6 +22,7 @@ const fairplayBackends = require("./fairplayBackends");
 const ipatoolExtras = require("./mac-ipatool-extras");
 const ipaCache = require("./mac-tg-ipa-cache");
 const urlLog = require("./mac-tg-url-log");
+const userLog = require("./mac-tg-user-log");
 const {
   renderProgressBanner,
   renderDownloadThumb,
@@ -3423,6 +3424,7 @@ async function handleCallback(cq) {
   const chatId = cq.message && cq.message.chat && cq.message.chat.id;
   const data = String(cq.data || "");
   if (!chatId) return;
+  userLog.logCallback(cq);
   if (!chatAllowed(chatId)) {
     await tgApi("answerCallbackQuery", { callback_query_id: cq.id }).catch(() => {});
     await tgApi("sendMessage", { chat_id: chatId, text: "This bot is private." });
@@ -3505,6 +3507,7 @@ async function handleCallback(cq) {
 async function handleMessage(msg) {
   const chatId = msg.chat && msg.chat.id;
   if (!chatId) return;
+  userLog.logMessage(msg);
   if (!chatAllowed(chatId)) {
     await tgApi("sendMessage", { chat_id: chatId, text: "This bot is private." });
     return;
@@ -3799,6 +3802,10 @@ async function resolveBotIdentity() {
 
 async function boot() {
   await resolveBotIdentity();
+  userLog.pruneOldEvents();
+  console.log(
+    `User usage log: ${userLog.LOG_DIR} (${userLog.listUsers().length} users)`
+  );
   // AppAssassin-style Menu button: /status /enc /vip /version (+ start/library).
   await tgApi("deleteMyCommands", {}).catch(() => {});
   await tgApi("setMyCommands", {
