@@ -1,14 +1,16 @@
 // Brand: FastDecrypt · https://fastdecrypt.bot
 "use strict";
 /**
- * Per-user usage log for the Mac Telegram bot.
+ * Per-user usage log for Mac Telegram + Discord bots.
  *
- * Records telegram id + @username (and chat id) for every inbound message /
- * callback so WebSSH `logs` and ~/tetherless-user-log show who used the bot.
+ * Records platform user id + @username for every inbound interaction so
+ * WebSSH and ~/tetherless-user-log show who used the bots.
  *
  * Layout:
  *   ~/tetherless-user-log/users.json     — one row per user (counts, last seen)
  *   ~/tetherless-user-log/events-YYYY-MM-DD.jsonl — append-only event stream
+ *
+ * Keys: telegram users use bare numeric id; Discord users use `discord:<id>`.
  */
 const fs = require("fs");
 const os = require("os");
@@ -82,20 +84,29 @@ function summarizeAction(kind, detail) {
 
 /**
  * Log one inbound interaction. Safe to call from hot paths — never throws.
+ * @param {object} opts
+ * @param {"telegram"|"discord"} [opts.platform]
  */
-function logUse({ from, chatId, kind, detail } = {}) {
+function logUse({ from, chatId, kind, detail, platform, guildId, channelId } = {}) {
   try {
+    const plat = String(platform || "telegram").toLowerCase() === "discord" ? "discord" : "telegram";
     const user = fromUser(from);
     if (!user.id && !chatId) return null;
     const now = Date.now();
     const action = summarizeAction(kind, detail);
+    const rawId = user.id || String(chatId || "");
+    const key = plat === "discord" ? `discord:${rawId}` : rawId;
     const entry = {
       at: now,
       iso: new Date(now).toISOString(),
-      userId: user.id || String(chatId || ""),
+      platform: plat,
+      userId: key,
+      discordId: plat === "discord" ? rawId : "",
       username: user.username || "",
       name: user.name || "",
       chatId: chatId != null ? String(chatId) : "",
+      guildId: guildId != null ? String(guildId) : "",
+      channelId: channelId != null ? String(channelId) : "",
       action,
     };
 
@@ -103,13 +114,16 @@ function logUse({ from, chatId, kind, detail } = {}) {
     fs.appendFileSync(eventsPath(now), JSON.stringify(entry) + "\n");
 
     const db = loadUsers();
-    const key = entry.userId;
     const prev = db.users[key] || {};
     db.users[key] = {
       userId: key,
+      platform: plat,
+      discordId: plat === "discord" ? rawId : prev.discordId || "",
       username: user.username || prev.username || "",
       name: user.name || prev.name || "",
       lastChatId: entry.chatId || prev.lastChatId || "",
+      lastGuildId: entry.guildId || prev.lastGuildId || "",
+      lastChannelId: entry.channelId || prev.lastChannelId || "",
       uses: Number(prev.uses || 0) + 1,
       firstAt: prev.firstAt || now,
       lastAt: now,
@@ -121,11 +135,49 @@ function logUse({ from, chatId, kind, detail } = {}) {
       ? `@${user.username}`
       : user.name
         ? user.name
-        : `id:${key}`;
-    console.log(`[user] ${who} id=${key} chat=${entry.chatId || "-"} · ${action}`);
+        : `id:${rawId}`;
+    console.log(
+      `[user:${plat}] ${who} id=${rawId} chat=${entry.chatId || "-"} · ${action}`
+    );
     return entry;
   } catch (e) {
     console.warn("[user-log]", (e && e.message) || e);
+    return null;
+  }
+}
+
+/** Discord.js User / GuildMember → log row. */
+function logDiscord({ user, interaction, message, kind, detail } = {}) {
+  try {
+    const u = user || (interaction && interaction.user) || (message && message.author);
+    if (!u) return null;
+    const username = String(u.username || u.globalName || "")
+      .replace(/^@/, "")
+      .slice(0, 64);
+    const tag = typeof u.tag === "string" ? u.tag : username;
+    const guildId =
+      (interaction && interaction.guildId) ||
+      (message && message.guildId) ||
+      "";
+    const channelId =
+      (interaction && interaction.channelId) ||
+      (message && message.channelId) ||
+      "";
+    return logUse({
+      platform: "discord",
+      from: {
+        id: u.id,
+        username,
+        first_name: String(u.globalName || tag || "").slice(0, 120),
+      },
+      chatId: channelId || u.id,
+      guildId,
+      channelId,
+      kind: kind || "discord",
+      detail: detail || "",
+    });
+  } catch (e) {
+    console.warn("[user-log] discord:", (e && e.message) || e);
     return null;
   }
 }
@@ -197,6 +249,7 @@ module.exports = {
   logUse,
   logMessage,
   logCallback,
+  logDiscord,
   listUsers,
   pruneOldEvents,
 };
