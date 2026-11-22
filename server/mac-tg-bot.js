@@ -1060,6 +1060,93 @@ function sendPhotoBotApi(chatId, photoPath, caption, replyMarkup) {
   }
 }
 
+/**
+ * Smooth % buffer (same idea as Discord): display eases +1–2 toward the real
+ * target and slowly creeps ahead so the sharp card never looks stuck.
+ */
+function createPctBuffer({ paint, intervalMs = 550 }) {
+  let target = 0;
+  let display = 0;
+  let ceiling = 8;
+  let timer = null;
+  let painting = false;
+  let lastPainted = -1;
+  let stopped = false;
+
+  const paintSafe = async (p) => {
+    if (painting || stopped) return;
+    if (p === lastPainted) return;
+    painting = true;
+    lastPainted = p;
+    try {
+      await paint(p);
+    } catch {
+      /* ignore edit races */
+    } finally {
+      painting = false;
+    }
+  };
+
+  const tick = () => {
+    if (stopped) return;
+    let aim = target;
+    if (display >= target && display < ceiling) aim = Math.min(ceiling, display + 1);
+    if (display < aim) {
+      const gap = aim - display;
+      display = Math.min(aim, display + (gap >= 10 ? 2 : 1));
+    }
+    display = Math.max(0, Math.min(100, display));
+    paintSafe(display).catch(() => {});
+  };
+
+  const ensureTimer = () => {
+    if (stopped || timer) return;
+    timer = setInterval(tick, intervalMs);
+  };
+
+  return {
+    setTarget(pct, phaseCeil) {
+      if (stopped) return;
+      const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+      target = Math.max(target, p);
+      if (phaseCeil != null) {
+        ceiling = Math.max(ceiling, Math.min(99, Math.round(Number(phaseCeil) || ceiling)));
+      }
+      ceiling = Math.max(ceiling, Math.min(99, target));
+      ensureTimer();
+      tick();
+    },
+    async flush(to = 100) {
+      if (stopped) return;
+      target = Math.max(target, to);
+      ceiling = Math.max(ceiling, to);
+      while (display < to && !stopped) {
+        display = Math.min(to, display + 3);
+        await paintSafe(display);
+        await new Promise((r) => setTimeout(r, 180));
+      }
+      this.stop();
+    },
+    stop() {
+      stopped = true;
+      if (timer) clearInterval(timer);
+      timer = null;
+    },
+    get display() {
+      return display;
+    },
+  };
+}
+
+function phaseCeilForStage(stage) {
+  const s = String(stage || "");
+  if (/upload|send|brand/i.test(s)) return 99;
+  if (/decrypt/i.test(s)) return 92;
+  if (/download/i.test(s)) return 55;
+  if (/fetch|start/i.test(s)) return 14;
+  return 96;
+}
+
 /** Replace the progress card photo (URSA-style banner updates). */
 function editMessageMediaBotApi(chatId, messageId, photoPath, caption, replyMarkup) {
   const abs = path.resolve(photoPath);
@@ -1218,6 +1305,17 @@ function createProgressCard(chatId) {
     return done;
   }
 
+  const pctBuf = createPctBuffer({
+    intervalMs: 550,
+    paint: async (p) => {
+      if (closed) return;
+      lastPct = p;
+      lastEdit = Date.now();
+      console.log("[job]", lastStage || "Working…", `${p}%`);
+      await paintBanner(lastStage || "Working…", p);
+    },
+  });
+
   return {
     get name() {
       return name;
@@ -1247,6 +1345,7 @@ function createProgressCard(chatId) {
       lastPct = 4;
       pushMockStage("Fetching…", 4);
       const ok = await paintBanner("Fetching…", 4);
+      pctBuf.setTarget(4, 14);
       if (ok) return;
       // Single fallback photo — still no caption text under it.
       if (!messageId && iconPath) {
@@ -1264,15 +1363,16 @@ function createProgressCard(chatId) {
       if (!v || isExternalVersionId(v)) return;
       if (v === version) return;
       version = v;
-      const p =
-        pct != null
-          ? Math.max(lastPct < 0 ? 0 : lastPct, Math.max(0, Math.min(99, Math.round(Number(pct) || 0))))
-          : lastPct < 0
-            ? 0
-            : lastPct;
-      lastPct = p;
-      if (stage) lastStage = stage;
-      await paintBanner(stage || lastStage || "Working…", p);
+      if (stage) {
+        lastStage = stage;
+        pushMockStage(stage, pctBuf.display || lastPct || 0);
+      }
+      if (pct != null) {
+        const raw = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
+        pctBuf.setTarget(raw, phaseCeilForStage(stage || lastStage));
+      } else {
+        await paintBanner(lastStage || "Working…", Math.max(0, pctBuf.display || lastPct || 0));
+      }
     },
     /** Swap to an IPA-extracted icon (this build’s artwork) and repaint. */
     async setIcon(nextIcon, stage, pct) {
@@ -1281,38 +1381,28 @@ function createProgressCard(chatId) {
       if (!next || !fs.existsSync(next)) return;
       next = (await ensureCordIcon(next)) || next;
       iconPath = next;
-      const p =
-        pct != null
-          ? Math.max(lastPct < 0 ? 0 : lastPct, Math.max(0, Math.min(99, Math.round(Number(pct) || 0))))
-          : lastPct < 0
-            ? 0
-            : lastPct;
-      lastPct = p;
-      if (stage) lastStage = stage;
-      await paintBanner(stage || lastStage || "Working…", p);
+      if (stage) {
+        lastStage = stage;
+        pushMockStage(stage, pctBuf.display || lastPct || 0);
+      }
+      if (pct != null) {
+        const raw = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
+        pctBuf.setTarget(raw, phaseCeilForStage(stage || lastStage));
+      } else {
+        await paintBanner(lastStage || "Working…", Math.max(0, pctBuf.display || lastPct || 0));
+      }
     },
     get iconPath() {
       return iconPath;
     },
     async setStage(stage, pct) {
       if (closed) return;
-      // Never regress: upload heartbeats / stage floors (76–80) used to yank 90% → 70%.
       const raw = Math.max(0, Math.min(99, Math.round(Number(pct) || 0)));
-      const p = Math.max(lastPct < 0 ? 0 : lastPct, raw);
-      const now = Date.now();
-      const stageChanged = stage && stage !== lastStage;
-      const logged = stage ? pushMockStage(stage, p) : false;
-      // Paint sooner when the terminal gets a new line; still throttle pct-only spam.
-      if (!stageChanged && !logged && p < lastPct + 3 && now - lastEdit < 1800) return;
-      if (!stageChanged && logged && now - lastEdit < 700) {
-        lastPct = p;
-        return;
+      if (stage) {
+        if (stage !== lastStage) lastStage = stage;
+        pushMockStage(stage, Math.max(pctBuf.display || 0, raw));
       }
-      lastEdit = now;
-      lastPct = p;
-      if (stage) lastStage = stage;
-      console.log("[job]", stage || lastStage, `${p}%`);
-      await paintBanner(stage || lastStage, p);
+      pctBuf.setTarget(raw, phaseCeilForStage(stage || lastStage));
     },
     /**
      * Map backend say() → stage/% only. Terminal shows safe mock lines —
@@ -1321,22 +1411,19 @@ function createProgressCard(chatId) {
     async fromBackendLine(line) {
       const t = String(line || "");
       let stage = lastStage || "Working…";
-      let pct = Math.max(lastPct < 0 ? 0 : lastPct, 12);
+      let pct = 12;
       if (/ipatool|download|encrypted IPA cache/i.test(t)) {
         stage = "Downloading…";
         pct = 28;
       } else if (/unfairplay|decrypt|FairPlay|model|Tetherless decrypt/i.test(t)) {
         stage = "Decrypting…";
-        pct = 55;
+        pct = 58;
       } else if (/produced|done/i.test(t)) {
         stage = "Decrypting…";
-        pct = 72;
+        pct = 78;
       } else if (/upload/i.test(t)) {
         stage = "Uploading…";
-        pct = Math.max(lastPct, 80);
-      } else {
-        // Unknown backend chatter — nudge % only, no terminal dump.
-        return this.setStage(stage, pct);
+        pct = 82;
       }
       return this.setStage(stage, pct);
     },
@@ -1345,12 +1432,19 @@ function createProgressCard(chatId) {
       const p = 80 + Math.round((Math.max(0, Math.min(100, pct)) / 100) * 19);
       return this.setStage("Uploading…", p);
     },
+    /** Ease displayed % up to `to` before promoting the card to an IPA. */
+    async flush(to = 100) {
+      if (closed) return;
+      await pctBuf.flush(to);
+      lastPct = to;
+    },
     /**
      * Release the progress photo without deleting it (after it became the IPA).
      * Drains paint queue first so a late Uploading… paint can't resurrect the card.
      */
     async release() {
       closed = true;
+      pctBuf.stop();
       await paintChain.catch(() => {});
       messageId = 0;
       hasPhoto = false;
@@ -1365,6 +1459,7 @@ function createProgressCard(chatId) {
     },
     async clear() {
       closed = true;
+      pctBuf.stop();
       await paintChain.catch(() => {});
       if (messageId) {
         await tgApi("deleteMessage", { chat_id: chatId, message_id: messageId }).catch(() => {});
@@ -1385,6 +1480,7 @@ function createProgressCard(chatId) {
       await this.clear();
     },
     async fail(err) {
+      pctBuf.stop();
       if (closed) {
         await tgApi("sendMessage", {
           chat_id: chatId,
@@ -3391,6 +3487,9 @@ async function deliverResult(chatId, result, opts = {}) {
   }
 
   if (card) await card.setStage("Uploading…", 92);
+  if (card && typeof card.flush === "function") {
+    await card.flush(100).catch(() => {});
+  }
 
   // Can't upload through Telegram (cloud Bot ~50 MB / Premium 4 GB) → HTTPS download.
   // Skips broken Premium-session login entirely when MAC_PUBLIC_BASE / api tunnel is up.
@@ -3507,6 +3606,7 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
       reply_markup: openMarkup,
     }).catch(() => {});
     await ensureIpaButtonTabs(chatId, mid, { caption: text, replyMarkup: openMarkup });
+    if (card && typeof card.flush === "function") await card.flush(100).catch(() => {});
     if (card && typeof card.release === "function") await card.release();
     console.log("[job] oversized IPA → download link on card", url);
     return { ok: true, url, inPlace: true };
@@ -3567,6 +3667,7 @@ async function promoteCardToIpa(chatId, cardMid, { fileId, disk, fileName, capti
   }
   // Large file_id edits often drop inline tabs — force Patch/VIP (reply fallback OK).
   await ensureIpaButtonTabs(chatId, cardMid, { caption, replyMarkup: markup });
+  if (card && typeof card.flush === "function") await card.flush(100).catch(() => {});
   if (card && typeof card.release === "function") await card.release();
   console.log("[job] sharp card → IPA document", cardMid, fileName);
   return edited;
