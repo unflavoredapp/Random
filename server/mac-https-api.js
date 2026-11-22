@@ -4,13 +4,13 @@
 /**
  * Tetherless Mac backup decrypt HTTPS API (App → Decrypt site URL).
  *
- * Run via WebSSH (dedicated keychain) behind Cloudflare tunnel:
+ * Run via WebSSH (dedicated keychain); public host is fastdecrypt.bot:
  *   zsh server/mac-ssh.sh api
  *   source ~/.tetherless-mac.env
  *   node server/mac-https-api.js
- *   # other terminal: cloudflared tunnel --url http://127.0.0.1:8787
+ *   # proxy https://fastdecrypt.bot → http://127.0.0.1:8787
  *
- * Then in the iOS app: FairPlay Decrypt → Decrypt site URL → https://….trycloudflare.com/
+ * Then in the iOS app: FairPlay Decrypt → Decrypt site URL → https://fastdecrypt.bot/
  *
  * Auth: accepts the app's Bearer token when MAC_API_OPEN=1 (default on Mac backup).
  * Optional: MAC_API_BEARER=secret to require that exact token instead.
@@ -425,7 +425,8 @@ async function handle(req, res) {
     return json(res, 200, await runTgAuth("logout", {}));
   }
 
-  // Open-in bridge: Discord Link buttons → custom schemes (TrollStore / Feather / …).
+  // Open-in bridge: Discord/Telegram → custom schemes (TrollStore / Feather / …).
+  // /open/menu?u=… = HTML dropdown; /open/<app>?u=… = single-app handoff.
   const openMatch = /^\/open\/([a-z0-9-]+)$/i.exec(p);
   if (openMatch && req.method === "GET") {
     let openIn;
@@ -434,12 +435,20 @@ async function handle(req, res) {
     } catch (e) {
       return fail(res, 500, "Open-in helper missing");
     }
-    const targetId = openMatch[1];
+    const targetId = openMatch[1].toLowerCase();
     const ipa = openIn.sanitizeIpaUrl(u.searchParams.get("u") || u.searchParams.get("url") || "");
-    if (!ipa || !openIn.targetById(targetId)) {
-      return fail(res, 400, "Need /open/<trollstore|feather|esign|flarestore|shrubsign>?u=https://…ipa");
+    if (!ipa) {
+      return fail(res, 400, "Need /open/menu?u=https://…ipa or /open/<app>?u=…");
     }
-    const html = openIn.bridgeHtml({ targetId, ipaHttps: ipa });
+    const html =
+      targetId === "menu"
+        ? openIn.menuHtml(ipa)
+        : openIn.targetById(targetId)
+          ? openIn.bridgeHtml({ targetId, ipaHttps: ipa })
+          : null;
+    if (!html) {
+      return fail(res, 400, "Need /open/<trollstore|feather|esign|flarestore|shrubsign|menu>?u=https://…ipa");
+    }
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
@@ -692,8 +701,8 @@ const server = http.createServer((req, res) => {
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Tetherless Mac HTTPS API on http://127.0.0.1:${PORT}`);
   console.log(`host=${fp.host} decrypt=${!!(fp.unfairplay && fp.unfairplay.ready)} model=${!!(fp.enrollmentModel && fp.enrollmentModel.ready)}`);
-  console.log("Expose with: cloudflared tunnel --url http://127.0.0.1:" + PORT);
-  console.log("Then set iOS Decrypt site URL to that https://….trycloudflare.com/");
+  console.log("Public base default: https://fastdecrypt.bot (proxy /d/ and /open/ here on :" + PORT + ")");
+  console.log("Optional: MAC_USE_CLOUDFLARED=1 for a temporary trycloudflare tunnel.");
   try {
     ipatoolExtras.startPrefetchLoop();
     const sess = ipatoolExtras.sessionWatch({ force: true });
