@@ -124,7 +124,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-enomem",
             title: "Not enough memory (mremap ENOMEM / Jetsam)",
-            summary: "On-device FairPlay ran out of RAM mapping the binary. Charge the device, close other apps, keep FastDecryptBot in the foreground, then retry — or use Phone Worker / unfairplay for large cryptsizes. Skip TestFlight / Apple system apps. AppAssassin can bounce large jobs to the backup server automatically.",
+            summary: "On-device FairPlay ran out of RAM during mremap (the full crypt window still has to map once; page capture is streamed). Charge the device, close other apps, keep FastDecryptBot in the foreground, re-run Get so you have the latest companion, then retry — or use Phone Worker / unfairplay.",
             matches: [
                 "enomem",
                 "not enough memory",
