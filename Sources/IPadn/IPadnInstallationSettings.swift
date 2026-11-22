@@ -35,6 +35,7 @@ struct IPadnInstallationSettingsView: View {
     @State private var checkMessage: String?
     @State private var ensuringAppleIDCert = false
     @State private var showCertificatesManager = false
+    @State private var showPortalTwoFactor = false
     @State private var certStatus: String?
 
     var body: some View {
@@ -156,6 +157,12 @@ struct IPadnInstallationSettingsView: View {
         .fullScreenCover(isPresented: $showCertificatesManager) {
             CertificatesScreen()
         }
+        .sheet(isPresented: $showPortalTwoFactor) {
+            PortalSigningTwoFactorSheet {
+                showPortalTwoFactor = false
+                Task { await ensureAppleIDCert(afterPortalCode: true) }
+            }
+        }
         .alert("Installation settings", isPresented: Binding(
             get: { issue != nil },
             set: { if !$0 { issue = nil } }
@@ -174,7 +181,7 @@ struct IPadnInstallationSettingsView: View {
             if appleID.isSignedIn {
                 LabeledContent("Apple ID", value: appleID.email)
                 Button {
-                    Task { await ensureAppleIDCert() }
+                    Task { await ensureAppleIDCert(afterPortalCode: false) }
                 } label: {
                     HStack {
                         Label(
@@ -187,6 +194,13 @@ struct IPadnInstallationSettingsView: View {
                     }
                 }
                 .disabled(ensuringAppleIDCert)
+                if appleID.authPhase == .awaitingTwoFactor {
+                    Button {
+                        showPortalTwoFactor = true
+                    } label: {
+                        Label("Enter Developer Portal code…", systemImage: "lock.shield")
+                    }
+                }
             } else {
                 Label("Sign in under Account to create a free 7-day development certificate", systemImage: "person.crop.circle.badge.exclamationmark")
                 Button {
@@ -288,15 +302,28 @@ struct IPadnInstallationSettingsView: View {
         .padding(.vertical, 4)
     }
 
-    private func ensureAppleIDCert() async {
+    private func ensureAppleIDCert(afterPortalCode: Bool) async {
         ensuringAppleIDCert = true
         defer { ensuringAppleIDCert = false }
         do {
-            // Explicit Create / Refresh always remints — SideStore-style revoke + CSR.
-            let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate(forceRefresh: true)
+            // Create (no linked cert) builds fresh; Refresh remints. Never force-wipe a
+            // still-valid cert just because Create was tapped after a portal glitch.
+            let force = linkedAppleIDCert != nil || afterPortalCode
+            let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate(forceRefresh: force)
             certStatus = "Ready: \(cert.name)"
+            showPortalTwoFactor = false
+        } catch AppleAuthError.needsTwoFactor {
+            certStatus = "Allow the Developer Portal prompt, then enter the code."
+            showPortalTwoFactor = true
         } catch {
             let text = error.localizedDescription
+            if text.localizedCaseInsensitiveContains("two-factor")
+                || text.localizedCaseInsensitiveContains("verification code")
+                || text.contains("2FA") {
+                certStatus = "Allow the Developer Portal prompt, then enter the code."
+                showPortalTwoFactor = true
+                return
+            }
             // Portal 1200 / free-tier blocks — point at custom import instead of a dead end.
             if text.contains("1200") || text.localizedCaseInsensitiveContains("not allowed to perform") {
                 issue = text + "\n\nUse Import custom .p12 + mobileprovision below — companion signing will fall back to that cert."
@@ -340,5 +367,120 @@ struct IPadnInstallationSettingsView: View {
             checkMessage = "Pairing is saved. Select Native and connect VPN before installing."
         }
     }
-
 }
+
+// MARK: - Portal 2FA for 7-day cert create
+
+/// Dedicated sheet so Create 7-day cert can finish GrandSlam without dumping the user
+/// back to a dead-end alert when portal tokens need Allow + code.
+private struct PortalSigningTwoFactorSheet: View {
+    var onFinished: () -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var store = AppleIDStore.shared
+    @State private var code = ""
+    @State private var busy = false
+    @State private var failure: String?
+    @State private var didRequestPush = false
+
+    private var accountLabel: String {
+        let email = store.email.trimmingCharacters(in: .whitespacesAndNewlines)
+        return email.isEmpty ? "your Apple Account" : email
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 18) {
+                    IPadnVerificationStep(
+                        account: accountLabel,
+                        code: $code,
+                        busy: busy,
+                        issue: failure ?? store.lastError,
+                        submitTitle: "Verify & Create Certificate",
+                        sent: GSAAuthClient.shared.twoFactorCodeAlreadySent || didRequestPush,
+                        stepLabel: "Developer Portal · 7-day cert",
+                        footnote: "This Allow is only for signing certificates. Store downloads stay signed in.",
+                        resend: { Task { await sendAllow(force: true) } },
+                        submit: { submit() },
+                        changeAccount: {
+                            store.clearPendingTwoFactorUI()
+                            dismiss()
+                        }
+                    )
+                }
+                .padding(20)
+            }
+            .background(Theme.bg.ignoresSafeArea())
+            .navigationTitle("Portal signing")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+            }
+            .task {
+                guard !didRequestPush else { return }
+                didRequestPush = true
+                if GSAAuthClient.shared.hasPendingTwoFactor,
+                   GSAAuthClient.shared.twoFactorCodeAlreadySent {
+                    return
+                }
+                await sendAllow(force: false)
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .preferredColorScheme(.dark)
+    }
+
+    private func sendAllow(force: Bool) async {
+        busy = true
+        failure = nil
+        defer { busy = false }
+        if force, GSAAuthClient.shared.hasPendingTwoFactor {
+            await store.requestTrustedDevicePush(forStoreUnlock: false, force: true)
+            didRequestPush = true
+            if let err = store.lastError, !err.isEmpty { failure = err }
+            return
+        }
+        do {
+            _ = try await store.refreshPortalSession()
+            // No 2FA needed — portal is ready; continue cert create.
+            onFinished()
+            dismiss()
+        } catch AppleAuthError.needsTwoFactor {
+            didRequestPush = true
+            failure = nil
+        } catch {
+            if GSAAuthClient.shared.hasPendingTwoFactor {
+                didRequestPush = true
+                failure = nil
+            } else {
+                failure = error.localizedDescription
+            }
+        }
+    }
+
+    private func submit() {
+        let digits = code.filter(\.isNumber)
+        guard digits.count == 6 else { return }
+        busy = true
+        failure = nil
+        Task {
+            defer { busy = false }
+            do {
+                _ = try await store.submitPortalTwoFactor(code: digits)
+                code = ""
+                onFinished()
+                dismiss()
+            } catch AppleAuthError.needsTwoFactor {
+                failure = "Need a fresh Allow — tap Resend, then enter the new code."
+                code = ""
+            } catch {
+                failure = store.lastError ?? error.localizedDescription
+                code = ""
+            }
+        }
+    }
+}
+
