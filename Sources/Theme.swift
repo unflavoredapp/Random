@@ -31,7 +31,7 @@ nonisolated enum Theme {
     static var accent: Color { Color(hex: accentHex) }
 
     static let appName    = TetherlessBrand.name
-    static let appVersion = "3.7"
+    static let appVersion = "3.8"
     /// Version of the local signing engine, shown under the ADID in Settings.
     static let trustCoreVersion = "1.6"
     static let owner      = TetherlessBrand.siteHost

@@ -28,7 +28,7 @@ enum AppleSystemAppGate {
            blockedAdams.contains(adam) {
             return true
         }
-        if let fromURL = adamId(fromStoreURL: storeURL ?? ""), blockedAdams.contains(fromURL) {
+        if let fromURL = Self.adamId(fromStoreURL: storeURL ?? ""), blockedAdams.contains(fromURL) {
             return true
         }
         return false
