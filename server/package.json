@@ -3,6 +3,7 @@
   "private": true,
   "description": "MacDuty Telegram decrypt bot deps (progress banners via sharp)",
   "dependencies": {
+    "discord.js": "^14.28.1",
     "sharp": "^0.33.5"
   }
 }

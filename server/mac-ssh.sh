@@ -40,6 +40,8 @@ RUN_DIR="${MAC_SSH_RUN_DIR:-$HOME/tetherless-run}"
 mkdir -p "$RUN_DIR"
 BOT_PID="$RUN_DIR/bot.pid"
 BOT_LOG="$RUN_DIR/bot.log"
+DISCORD_PID="$RUN_DIR/discord.pid"
+DISCORD_LOG="$RUN_DIR/discord.log"
 API_PID="$RUN_DIR/api.pid"
 API_LOG="$RUN_DIR/api.log"
 CF_PID="$RUN_DIR/cloudflared.pid"
@@ -124,9 +126,12 @@ cmd_unlock() {
 
 cmd_stop() {
   stop_pidfile "$BOT_PID" "bot"
+  stop_pidfile "$DISCORD_PID" "discord"
   # Also kill stragglers from desktop launches
   pkill -f "node server/mac-tg-bot.js" 2>/dev/null || true
   pkill -f "node.*/mac-tg-bot.js" 2>/dev/null || true
+  pkill -f "node server/mac-discord-bot.js" 2>/dev/null || true
+  pkill -f "node.*/mac-discord-bot.js" 2>/dev/null || true
 }
 
 cmd_stop_api() {
@@ -141,45 +146,65 @@ cmd_start() {
   unlock_keychain
   cmd_stop
   cd "$REPO"
-  if [[ -z "${TELEGRAM_BOT_TOKEN:-}" ]]; then
-    echo "TELEGRAM_BOT_TOKEN missing in $ENV_FILE"
+  if [[ -z "${TELEGRAM_BOT_TOKEN:-}" && -z "${DISCORD_BOT_TOKEN:-}" ]]; then
+    echo "Need TELEGRAM_BOT_TOKEN and/or DISCORD_BOT_TOKEN in $ENV_FILE"
     exit 1
   fi
-  # Progress banners need sharp (Home Screen circle card). Install if missing.
+  # Progress banners + Discord bot deps.
   if [[ -f server/package.json ]]; then
-    if [[ ! -d server/node_modules/sharp ]] || ! node -e "require('./server/node_modules/sharp')" 2>/dev/null; then
-      echo "Installing server deps (sharp)…"
-      (cd server && npm install --omit=dev) || echo "npm install failed — banners will fall back to prior card"
+    if [[ ! -d server/node_modules/sharp ]] || ! node -e "require('./server/node_modules/sharp')" 2>/dev/null \
+      || [[ -n "${DISCORD_BOT_TOKEN:-}" && ! -d server/node_modules/discord.js ]]; then
+      echo "Installing server deps (sharp / discord.js)…"
+      (cd server && npm install --omit=dev) || echo "npm install failed — check server/package.json"
     fi
   fi
-  # Public by default — lockdown only when TELEGRAM_LOCKDOWN=1.
-  if [[ "${TELEGRAM_LOCKDOWN:-}" == "1" ]]; then
-    echo "Access: lockdown (TELEGRAM_ALLOWED_IDS)"
-  else
-    echo "Access: public (anyone who messages)"
-  fi
-  nohup node server/mac-tg-bot.js >>"$BOT_LOG" 2>&1 &
-  echo $! >"$BOT_PID"
-  sleep 1
-  # Public HTTPS for big-IPA /d/ links + /tg-login web admin (decrypt.team-style).
+  # Public HTTPS for big-IPA /d/ links (Discord + Telegram).
   if ! alive_pid "$API_PID" || ! alive_pid "$CF_PID"; then
-    echo "Starting Mac API + Cloudflare for /tg-login and IPA downloads…"
+    echo "Starting Mac API + Cloudflare for IPA downloads…"
     cmd_api
   fi
-  if alive_pid "$BOT_PID"; then
-    echo "Bot started (pid $(cat "$BOT_PID")) · workers=${MAC_TG_WORKERS:-3}"
-    echo "Logs: tail -f $BOT_LOG"
-    echo "Stop: zsh $REPO/server/mac-ssh.sh stop"
-    if [[ -n "${MAC_PUBLIC_BASE:-}" ]]; then
-      echo "Telegram web login: ${MAC_PUBLIC_BASE%/}/tg-login"
+  local started=0
+  if [[ -n "${TELEGRAM_BOT_TOKEN:-}" ]]; then
+    if [[ "${TELEGRAM_LOCKDOWN:-}" == "1" ]]; then
+      echo "Telegram: lockdown (TELEGRAM_ALLOWED_IDS)"
+    else
+      echo "Telegram: public"
     fi
-    # Confirm the running tree has the circle banner (not the old pill card).
-    grep -q 'homescreenOverlaySvg' "$REPO/server/mac-tg-progress-banner.js" 2>/dev/null \
-      && echo "Banner: homescreen-circle OK" \
-      || echo "WARN: banner file looks legacy — pull may have failed"
+    nohup node server/mac-tg-bot.js >>"$BOT_LOG" 2>&1 &
+    echo $! >"$BOT_PID"
+    sleep 1
+    if alive_pid "$BOT_PID"; then
+      echo "Telegram bot pid=$(cat "$BOT_PID") · log: $BOT_LOG"
+      started=1
+    else
+      echo "Telegram bot failed — last log lines:"
+      tail -n 40 "$BOT_LOG" || true
+    fi
   else
-    echo "Bot failed to stay up — last log lines:"
-    tail -n 40 "$BOT_LOG" || true
+    rm -f "$BOT_PID"
+    echo "Telegram: skipped (no TELEGRAM_BOT_TOKEN)"
+  fi
+  if [[ -n "${DISCORD_BOT_TOKEN:-}" ]]; then
+    echo "Discord: FastDecrypt"
+    : >"$DISCORD_LOG"
+    nohup node server/mac-discord-bot.js >>"$DISCORD_LOG" 2>&1 &
+    echo $! >"$DISCORD_PID"
+    sleep 2
+    if alive_pid "$DISCORD_PID"; then
+      echo "Discord bot pid=$(cat "$DISCORD_PID") · log: $DISCORD_LOG"
+      started=1
+    else
+      echo "Discord bot failed — last log lines:"
+      tail -n 40 "$DISCORD_LOG" || true
+    fi
+  else
+    rm -f "$DISCORD_PID"
+  fi
+  if [[ -n "${MAC_PUBLIC_BASE:-}" ]]; then
+    echo "Public API: ${MAC_PUBLIC_BASE%/}/  · tg-login: ${MAC_PUBLIC_BASE%/}/tg-login"
+  fi
+  echo "Stop: zsh $REPO/server/mac-ssh.sh stop"
+  if [[ "$started" -eq 0 ]]; then
     exit 1
   fi
 }
@@ -267,8 +292,11 @@ cmd_api() {
 
 cmd_logs() {
   local n="${1:-80}"
-  echo "=== bot ($BOT_LOG) ==="
-  tail -n "$n" "$BOT_LOG" 2>/dev/null || echo "(no bot log yet)"
+  echo "=== telegram ($BOT_LOG) ==="
+  tail -n "$n" "$BOT_LOG" 2>/dev/null || echo "(no telegram log yet)"
+  echo
+  echo "=== discord ($DISCORD_LOG) ==="
+  tail -n "$n" "$DISCORD_LOG" 2>/dev/null || echo "(no discord log yet)"
 }
 
 cmd_session() {
@@ -354,9 +382,14 @@ cmd_status() {
   echo "repo:   $REPO"
   echo "env:    ${ENV_FILE:-none}"
   if alive_pid "$BOT_PID"; then
-    echo "bot:    running pid $(cat "$BOT_PID")"
+    echo "telegram: running pid $(cat "$BOT_PID")"
   else
-    echo "bot:    stopped"
+    echo "telegram: stopped"
+  fi
+  if alive_pid "$DISCORD_PID"; then
+    echo "discord:  running pid $(cat "$DISCORD_PID")"
+  else
+    echo "discord:  stopped${DISCORD_BOT_TOKEN:+ (token set — try start)}"
   fi
   if [[ -n "${TELEGRAM_SESSION:-}${TELEGRAM_SESSION_STRING:-}" && -n "${TELEGRAM_API_ID:-}" ]]; then
     local flag="${TELEGRAM_PREMIUM_UPLOAD:-1}"
@@ -445,10 +478,10 @@ Tetherless Mac SSH helper (no desktop)
   zsh $REPO/server/mac-ssh.sh unlock
   zsh $REPO/server/mac-ssh.sh pull
 
-Requires $HOME/.tetherless-mac.env with TELEGRAM_BOT_TOKEN and
-TETHERLESS_KEYCHAIN_PASSWORD (dedicated keychain — works over SSH).
-Premium uploads need TELEGRAM_API_ID / HASH / SESSION (mac-ssh.sh session).
-Big IPAs also need TELEGRAM_UPLOAD_CHANNEL (mac-ssh.sh channel <invite>).
+Requires $HOME/.tetherless-mac.env with TELEGRAM_BOT_TOKEN and/or DISCORD_BOT_TOKEN
+plus TETHERLESS_KEYCHAIN_PASSWORD (dedicated keychain — works over SSH).
+Discord: rename app to FastDecrypt, enable Message Content Intent, invite bot.
+Never commit bot tokens — put them only in ~/.tetherless-mac.env on the Mac.
 EOF
 }
 
