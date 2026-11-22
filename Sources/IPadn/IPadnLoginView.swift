@@ -165,7 +165,7 @@ struct IPadnVerificationStep: View {
         .alert("Get a verification code", isPresented: $showingHelp) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("Tetherless signs in as a MacBook so Apple’s Allow sheet (with a map) and the 6-digit code appear on this iPhone.\n1. Tap Allow on that sheet, then type the code below.\n2. Turn Focus / Do Not Disturb off if nothing appears.\n3. Tap Resend Code for a fresh MacBook Allow — don’t pull the code only from another device unless this phone never shows the map sheet.")
+            Text("AppAssassin signs in as a MacBook so Apple’s Allow sheet (with a map) and the 6-digit code appear on this iPhone.\n1. Tap Allow on that sheet, then type the code below before anything else.\n2. Turn Focus / Do Not Disturb off if nothing appears.\n3. Tap Resend Code only if you need a fresh Allow — a second Allow burns the first code.")
         }
     }
 }
@@ -236,7 +236,7 @@ struct IPadnLoginView: View {
                         submitTitle: "Verify & Sign In",
                         sent: allowPushSent,
                         stepLabel: "Step 1 of 2 · Apple ID",
-                        footnote: "Allow uses the MacBook sign-in style so the map sheet appears on this iPhone. If Store downloads still need access after this, you’ll get a second Allow — that’s step 2.",
+                        footnote: "Allow uses the MacBook sign-in style so the map sheet appears on this iPhone. Enter that code here first. If Store still needs access afterward, tap Unlock Store downloads on Account (step 2) — don’t stack a second Allow yet.",
                         resend: resendCode,
                         submit: submit,
                         changeAccount: {
@@ -565,7 +565,11 @@ struct IPadnStoreUnlockSheet: View {
                 guard !didRequestPush else { return }
                 didRequestPush = true
                 // force:false — keep an Allow already in flight; a second push burns its code.
-                // (If AuthKit was stuck on iPhone, requestTrustedDevicePush force-refreshes as Mac.)
+                // Skip entirely when a Step-1 Allow code is still live for this challenge.
+                if GSAAuthClient.shared.hasPendingTwoFactor,
+                   GSAAuthClient.shared.twoFactorCodeAlreadySent {
+                    return
+                }
                 await sendAllowPush(force: false)
             }
         }
