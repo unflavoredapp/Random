@@ -126,16 +126,25 @@ final class DecryptClient: ObservableObject {
     /// (`https://tetherless.dev/` — same apex as OTA). Override with UserDefaults
     /// `as_site_base`; legacy airshare.lol / zefv overrides are ignored.
     nonisolated static var siteBase: String {
-        let raw = UserDefaults.standard.string(forKey: "as_site_base") ?? ""
-        let lower = raw.lowercased()
-        var b: String
-        if raw.isEmpty || lower.contains("airshare.lol") || lower.contains("zefv.dev") || lower.contains("mrzefv.com") {
-            b = ZefvAccount.apiBase
-        } else {
-            b = raw
-        }
+        if let explicit = phoneWorkerSiteBase { return explicit }
+        var b = ZefvAccount.apiBase
         if b.hasSuffix("app/v1/") { b.removeLast("app/v1/".count) }
         return b.hasSuffix("/") ? b : b + "/"
+    }
+
+    /// Explicit Decrypt site URL for Phone Worker / Linux VPS — nil when unset or legacy.
+    /// Does **not** fall back to tetherless.dev (avoids claiming jobs against the wrong host).
+    nonisolated static var phoneWorkerSiteBase: String? {
+        let raw = (UserDefaults.standard.string(forKey: "as_site_base") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let lower = raw.lowercased()
+        if raw.isEmpty || lower.contains("airshare.lol") || lower.contains("zefv.dev") || lower.contains("mrzefv.com") {
+            return nil
+        }
+        var b = raw
+        if b.hasSuffix("app/v1/") { b.removeLast("app/v1/".count) }
+        if !b.hasSuffix("/") { b += "/" }
+        return b
     }
 
     // MARK: Networking

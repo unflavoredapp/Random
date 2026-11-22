@@ -569,12 +569,34 @@ final class DeviceDecryptService: ObservableObject {
             version: version
         )
         let name = displayName.isEmpty ? "App" : displayName
-        progress?("Decrypting on this iPhone…")
-        let clear = try FairPlayDecrypt.decryptIPA(
-            at: result.url,
-            displayName: name
-        ) { msg in
-            progress?(msg)
+        // Prefer a live App Store install’s SC_Info when present — IPA-only mremap usually fails.
+        // Best reliability: install the app once from the Store on this device, then keep Phone Worker on.
+        progress?("Decrypting on this iPhone (live install licenses when available)…")
+        let clear: URL
+        do {
+            clear = try FairPlayDecrypt.decryptIPA(
+                at: result.url,
+                displayName: name,
+                preferIPAContentsOnly: false
+            ) { msg in
+                progress?(msg)
+            }
+        } catch {
+            let text = error.localizedDescription
+            if text.localizedCaseInsensitiveContains("still encrypted")
+                || text.localizedCaseInsensitiveContains("cryptid")
+                || text.localizedCaseInsensitiveContains("eperm")
+                || text.localizedCaseInsensitiveContains("operation not permitted") {
+                throw DecryptError(
+                    "Phone Worker FairPlay needs this app installed from the App Store on this iPhone (same Apple ID), or use Get → companion. \(text)"
+                )
+            }
+            throw error
+        }
+        if let verify = try? FairPlayDecrypt.verifyIPA(at: clear), !verify.isFullyClear {
+            throw DecryptError(
+                "Phone Worker left encrypted Mach-Os (\(verify.summary)). Install the app from the App Store on this device, confirm FairPlay keys, then retry — or use Get → Tetherless Decrypt companion."
+            )
         }
         return (clear, name, result.item.displayVersion)
     }

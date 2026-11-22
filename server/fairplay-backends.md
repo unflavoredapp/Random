@@ -53,7 +53,8 @@ Ops: `bash server/linux-ctl.sh status|token|logs api`.
 1. Same Media & Purchases + development-cert setup as above.
 2. **FairPlay Decrypt → Decrypt site URL** = your VPS HTTPS origin.
 3. **Settings → Phone Worker** → paste `DECRYPT_WORKER_TOKEN` → enable → keep the app open.
-4. Phone Worker downloads the Store IPA and runs FairPlay on this device, then uploads the clear IPA.
+4. Phone Worker downloads the Store IPA and decrypts using **live App Store install licenses when the app is already installed** on this device, then uploads the clear IPA. For the most reliable first decrypt of an app, use **Get → companion** once (development cert), then leave Phone Worker on for the VPS queue.
+5. Leave **Server decrypt only** off unless you intentionally want every Get to hit the VPS.
 
 | Step | Where |
 |------|--------|

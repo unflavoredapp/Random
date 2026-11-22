@@ -70,6 +70,13 @@ final class PhoneDecryptWorker: ObservableObject {
                 try? await Task.sleep(nanoseconds: 5_000_000_000)
                 continue
             }
+            if DecryptClient.phoneWorkerSiteBase == nil {
+                status = "Set Decrypt site URL"
+                lastError =
+                    "Phone Worker needs FairPlay Decrypt → Decrypt site URL set to your Linux VPS (https://…). Don’t leave it empty (that falls back to tetherless.dev)."
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+                continue
+            }
             do {
                 if let job = try await claim(token: token) {
                     await handle(job: job, token: token)
@@ -168,8 +175,9 @@ final class PhoneDecryptWorker: ObservableObject {
     }
 
     private func upload(jobID: String, ipa: URL, name: String, token: String) async throws {
-        guard var comps = URLComponents(string: DecryptClient.siteBase + "api/decrypt/worker/complete") else {
-            throw DecryptError("Bad worker URL.")
+        guard let base = DecryptClient.phoneWorkerSiteBase,
+              var comps = URLComponents(string: base + "api/decrypt/worker/complete") else {
+            throw DecryptError("Set Decrypt site URL to your Linux VPS before uploading.")
         }
         comps.queryItems = [
             URLQueryItem(name: "id", value: jobID),
@@ -193,8 +201,9 @@ final class PhoneDecryptWorker: ObservableObject {
     }
 
     private func makeRequest(_ path: String, token: String, timeout: TimeInterval = 60) throws -> URLRequest {
-        guard let url = URL(string: DecryptClient.siteBase + path) else {
-            throw DecryptError("Bad worker URL.")
+        guard let base = DecryptClient.phoneWorkerSiteBase,
+              let url = URL(string: base + path) else {
+            throw DecryptError("Set Decrypt site URL to your Linux VPS (FairPlay Decrypt settings).")
         }
         var r = URLRequest(url: url)
         r.timeoutInterval = timeout
