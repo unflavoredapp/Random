@@ -1,0 +1,17 @@
+# Example Caddyfile for https://fastdecrypt.bot → Mac API :8787
+# On the Mac:
+#   cp ~/tetherless/server/Caddyfile.fastdecrypt.example ~/tetherless-run/Caddyfile
+#   sudo caddy start --config ~/tetherless-run/Caddyfile
+#
+# DNS: A record fastdecrypt.bot (+ www) → this Mac's public IP.
+# Needs inbound TCP 80 + 443.
+
+fastdecrypt.bot, www.fastdecrypt.bot {
+	encode gzip
+	reverse_proxy 127.0.0.1:8787 {
+		transport http {
+			read_timeout 1h
+			write_timeout 1h
+		}
+	}
+}
