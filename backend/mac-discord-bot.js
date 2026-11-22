@@ -26,6 +26,7 @@ const fairplayBackends = require("./fairplayBackends");
 const ipaCache = require("./mac-tg-ipa-cache");
 const publicDl = require("./mac-tg-public-dl");
 const { renderProgressBanner } = require("./mac-tg-progress-banner");
+const userLog = require("./mac-tg-user-log");
 
 const TOKEN = String(process.env.DISCORD_BOT_TOKEN || "").trim();
 const BOT_NAME = String(process.env.DISCORD_BOT_NAME || "FastDecrypt").trim() || "FastDecrypt";
@@ -626,6 +627,13 @@ client.once("ready", async () => {
   } catch (e) {
     console.warn("[discord] command register failed:", (e && e.message) || e);
   }
+  try {
+    userLog.pruneOldEvents();
+    const n = userLog.listUsers().filter((u) => u.platform === "discord" || String(u.userId || "").startsWith("discord:")).length;
+    console.log(`[discord] user usage log: ${userLog.LOG_DIR} (${n} discord users)`);
+  } catch {
+    /* ignore */
+  }
   const st = fairplayBackends.backendStatus();
   console.log(
     `[discord] decrypt=${!!(st.unfairplay && st.unfairplay.ready)} model=${!!(
@@ -637,6 +645,11 @@ client.once("ready", async () => {
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
   const name = interaction.commandName;
+  userLog.logDiscord({
+    interaction,
+    kind: "cmd",
+    detail: `/${name}`,
+  });
   try {
     if (name === "start") {
       await interaction.reply({ embeds: [helpEmbed()] });
@@ -649,18 +662,40 @@ client.on("interactionCreate", async (interaction) => {
     if (name === "decrypt") {
       const url = String(interaction.options.getString("url") || "").trim();
       if (!isStoreUrl(url)) {
+        userLog.logDiscord({
+          interaction,
+          kind: "decrypt_bad_url",
+          detail: url.slice(0, 80),
+        });
         await interaction.reply({
           content: "Paste a full App Store link (`https://apps.apple.com/...`).",
           ephemeral: true,
         });
         return;
       }
+      userLog.logDiscord({
+        interaction,
+        kind: "decrypt",
+        detail: url.slice(0, 120),
+      });
       await interaction.deferReply();
       const progressMsg = {
         edit: (payload) => interaction.editReply(payload),
       };
       try {
         const payload = await queueJob(async () => decryptStoreUrl(url, progressMsg));
+        const title =
+          (payload.embeds &&
+            payload.embeds[0] &&
+            typeof payload.embeds[0].data?.title === "string" &&
+            payload.embeds[0].data.title) ||
+          (payload.embeds && payload.embeds[0] && payload.embeds[0].title) ||
+          "ok";
+        userLog.logDiscord({
+          interaction,
+          kind: "decrypt_ok",
+          detail: String(title).slice(0, 80),
+        });
         await interaction.editReply({
           content: null,
           embeds: payload.embeds,
@@ -668,6 +703,11 @@ client.on("interactionCreate", async (interaction) => {
           components: payload.components || [],
         });
       } catch (e) {
+        userLog.logDiscord({
+          interaction,
+          kind: "decrypt_fail",
+          detail: friendlyError(e).slice(0, 120),
+        });
         await interaction.editReply({
           content: null,
           embeds: [progressEmbed("Failed", friendlyError(e), 0)],
@@ -697,10 +737,12 @@ client.on("messageCreate", async (message) => {
   if (!text) return;
 
   if (/^\/?(start|help)\b/i.test(text)) {
+    userLog.logDiscord({ message, kind: "cmd", detail: "/start" });
     await message.reply({ embeds: [helpEmbed()] });
     return;
   }
   if (/^\/?status\b/i.test(text)) {
+    userLog.logDiscord({ message, kind: "cmd", detail: "/status" });
     await message.reply({ embeds: [statusEmbed()] });
     return;
   }
@@ -708,6 +750,11 @@ client.on("messageCreate", async (message) => {
   const m = text.match(/https:\/\/(?:apps|itunes)\.apple\.com\/[^\s>]+/i);
   if (!m) return;
   const link = m[0].replace(/[)>,.]+$/g, "");
+  userLog.logDiscord({
+    message,
+    kind: "decrypt",
+    detail: link.slice(0, 120),
+  });
   await runDecryptFor(message.channel, link, async (payload) =>
     message.reply(payload)
   );
