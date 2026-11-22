@@ -296,9 +296,7 @@ function helpEmbed(userId) {
         `• \`/status\``,
         WANT_MESSAGE_CONTENT ? `• Or paste a link / type an app name` : "",
         ``,
-        q.vip
-          ? `VIP · ${q.remaining}/${q.limit} decrypts left today`
-          : `Free · ${q.remaining}/${q.limit} decrypts left today`,
+        feat.quotaLabel(q),
         SITE,
       ]
         .filter(Boolean)
@@ -799,6 +797,43 @@ async function registerCommands(appId) {
     new SlashCommandBuilder()
       .setName("users")
       .setDescription("Admin: Discord usage (last 24h)"),
+    new SlashCommandBuilder()
+      .setName("grantvip")
+      .setDescription("Admin: grant timed VIP")
+      .addIntegerOption((o) =>
+        o
+          .setName("days")
+          .setDescription("VIP length")
+          .setRequired(true)
+          .addChoices(
+            { name: "7 days", value: 7 },
+            { name: "30 days", value: 30 },
+            { name: "90 days", value: 90 },
+            { name: "180 days", value: 180 },
+            { name: "365 days", value: 365 }
+          )
+      )
+      .addUserOption((o) =>
+        o.setName("user").setDescription("Discord member").setRequired(false)
+      )
+      .addStringOption((o) =>
+        o
+          .setName("user_id")
+          .setDescription("Discord user id (if not in this server)")
+          .setRequired(false)
+      ),
+    new SlashCommandBuilder()
+      .setName("revokevip")
+      .setDescription("Admin: revoke timed VIP")
+      .addUserOption((o) =>
+        o.setName("user").setDescription("Discord member").setRequired(false)
+      )
+      .addStringOption((o) =>
+        o
+          .setName("user_id")
+          .setDescription("Discord user id")
+          .setRequired(false)
+      ),
   ].map((c) => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -1005,29 +1040,33 @@ client.on("interactionCreate", async (interaction) => {
         "FastDecrypt status";
       await interaction.reply({
         embeds: [
-          base.setDescription(
-            `${prev}\n**Tier:** ${q.vip ? "VIP" : "Free"} · ${q.remaining}/${q.limit} today`
-          ),
+          base.setDescription(`${prev}\n**Tier:** ${feat.quotaLabel(q)}`),
         ],
       });
       return;
     }
     if (name === "vip") {
       const q = feat.quotaStatus(interaction.user.id);
+      const lines = q.vip
+        ? [
+            "You have **VIP**.",
+            q.permanent
+              ? "Expires: **lifetime**"
+              : `Time left: **${q.left}**` +
+                (q.expiresIso ? `\nEnds: <t:${Math.floor(q.expiresAt / 1000)}:f>` : ""),
+            "Unlimited decrypts · older versions · priority queue.",
+          ]
+        : [
+            "You’re on the **free** tier.",
+            `Decrypts today: **${q.remaining}/${q.limit}**`,
+            `Ask an admin for VIP (7 / 30 / 90 / 180 days), or:\n${feat.VIP_URL}`,
+          ];
       await interaction.reply({
         embeds: [
           new EmbedBuilder()
             .setColor(0xff9a1f)
             .setTitle("VIP")
-            .setDescription(
-              [
-                q.vip ? "You have VIP." : "You’re on the free tier.",
-                `Decrypts today: **${q.remaining}/${q.limit}**`,
-                q.vip
-                  ? "Older versions + priority queue unlocked."
-                  : `Upgrade for older builds + higher limits:\n${feat.VIP_URL}`,
-              ].join("\n")
-            ),
+            .setDescription(lines.join("\n")),
         ],
         components: [
           new ActionRowBuilder().addComponents(
@@ -1037,6 +1076,81 @@ client.on("interactionCreate", async (interaction) => {
               .setURL(feat.VIP_URL)
           ),
         ],
+      });
+      return;
+    }
+    if (name === "grantvip") {
+      if (!feat.isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: "Admin only.", ephemeral: true });
+        return;
+      }
+      const days = interaction.options.getInteger("days", true);
+      const member = interaction.options.getUser("user");
+      const rawId = String(interaction.options.getString("user_id") || "").trim();
+      const targetId = member ? member.id : rawId;
+      if (!targetId) {
+        await interaction.reply({
+          content: "Pick a **user** or pass **user_id**.",
+          ephemeral: true,
+        });
+        return;
+      }
+      const result = feat.grantVip(targetId, days, interaction.user.id);
+      if (!result.ok) {
+        await interaction.reply({ content: result.error, ephemeral: true });
+        return;
+      }
+      userLog.logDiscord({
+        interaction,
+        kind: "grantvip",
+        detail: `${targetId} ${days}d → ${result.left}`,
+      });
+      await interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xff9a1f)
+            .setTitle("VIP granted")
+            .setDescription(
+              [
+                `User: <@${targetId}> (\`${targetId}\`)`,
+                `Added: **${days} days**${result.stacked ? " (stacked on existing VIP)" : ""}`,
+                `Time left: **${result.left}**`,
+                `Ends: <t:${Math.floor(result.expiresAt / 1000)}:f>`,
+              ].join("\n")
+            ),
+        ],
+        ephemeral: true,
+      });
+      return;
+    }
+    if (name === "revokevip") {
+      if (!feat.isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: "Admin only.", ephemeral: true });
+        return;
+      }
+      const member = interaction.options.getUser("user");
+      const rawId = String(interaction.options.getString("user_id") || "").trim();
+      const targetId = member ? member.id : rawId;
+      if (!targetId) {
+        await interaction.reply({
+          content: "Pick a **user** or pass **user_id**.",
+          ephemeral: true,
+        });
+        return;
+      }
+      const result = feat.revokeVip(targetId);
+      if (!result.ok) {
+        await interaction.reply({ content: result.error, ephemeral: true });
+        return;
+      }
+      userLog.logDiscord({
+        interaction,
+        kind: "revokevip",
+        detail: targetId,
+      });
+      await interaction.reply({
+        content: `Revoked timed VIP for \`${targetId}\`.`,
+        ephemeral: true,
       });
       return;
     }
