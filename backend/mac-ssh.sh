@@ -278,16 +278,14 @@ cmd_session() {
   if (( ${#py_args[@]} )); then
     echo "Phone + login-code mode (flaky — prefer HTTPS /tg-login)."
   else
-    # Public HTTPS page via Mac API + Cloudflare (works on cellular, one iPhone).
-    if ! alive_pid "$API_PID" || ! alive_pid "$CF_PID"; then
-      echo "Starting public Mac API (Cloudflare HTTPS) for /tg-login…"
-      cmd_api
-    else
-      wait_for_tunnel_url || true
-    fi
+    # Always restart API so /tg-login from latest pull is loaded (old process → Not found).
+    echo "Restarting public Mac API (Cloudflare HTTPS) for /tg-login…"
+    cmd_api
     if [[ -n "${MAC_PUBLIC_BASE:-}" ]]; then
-      echo "Open on your iPhone Safari:"
-      echo "  ${MAC_PUBLIC_BASE%/}/tg-login"
+      echo
+      echo ">>> On iPhone Safari open EXACTLY:"
+      echo ">>>   ${MAC_PUBLIC_BASE%/}/tg-login"
+      echo
     else
       echo "WARN: tunnel URL missing — check: tail -f $CF_LOG"
     fi
