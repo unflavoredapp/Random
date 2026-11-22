@@ -76,6 +76,17 @@ enum DecryptCompanionRuntime {
         guard !name.contains("/") && !name.contains("..") && !name.hasPrefix(".") else {
             throw DecryptError("Invalid EmbeddedPayload name.")
         }
+        // Apple first-party titles (TestFlight, …) are not valid FairPlay targets and often ENOMEM.
+        let embedInfo = NSDictionary(
+            contentsOf: embeddedPayloadRoot
+                .appendingPathComponent(name, isDirectory: true)
+                .appendingPathComponent("Info.plist")
+        ) as? [String: Any]
+        let embedBid = embedInfo?["CFBundleIdentifier"] as? String
+        if AppleSystemAppGate.isBlocked(bundleID: embedBid, storeURL: nil)
+            || name.localizedCaseInsensitiveContains("TestFlight") {
+            throw DecryptError(AppleSystemAppGate.userMessage)
+        }
         let src = embeddedPayloadRoot.appendingPathComponent(name, isDirectory: true).standardizedFileURL
         let embedRoot = embeddedPayloadRoot.standardizedFileURL
         guard src.path.hasPrefix(embedRoot.path + "/") || src.path == embedRoot.path else {
@@ -604,7 +615,7 @@ struct DecryptCompanionRoot: View {
                 }
                 Button("OK", role: .cancel) {}
             } message: {
-                Text(errorText ?? "")
+                Text(Self.userFacingError(errorText))
             }
     }
 
@@ -623,6 +634,16 @@ struct DecryptCompanionRoot: View {
             || t.contains("not enough memory")
             || t.contains("mremap")
             || t.contains("out of memory")
+    }
+
+    private static func userFacingError(_ text: String?) -> String {
+        let raw = (text ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return "Decrypt failed." }
+        if shouldBounceToServer(raw) {
+            return raw
+                + "\n\nTip: charge the device, free RAM, keep this app foregrounded, and retry a smaller third-party app (not TestFlight). Backup server needs a Linux VPS Phone Worker on a device that still has free memory — or an unfairplay model."
+        }
+        return raw
     }
 }
 

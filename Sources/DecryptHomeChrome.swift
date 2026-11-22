@@ -106,7 +106,7 @@ struct DecryptSignedInCard: View {
                 }
 
                 Text(storeReady
-                     ? "Tap Test download to pull free TestFlight, install the companion, and run FairPlay."
+                     ? "Tap Test download to pull free DuckDuckGo (third-party), install the companion, and run FairPlay. Don’t use TestFlight / Apple system apps — they OOM (mremap ENOMEM)."
                      : "Connect Store first (uses your Sign In trust token). Then Test download runs the full path.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.5))
@@ -406,7 +406,7 @@ struct DecryptDeviceAppsSection: View {
     @ObservedObject private var device = DeviceLibrary.shared
     @ObservedObject private var decrypting = DeviceDecryptService.shared
     @AppStorage("uzd_decrypt_channel") private var channelRaw = DecryptChannel.device.rawValue
-    @AppStorage(FairPlayAdvancedOptions.includeTestFlightKey) private var includeTestFlight = true
+    @AppStorage(FairPlayAdvancedOptions.includeTestFlightKey) private var includeTestFlight = false
 
     private var drm: [DeviceApp] {
         device.apps.filter { $0.isDecryptTarget(includeTestFlight: includeTestFlight) }

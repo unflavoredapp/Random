@@ -122,6 +122,14 @@ enum FailurePlaybook {
             action: .openAppStoreSignIn
         ),
         FailurePlay(
+            id: "fairplay-enomem",
+            title: "Not enough memory (mremap ENOMEM)",
+            summary: "On-device FairPlay ran out of RAM mapping the binary. Charge the device, close other apps, keep Tetherless Decrypt in the foreground, and retry a smaller third-party app — not TestFlight / Apple system apps. A faster iPad with more free RAM helps; backup server only helps if another worker or unfairplay model is available.",
+            matches: ["enomem", "not enough memory", "mremap", "out of memory"],
+            actionTitle: "Capture FairPlay keys",
+            action: .acknowledgeFairPlay
+        ),
+        FailurePlay(
             id: "pair",
             title: "Native install / pairing dropped",
             summary: "VPN or pairing died (common after re-signing TetherLess). Re-pair or let Install Autopilot fall back to OTA.",
