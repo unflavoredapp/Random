@@ -406,30 +406,60 @@ final class AppleIDStore: ObservableObject {
         authPhase == .verifying || authPhase == .awaitingTwoFactor
     }
 
-    /// Optional GrandSlam portal after Store is already green (signing certs / manage).
-    /// Never fires a trusted-device Allow here — a second push burns the Store/step-1 code
-    /// the user is still typing. Portal 2FA waits until Certificate create / refreshPortalSession.
+    /// Optional GrandSlam portal after Store is already green (signing / 7-day certs).
+    /// Runs only after Store login finished — one portal Allow, not stacked on Store step 1.
     private func attemptPortalAfterIPadnStore(email: String, password: String) async {
         do {
+            // No push during SRP — if 2FA is required we send exactly one Allow below.
             let portal = try await GSAAuthClient.shared.authenticate(
                 email: email,
                 password: password,
                 requestTrustedDevicePush: false
             )
-            if let idx = accounts.firstIndex(where: { $0.email.caseInsensitiveCompare(email) == .orderedSame }) {
-                accounts[idx].portalSessionJSON = try? JSONEncoder().encode(portal)
-                accounts[idx].teamID = portal.teamID
-                accounts[idx].teamName = portal.teamName
-                save()
-            }
+            await persistPortalSession(portal)
         } catch AppleAuthError.needsTwoFactor {
-            // Drop the silent challenge — do not flip UI back to awaitingTwoFactor or push Allow.
-            GSAAuthClient.shared.cancel()
-            twoFactorUsesSMS = false
-            twoFactorPhoneHint = nil
+            // Keep the challenge for Certificate create / Continue verification on Account.
+            refreshTwoFactorChannelFromGSA()
+            withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+            statusMessage = "Store ready — Allow once more for Developer Portal (7-day certificate signing)."
+            lastError = nil
+            // Store step is done; this single Allow is for portal / free certs only.
+            if !GSAAuthClient.shared.twoFactorCodeAlreadySent {
+                await requestTrustedDevicePush(forStoreUnlock: false, force: false)
+            }
         } catch {
-            // Non-fatal for downloads — portal tokens can finish on the next Certificate create.
+            // Non-fatal for downloads — Certificate create will refreshPortalSession.
         }
+    }
+
+    /// Save GrandSlam / Developer Portal tokens without reminting the Store session.
+    private func persistPortalSession(_ session: AppleAuthSession) async {
+        var session = session
+        session.pet = nil
+        if let teams = try? await DeveloperPortalClient.shared.listTeams(auth: session),
+           let team = preferredPortalTeam(from: teams, session: session) {
+            session.teamID = team.id
+            session.teamName = team.name
+            session.isFreeTeam = team.isFree
+        }
+        let email = session.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let sessionJSON = try? JSONEncoder().encode(session)
+        if let idx = accounts.firstIndex(where: { $0.email.caseInsensitiveCompare(email) == .orderedSame }) {
+            accounts[idx].portalSessionJSON = sessionJSON
+            accounts[idx].teamID = session.teamID
+            accounts[idx].teamName = session.teamName
+            save()
+        }
+        authPhase = .idle
+        statusMessage = "Developer Portal ready for 7-day certificates"
+    }
+
+    private func preferredPortalTeam(from teams: [Team], session: AppleAuthSession) -> Team? {
+        if let remembered = session.teamID, let match = teams.first(where: { $0.id == remembered }) {
+            return match
+        }
+        if let free = teams.first(where: \.isFree) { return free }
+        return teams.first
     }
 
     /// Password held for the in-flight Store / portal 2FA (or the active account secret).
@@ -540,6 +570,22 @@ final class AppleIDStore: ObservableObject {
         }
 
         let gsaPending = GSAAuthClient.shared.hasPendingTwoFactor
+
+        // Store already green + portal Allow pending (post–Store-login signing step):
+        // finish GrandSlam only — do not remint MZFinance with the portal code.
+        if gsaPending, storefrontSession()?.isUsable == true {
+            statusMessage = "Finishing Developer Portal trust…"
+            do {
+                let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
+                await persistPortalSession(session)
+                return
+            } catch {
+                lastError = error.localizedDescription
+                statusMessage = "Allow again for Developer Portal, then enter the new code."
+                authPhase = .awaitingTwoFactor
+                return
+            }
+        }
 
         // Allow digits are delivered by GSA push but must hit MZFinance first (password+code).
         // Submitting GSA first burns the one-time code so Store then says invalid — that was
@@ -1117,7 +1163,8 @@ final class AppleIDStore: ObservableObject {
         return try? JSONDecoder().decode(AppleAuthSession.self, from: data)
     }
 
-    /// Re-run GrandSlam with the saved password so Developer Portal tokens work again after error 1100.
+    /// Re-run GrandSlam with the saved password so Developer Portal tokens work for 7-day certs.
+    /// Does **not** remint Store (that remint was breaking Certificate create after a good Store login).
     @discardableResult
     func refreshPortalSession() async throws -> AppleAuthSession {
         guard let account = activeAccount else {
@@ -1130,17 +1177,70 @@ final class AppleIDStore: ObservableObject {
         lastError = nil
         statusMessage = "Refreshing Developer Portal session…"
         do {
-            let session = try await GSAAuthClient.shared.authenticate(email: account.email, password: password)
-            await finishRealSignIn(session: session, password: password)
+            let session = try await GSAAuthClient.shared.authenticate(
+                email: account.email,
+                password: password,
+                requestTrustedDevicePush: true
+            )
+            await persistPortalSession(session)
             return session
         } catch AppleAuthError.needsTwoFactor {
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
             refreshTwoFactorChannelFromGSA()
-            statusMessage = twoFactorPromptMessage()
+            statusMessage = "Allow this Developer Portal sign-in, then enter the 6-digit code to create your 7-day certificate."
             throw AppleAuthError.needsTwoFactor
         } catch {
             authPhase = .idle
             lastError = error.localizedDescription
+            throw error
+        }
+    }
+
+    /// Finish portal 2FA for Certificate create — saves portal tokens only (Store stays as-is).
+    @discardableResult
+    func submitPortalTwoFactor(code: String) async throws -> AppleAuthSession {
+        let digits = code.filter(\.isNumber)
+        guard digits.count == 6 else {
+            throw AppleAuthError.message("Enter the 6-digit verification code.")
+        }
+        guard let account = activeAccount else {
+            throw AppleAuthError.message("Sign in under Account first.")
+        }
+        guard let password = passwordForAccount(id: account.id), !password.isEmpty else {
+            throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Account.")
+        }
+        lastError = nil
+        authPhase = .verifying
+        statusMessage = "Finishing Developer Portal trust…"
+        do {
+            guard GSAAuthClient.shared.hasPendingTwoFactor else {
+                // Challenge expired — start a fresh portal Allow, then ask for the new code.
+                do {
+                    let session = try await GSAAuthClient.shared.authenticate(
+                        email: account.email,
+                        password: password,
+                        requestTrustedDevicePush: true
+                    )
+                    await persistPortalSession(session)
+                    _ = Keychain.setSessionSecret(Self.passwordPrefix + account.id, password)
+                    return session
+                } catch AppleAuthError.needsTwoFactor {
+                    withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
+                    refreshTwoFactorChannelFromGSA()
+                    statusMessage = "Allow the new Developer Portal prompt, then enter that code."
+                    throw AppleAuthError.needsTwoFactor
+                }
+            }
+            let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
+            await persistPortalSession(session)
+            _ = Keychain.setSessionSecret(Self.passwordPrefix + account.id, password)
+            return session
+        } catch AppleAuthError.needsTwoFactor {
+            throw AppleAuthError.needsTwoFactor
+        } catch {
+            authPhase = .awaitingTwoFactor
+            lastError = error.localizedDescription
+            statusMessage = "Couldn't finish Developer Portal — check the code and retry."
             throw error
         }
     }
