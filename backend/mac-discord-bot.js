@@ -28,6 +28,7 @@ const publicDl = require("./mac-tg-public-dl");
 const { renderProgressBanner } = require("./mac-tg-progress-banner");
 const userLog = require("./mac-tg-user-log");
 const feat = require("./mac-discord-features");
+const openIn = require("./mac-open-in");
 
 const TOKEN = String(process.env.DISCORD_BOT_TOKEN || "").trim();
 const BOT_NAME = String(process.env.DISCORD_BOT_NAME || "FastDecrypt").trim() || "FastDecrypt";
@@ -193,19 +194,41 @@ function progressEmbed(appName, stage, pct) {
 }
 
 function siteButtons(downloadUrl) {
-  const website = new ButtonBuilder()
-    .setStyle(ButtonStyle.Link)
-    .setLabel("Website")
-    .setURL(SITE);
-  if (!downloadUrl) {
-    return [new ActionRowBuilder().addComponents(website)];
+  const rows = [];
+  const row1 = new ActionRowBuilder();
+  if (downloadUrl) {
+    row1.addComponents(
+      new ButtonBuilder()
+        .setStyle(ButtonStyle.Link)
+        .setLabel("Download IPA")
+        .setURL(downloadUrl)
+    );
   }
-  // Download left · Website right (no spacer — Discord rejects blank labels).
-  const download = new ButtonBuilder()
-    .setStyle(ButtonStyle.Link)
-    .setLabel("Download IPA")
-    .setURL(downloadUrl);
-  return [new ActionRowBuilder().addComponents(download, website)];
+  row1.addComponents(
+    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Website").setURL(SITE)
+  );
+  rows.push(row1);
+
+  // Open in … (HTTPS bridge — Discord rejects custom schemes on Link buttons).
+  if (downloadUrl) {
+    const opens = openIn.openInButtons(downloadUrl, { httpsRedirect: true });
+    let row = new ActionRowBuilder();
+    for (const b of opens) {
+      if (!b.url || !/^https:\/\//i.test(b.url)) continue;
+      if (row.components.length >= 5) {
+        rows.push(row);
+        row = new ActionRowBuilder();
+      }
+      row.addComponents(
+        new ButtonBuilder()
+          .setStyle(ButtonStyle.Link)
+          .setLabel(b.label.slice(0, 80))
+          .setURL(b.url)
+      );
+    }
+    if (row.components.length) rows.push(row);
+  }
+  return rows.slice(0, 5);
 }
 
 /** User-facing stage only — never raw ipatool / path / INF lines. */
@@ -353,20 +376,27 @@ async function buildDeliveryPayload(
   let mode = "attach";
   let downloadUrl = "";
 
+  // Always stage a public HTTPS URL when possible — Open-in installers need it.
+  try {
+    const staged = publicDl.stageIpa(file, { fileName, bytes: st.size });
+    downloadUrl = publicDl.downloadUrlFor(staged.token) || "";
+  } catch (e) {
+    console.warn("[discord] stage for open-in:", (e && e.message) || e);
+  }
+
   if (st.size <= DISCORD_ATTACH_MAX) {
     files.push(new AttachmentBuilder(file, { name: fileName }));
   } else {
-    const staged = publicDl.stageIpa(file, { fileName, bytes: st.size });
-    const url = publicDl.downloadUrlFor(staged.token);
-    if (!url) {
+    if (!downloadUrl) {
       throw new Error(
         `IPA is ${mb} MB (over Discord’s ~25 MB attach cap). Run: zsh ~/tetherless/server/mac-ssh.sh api`
       );
     }
     mode = "link";
-    downloadUrl = url;
+  }
+  if (downloadUrl) {
     embed.setFooter({
-      text: `Link expires in ~${Math.round(publicDl.TTL_MS / 60000)} min`,
+      text: `Link expires in ~${Math.round(publicDl.TTL_MS / 60000)} min · Open in TrollStore / Feather / E-Sign…`,
     });
   }
 
