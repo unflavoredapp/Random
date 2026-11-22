@@ -8,7 +8,7 @@
 #   zsh ~/tetherless/server/mac-ssh.sh stop
 #   zsh ~/tetherless/server/mac-ssh.sh status
 #   zsh ~/tetherless/server/mac-ssh.sh logs
-#   zsh ~/tetherless/server/mac-ssh.sh api       # HTTPS backup API + cloudflared
+#   zsh ~/tetherless/server/mac-ssh.sh api       # HTTPS API on :8787 (fastdecrypt.bot; optional cloudflared)
 #   zsh ~/tetherless/server/mac-ssh.sh pull
 #   zsh ~/tetherless/server/mac-ssh.sh unlock    # keychain only
 #   zsh ~/tetherless/server/mac-ssh.sh login     # keychain + ipatool auth login
@@ -274,7 +274,7 @@ cmd_start() {
   fi
 }
 
-# Persist live Mac HTTPS API public URL (trycloudflare) for the iOS Decrypt site URL + bot /d/ links.
+# Persist Mac HTTPS API public URL (fastdecrypt.bot, or trycloudflare if MAC_USE_CLOUDFLARED=1).
 write_mac_public_base() {
   local url="${1:-}"
   [[ -n "$url" ]] || return 1
@@ -326,32 +326,47 @@ cmd_api() {
   export MAC_API_OPEN="${MAC_API_OPEN:-1}"
   export MAC_API_PORT="${MAC_API_PORT:-8787}"
 
-  if ! command -v cloudflared >/dev/null 2>&1; then
-    echo "Installing cloudflared…"
-    mkdir -p "$HOME/bin"
-    curl -fsSL -o /tmp/cloudflared.tgz \
-      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz"
-    tar -xzf /tmp/cloudflared.tgz -C "$HOME/bin"
-    if [[ ! -x "$HOME/bin/cloudflared" ]]; then
-      local cf
-      cf="$(find "$HOME/bin" -maxdepth 1 -type f -name 'cloudflared*' | head -1)"
-      [[ -n "$cf" ]] && ln -sfn "$cf" "$HOME/bin/cloudflared"
-    fi
-    chmod +x "$HOME/bin/cloudflared" 2>/dev/null || true
+  # Default public base: fastdecrypt.bot (no ephemeral trycloudflare).
+  local base="${MAC_PUBLIC_BASE:-}"
+  if [[ -z "$base" || "$base" == *trycloudflare.com ]]; then
+    base="${FASTDECRYPT_SITE_URL:-https://fastdecrypt.bot}"
   fi
+  base="${base%/}"
+  write_mac_public_base "$base"
 
-  : >"$CF_LOG"
   nohup node server/mac-https-api.js >>"$API_LOG" 2>&1 &
   echo $! >"$API_PID"
   sleep 1
-  nohup cloudflared tunnel --url "http://127.0.0.1:${MAC_API_PORT}" >>"$CF_LOG" 2>&1 &
-  echo $! >"$CF_PID"
-  echo "API pid=$(cat "$API_PID" 2>/dev/null) cloudflared pid=$(cat "$CF_PID" 2>/dev/null)"
-  if wait_for_tunnel_url; then
-    echo "Paste that URL into iOS → Account → FairPlay Decrypt → Mac API URL → Save."
+
+  if [[ "${MAC_USE_CLOUDFLARED:-0}" == "1" ]]; then
+    if ! command -v cloudflared >/dev/null 2>&1; then
+      echo "Installing cloudflared…"
+      mkdir -p "$HOME/bin"
+      curl -fsSL -o /tmp/cloudflared.tgz \
+        "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-arm64.tgz"
+      tar -xzf /tmp/cloudflared.tgz -C "$HOME/bin"
+      if [[ ! -x "$HOME/bin/cloudflared" ]]; then
+        local cf
+        cf="$(find "$HOME/bin" -maxdepth 1 -type f -name 'cloudflared*' | head -1)"
+        [[ -n "$cf" ]] && ln -sfn "$cf" "$HOME/bin/cloudflared"
+      fi
+      chmod +x "$HOME/bin/cloudflared" 2>/dev/null || true
+    fi
+    : >"$CF_LOG"
+    nohup cloudflared tunnel --url "http://127.0.0.1:${MAC_API_PORT}" >>"$CF_LOG" 2>&1 &
+    echo $! >"$CF_PID"
+    echo "API pid=$(cat "$API_PID" 2>/dev/null) cloudflared pid=$(cat "$CF_PID" 2>/dev/null)"
+    if wait_for_tunnel_url; then
+      echo "Paste that URL into iOS → Account → FairPlay Decrypt → Mac API URL → Save."
+    else
+      echo "Tunnel URL not ready yet — watch: tail -f $CF_LOG"
+      echo "When https://….trycloudflare.com appears, paste it as the iOS Mac API URL."
+    fi
   else
-    echo "Tunnel URL not ready yet — watch: tail -f $CF_LOG"
-    echo "When https://….trycloudflare.com appears, paste it as the iOS Mac API URL."
+    rm -f "$CF_PID"
+    echo "API pid=$(cat "$API_PID" 2>/dev/null) · public base: $base (no cloudflared)"
+    echo "Point fastdecrypt.bot (DNS / reverse proxy) at this Mac :${MAC_API_PORT} for /d/ and /open/."
+    echo "Optional quick tunnel: MAC_USE_CLOUDFLARED=1 zsh $REPO/server/mac-ssh.sh api"
   fi
 }
 

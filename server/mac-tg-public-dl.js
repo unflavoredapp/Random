@@ -90,7 +90,7 @@ function publicBaseFromEnv() {
   return raw.replace(/\/+$/, "");
 }
 
-/** Sidecar written by `mac-ssh.sh api` when the trycloudflare URL appears. */
+/** Sidecar written by `mac-ssh.sh api` (fastdecrypt.bot or optional trycloudflare). */
 function publicBaseFromSidecar() {
   const candidates = [
     path.join(os.homedir(), "tetherless-run", "mac-public-url"),
@@ -129,8 +129,19 @@ function publicBaseFromCloudflaredLog() {
   return "";
 }
 
+/** Canonical public host — no trycloudflare by default. */
+const DEFAULT_PUBLIC_BASE = "https://fastdecrypt.bot";
+
 function resolvePublicBase() {
-  return publicBaseFromEnv() || publicBaseFromSidecar() || publicBaseFromCloudflaredLog() || "";
+  const fromEnv = publicBaseFromEnv();
+  if (fromEnv) return fromEnv;
+  const sidecar = publicBaseFromSidecar();
+  // Prefer a real domain sidecar; only fall back to trycloudflare when opted in.
+  if (sidecar && !/trycloudflare\.com/i.test(sidecar)) return sidecar;
+  if (String(process.env.MAC_USE_CLOUDFLARED || "").trim() === "1") {
+    return sidecar || publicBaseFromCloudflaredLog() || DEFAULT_PUBLIC_BASE;
+  }
+  return DEFAULT_PUBLIC_BASE;
 }
 
 function downloadUrlFor(token) {

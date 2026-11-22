@@ -209,24 +209,22 @@ function siteButtons(downloadUrl) {
   );
   rows.push(row1);
 
-  // Open in … (HTTPS bridge — Discord rejects custom schemes on Link buttons).
+  // Open in … as a dropdown (HTTPS bridge — Discord rejects custom schemes on Link buttons).
   if (downloadUrl) {
-    const opens = openIn.openInButtons(downloadUrl, { httpsRedirect: true });
-    let row = new ActionRowBuilder();
-    for (const b of opens) {
-      if (!b.url || !/^https:\/\//i.test(b.url)) continue;
-      if (row.components.length >= 5) {
-        rows.push(row);
-        row = new ActionRowBuilder();
-      }
-      row.addComponents(
-        new ButtonBuilder()
-          .setStyle(ButtonStyle.Link)
-          .setLabel(b.label.slice(0, 80))
-          .setURL(b.url)
-      );
+    const token = openIn.putOpenPending(downloadUrl);
+    if (token) {
+      const menu = new StringSelectMenuBuilder()
+        .setCustomId(`oin:${token}`)
+        .setPlaceholder("Open in…")
+        .addOptions(
+          openIn.TARGETS.map((t) =>
+            new StringSelectMenuOptionBuilder()
+              .setLabel(t.label.slice(0, 100))
+              .setValue(t.id)
+          )
+        );
+      rows.push(new ActionRowBuilder().addComponents(menu));
     }
-    if (row.components.length) rows.push(row);
   }
   return rows.slice(0, 5);
 }
@@ -911,8 +909,43 @@ client.on("interactionCreate", async (interaction) => {
       return;
     }
 
-    // ── Version select ────────────────────────────────────────────
+    // ── Selects (Open-in + version) ───────────────────────────────
     if (interaction.isStringSelectMenu()) {
+      const oin = String(interaction.customId || "").match(/^oin:([a-f0-9]+)$/i);
+      if (oin) {
+        const ipa = openIn.getOpenPending(oin[1]);
+        if (!ipa) {
+          await interaction.reply({
+            content: "That Open-in menu expired — decrypt again.",
+            ephemeral: true,
+          });
+          return;
+        }
+        const id = String(interaction.values[0] || "");
+        const t = openIn.targetById(id);
+        const url = openIn.redirectUrl(id, ipa) || openIn.deepLink(id, ipa);
+        if (!t || !url || !/^https:\/\//i.test(url)) {
+          await interaction.reply({
+            content: "Couldn’t build that Open-in link.",
+            ephemeral: true,
+          });
+          return;
+        }
+        await interaction.reply({
+          content: `Open **${t.label}** on your iPhone:`,
+          ephemeral: true,
+          components: [
+            new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setStyle(ButtonStyle.Link)
+                .setLabel(`Open ${t.label}`.slice(0, 80))
+                .setURL(url)
+            ),
+          ],
+        });
+        return;
+      }
+
       const m = String(interaction.customId || "").match(/^ver:([a-f0-9]+)$/i);
       if (!m) return;
       const pending = feat.takePending(m[1]);

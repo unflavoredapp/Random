@@ -386,25 +386,15 @@ function siteLinkButtons() {
   ];
 }
 
-/** Final IPA buttons: Patch/VIP + Open in (TrollStore / Feather / E-Sign / …). */
+/** Final IPA buttons: Patch/VIP + one Open in… (HTML dropdown on fastdecrypt.bot). */
 function resultKeyboard(downloadUrl) {
   const rows = [siteLinkButtons()];
   const url = String(downloadUrl || "").trim();
   if (/^https:\/\//i.test(url)) {
     try {
       const openIn = require("./mac-open-in");
-      // Telegram can open custom schemes directly (no HTTPS bridge required).
-      const opens = openIn.openInButtons(url, { httpsRedirect: false });
-      let row = [];
-      for (const b of opens) {
-        if (!b.url) continue;
-        row.push({ text: `📲 ${b.label}`, url: b.url });
-        if (row.length >= 3) {
-          rows.push(row);
-          row = [];
-        }
-      }
-      if (row.length) rows.push(row);
+      const menu = openIn.menuUrl(url);
+      if (menu) rows.push([{ text: "📲 Open in…", url: menu }]);
     } catch (e) {
       console.warn("[open-in]", (e && e.message) || e);
     }
@@ -3418,7 +3408,7 @@ function needsHttpsIpaLink(bytes) {
 
 /**
  * IPA too large for Telegram upload → tokenized HTTPS download on the Mac API
- * (mac-ssh.sh api / cloudflared + MAC_PUBLIC_BASE). No Premium session required.
+ * (mac-ssh.sh api + MAC_PUBLIC_BASE=https://fastdecrypt.bot). No Premium session required.
  */
 async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
   const bytes = pending.bytes || 0;
@@ -3435,7 +3425,7 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
     return {
       ok: false,
       description:
-        "Run: zsh ~/tetherless/server/mac-ssh.sh api  (needs the https://….trycloudflare.com URL)",
+        "Run: zsh ~/tetherless/server/mac-ssh.sh api  (uses https://fastdecrypt.bot — proxy /d/ to this Mac)",
     };
   }
   const caption = pending.caption || "";

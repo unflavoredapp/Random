@@ -3,10 +3,11 @@
 /**
  * "Open in …" deep links after decrypt (TrollStore, Feather, E-Sign, FlareStore, ShrubSign).
  *
- * Discord Link buttons only allow https:// — so Discord uses /open/<target>?u= on the
- * Mac public API, which redirects into the app’s custom scheme.
- * Telegram inline buttons can use custom schemes directly.
+ * Discord: StringSelectMenu dropdown → ephemeral Link to https://fastdecrypt.bot/open/<app>?u=
+ * (Link buttons cannot use custom schemes.)
+ * Telegram: one “Open in…” link to /open/menu?u= (HTML dropdown) or direct schemes.
  */
+const crypto = require("crypto");
 const publicDl = require("./mac-tg-public-dl");
 
 const TARGETS = [
@@ -20,7 +21,6 @@ const TARGETS = [
   {
     id: "feather",
     label: "Feather",
-    // Feather docs: feather://install/<url> (keep https:// unescaped in path)
     deep: (ipaHttps) => `feather://install/${ipaHttps}`,
   },
   {
@@ -31,7 +31,6 @@ const TARGETS = [
   {
     id: "flarestore",
     label: "FlareStore",
-    // No reliable public scheme — open helper that falls back to IPA download for Import.
     deep: (ipaHttps) => ipaHttps,
     webOnly: true,
   },
@@ -44,6 +43,10 @@ const TARGETS = [
   },
 ];
 
+/** token → { url, expires } for Discord select menus */
+const pendingOpen = new Map();
+const OPEN_TTL_MS = 2 * 60 * 60 * 1000;
+
 function sanitizeIpaUrl(raw) {
   const u = String(raw || "").trim();
   if (!/^https:\/\/[^\s]+$/i.test(u)) return "";
@@ -55,7 +58,29 @@ function targetById(id) {
   return TARGETS.find((t) => t.id === String(id || "").toLowerCase()) || null;
 }
 
-/** Absolute https://…/open/<target>?u=… for Discord Link buttons. */
+function pruneOpenPending() {
+  const now = Date.now();
+  for (const [k, v] of pendingOpen) {
+    if (!v || v.expires < now) pendingOpen.delete(k);
+  }
+}
+
+function putOpenPending(ipaHttps) {
+  const ipa = sanitizeIpaUrl(ipaHttps);
+  if (!ipa) return "";
+  pruneOpenPending();
+  const token = crypto.randomBytes(6).toString("hex");
+  pendingOpen.set(token, { url: ipa, expires: Date.now() + OPEN_TTL_MS });
+  return token;
+}
+
+function getOpenPending(token) {
+  pruneOpenPending();
+  const row = pendingOpen.get(String(token || ""));
+  return row && row.url ? row.url : "";
+}
+
+/** Absolute https://…/open/<target>?u=… (fastdecrypt.bot by default). */
 function redirectUrl(targetId, ipaHttps) {
   const base = publicDl.resolvePublicBase();
   const ipa = sanitizeIpaUrl(ipaHttps);
@@ -63,6 +88,14 @@ function redirectUrl(targetId, ipaHttps) {
   if (!base || !ipa || !t) return "";
   if (t.httpsDirect) return t.deep(ipa);
   return `${base}/open/${t.id}?u=${encodeURIComponent(ipa)}`;
+}
+
+/** Menu page URL with HTML dropdown of all installers. */
+function menuUrl(ipaHttps) {
+  const base = publicDl.resolvePublicBase();
+  const ipa = sanitizeIpaUrl(ipaHttps);
+  if (!base || !ipa) return "";
+  return `${base}/open/menu?u=${encodeURIComponent(ipa)}`;
 }
 
 /** Direct deep link (Telegram) — custom scheme or https. */
@@ -73,27 +106,28 @@ function deepLink(targetId, ipaHttps) {
   return t.deep(ipa);
 }
 
+function escHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/"/g, "&quot;");
+}
+
 /**
  * HTML bridge page: try custom scheme, show fallbacks.
- * @returns {string} html
  */
 function bridgeHtml({ targetId, ipaHttps }) {
   const t = targetById(targetId) || { id: "app", label: "Installer", deep: (u) => u };
   const ipa = sanitizeIpaUrl(ipaHttps);
   const deep = ipa ? t.deep(ipa) : "";
   const label = t.label || "Installer";
-  const esc = (s) =>
-    String(s || "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/"/g, "&quot;");
   const tryDeep = deep && deep !== ipa;
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Open in ${esc(label)} · FastDecrypt</title>
+<title>Open in ${escHtml(label)} · FastDecrypt</title>
 <style>
   body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#0b0d14;color:#e8eef8;margin:0;padding:28px 20px;line-height:1.45}
   h1{font-size:1.35rem;margin:0 0 8px}
@@ -105,19 +139,15 @@ function bridgeHtml({ targetId, ipaHttps }) {
 </style>
 </head>
 <body>
-  <h1>Open in ${esc(label)}</h1>
-  <p>FastDecrypt · decrypted IPA handoff</p>
-  ${
-    tryDeep
-      ? `<a class="btn primary" id="open" href="${esc(deep)}">Open ${esc(label)}</a>`
-      : ""
-  }
-  ${ipa ? `<a class="btn ghost" href="${esc(ipa)}">Download IPA</a>` : ""}
+  <h1>Open in ${escHtml(label)}</h1>
+  <p>FastDecrypt · fastdecrypt.bot</p>
+  ${tryDeep ? `<a class="btn primary" id="open" href="${escHtml(deep)}">Open ${escHtml(label)}</a>` : ""}
+  ${ipa ? `<a class="btn ghost" href="${escHtml(ipa)}">Download IPA</a>` : ""}
   <p class="note">${
     t.id === "flarestore"
       ? "FlareStore: Download the IPA, then Import it in the FlareStore app."
       : tryDeep
-        ? `If ${esc(label)} didn’t open, install it first, then tap Open again.`
+        ? `If ${escHtml(label)} didn’t open, install it first, then tap Open again.`
         : "Download the IPA, then import it in your installer app."
   }</p>
   ${
@@ -126,14 +156,54 @@ function bridgeHtml({ targetId, ipaHttps }) {
   (function(){
     var deep=${JSON.stringify(deep)};
     try { window.location.href = deep; } catch (e) {}
-    setTimeout(function(){
-      var a=document.getElementById('open');
-      if(a) a.focus();
-    }, 400);
   })();
 </script>`
       : ""
   }
+</body>
+</html>`;
+}
+
+/** HTML dropdown chooser for all installers (Telegram / Safari). */
+function menuHtml(ipaHttps) {
+  const ipa = sanitizeIpaUrl(ipaHttps);
+  const options = TARGETS.map(
+    (t) => `<option value="${escHtml(t.id)}">${escHtml(t.label)}</option>`
+  ).join("");
+  const bridges = {};
+  for (const t of TARGETS) {
+    bridges[t.id] = redirectUrl(t.id, ipa) || deepLink(t.id, ipa) || ipa;
+  }
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Open in… · FastDecrypt</title>
+<style>
+  body{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;background:#0b0d14;color:#e8eef8;margin:0;padding:28px 20px}
+  h1{font-size:1.35rem;margin:0 0 8px}
+  p{color:#9aa3b5}
+  select{width:100%;font-size:1.05rem;padding:14px;border-radius:12px;border:1px solid #2a3348;background:#1a2030;color:#e8eef8;margin:16px 0}
+  a.btn,button.btn{display:block;width:100%;box-sizing:border-box;text-align:center;padding:14px 16px;border-radius:12px;margin:10px 0;text-decoration:none;font-weight:700;border:0;font-size:1rem}
+  .primary{background:#ff9a1f;color:#111}
+  .ghost{background:#1a2030;color:#e8eef8;border:1px solid #2a3348}
+</style>
+</head>
+<body>
+  <h1>Open in…</h1>
+  <p>Pick an installer, then open it on this iPhone.</p>
+  <select id="app">${options}</select>
+  <button class="btn primary" type="button" id="go">Continue</button>
+  ${ipa ? `<a class="btn ghost" href="${escHtml(ipa)}">Download IPA</a>` : ""}
+  <script>
+  var bridges=${JSON.stringify(bridges)};
+  document.getElementById('go').onclick=function(){
+    var id=document.getElementById('app').value;
+    var u=bridges[id];
+    if(u) location.href=u;
+  };
+  </script>
 </body>
 </html>`;
 }
@@ -153,7 +223,11 @@ module.exports = {
   targetById,
   sanitizeIpaUrl,
   redirectUrl,
+  menuUrl,
   deepLink,
   bridgeHtml,
+  menuHtml,
   openInButtons,
+  putOpenPending,
+  getOpenPending,
 };
