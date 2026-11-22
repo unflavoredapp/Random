@@ -1,149 +1,127 @@
 # FairPlay decrypt backends
 
-**Best path if you rent a Mac:** run the whole Tetherless site decrypt queue **on that Mac**. Enroll once with the decrypt binary, then every job decrypts there — no mint → Linux hop.
+**Preferred:** a **stock iPhone** signed with a **free/development Apple ID certificate**, running the **Tetherless Decrypt companion** (on-device FairPlay). No Mac enrollment. No jailbreak.
 
-No jailbreak / TrollStore / Phone Worker required.
+For a Debian 13 / Linux VPS site or bots: queue on the VPS and let an iPhone **Phone Worker** claim jobs (same on-device FairPlay). The VPS never needs `fairplay-enrollment.bin`.
 
-Status: `GET /api/decrypt/backends` (includes `host`: `mac` | `linux`)
+Status: `GET /api/decrypt/backends` (`host`: `mac` | `linux`, plus `phone.ready`)
 
 ---
 
-## Preferred — Mac server does everything
+## Stock iPhone — development cert + companion (primary)
 
-On an Apple Silicon Mac (rented or local), signed into the **Mac App Store** with the same Apple ID / enrollment as your IPAs:
+FairPlay keys stay on the phone after Media & Purchases / App Store sign-in. Decrypt runs inside the installed **Tetherless Decrypt** companion IPA (signed with your free or paid development certificate), same class of path as fouldecrypt / FairPlayed (`mremap` next to `SC_Info`).
+
+### One-time on the iPhone
+
+1. Sign into **Settings → Media & Purchases / App Store** with the Apple ID that owns the apps.
+2. Open **TetherLess** → sign in under **Account** (Store + signing).
+3. Ensure a **development / free Apple ID certificate** is linked (Settings / Account signing). On first companion install, **Trust** the cert under **Settings → General → VPN & Device Management**.
+4. Leave **“Server decrypt only”** **off** (default) under FairPlay Decrypt — that keeps Get / companion on-device.
+5. Use **Get** / Decrypt: Store download → companion install → FairPlay on-device → clear IPA in Library.
+
+Optional readiness: **FairPlay Keys** capture sheet confirms Media & Purchases + an App Store install with `SC_Info`. It does **not** export a credential file — keys never leave the device that way.
+
+---
+
+## Linux VPS + Phone Worker (queue without a Mac)
+
+Use when Telegram / Discord / web should queue App Store links and this iPhone finishes them.
+
+### 1) Install on the VPS (Debian 13)
 
 ```bash
-# 1) Install the Tetherless decrypt binary (UNFAIRPLAY_BIN) + ipatool, put them on PATH
-# 2) One-time enrollment (either form)
-sudo ./unfairplay setup --app /Applications/SomeOwnedApp.app
-# or: export-enrollment on this Mac, then setup --enrollment … --ipa App.ipa
+sudo bash server/linux-install.sh
+sudo systemctl enable --now tetherless-api.service
+```
 
-# 3) Point env at the enrollment model (MacDuty example paths)
+Env: `/etc/tetherless/linux-host.env` (from `server/linux-host.env.example`):
+
+```bash
+FAIRPLAY_HOST=linux
+DECRYPT_BACKENDS=phone
+DECRYPT_WORKER_TOKEN=…          # paste into Phone Worker on the iPhone
+MAC_API_PORT=8787
+MAC_PUBLIC_BASE=https://fastdecrypt.bot
+```
+
+Caddy/nginx → `:8787` — `server/Caddyfile.linux.example`.  
+Ops: `bash server/linux-ctl.sh status|token|logs api`.
+
+### 2) Connect the iPhone
+
+1. Same Media & Purchases + development-cert setup as above.
+2. **FairPlay Decrypt → Decrypt site URL** = your VPS HTTPS origin.
+3. **Settings → Phone Worker** → paste `DECRYPT_WORKER_TOKEN` → enable → keep the app open.
+4. Phone Worker downloads the Store IPA and runs FairPlay on this device, then uploads the clear IPA.
+
+| Step | Where |
+|------|--------|
+| Queue / bots / HTTPS | Linux VPS |
+| FairPlay decrypt | Stock iPhone (dev cert + on-device FairPlay) |
+| Mac needed? | **No** |
+| Jailbreak? | **No** |
+
+**Never commit** `DECRYPT_WORKER_TOKEN`, enrollment models, or `credential.bin`.
+
+---
+
+## Optional — offline CLI on the VPS (Mac-minted unfairplay model)
+
+Only if you want decrypt **without** an iPhone online. UnfairPlay enrollment still has to be minted on a Mac once:
+
+```bash
+# On Mac (one-time) — not required for companion / Phone Worker
+sudo ./unfairplay export-enrollment --output enrollment.snapshot
+./unfairplay setup --enrollment enrollment.snapshot --ipa SomeOwnedApp.ipa
+# scp fairplay-enrollment.bin → VPS (mode 0600)
+
+export DECRYPT_BACKENDS=phone,unfairplay
+export UNFAIRPLAY_BIN=/usr/local/bin/unfairplay
+export FAIRPLAY_ENROLLMENT_MODEL=/var/lib/tetherless/fairplay-enrollment.bin
+```
+
+A stock iPhone **cannot** mint `fairplay-enrollment.bin` (Mac unfairplay) or a jailbreak `credential.bin`. It **can** decrypt via companion / Phone Worker.
+
+---
+
+## Optional — Mac host CLI
+
+```bash
 export FAIRPLAY_HOST=mac
 export DECRYPT_BACKENDS=unfairplay
-export UNFAIRPLAY_BIN="$HOME/bin/unfairplay"
-export FAIRPLAY_ENROLLMENT_MODEL="$HOME/unfairplay/models/fairplay-enrollment.bin"
-export UNFAIRPLAY_MODEL_DIR="$HOME/unfairplay/models"
-export FAIRPLAY_IPATOOL_BIN=ipatool
-# FAIRPLAY_REQUIRE_CREDENTIAL defaults off on Mac
-
-# Optional: your own Telegram decrypt bot (BotFather → TELEGRAM_BOT_TOKEN).
-# Same Mac process polls the bot; paste apps.apple.com links → Tetherless decrypt → IPA back in chat.
-# export TELEGRAM_BOT_TOKEN=...
-# export TELEGRAM_BOT_USERNAME=YourDecryptBot
-# export TELEGRAM_ALLOWED_IDS=123456789   # your numeric chat id(s); omit = open to anyone
-#
-# Standalone Tetherless bot (recommended on MacDuty) — **WebSSH only** (dedicated keychain):
-#   zsh ~/tetherless/server/mac-ssh.sh start
-#   zsh ~/tetherless/server/mac-ssh.sh status
-#   zsh ~/tetherless/server/mac-ssh.sh logs
-# App Store link → decrypt. TestFlight → send .ipa or drop into ~/tetherless-drop
-# and message: decrypt App.ipa
-# Replies look like AppAssassin (Name_vX.Y-Tetherless.ipa + bundle / version / store link).
-# Big IPAs: Telegram Premium does NOT raise Bot API (~50 MB). Use Premium *user* MTProto:
-#   python3 -m pip install --user pyrogram tgcrypto
-#   python3 ~/tetherless/server/mac-tg-session-setup.py
-#   # add TELEGRAM_API_ID / HASH / SESSION / TELEGRAM_PREMIUM_UPLOAD=1 to .tetherless-mac.env
-# Cloud cache: first decrypt stores Telegram file_id / message under ~/tetherless-ipa-cache.
-# Same App Store link again → instant re-send (no re-decrypt). /cache lists entries.
-# Encrypted cache: ipatool downloads are kept under ~/tetherless-ipa-cache/encrypted —
-# same adam/version later skips the App Store download (still decrypts unless clear-cached).
-#
-# ipatool speed pack (WebSSH ops — not in the public bot menu):
-#   /speed                 → dashboard for all 6 features
-#   /prefetch URL          → queue encrypted download before demand
-#   /prefetch purchased    → warm top purchased apps missing from enc cache
-#   /purchased sync        → refresh owned list (enables skip --purchase)
-#   /session               → ipatool auth health
-# Safe bypasses only: clear-cache skip decrypt · encrypted-cache skip CDN ·
-# skip --purchase when adam is in purchased sync. No DRM/account bypass.
-# Storefront: FAIRPLAY_IPATOOL_STOREFRONT only — never URL-derived --country.
-# Version-first: bare App Store links open VERSIONS before ipatool download.
-#
-# If login Keychain password is unknown (MacDuty padlock dialogs), use a dedicated
-# keychain instead (macOS cannot unlock without a password):
-#   export TETHERLESS_KEYCHAIN_PASSWORD='pick-a-strong-pass'
-#   zsh ~/tetherless/server/mac-keychain-setup.sh
-#   ipatool auth login   # enter THAT password → Always Allow
-#
-# Full HTTPS backup API for the iOS app (when on-device decrypt fails):
-#   Double-click Desktop/Start-Tetherless-API.command
-#   Copy the printed https://….trycloudflare.com/ URL
-#   iOS app → FairPlay Decrypt → Decrypt site URL → paste that URL → Save host
-
-# 4) Run the Tetherless Node site on THIS Mac (same process as production)
-#    OR just mac-tg-bot.js above for Telegram-only decrypt.
-# Then in the iOS app: Account → Settings → FairPlay Decrypt → Decrypt site URL
-# set to https://YOUR-MAC-HOST/  (HTTPS required for App Transport; or keep tetherless.dev
-# and copy FAIRPLAY_ENROLLMENT_MODEL to the Linux production host instead)
+sudo ./unfairplay setup --app /Applications/SomeOwnedApp.app
 ```
 
-**App setting:** FairPlay Decrypt → **Decrypt site URL** writes UserDefaults `as_site_base`. Leave empty for `tetherless.dev`.
-
-**Never commit** `fairplay-enrollment.bin` / `enrollment.snapshot` — private enrollment secrets.
-
-Optional: also set `FAIRPLAY_CREDENTIAL_BIN` + `fairplay-decrypt` if you want that backend as a fallback on the same Mac.
-
----
-
-## Alternate — Linux decrypt (copy secrets once)
-
-If the Node server stays on Debian/Linux, mint on a Mac once and copy:
-
-```bash
-# On Mac
-sudo ./unfairplay export-enrollment --output enrollment.snapshot
-# then on Mac or Linux:
-./unfairplay setup --enrollment enrollment.snapshot --ipa SomeOwnedApp.ipa
-# copy the resulting model file to the Linux host
-
-# On Linux
-export FAIRPLAY_HOST=linux
-export DECRYPT_BACKENDS=fairplay-decrypt,unfairplay
-export FAIRPLAY_ENROLLMENT_MODEL=/var/lib/tetherless/fairplay-enrollment.bin
-export FAIRPLAY_CREDENTIAL_BIN=/var/lib/tetherless/credential.bin   # if using fairplay-decrypt
-export FAIRPLAY_REQUIRE_CREDENTIAL=1
-export UNFAIRPLAY_BIN=/usr/local/bin/unfairplay
-export FAIRPLAY_DECRYPT_BIN=/opt/fairplay-decrypt/decrypt.py
-export FAIRPLAY_IPATOOL_BIN=ipatool
-chmod 600 "$FAIRPLAY_ENROLLMENT_MODEL" "$FAIRPLAY_CREDENTIAL_BIN"
-```
-
-| Step | Mac-host mode | Linux-host mode |
-|------|----------------|-----------------|
-| Enroll / setup | Same Mac | Mac once → copy model |
-| Decrypt jobs | Same Mac | Linux |
-| Jailbreak? | No | No |
+See `server/mac-host.env.example`. Prefer Linux + Phone Worker unless you already run on MacDuty.
 
 ---
 
 ## Backends
 
-### `unfairplay` (Mac default — shown as Tetherless) — [DrWhax/unfairplay](https://github.com/DrWhax/unfairplay)
+### `phone` (Linux default) — iPhone Phone Worker
 
-Internal backend id stays `unfairplay` / `UNFAIRPLAY_BIN`. User-facing status says **Tetherless**.  
-`decrypt --input … --output …` with optional `--model`. On Mac, omitting `--model` uses the default saved model directory after local `setup`.
+Requires `DECRYPT_WORKER_TOKEN`. Stock iPhone claims jobs and runs on-device FairPlay (same Apple ID / Media & Purchases as companion).
+
+### `unfairplay` (Mac default) — [DrWhax/unfairplay](https://github.com/DrWhax/unfairplay)
+
+Needs a Mac-minted enrollment model (or live Mac setup). Optional on Linux.
 
 ### `fairplay-decrypt` — [EthanArbuckle/fairplay-decrypt](https://github.com/EthanArbuckle/fairplay-decrypt)
 
-Needs a 16-byte `credential.bin` + encrypted IPA (`ipatool`).
+16-byte `credential.bin` (jailbreak mint) + encrypted IPA.
 
-### `ipadecrypt` / `ipa-decrypter`
+### Opt-in
 
-Optional Linux/Mac CLIs or HTTP wrappers.
-
-### Opt-in only
-
-- `phone` — Tetherless Phone Worker  
+- `ipadecrypt` / `ipa-decrypter` — CLI/HTTP wrappers  
 - `unfaird` — jailbroken LAN daemon  
 
 ---
 
 ## App ↔ server
 
-1. App / site → `POST /api/decrypt` `{ url }`
-2. Host runs Tetherless decrypt / fairplay-decrypt
-3. Clear IPA → `/api/ipa/file/:up`
-4. App downloads → Sign → Install
+1. App / site → `POST /api/decrypt` `{ url }` (or companion runs FairPlay locally with no server)
+2. Host waits for Phone Worker when `DECRYPT_BACKENDS=phone`
+3. Clear IPA → download / bot delivery → Sign → Install
 
-On-device companion FairPlay inside the iOS app is separate and unchanged.
+Interactive **Get** uses the development-cert companion on-device unless “Server decrypt only” is enabled.

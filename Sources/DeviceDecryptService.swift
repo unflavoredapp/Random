@@ -692,7 +692,7 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.start(url: app.url, version: version, display: app.name)
         case .device:
             DecryptClient.shared.select(app)
-            // Mac-only: skip companion / on-device FairPlay — job hits Decrypt site URL.
+            // Server-only: skip companion FairPlay — job hits Decrypt site URL (Linux/Mac).
             if DecryptMacRouting.macOnly {
                 DecryptMacRouting.startMacDecrypt(
                     storeURL: app.url,
@@ -750,8 +750,8 @@ final class DeviceDecryptService: ObservableObject {
     }
 
     /// Device-channel path for a Store listing: silent purchase/download, then hand
-    /// FairPlay to the companion IPA (never opens the App Store UI; no install-path embed).
-    /// When `DecryptMacRouting.macOnly`, skips companion and queues Mac Decrypt site URL.
+    /// FairPlay to the development-cert companion IPA (never opens the App Store UI).
+    /// When `DecryptMacRouting.macOnly`, skips companion and queues Decrypt site URL.
     func decryptOwnedStoreApp(
         _ app: DeviceApp,
         storeURL: String,

@@ -93,7 +93,7 @@ a{color:var(--acc2)}
 <body>
 <main class="wrap">
   <h1 class="brand">FastDecrypt</h1>
-  <p class="tag">Paste an App Store link. Decrypt on our Mac. Download up to ${maxGb}&nbsp;GB over HTTPS.</p>
+  <p class="tag">Paste an App Store link. A stock iPhone Phone Worker grabs FairPlay on-device (development cert). Download up to ${maxGb}&nbsp;GB over HTTPS.</p>
   <form class="panel" id="f" autocomplete="off">
     <label for="url">App Store link</label>
     <input id="url" name="url" type="url" inputmode="url" placeholder="https://apps.apple.com/…/id…" required/>

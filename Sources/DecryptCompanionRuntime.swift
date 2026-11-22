@@ -63,10 +63,10 @@ enum DecryptCompanionRuntime {
         }
 
         if DecryptMacRouting.macOnly {
-            log("Mac-only decrypt — skipping on-device FairPlay, opening host…")
-            DecryptCompanionController.shared.statusTitle = "Decrypting on Mac…"
+            log("Server-only decrypt — skipping on-device companion FairPlay, opening Decrypt site URL…")
+            DecryptCompanionController.shared.statusTitle = "Decrypting on server…"
             DecryptCompanionHandoff.requestServerFallback(reason: "mac-only")
-            throw DecryptError("Finishing decrypt on your Mac (Decrypt site URL).")
+            throw DecryptError("Finishing decrypt on Decrypt site URL (Linux VPS / server).")
         }
 
         guard let name = embeddedAppName() else {

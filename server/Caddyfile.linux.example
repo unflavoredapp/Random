@@ -1,0 +1,18 @@
+# Example Caddyfile for https://fastdecrypt.bot → Linux VPS API :8787
+# Phone Worker (iPhone) must reach this same public HTTPS origin.
+#
+#   sudo cp server/Caddyfile.linux.example /etc/caddy/Caddyfile
+#   sudo systemctl reload caddy
+#
+# DNS: A/AAAA fastdecrypt.bot (+ www) → this VPS public IP.
+# Needs inbound TCP 80 + 443.
+
+fastdecrypt.bot, www.fastdecrypt.bot {
+	encode gzip
+	reverse_proxy 127.0.0.1:8787 {
+		transport http {
+			read_timeout 1h
+			write_timeout 1h
+		}
+	}
+}

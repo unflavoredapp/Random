@@ -1,26 +1,30 @@
 //
 // Brand: Tetherless · https://tetherless.dev
 //  DecryptMacRouting.swift
-//  Companion / This Device → Mac Decrypt site URL only (unfairplay on MacDuty).
+//  Optional server fallback: Companion / This Device → Decrypt site URL
+//  (Linux VPS Phone Worker queue or legacy Mac unfairplay) instead of
+//  on-device companion FairPlay.
 //
 
 import Foundation
 
-/// Routes Get / companion / “This Device” decrypt through the Mac host API
-/// (`as_site_base` → Mac HTTPS / Cloudflare) instead of on-device FairPlay.
+/// When enabled, routes Get / companion / “This Device” decrypt through the
+/// Decrypt site URL (`as_site_base` → Linux/Mac HTTPS API) instead of the
+/// development-cert companion on this iPhone.
 enum DecryptMacRouting {
     static let macOnlyKey = "tetherless.decrypt.macOnly"
 
-    /// Default ON — no on-device companion FairPlay; jobs hit Decrypt site URL (your Mac).
+    /// Default OFF — stock iPhone uses development-cert companion FairPlay.
+    /// Opt in only to force every job onto Decrypt site URL (Linux VPS / Mac).
     static var macOnly: Bool {
         get {
-            if UserDefaults.standard.object(forKey: macOnlyKey) == nil { return true }
+            if UserDefaults.standard.object(forKey: macOnlyKey) == nil { return false }
             return UserDefaults.standard.bool(forKey: macOnlyKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: macOnlyKey) }
     }
 
-    /// Site root used for Mac decrypt (same as `DecryptClient.siteBase`).
+    /// Site root used for server decrypt (same as `DecryptClient.siteBase`).
     static var macSiteConfigured: Bool {
         let raw = (UserDefaults.standard.string(forKey: "as_site_base") ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -33,7 +37,8 @@ enum DecryptMacRouting {
         let name = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !url.isEmpty else {
             DecryptClient.shared.phase = .failed
-            DecryptClient.shared.error = "Mac decrypt needs an App Store link. Set Decrypt site URL to your Mac."
+            DecryptClient.shared.error =
+                "Server decrypt needs an App Store link. Set Decrypt site URL under FairPlay Decrypt."
             DecryptClient.shared.message = DecryptClient.shared.error ?? ""
             return
         }
@@ -47,7 +52,7 @@ enum DecryptMacRouting {
         if !macSiteConfigured {
             DecryptClient.shared.phase = .failed
             DecryptClient.shared.error =
-                "Set Mac API URL under Account › FairPlay Decrypt (run: zsh ~/tetherless/server/mac-ssh.sh api)."
+                "Set Decrypt site URL under Account › FairPlay Decrypt (Linux VPS API or Mac host)."
             DecryptClient.shared.message = DecryptClient.shared.error ?? ""
             return
         }
@@ -55,7 +60,7 @@ enum DecryptMacRouting {
         // (queued/running/downloading) and would no-op, leaving the UI stuck forever.
         if DecryptClient.shared.busy {
             DecryptClient.shared.phase = .failed
-            DecryptClient.shared.error = "Already decrypting — wait for the current Mac job to finish."
+            DecryptClient.shared.error = "Already decrypting — wait for the current server job to finish."
             DecryptClient.shared.message = DecryptClient.shared.error ?? ""
             return
         }
@@ -67,7 +72,7 @@ enum DecryptMacRouting {
             display: name.isEmpty ? "App" : name
         )
         if DecryptClient.shared.busy {
-            DecryptClient.shared.message = "Decrypting on Mac…"
+            DecryptClient.shared.message = "Decrypting on server…"
         }
     }
 

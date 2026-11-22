@@ -1,7 +1,7 @@
 {
   "name": "tetherless-mac-bot",
   "private": true,
-  "description": "MacDuty Telegram decrypt bot deps (progress banners via sharp)",
+  "description": "FastDecrypt / Tetherless decrypt host deps (Linux VPS + iPhone Phone Worker, or Mac). Progress banners via sharp.",
   "dependencies": {
     "discord.js": "^14.28.1",
     "sharp": "^0.33.5"
