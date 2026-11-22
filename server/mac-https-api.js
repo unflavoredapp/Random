@@ -159,10 +159,11 @@ function paint(s){
   if(s&&s.pendingPhone)$('phone').value=s.pendingPhone;
 }
 function refresh(){fetch('/tg-login/status').then(function(r){return r.json();}).then(paint).catch(function(){flash('Status failed',true);});}
-$('saveKeys').onclick=function(){post('/tg-login/keys',{api_id:$('api_id').value,api_hash:$('api_hash').value}).then(function(j){flash(j.message||j.error,!j.ok);refresh();});};
-$('sendCode').onclick=function(){post('/tg-login/send-code',{phone:$('phone').value}).then(function(j){flash(j.message||j.error,!j.ok);});};
-$('signIn').onclick=function(){post('/tg-login/sign-in',{phone:$('phone').value,code:$('code').value,password:$('password').value}).then(function(j){flash(j.message||j.error,!j.ok);if(j.ok)refresh();});};
-$('useSession').onclick=function(){post('/tg-login/session',{session:$('session').value}).then(function(j){flash(j.message||j.error,!j.ok);if(j.ok)refresh();});};
+function keysPayload(){return{api_id:$('api_id').value,api_hash:$('api_hash').value};}
+$('saveKeys').onclick=function(){post('/tg-login/keys',keysPayload()).then(function(j){flash(j.message||j.error,!j.ok);refresh();});};
+$('sendCode').onclick=function(){var b=keysPayload();b.phone=$('phone').value;post('/tg-login/send-code',b).then(function(j){flash(j.message||j.error,!j.ok);});};
+$('signIn').onclick=function(){var b=keysPayload();b.phone=$('phone').value;b.code=$('code').value;b.password=$('password').value;post('/tg-login/sign-in',b).then(function(j){flash(j.message||j.error,!j.ok);if(j.ok)refresh();});};
+$('useSession').onclick=function(){var b=keysPayload();b.session=$('session').value;post('/tg-login/session',b).then(function(j){flash(j.message||j.error,!j.ok);if(j.ok)refresh();});};
 $('logout').onclick=function(){if(!confirm('Log out Premium session?'))return;post('/tg-login/logout',{}).then(function(j){flash(j.message||j.error,!j.ok);refresh();});};
 refresh();
 })();

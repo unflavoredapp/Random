@@ -32,7 +32,7 @@ def state_path() -> Path:
     return run_dir() / "tg-auth-state.json"
 
 
-def read_env() -> dict[str, str]:
+def read_env_file() -> dict[str, str]:
     out: dict[str, str] = {}
     for p in env_paths():
         if not p.is_file():
@@ -44,6 +44,13 @@ def read_env() -> dict[str, str]:
             k, v = s.split("=", 1)
             out[k.strip()] = v.strip().strip("'").strip('"')
         break
+    return out
+
+
+def read_env() -> dict[str, str]:
+    # Prefer on-disk Mac env (web Save keys) over inherited process env —
+    # Node may pass stale/non-int TELEGRAM_API_ID through spawn.
+    out = read_env_file()
     for k in (
         "TELEGRAM_API_ID",
         "TELEGRAM_API_HASH",
@@ -53,9 +60,32 @@ def read_env() -> dict[str, str]:
         "TELEGRAM_UPLOAD_CHANNEL",
         "TELEGRAM_BOT_USERNAME",
     ):
+        if k in out and out[k]:
+            continue
         if os.environ.get(k):
             out[k] = os.environ[k].strip()
     return out
+
+
+def parse_api_id(raw) -> int:
+    s = str(raw or "").strip().strip("'").strip('"')
+    if not s or not s.isdigit():
+        raise ValueError("api_id must be digits from my.telegram.org")
+    return int(s)
+
+
+def resolve_keys(body=None) -> tuple[int, str]:
+    body = body or {}
+    env = read_env()
+    api_id_raw = body.get("api_id") or env.get("TELEGRAM_API_ID") or ""
+    api_hash = str(body.get("api_hash") or env.get("TELEGRAM_API_HASH") or "").strip()
+    # Placeholder from the web UI means "keep saved hash".
+    if api_hash.lower().startswith("saved"):
+        api_hash = str(env.get("TELEGRAM_API_HASH") or "").strip()
+    api_id = parse_api_id(api_id_raw)
+    if len(api_hash) < 16:
+        raise ValueError("api_hash required — Save keys first")
+    return api_id, api_hash
 
 
 def upsert_env(updates: dict[str, str]) -> Path:
@@ -144,8 +174,8 @@ async def whoami(session: str, api_id: int, api_hash: str):
 
     async with Client(
         name="fastdecrypt_auth_who",
-        api_id=api_id,
-        api_hash=api_hash,
+        api_id=int(api_id),
+        api_hash=str(api_hash),
         session_string=session,
         in_memory=True,
     ) as app:
@@ -183,7 +213,7 @@ async def cmd_status() -> dict:
     if not (api_id and api_hash and session):
         return out
     try:
-        who = await whoami(session, int(api_id), api_hash)
+        who = await whoami(session, parse_api_id(api_id), api_hash)
         out["authed"] = True
         out["who"] = who
     except Exception as e:
@@ -192,50 +222,57 @@ async def cmd_status() -> dict:
 
 
 async def cmd_set_keys(body: dict) -> dict:
-    api_id = str(body.get("api_id") or "").strip()
-    api_hash = str(body.get("api_hash") or "").strip()
-    if not api_id.isdigit():
-        return {"ok": False, "error": "api_id must be digits from my.telegram.org"}
-    env = read_env()
-    if not api_hash:
-        api_hash = (env.get("TELEGRAM_API_HASH") or "").strip()
-    if len(api_hash) < 16:
-        return {"ok": False, "error": "api_hash required (or already saved)"}
-    upsert_env({"TELEGRAM_API_ID": api_id, "TELEGRAM_API_HASH": api_hash})
-    return {"ok": True, "message": "Saved API keys"}
+    try:
+        api_id, api_hash = resolve_keys(body)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    upsert_env({"TELEGRAM_API_ID": str(api_id), "TELEGRAM_API_HASH": api_hash})
+    return {"ok": True, "message": "Saved API keys", "apiId": str(api_id)}
 
 
 async def cmd_send_code(body: dict) -> dict:
-    env = read_env()
-    api_id = int(env.get("TELEGRAM_API_ID") or "0")
-    api_hash = (env.get("TELEGRAM_API_HASH") or "").strip()
-    if not api_id or not api_hash:
-        return {"ok": False, "error": "Save api_id / api_hash first"}
+    try:
+        api_id, api_hash = resolve_keys(body)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+    # Persist whatever the form sent so the next bot restart sees keys.
+    upsert_env({"TELEGRAM_API_ID": str(api_id), "TELEGRAM_API_HASH": api_hash})
     phone = str(body.get("phone") or "").strip().replace(" ", "")
     if not phone.startswith("+") or len(phone) < 8:
         return {"ok": False, "error": "Phone must include country code, e.g. +15551234567"}
 
     from pyrogram import Client
+    from pyrogram.raw import functions, types
 
     app = Client(
         name="fastdecrypt_auth_code",
-        api_id=api_id,
-        api_hash=api_hash,
+        api_id=int(api_id),
+        api_hash=str(api_hash),
         in_memory=True,
     )
     await app.connect()
     try:
-        sent = await app.send_code(phone)
+        # Invoke raw SendCode so api_id is always a real int at the TL layer
+        # (avoids pyrogram "required argument is not an integer").
+        sent = await app.invoke(
+            functions.auth.SendCode(
+                phone_number=phone,
+                api_id=int(api_id),
+                api_hash=str(api_hash),
+                settings=types.CodeSettings(),
+            )
+        )
         phone_code_hash = getattr(sent, "phone_code_hash", None) or ""
         if not phone_code_hash:
             return {"ok": False, "error": "Telegram did not return phone_code_hash"}
-        # Keep a temporary session string so sign-in can reuse the same auth key.
         tmp_session = await app.export_session_string()
         save_state(
             {
                 "phone": phone,
                 "phone_code_hash": phone_code_hash,
                 "tmp_session": tmp_session,
+                "api_id": int(api_id),
+                "api_hash": str(api_hash),
             }
         )
         return {
@@ -250,17 +287,16 @@ async def cmd_send_code(body: dict) -> dict:
 
 
 async def cmd_sign_in(body: dict) -> dict:
-    env = read_env()
-    api_id = int(env.get("TELEGRAM_API_ID") or "0")
-    api_hash = (env.get("TELEGRAM_API_HASH") or "").strip()
     st = load_state()
+    try:
+        api_id, api_hash = resolve_keys({**st, **(body or {})})
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     phone = str(body.get("phone") or st.get("phone") or "").strip().replace(" ", "")
     code = str(body.get("code") or "").strip().replace(" ", "")
     password = str(body.get("password") or "").strip()
     phone_code_hash = str(st.get("phone_code_hash") or "").strip()
-    tmp_session = str(st.get("tmp_session") or "").strip()
-    if not (api_id and api_hash):
-        return {"ok": False, "error": "Save api_id / api_hash first"}
+    tmp_session = str(st.get("tmp_session") or "").strip() or None
     if not phone or not phone_code_hash:
         return {"ok": False, "error": "Send code first"}
     if not code and not password:
@@ -271,9 +307,9 @@ async def cmd_sign_in(body: dict) -> dict:
 
     app = Client(
         name="fastdecrypt_auth_signin",
-        api_id=api_id,
-        api_hash=api_hash,
-        session_string=tmp_session or None,
+        api_id=int(api_id),
+        api_hash=str(api_hash),
+        session_string=tmp_session,
         in_memory=True,
     )
     await app.connect()
@@ -322,22 +358,21 @@ async def cmd_sign_in(body: dict) -> dict:
 
 
 async def cmd_use_session(body: dict) -> dict:
-    env = read_env()
-    api_id = int(env.get("TELEGRAM_API_ID") or body.get("api_id") or "0")
-    api_hash = (env.get("TELEGRAM_API_HASH") or str(body.get("api_hash") or "")).strip()
+    try:
+        api_id, api_hash = resolve_keys(body)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
     session = str(body.get("session") or "").strip()
-    if not api_id or not api_hash:
-        return {"ok": False, "error": "Save api_id / api_hash first"}
     if len(session) < 20:
         return {"ok": False, "error": "Paste a full Pyrogram/Telethon session string"}
     try:
-        who = await whoami(session, api_id, api_hash)
+        who = await whoami(session, int(api_id), str(api_hash))
     except Exception as e:
         return {"ok": False, "error": f"Session invalid: {e}"[:200]}
     upsert_env(
         {
             "TELEGRAM_API_ID": str(api_id),
-            "TELEGRAM_API_HASH": api_hash,
+            "TELEGRAM_API_HASH": str(api_hash),
             "TELEGRAM_SESSION": session,
             "TELEGRAM_PREMIUM_UPLOAD": "1",
         }
