@@ -463,7 +463,7 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Tetherless-Bridging-Header.h";
 				SWIFT_OBJC_INTEROP_MODE = objc;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = YES;
@@ -479,7 +479,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.7;
+				MARKETING_VERSION = 3.8;
 				ONLY_ACTIVE_ARCH = YES;
 				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -513,7 +513,7 @@
 				SWIFT_OBJC_BRIDGING_HEADER = "Sources/Tetherless-Bridging-Header.h";
 				SWIFT_OBJC_INTEROP_MODE = objc;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_PREVIEWS = YES;
 				ENABLE_TESTABILITY = NO;
@@ -529,7 +529,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 3.7;
+				MARKETING_VERSION = 3.8;
 				ONLY_ACTIVE_ARCH = NO;
 				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app";
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -548,7 +548,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = AirShareDeviceTunnel/AirShareDeviceTunnel.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirShareDeviceTunnel/Info.plist;
@@ -559,7 +559,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 3.7;
+				MARKETING_VERSION = 3.8;
 				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app.r656g";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -577,7 +577,7 @@
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_ENTITLEMENTS = AirShareDeviceTunnel/AirShareDeviceTunnel.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirShareDeviceTunnel/Info.plist;
@@ -588,7 +588,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 3.7;
+				MARKETING_VERSION = 3.8;
 				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app.r656g";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -605,7 +605,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirShareLiveActivity/Info.plist;
@@ -616,7 +616,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 3.7;
+				MARKETING_VERSION = 3.8;
 				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app.n88r1";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;
@@ -633,7 +633,7 @@
 			buildSettings = {
 				APPLICATION_EXTENSION_API_ONLY = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = AirShareLiveActivity/Info.plist;
@@ -644,7 +644,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/../../Frameworks",
 				);
-				MARKETING_VERSION = 3.7;
+				MARKETING_VERSION = 3.8;
 				PRODUCT_BUNDLE_IDENTIFIER = "dev.tetherless.app.n88r1";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SDKROOT = iphoneos;

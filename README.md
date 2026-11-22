@@ -16,7 +16,7 @@
   <strong>On-device sideloading — pair, sign, install. No computer required.</strong><br />
   <a href="https://tetherless.dev">tetherless.dev</a>
   · Bundle ID <code>dev.tetherless.app</code>
-  · v3.7
+  · v3.8
 </p>
 
 ---
