@@ -425,6 +425,29 @@ async function handle(req, res) {
     return json(res, 200, await runTgAuth("logout", {}));
   }
 
+  // Open-in bridge: Discord Link buttons → custom schemes (TrollStore / Feather / …).
+  const openMatch = /^\/open\/([a-z0-9-]+)$/i.exec(p);
+  if (openMatch && req.method === "GET") {
+    let openIn;
+    try {
+      openIn = require("./mac-open-in");
+    } catch (e) {
+      return fail(res, 500, "Open-in helper missing");
+    }
+    const targetId = openMatch[1];
+    const ipa = openIn.sanitizeIpaUrl(u.searchParams.get("u") || u.searchParams.get("url") || "");
+    if (!ipa || !openIn.targetById(targetId)) {
+      return fail(res, 400, "Need /open/<trollstore|feather|esign|flarestore|shrubsign>?u=https://…ipa");
+    }
+    const html = openIn.bridgeHtml({ targetId, ipaHttps: ipa });
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    res.end(html);
+    return;
+  }
+
   // Public tokenized IPA download (bot stages >4 GB files here).
   const dlMatch = /^\/d\/([a-f0-9]+)$/i.exec(p);
   if (dlMatch && req.method === "GET") {

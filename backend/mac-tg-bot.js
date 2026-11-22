@@ -386,9 +386,30 @@ function siteLinkButtons() {
   ];
 }
 
-/** Final IPA buttons only: Patch Help · Get VIP (inline tabs under the document). */
-function resultKeyboard() {
-  return { inline_keyboard: [siteLinkButtons()] };
+/** Final IPA buttons: Patch/VIP + Open in (TrollStore / Feather / E-Sign / …). */
+function resultKeyboard(downloadUrl) {
+  const rows = [siteLinkButtons()];
+  const url = String(downloadUrl || "").trim();
+  if (/^https:\/\//i.test(url)) {
+    try {
+      const openIn = require("./mac-open-in");
+      // Telegram can open custom schemes directly (no HTTPS bridge required).
+      const opens = openIn.openInButtons(url, { httpsRedirect: false });
+      let row = [];
+      for (const b of opens) {
+        if (!b.url) continue;
+        row.push({ text: `📲 ${b.label}`, url: b.url });
+        if (row.length >= 3) {
+          rows.push(row);
+          row = [];
+        }
+      }
+      if (row.length) rows.push(row);
+    } catch (e) {
+      console.warn("[open-in]", (e && e.message) || e);
+    }
+  }
+  return { inline_keyboard: rows };
 }
 
 function vipStatusText(chatId) {
@@ -3079,6 +3100,19 @@ async function sendCachedEntry(chatId, entry, { quiet } = {}) {
       iconPath ||
       "";
   }
+  // Stamp cord on the Telegram card / thumb source even if IPA extract missed.
+  if (iconPath && fs.existsSync(iconPath)) {
+    try {
+      const stampedDest = path.join(
+        path.dirname(iconPath),
+        `${path.basename(iconPath, path.extname(iconPath))}.cord.png`
+      );
+      const stamped = await cordBrand.brandIconFile(iconPath, stampedDest);
+      if (stamped) iconPath = stamped;
+    } catch {
+      /* keep unbranded */
+    }
+  }
   if (iconPath && typeof card.setIcon === "function") {
     await card.setIcon(iconPath, "Sending…", 90);
   }
@@ -3271,11 +3305,13 @@ async function deliverResult(chatId, result, opts = {}) {
   iconPath = extractIpaIcon(keep, iconDest) || "";
   if (!iconPath && opts.iconPath && fs.existsSync(opts.iconPath)) {
     iconPath = opts.iconPath;
+  }
+  if (iconPath && fs.existsSync(iconPath)) {
     try {
       const stamped = await cordBrand.brandIconFile(iconPath, iconDest);
       if (stamped) iconPath = stamped;
     } catch {
-      /* keep store art */
+      /* keep prior icon */
     }
   }
   if (iconPath && adam) {
@@ -3370,9 +3406,19 @@ async function deliverResult(chatId, result, opts = {}) {
   }
 }
 
+/** True when Bot/Premium Telegram upload can't carry this IPA (use HTTPS /d/ link). */
+function needsHttpsIpaLink(bytes) {
+  const n = Number(bytes) || 0;
+  if (n > TG_PREMIUM_DOC_MAX) return true;
+  if (LOCAL_API) return false;
+  if (n <= TG_DOC_MAX) return false;
+  // Over cloud Bot ~50 MB and no working Premium user session → public download.
+  return !preferPremiumUpload();
+}
+
 /**
- * IPA larger than Telegram’s 4 GB document cap → tokenized HTTPS download
- * (requires mac-ssh.sh api / cloudflared + MAC_PUBLIC_BASE or live tunnel URL).
+ * IPA too large for Telegram upload → tokenized HTTPS download on the Mac API
+ * (mac-ssh.sh api / cloudflared + MAC_PUBLIC_BASE). No Premium session required.
  */
 async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
   const bytes = pending.bytes || 0;
@@ -3405,17 +3451,18 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
     (caption ? `${caption}\n\n` : "") +
     `<i>Link expires in ~${Math.round(publicDl.TTL_MS / 60000)} minutes.</i>`;
 
+  const openMarkup = resultKeyboard(url);
   const mid = card && card.messageId;
   if (mid) {
-    // Keep the sharp card photo; put the link as caption + Patch/VIP.
+    // Keep the sharp card photo; put the link as caption + Patch/VIP + Open in.
     await tgApi("editMessageCaption", {
       chat_id: chatId,
       message_id: mid,
       caption: text,
       parse_mode: "HTML",
-      reply_markup: resultKeyboard(),
+      reply_markup: openMarkup,
     }).catch(() => {});
-    await ensureIpaButtonTabs(chatId, mid, { caption: text, replyMarkup: resultKeyboard() });
+    await ensureIpaButtonTabs(chatId, mid, { caption: text, replyMarkup: openMarkup });
     if (card && typeof card.release === "function") await card.release();
     console.log("[job] oversized IPA → download link on card", url);
     return { ok: true, url, inPlace: true };
@@ -3426,7 +3473,7 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
     text,
     parse_mode: "HTML",
     disable_web_page_preview: true,
-    reply_markup: resultKeyboard(),
+    reply_markup: openMarkup,
   }).catch((e) => ({ ok: false, description: String((e && e.message) || e) }));
   if (card) await card.finish();
   if (!(sent && sent.ok)) {
@@ -3434,15 +3481,6 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
   }
   console.log("[job] oversized IPA → download link message", url);
   return { ok: true, url, result: sent.result };
-}
-
-function needsHttpsIpaLink(bytes) {
-  const n = Number(bytes) || 0;
-  if (n > TG_PREMIUM_DOC_MAX) return true;
-  if (LOCAL_API) return false;
-  if (n <= TG_DOC_MAX) return false;
-  // Over cloud Bot ~50 MB and no working Premium user session → public download.
-  return !preferPremiumUpload();
 }
 
 async function cacheIpaDelivery(pending, { fileName, caption, fileId, fileUniqueId, messageId, fromChatId, bytes, diskPath }) {
@@ -3517,11 +3555,21 @@ async function deliverIpaAsDocument(chatId, pending, { card, cardMessageId } = {
       minIos: pending.minIos,
       storeUrl: pending.storeUrl,
     });
-  const markup = resultKeyboard();
   const cardMid =
     Number(cardMessageId || pending.cardMessageId || (card && card.messageId) || 0) || 0;
   const disk = pending.diskPath && fs.existsSync(pending.diskPath) ? pending.diskPath : "";
   const bytes = pending.bytes || (disk ? fs.statSync(disk).size : 0);
+  // Stage HTTPS URL for Open-in (TrollStore / Feather / …) when public API is up.
+  let openUrl = "";
+  if (disk) {
+    try {
+      const staged = publicDl.stageIpa(disk, { fileName, bytes });
+      openUrl = publicDl.downloadUrlFor(staged.token) || "";
+    } catch {
+      /* open-in optional */
+    }
+  }
+  const markup = resultKeyboard(openUrl);
   let buildIcon = pending.iconPath && fs.existsSync(pending.iconPath) ? pending.iconPath : "";
   if (!buildIcon && disk) {
     const iconDest = path.join(
