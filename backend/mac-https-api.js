@@ -20,7 +20,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
-const { spawnSync } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
 const publicDl = require("./mac-tg-public-dl");
 const ipatoolExtras = require("./mac-ipatool-extras");
@@ -29,50 +29,144 @@ const PORT = Number(process.env.MAC_API_PORT || 8787);
 const OPEN = String(process.env.MAC_API_OPEN || "1") !== "0";
 const REQUIRE = String(process.env.MAC_API_BEARER || "").trim();
 const WORK = process.env.MAC_API_WORK_DIR || path.join(os.tmpdir(), "tetherless-mac-api");
-const BUILD = "tetherless-mac-https-api-2-tg-login";
-const TG_LOGIN_FILE =
-  process.env.TELEGRAM_LOGIN_FILE ||
-  path.join(os.homedir(), "tetherless-run", "tg-login.json");
+const BUILD = "tetherless-mac-https-api-3-tg-admin";
+const AUTH_PY = path.join(__dirname, "mac-tg-auth-web.py");
 
-function readTgLoginUrl() {
-  try {
-    if (!fs.existsSync(TG_LOGIN_FILE)) return "";
-    const j = JSON.parse(fs.readFileSync(TG_LOGIN_FILE, "utf8"));
-    return String((j && j.url) || "").trim();
-  } catch {
-    return "";
-  }
+function runTgAuth(cmd, bodyObj) {
+  return new Promise((resolve) => {
+    const child = spawn("python3", [AUTH_PY, cmd], {
+      env: process.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let out = "";
+    let err = "";
+    const killer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* ignore */
+      }
+    }, 120000);
+    child.stdout.on("data", (c) => {
+      out += c.toString("utf8");
+    });
+    child.stderr.on("data", (c) => {
+      err += c.toString("utf8");
+    });
+    child.on("close", () => {
+      clearTimeout(killer);
+      const line = out.trim().split(/\n/).filter(Boolean).pop() || "";
+      try {
+        resolve(JSON.parse(line));
+      } catch {
+        resolve({
+          ok: false,
+          error: (err || out || "auth helper failed").toString().slice(0, 240),
+        });
+      }
+    });
+    child.on("error", (e) => {
+      clearTimeout(killer);
+      resolve({ ok: false, error: String((e && e.message) || e) });
+    });
+    try {
+      child.stdin.write(JSON.stringify(bodyObj || {}));
+      child.stdin.end();
+    } catch {
+      /* ignore */
+    }
+  });
 }
 
-function sendTgLoginHtml(res, tg) {
-  const safe = String(tg || "")
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;");
+function sendTgAdminHtml(res) {
   const html = `<!DOCTYPE html>
-<html><head>
+<html lang="en"><head>
 <meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<meta http-equiv="refresh" content="8"/>
-<title>FastDecrypt · Link Telegram</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<meta name="color-scheme" content="dark"/>
+<title>Telegram · FastDecrypt</title>
 <style>
-body{font-family:-apple-system,system-ui,sans-serif;background:#0b0d14;color:#e8eef8;margin:0;padding:28px;text-align:center}
-a.btn{display:inline-block;margin-top:24px;padding:16px 22px;background:#2AABEE;color:#fff;text-decoration:none;font-weight:700;border-radius:12px;font-size:18px}
-p{opacity:.85;line-height:1.45;max-width:28rem;margin:12px auto}
-code{word-break:break-all;font-size:12px;opacity:.7}
-.muted{opacity:.55;font-size:13px}
-</style></head><body>
-<h1>Link Premium session</h1>
-${
-  tg
-    ? `<p>Tap the button to open Telegram and approve this Mac.</p>
-<p><a class="btn" href="${safe}">Open Telegram</a></p>
-<p class="muted">Page auto-refreshes. Keep the SSH <code>session</code> command running.</p>
-<p><code>${safe}</code></p>`
-    : `<p>Waiting for login token… keep <code>mac-ssh.sh session</code> running on the Mac, then refresh this page.</p>
-<p class="muted">build ${BUILD}</p>`
+:root{--acc:#ff9a1f;--bg:#0b0b0b;--card:#141414;--line:#292929;--muted:#9a9a9a}
+*{box-sizing:border-box}body{margin:0;font:16px/1.45 -apple-system,system-ui,sans-serif;background:var(--bg);color:#fff}
+.w{max-width:560px;margin:0 auto;padding:18px 16px 48px}
+h1{font-size:28px;margin:8px 0 14px}h2{font-size:13px;letter-spacing:1px;color:var(--muted);margin:22px 0 8px}
+.box{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px 14px 16px;margin:0 0 12px}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:8px;background:#f33;vertical-align:middle}
+.dot.ok{background:#2fd16b}label{display:block;margin:12px 0 4px;font-size:13px;color:var(--muted)}
+input{width:100%;height:44px;padding:0 12px;border:1px solid #333;border-radius:11px;background:#0b0b0b;color:#fff;font:16px system-ui;outline:0}
+input:focus{border-color:var(--acc)}.btn{appearance:none;border:0;border-radius:12px;background:var(--acc);color:#111;font:700 15px system-ui;padding:12px 16px;margin-top:12px;width:100%;cursor:pointer}
+.btn.sec{background:transparent;border:1px solid #444;color:#ddd}.btn.danger{background:transparent;border:1px solid #7a2318;color:#f66;margin-top:18px}
+.mm{color:var(--muted);font-size:12px;margin:8px 0 0}.flash{padding:10px 12px;border-radius:12px;border:1px solid #333;margin:10px 0;display:none}
+.flash.on{display:block}.flash.bad{border-color:#f33;color:#f66}.flash.ok{border-color:#2f8f4a;color:#5fd17f}
+details{margin-top:10px}summary{cursor:pointer;color:var(--acc);font-weight:600}
+code{background:#111;border:1px solid #292929;border-radius:8px;padding:2px 7px}
+</style></head><body><div class="w">
+<h1>Telegram</h1>
+<div class="box" id="status"><span class="dot" id="dot"></span><span id="statusText">Checking…</span>
+<p class="mm" id="route"></p></div>
+<div class="flash" id="flash"></div>
+
+<h2>API KEYS</h2>
+<div class="box">
+<p class="mm">From my.telegram.org → API development tools.</p>
+<label>api_id</label><input id="api_id" inputmode="numeric" autocomplete="off" placeholder="12345678"/>
+<label>api_hash</label><input id="api_hash" autocomplete="off" placeholder="saved (enter to replace)"/>
+<button class="btn" type="button" id="saveKeys">Save keys</button>
+</div>
+
+<h2>LOG IN</h2>
+<div class="box">
+<label>Phone (with country code)</label>
+<input id="phone" type="tel" autocomplete="tel" placeholder="+15551234567"/>
+<button class="btn" type="button" id="sendCode">Send code</button>
+<label>Login code</label>
+<input id="code" inputmode="numeric" autocomplete="one-time-code" placeholder="12345"/>
+<label>2FA password (if enabled)</label>
+<input id="password" type="password" autocomplete="current-password" placeholder="optional"/>
+<button class="btn" type="button" id="signIn">Sign in</button>
+<details><summary>Or paste a session string</summary>
+<label>Session string</label>
+<input id="session" autocomplete="off" placeholder="Pyrogram / Telethon string session"/>
+<button class="btn sec" type="button" id="useSession">Save session</button>
+</details>
+<button class="btn danger" type="button" id="logout">Log out of Telegram</button>
+<p class="mm">Codes arrive in the official <b>Telegram</b> chat as “Login code: …”, not my.telegram.org web codes. Large IPAs also work via HTTPS download when this session is missing.</p>
+</div>
+<p class="mm">build ${BUILD}</p>
+</div>
+<script>
+(function(){
+function $(id){return document.getElementById(id);}
+function flash(msg,bad){var f=$('flash');f.textContent=msg||'';f.className='flash on '+(bad?'bad':'ok');}
+function post(path,body){
+  return fetch(path,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body||{})})
+    .then(function(r){return r.json();});
 }
-</body></html>`;
+function paint(s){
+  var ok=!!(s&&s.authed);$('dot').className='dot'+(ok?' ok':'');
+  if(ok){
+    var w=s.who||{};
+    var name=w.name||('id '+w.id)||'user';
+    var un=w.username?(' @'+w.username):'';
+    $('statusText').innerHTML='Connected as <b>'+name+'</b>'+un+(w.premium?' · Premium':'');
+    $('route').textContent='Requests upload via @'+(s.bot||'FastDecryptAI')+(s.channel?(' · channel '+s.channel):'');
+  }else{
+    $('statusText').textContent='Not connected';
+    $('route').textContent=s&&s.error?s.error:'Save keys, then Send code — or paste a session string.';
+  }
+  if(s&&s.apiId)$('api_id').value=s.apiId;
+  if(s&&s.hasHash)$('api_hash').placeholder='saved (enter to replace)';
+  if(s&&s.pendingPhone)$('phone').value=s.pendingPhone;
+}
+function refresh(){fetch('/tg-login/status').then(function(r){return r.json();}).then(paint).catch(function(){flash('Status failed',true);});}
+$('saveKeys').onclick=function(){post('/tg-login/keys',{api_id:$('api_id').value,api_hash:$('api_hash').value}).then(function(j){flash(j.message||j.error,!j.ok);refresh();});};
+$('sendCode').onclick=function(){post('/tg-login/send-code',{phone:$('phone').value}).then(function(j){flash(j.message||j.error,!j.ok);});};
+$('signIn').onclick=function(){post('/tg-login/sign-in',{phone:$('phone').value,code:$('code').value,password:$('password').value}).then(function(j){flash(j.message||j.error,!j.ok);if(j.ok)refresh();});};
+$('useSession').onclick=function(){post('/tg-login/session',{session:$('session').value}).then(function(j){flash(j.message||j.error,!j.ok);if(j.ok)refresh();});};
+$('logout').onclick=function(){if(!confirm('Log out Premium session?'))return;post('/tg-login/logout',{}).then(function(j){flash(j.message||j.error,!j.ok);refresh();});};
+refresh();
+})();
+</script></body></html>`;
   const body = Buffer.from(html, "utf8");
   res.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
@@ -263,12 +357,6 @@ async function handle(req, res) {
     return res.end();
   }
 
-  // While session setup is waiting, bare tunnel URL should show the login page
-  // (phones often open the host without /tg-login).
-  if (p === "/" && req.method === "GET" && readTgLoginUrl()) {
-    return sendTgLoginHtml(res, readTgLoginUrl());
-  }
-
   if (p === "/" || p === "/health" || p === "/api/mac-host") {
     const fp = fairplayBackends.backendStatus();
     const resHost = fairplayBackends.hostResources ? fairplayBackends.hostResources() : null;
@@ -293,6 +381,7 @@ async function handle(req, res) {
       publicBase: macApi || undefined,
       macApiUrl: macApi ? macApi + "/" : undefined,
       tgLogin: macApi ? `${macApi}/tg-login` : "/tg-login",
+      buildTgAdmin: BUILD,
       ipatoolSession: session,
       purchasedCount: (purchased.items || []).length,
       purchasedUpdatedAt: purchased.updatedAt || 0,
@@ -307,15 +396,32 @@ async function handle(req, res) {
     });
   }
 
-  // Premium session link-login page (written by mac-tg-session-setup.py).
-  // Open on cellular via the Cloudflare public URL — no LAN / QR needed.
+  // decrypt.team-style Premium user login (api keys / send code / paste session).
   if (p === "/tg-login" && req.method === "GET") {
-    return sendTgLoginHtml(res, readTgLoginUrl());
+    return sendTgAdminHtml(res);
   }
-
-  if (p === "/tg-login.json" && req.method === "GET") {
-    const url = readTgLoginUrl();
-    return json(res, 200, { ok: !!url, url, build: BUILD });
+  if (p === "/tg-login/status" && req.method === "GET") {
+    const st = await runTgAuth("status", {});
+    return json(res, 200, { ...st, build: BUILD });
+  }
+  if (p === "/tg-login/keys" && req.method === "POST") {
+    const body = await readBody(req).catch(() => ({}));
+    return json(res, 200, await runTgAuth("set-keys", body));
+  }
+  if (p === "/tg-login/send-code" && req.method === "POST") {
+    const body = await readBody(req).catch(() => ({}));
+    return json(res, 200, await runTgAuth("send-code", body));
+  }
+  if (p === "/tg-login/sign-in" && req.method === "POST") {
+    const body = await readBody(req).catch(() => ({}));
+    return json(res, 200, await runTgAuth("sign-in", body));
+  }
+  if (p === "/tg-login/session" && req.method === "POST") {
+    const body = await readBody(req).catch(() => ({}));
+    return json(res, 200, await runTgAuth("use-session", body));
+  }
+  if (p === "/tg-login/logout" && req.method === "POST") {
+    return json(res, 200, await runTgAuth("logout", {}));
   }
 
   // Public tokenized IPA download (bot stages >4 GB files here).

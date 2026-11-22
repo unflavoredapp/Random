@@ -436,13 +436,16 @@ async function sendStatus(chatId) {
   const premOn = preferPremiumUpload();
   const ch = premiumUploadChannel() || "";
   const sessLoaded = premiumUploadConfigured();
+  const pub = publicDl.resolvePublicBase() || "";
   const uploadLine = premOn
     ? ch
       ? `☁️ Upload: Premium → channel <code>${escapeHtml(ch)}</code> → bot`
       : `☁️ Upload: Premium session OK · set <code>TELEGRAM_UPLOAD_CHANNEL</code> for large IPAs`
     : sessLoaded
       ? `☁️ Upload: Premium session loaded but disabled (<code>TELEGRAM_PREMIUM_UPLOAD=0</code>)`
-      : `☁️ Upload: Bot API only (~50 MB) — run <code>zsh server/mac-ssh.sh session 'https://t.me/+…'</code>`;
+      : pub
+        ? `☁️ Upload: Bot API ≤50 MB · larger → HTTPS <code>${escapeHtml(pub)}/d/…</code>`
+        : `☁️ Upload: Bot API ≤50 MB · run <code>mac-ssh.sh api</code> for HTTPS big-IPA links (or web login at /tg-login)`;
   const text =
     `<b>${escapeHtml(botBrandName())} status</b>\n\n` +
     `🤖 Bot: @${escapeHtml(BOT_USERNAME || "?")}\n` +
@@ -3309,8 +3312,9 @@ async function deliverResult(chatId, result, opts = {}) {
 
   if (card) await card.setStage("Uploading…", 92);
 
-  // Telegram Premium hard-caps documents at 4 GB — stage a Mac download link instead.
-  if (bytes > TG_PREMIUM_DOC_MAX) {
+  // Can't upload through Telegram (cloud Bot ~50 MB / Premium 4 GB) → HTTPS download.
+  // Skips broken Premium-session login entirely when MAC_PUBLIC_BASE / api tunnel is up.
+  if (needsHttpsIpaLink(bytes)) {
     const linkSent = await deliverOversizedViaLink(chatId, {
       diskPath: keep,
       fileName,
@@ -3326,7 +3330,7 @@ async function deliverResult(chatId, result, opts = {}) {
         await tgApi("sendMessage", {
           chat_id: chatId,
           text:
-            `Decrypted (${mb} MB) but over Telegram’s 4 GB cap and no public download base.\n` +
+            `Decrypted (${mb} MB) but Telegram can't host this file and HTTPS link failed.\n` +
             `${String(why).slice(0, 300)}\n\nSaved on Mac:\n\`${keep}\``,
           parse_mode: "Markdown",
         });
@@ -3372,7 +3376,7 @@ async function deliverResult(chatId, result, opts = {}) {
  */
 async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
   const bytes = pending.bytes || 0;
-  const gb = (bytes / (1024 ** 3)).toFixed(2);
+  const mb = (bytes / (1024 * 1024)).toFixed(1);
   const fileName = displayIpaFileName(pending.fileName || "App.ipa");
   let staged;
   try {
@@ -3385,13 +3389,17 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
     return {
       ok: false,
       description:
-        "Set MAC_PUBLIC_BASE to your trycloudflare URL (or run: zsh ~/tetherless/server/mac-ssh.sh api)",
+        "Run: zsh ~/tetherless/server/mac-ssh.sh api  (needs the https://….trycloudflare.com URL)",
     };
   }
   const caption = pending.caption || "";
+  const reason =
+    bytes > TG_PREMIUM_DOC_MAX
+      ? "Too large for Telegram’s 4 GB file cap."
+      : "Too large for Telegram Bot upload (~50 MB) — download from the Mac instead.";
   const text =
-    `<b>${escapeHtml(pending.name || "App")}</b> · ${gb} GB\n` +
-    `Too large for Telegram’s 4 GB file cap.\n\n` +
+    `<b>${escapeHtml(pending.name || "App")}</b> · ${escapeHtml(mb)} MB\n` +
+    `${reason}\n\n` +
     `⬇️ <a href="${escapeHtml(url)}">Download IPA</a>\n` +
     `<code>${escapeHtml(url)}</code>\n\n` +
     (caption ? `${caption}\n\n` : "") +
@@ -3426,6 +3434,15 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
   }
   console.log("[job] oversized IPA → download link message", url);
   return { ok: true, url, result: sent.result };
+}
+
+function needsHttpsIpaLink(bytes) {
+  const n = Number(bytes) || 0;
+  if (n > TG_PREMIUM_DOC_MAX) return true;
+  if (LOCAL_API) return false;
+  if (n <= TG_DOC_MAX) return false;
+  // Over cloud Bot ~50 MB and no working Premium user session → public download.
+  return !preferPremiumUpload();
 }
 
 async function cacheIpaDelivery(pending, { fileName, caption, fileId, fileUniqueId, messageId, fromChatId, bytes, diskPath }) {
@@ -3556,6 +3573,10 @@ async function deliverIpaAsDocument(chatId, pending, { card, cardMessageId } = {
       card: null, // don't drive progress paints during upload
     });
     if (!(sent && sent.ok)) {
+      // Premium login often unavailable — fall back to public HTTPS IPA link.
+      if (sent && sent.tooLarge) {
+        return deliverOversizedViaLink(chatId, pending, { card });
+      }
       return sent || { ok: false, description: "upload failed" };
     }
     uploadResult = sent;
