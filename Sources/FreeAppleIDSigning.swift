@@ -1,5 +1,5 @@
 //
-// Brand: Tetherless · https://tetherless.dev
+// Brand: AppAssassin · https://fastdecrypt.ai
 //  FreeAppleIDSigning.swift
 //  SideSign / SideStore-style free Apple ID 7-day development certificate:
 //  GrandSlam portal session → list/revoke orphan portal certs → CSR create →
@@ -48,6 +48,7 @@ enum FreeAppleIDSigning {
         let orphans = portalCerts.filter { !ownsPortalCertificate($0, owned: owned) }
         if !orphans.isEmpty {
             try await revokePortalCertificates(orphans, auth: auth, team: team, requireSuccess: false)
+            try? await Task.sleep(nanoseconds: 800_000_000)
         }
 
         let created: (certPEM: Data, privateKeyPEM: Data, certificate: DevCertificate, csr: CSRBuilder.Result)
@@ -55,26 +56,49 @@ enum FreeAppleIDSigning {
             do {
                 return try await createDevelopmentCertificateSideSignStyle(auth: auth, team: team)
             } catch {
-                // Portal 1200 / session flakes: one full GrandSlam refresh then retry create.
+                // Portal 1200 / session flakes: GrandSlam refresh, clear *all* Development
+                // slots (SideStore replace), wait, then create again — up to 2 recovery rounds.
                 guard isPortalAuthBlocked(error) || isPortalSlotError(error) else { throw error }
-                auth = try await AppleIDStore.shared.refreshPortalSession()
-                let refreshedTeams = try await DeveloperPortalClient.shared.listTeams(auth: auth)
-                let team2 = preferredTeam(from: refreshedTeams, session: auth) ?? team
-                let again = (try? await DeveloperPortalClient.shared.listCertificates(auth: auth, team: team2)) ?? []
-                try await revokePortalCertificates(again, auth: auth, team: team2, requireSuccess: false)
-                try? await Task.sleep(nanoseconds: 1_200_000_000)
-                return try await createDevelopmentCertificateSideSignStyle(auth: auth, team: team2)
+                var lastError: Error = error
+                var workingAuth = auth
+                var workingTeam = team
+                for round in 1...2 {
+                    do {
+                        workingAuth = try await AppleIDStore.shared.refreshPortalSession()
+                        let refreshedTeams = try await DeveloperPortalClient.shared.listTeams(auth: workingAuth)
+                        workingTeam = preferredTeam(from: refreshedTeams, session: workingAuth) ?? workingTeam
+                    } catch {
+                        // Still try create with the previous portal session if refresh needs 2FA.
+                        if case AppleAuthError.needsTwoFactor = error { throw error }
+                        lastError = error
+                    }
+                    let again = (try? await DeveloperPortalClient.shared.listCertificates(
+                        auth: workingAuth, team: workingTeam
+                    )) ?? []
+                    // Free tier: clear every listed Development cert so CSR can take the slot.
+                    try await revokePortalCertificates(again, auth: workingAuth, team: workingTeam, requireSuccess: false)
+                    try? await Task.sleep(nanoseconds: UInt64(1_500_000_000 * round))
+                    do {
+                        return try await createDevelopmentCertificateSideSignStyle(
+                            auth: workingAuth, team: workingTeam
+                        )
+                    } catch {
+                        lastError = error
+                    }
+                }
+                auth = workingAuth
+                throw lastError
             }
         }()
 
         var appIDs = (try? await DeveloperPortalClient.shared.listAppIDs(auth: auth, team: team)) ?? []
         var appID = preferredWildcardAppID(from: appIDs)
         if appID == nil {
-            let bid = "com.tetherless.\(UUID().uuidString.prefix(8).lowercased()).*"
+            let bid = "com.fastdecrypt.\(UUID().uuidString.prefix(8).lowercased()).*"
             do {
                 appID = try await DeveloperPortalClient.shared.addAppID(
                     bundleID: bid,
-                    name: "TetherLess Free",
+                    name: "AppAssassin Free",
                     auth: auth,
                     team: team
                 )
@@ -129,8 +153,15 @@ enum FreeAppleIDSigning {
             if AppleIDStore.isPortalSessionExpired(error) || isPortalAuthBlocked(error) {
                 let refreshed = try await AppleIDStore.shared.refreshPortalSession()
                 // Re-probe — returning a session that still 1200s wastes the create path.
-                _ = try await DeveloperPortalClient.shared.listTeams(auth: refreshed)
-                return refreshed
+                do {
+                    _ = try await DeveloperPortalClient.shared.listTeams(auth: refreshed)
+                    return refreshed
+                } catch {
+                    // listTeams 1200 after refresh: still return the refreshed session so CSR
+                    // + revoke path can run — some free accounts 1200 on listTeams only.
+                    if isPortalAuthBlocked(error) { return refreshed }
+                    throw error
+                }
             }
             throw error
         }
@@ -153,6 +184,7 @@ enum FreeAppleIDSigning {
         return text.contains("1100")
             || text.contains("not allowed to perform")
             || text.contains("portal error 1200")
+            || text.contains("(1200)")
     }
 
     private static func isPortalSlotError(_ error: Error) -> Bool {
@@ -160,7 +192,10 @@ enum FreeAppleIDSigning {
             return code == 35 || code == 7460 || code == 1200
         }
         let text = error.localizedDescription.lowercased()
-        return text.contains("7460") || text.contains("portal error 35") || text.contains("portal error 1200")
+        return text.contains("7460")
+            || text.contains("portal error 35")
+            || text.contains("portal error 1200")
+            || text.contains("(1200)")
     }
 
     private struct OwnedPortalKeys {
@@ -233,7 +268,7 @@ enum FreeAppleIDSigning {
     }
 
     /// CSR submit with SideSign replace semantics: on 35/7460/1200 revoke Development
-    /// certs we don't own, then create once more.
+    /// certs (or every listed cert on free tier), then create once more.
     private static func createDevelopmentCertificateSideSignStyle(
         auth: AppleAuthSession,
         team: Team
@@ -249,14 +284,18 @@ enum FreeAppleIDSigning {
         } catch {
             guard isPortalSlotError(error) else { throw error }
             let existing = (try? await DeveloperPortalClient.shared.listCertificates(auth: auth, team: team)) ?? []
-            // Free tier: clear the single Development slot. Prefer Development-looking names.
-            let toRevoke = existing.isEmpty ? existing : existing.filter {
-                let n = $0.name.lowercased()
-                return n.contains("development") || n.contains("ios development") || existing.count == 1
-            }
-            let targets = toRevoke.isEmpty ? existing : toRevoke
-            try await revokePortalCertificates(targets, auth: auth, team: team, requireSuccess: false)
-            try? await Task.sleep(nanoseconds: 1_200_000_000)
+            // Free tier: clear the single Development slot. Prefer Development-looking names,
+            // but if names are just the device ("iPhone") revoke everything listed.
+            let toRevoke: [DevCertificate] = {
+                if existing.count <= 1 { return existing }
+                let filtered = existing.filter {
+                    let n = $0.name.lowercased()
+                    return n.contains("development") || n.contains("ios development") || n.contains("apple development")
+                }
+                return filtered.isEmpty ? existing : filtered
+            }()
+            try await revokePortalCertificates(toRevoke, auth: auth, team: team, requireSuccess: false)
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
             do {
                 return try await DeveloperPortalClient.shared.createDevelopmentCertificate(
                     machineName: UIDevice.current.name,
@@ -266,7 +305,7 @@ enum FreeAppleIDSigning {
                 )
             } catch {
                 throw AppleAuthError.message(
-                    "Couldn't create a free 7-day development certificate after clearing the portal slot (\(error.localizedDescription)). Sign out and back in under Account, then retry — same flow as SideStore/SideSign."
+                    "Couldn't create a free 7-day development certificate after clearing the portal slot (\(error.localizedDescription)). Tap Create again, or import a custom .p12 + mobileprovision under Certificate — same flow as SideStore/SideSign."
                 )
             }
         }
@@ -288,10 +327,11 @@ enum FreeAppleIDSigning {
         let wildcards = appIDs.filter {
             $0.bundleID == "*" || $0.bundleID.hasSuffix(".*")
         }
-        if let tetherless = wildcards.first(where: {
-            $0.bundleID.localizedCaseInsensitiveContains("tetherless")
+        if let branded = wildcards.first(where: {
+            let b = $0.bundleID.lowercased()
+            return b.contains("fastdecrypt") || b.contains("appassassin") || b.contains("tetherless")
         }) {
-            return tetherless
+            return branded
         }
         return wildcards.first
     }

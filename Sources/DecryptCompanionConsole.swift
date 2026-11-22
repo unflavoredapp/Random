@@ -301,14 +301,14 @@ struct DecryptCompanionConsole: View {
     private var exportActions: some View {
         VStack(alignment: .leading, spacing: 10) {
             if companion.exportSentToHost {
-                Text("Clear IPA sent to TetherLess. Switch back for Sign → Install.")
+                Text("Clear IPA sent to AppAssassin. Switch back for Sign → Install.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.65))
                     .fixedSize(horizontal: false, vertical: true)
                 Button {
                     DecryptCompanionHandoff.openHostForClearIPAImport()
                 } label: {
-                    Text("Open TetherLess")
+                    Text("Open AppAssassin")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.black)
                         .frame(maxWidth: .infinity)
@@ -317,7 +317,7 @@ struct DecryptCompanionConsole: View {
                 }
                 .buttonStyle(.plain)
             } else {
-                Text("App Group isn’t available on this certificate — Share the IPA and choose Open in TetherLess.")
+                Text("App Group isn’t available on this certificate — Share the IPA and choose Open in AppAssassin.")
                     .font(.caption)
                     .foregroundStyle(.white.opacity(0.65))
                     .fixedSize(horizontal: false, vertical: true)
@@ -325,7 +325,7 @@ struct DecryptCompanionConsole: View {
             Button {
                 shareURL = companion.finishedURL
             } label: {
-                Text(companion.exportSentToHost ? "Share copy…" : "Share IPA with TetherLess")
+                Text(companion.exportSentToHost ? "Share copy…" : "Share IPA with AppAssassin")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity)

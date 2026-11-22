@@ -823,6 +823,11 @@ final class DeviceDecryptService: ObservableObject {
             guard AppleIDStore.shared.isSignedIn else {
                 throw DecryptError("Sign in under Account with the Apple ID that owns this app.")
             }
+            // Gate Media & Purchases *before* any Store purchase/download so a missing
+            // FairPlay ack never looks like an App Store outage.
+            _ = try FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
+                self?.publishDecryptProgress(msg)
+            }
             let link: String
             if !linkHint.isEmpty {
                 link = linkHint
@@ -848,6 +853,7 @@ final class DeviceDecryptService: ObservableObject {
                     externalVersionId: externalVersionId
                 )
             } catch {
+                if error is FairPlayKeyGateError { throw error }
                 guard !bid.isEmpty,
                       let installed = await resolveInstalledAppURL(bundleID: bid) else {
                     throw error
@@ -866,6 +872,9 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.error = text
             DecryptClient.shared.message = text
             status = ""
+            if error is FairPlayKeyGateError {
+                FairPlayKeyGate.rememberPendingSearchRetry()
+            }
         }
     }
 
@@ -946,7 +955,15 @@ final class DeviceDecryptService: ObservableObject {
             )
             AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
         } catch {
+            // Never wrap the FairPlay Media & Purchases gate as a Store download failure.
+            if error is FairPlayKeyGateError { throw error }
             let detail = error.localizedDescription
+            let lower = detail.lowercased()
+            if lower.contains("capture fairplay keys")
+                || lower.contains("before companion decrypt")
+                || lower.contains("media & purchases") {
+                throw error
+            }
             // Installed companion embed only — no remint / backend IPA fallback.
             if !bundleID.isEmpty,
                let installed = await resolveInstalledAppURL(bundleID: bundleID) {
@@ -959,7 +976,6 @@ final class DeviceDecryptService: ObservableObject {
                 AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
                 return
             }
-            let lower = detail.lowercased()
             if lower.contains("timed out") || lower.contains("timeout") || lower.contains("network connection was lost") {
                 throw DecryptError(
                     "App Store download timed out. Check Wi‑Fi and retry Get — you usually don’t need to sign in again."

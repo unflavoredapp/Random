@@ -149,8 +149,8 @@ enum FailurePlaybook {
     static func run(_ play: FailurePlay) async {
         switch play.action {
         case .openAppStoreSignIn:
-            // Clear stale ack and open the capture sheet → App Store / Media & Purchases.
-            AppStoreDecryptGuide.setAcknowledged(false, email: AppleIDStore.shared.email)
+            // Keep any existing ack; open capture so the user can Confirm / re-enroll Media & Purchases.
+            FairPlayKeyGate.rememberPendingSearchRetry()
             FairPlayKeysFetcher.shared.presentCaptureSheet()
             FairPlayKeysFetcher.shared.startFetchFromSession()
         case .acknowledgeFairPlay:
@@ -160,6 +160,7 @@ enum FailurePlaybook {
                 AppNav.shared.goAccount()
                 return
             }
+            FairPlayKeyGate.rememberPendingSearchRetry()
             FairPlayKeysFetcher.shared.presentCaptureSheet()
             FairPlayKeysFetcher.shared.markGrabbedManually()
         case .reauthStore:

@@ -292,16 +292,19 @@ struct IPadnInstallationSettingsView: View {
         ensuringAppleIDCert = true
         defer { ensuringAppleIDCert = false }
         do {
-            // Remint when the linked free cert is expired; otherwise ensure/create as needed.
-            let force = linkedAppleIDCert.map {
-                certStore.cachedProfileInfo(for: $0).isExpired
-            } ?? false
-            let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate(forceRefresh: force)
+            // Explicit Create / Refresh always remints — SideStore-style revoke + CSR.
+            let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate(forceRefresh: true)
             certStatus = "Ready: \(cert.name)"
         } catch {
-            // SideSign-style create already tried portal session refresh + revoke/recreate.
-            issue = error.localizedDescription
-            certStatus = nil
+            let text = error.localizedDescription
+            // Portal 1200 / free-tier blocks — point at custom import instead of a dead end.
+            if text.contains("1200") || text.localizedCaseInsensitiveContains("not allowed to perform") {
+                issue = text + "\n\nUse Import custom .p12 + mobileprovision below — companion signing will fall back to that cert."
+                certStatus = "Free Apple ID cert blocked — import a custom certificate."
+            } else {
+                issue = text
+                certStatus = nil
+            }
         }
     }
 
