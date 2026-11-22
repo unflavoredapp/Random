@@ -10,7 +10,9 @@
  *
  * Discord Developer Portal:
  *   - Rename app to FastDecrypt
- *   - Enable MESSAGE CONTENT INTENT (+ Server Members optional)
+ *   - Bot → Privileged Gateway Intents → enable MESSAGE CONTENT INTENT
+ *     (optional: set DISCORD_MESSAGE_CONTENT=1 after enabling — paste-URL decrypt)
+ *   - Without that intent the bot still starts; use /decrypt url:…
  *   - Invite with scopes: bot, applications.commands
  *     permissions: Send Messages, Attach Files, Embed Links, Read Message History
  *
@@ -63,13 +65,19 @@ const {
   ActivityType,
 } = Discord;
 
+// Message Content is a privileged intent — enabling it in code without flipping
+// the Developer Portal switch causes: "Used disallowed intents".
+const WANT_MESSAGE_CONTENT =
+  String(process.env.DISCORD_MESSAGE_CONTENT || "").trim() === "1";
+const intents = [
+  GatewayIntentBits.Guilds,
+  GatewayIntentBits.GuildMessages,
+  GatewayIntentBits.DirectMessages,
+];
+if (WANT_MESSAGE_CONTENT) intents.push(GatewayIntentBits.MessageContent);
+
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.DirectMessages,
-    GatewayIntentBits.MessageContent,
-  ],
+  intents,
   partials: [Partials.Channel],
 });
 
@@ -133,9 +141,11 @@ function helpEmbed() {
       [
         `Decrypt App Store IPAs on the Mac host.`,
         ``,
-        `• Paste an App Store link`,
-        `• Or \`/decrypt url:<App Store link>\``,
+        `• \`/decrypt url:<App Store link>\``,
         `• \`/status\` — Mac decrypt readiness`,
+        WANT_MESSAGE_CONTENT
+          ? `• Or paste an App Store link in chat`
+          : `• Paste-URL needs Message Content Intent + DISCORD_MESSAGE_CONTENT=1`,
         ``,
         `Files over ~25 MB are sent as an HTTPS download link.`,
         SITE,
@@ -312,7 +322,7 @@ client.once("ready", async () => {
   console.log(
     `[discord] decrypt=${!!(st.unfairplay && st.unfairplay.ready)} model=${!!(
       st.enrollmentModel && st.enrollmentModel.ready
-    )} public=${publicDl.resolvePublicBase() || "unset"}`
+    )} public=${publicDl.resolvePublicBase() || "unset"} messageContent=${WANT_MESSAGE_CONTENT ? "on" : "off"}`
   );
 });
 
@@ -368,6 +378,7 @@ client.on("interactionCreate", async (interaction) => {
 });
 
 client.on("messageCreate", async (message) => {
+  if (!WANT_MESSAGE_CONTENT) return;
   if (!message || message.author.bot) return;
   const text = String(message.content || "").trim();
   if (!text) return;
