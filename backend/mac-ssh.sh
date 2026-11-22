@@ -11,10 +11,12 @@
 #   zsh ~/tetherless/server/mac-ssh.sh api       # HTTPS backup API + cloudflared
 #   zsh ~/tetherless/server/mac-ssh.sh pull
 #   zsh ~/tetherless/server/mac-ssh.sh unlock    # keychain only
+#   zsh ~/tetherless/server/mac-ssh.sh login     # keychain + ipatool auth login
 #
 set -euo pipefail
 
-export PATH="/opt/homebrew/bin:$HOME/bin:/users/client/bin:/usr/local/bin:$PATH"
+# SSH shells often miss Homebrew / go / local bins — keep ipatool reachable.
+export PATH="/opt/homebrew/bin:/opt/homebrew/sbin:$HOME/bin:$HOME/go/bin:$HOME/.local/bin:/users/client/bin:/users/client/go/bin:/usr/local/bin:/usr/local/go/bin:$PATH"
 
 ENV_FILE=""
 for f in "$HOME/.tetherless-mac.env" /users/client/.tetherless-mac.env; do
@@ -47,11 +49,39 @@ API_LOG="$RUN_DIR/api.log"
 CF_PID="$RUN_DIR/cloudflared.pid"
 CF_LOG="$RUN_DIR/cloudflared.log"
 
+# Resolve ipatool even when interactive SSH PATH is bare.
+resolve_ipatool() {
+  local c
+  c="$(command -v ipatool 2>/dev/null || true)"
+  if [[ -n "$c" && -x "$c" ]]; then
+    echo "$c"
+    return 0
+  fi
+  local cand
+  for cand in \
+    "${FAIRPLAY_IPATOOL_BIN:-}" \
+    /opt/homebrew/bin/ipatool \
+    /usr/local/bin/ipatool \
+    "$HOME/bin/ipatool" \
+    "$HOME/go/bin/ipatool" \
+    "$HOME/.local/bin/ipatool" \
+    /users/client/bin/ipatool \
+    /users/client/go/bin/ipatool
+  do
+    [[ -n "$cand" && -x "$cand" ]] || continue
+    echo "$cand"
+    return 0
+  done
+  return 1
+}
+
 unlock_keychain() {
   local pass="${TETHERLESS_KEYCHAIN_PASSWORD:-}"
   local kc="$HOME/Library/Keychains/tetherless.keychain-db"
   if [[ -z "$pass" ]]; then
-    echo "WARN: TETHERLESS_KEYCHAIN_PASSWORD not set in $ENV_FILE — ipatool may fail over SSH."
+    echo "WARN: TETHERLESS_KEYCHAIN_PASSWORD not set in ${ENV_FILE:-~/.tetherless-mac.env}"
+    echo "  Add a line, then re-run unlock/login:"
+    echo "    TETHERLESS_KEYCHAIN_PASSWORD='pick-a-strong-pass'"
     return 0
   fi
   if [[ ! -f "$kc" ]]; then
@@ -119,9 +149,44 @@ cmd_pull() {
 
 cmd_unlock() {
   unlock_keychain
-  if command -v ipatool >/dev/null 2>&1; then
-    ipatool auth info 2>&1 | head -5 || echo "ipatool not logged in — from SSH run: ipatool auth login"
+  local bin
+  if bin="$(resolve_ipatool)"; then
+    echo "ipatool: $bin"
+    "$bin" auth info 2>&1 | head -5 || true
+    if ! "$bin" auth info >/dev/null 2>&1; then
+      echo "not logged in — run: zsh $REPO/server/mac-ssh.sh login"
+    fi
+  else
+    echo "ipatool: not found (install or set FAIRPLAY_IPATOOL_BIN in ~/.tetherless-mac.env)"
   fi
+}
+
+# Interactive App Store login over SSH (uses resolved ipatool path).
+cmd_login() {
+  local envf="${ENV_FILE:-$HOME/.tetherless-mac.env}"
+  if [[ -z "${TETHERLESS_KEYCHAIN_PASSWORD:-}" ]]; then
+    echo "TETHERLESS_KEYCHAIN_PASSWORD is required for SSH login."
+    echo "Add to $envf (do not commit):"
+    echo "  TETHERLESS_KEYCHAIN_PASSWORD='pick-a-strong-pass'"
+    echo "Then: zsh $REPO/server/mac-ssh.sh login"
+    exit 1
+  fi
+  if [[ ! -f "$HOME/Library/Keychains/tetherless.keychain-db" ]]; then
+    zsh "$REPO/server/mac-keychain-setup.sh"
+  else
+    unlock_keychain
+  fi
+  local bin
+  if ! bin="$(resolve_ipatool)"; then
+    echo "ipatool binary not found. Install it, or set FAIRPLAY_IPATOOL_BIN=/full/path/to/ipatool"
+    exit 1
+  fi
+  echo "Using: $bin"
+  echo "Sign in with the Apple ID used for App Store downloads."
+  echo "If Keychain asks for a password, use TETHERLESS_KEYCHAIN_PASSWORD → Always Allow."
+  "$bin" auth login
+  echo
+  "$bin" auth info 2>&1 | head -8 || true
 }
 
 cmd_stop() {
@@ -430,20 +495,20 @@ cmd_status() {
   elif [[ -f "$HOME/.tetherless-mac-public-url" ]]; then
     echo "public: $(cat "$HOME/.tetherless-mac-public-url" 2>/dev/null)"
   fi
-  if command -v ipatool >/dev/null 2>&1; then
-    echo -n "ipatool: "
-    # Prefer JSON-ish / email line from auth info; fall back to first two lines.
+  local ibin
+  if ibin="$(resolve_ipatool)"; then
+    echo -n "ipatool: $ibin · "
     local info
-    info="$(ipatool auth info 2>&1 || true)"
+    info="$("$ibin" auth info 2>&1 || true)"
     if echo "$info" | grep -qiE 'email|logged|name@|@[a-z0-9.-]+\.[a-z]'; then
       echo "$info" | head -3
     elif [[ -z "$info" ]]; then
-      echo "not logged in — run: ipatool auth login"
+      echo "not logged in — run: zsh $REPO/server/mac-ssh.sh login"
     else
       echo "$info" | head -2
     fi
   else
-    echo "ipatool: missing on PATH"
+    echo "ipatool: missing — set FAIRPLAY_IPATOOL_BIN or install into PATH"
   fi
   if [[ -f "$REPO/server/fairplayBackends.js" ]]; then
     node -e '
@@ -476,6 +541,7 @@ Tetherless Mac SSH helper (no desktop)
   zsh $REPO/server/mac-ssh.sh api
   zsh $REPO/server/mac-ssh.sh stop-api
   zsh $REPO/server/mac-ssh.sh unlock
+  zsh $REPO/server/mac-ssh.sh login    # App Store / ipatool (finds binary off PATH)
   zsh $REPO/server/mac-ssh.sh pull
 
 Requires $HOME/.tetherless-mac.env with TELEGRAM_BOT_TOKEN and/or DISCORD_BOT_TOKEN
@@ -496,6 +562,7 @@ case "$cmd" in
   channel) shift || true; cmd_channel "${1:-}" ;;
   api) cmd_api ;;
   unlock) cmd_unlock ;;
+  login|auth) cmd_login ;;
   pull) cmd_pull ;;
   -h|--help|help|"") usage ;;
   *) echo "Unknown: $cmd"; usage; exit 1 ;;
