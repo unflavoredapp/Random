@@ -3148,7 +3148,7 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
-    await card.setStage("Uploading…", 74);
+    await card.setStage("Finishing…", 86);
     await deliverResult(chatId, result, { label, card });
   } catch (e) {
     await card.fail((e && e.message) || e);
