@@ -30,7 +30,8 @@ struct IPadnVerificationCodeField: View {
                 .onChange(of: code) { value in
                     let digits = String(value.filter { $0.isASCII && $0.isNumber }.prefix(length))
                     if digits != value { code = digits; return }
-                    if digits.count == length { onComplete(digits) }
+                    // Do not auto-submit on the 6th digit — OTP autofill + a second Allow sheet
+                    // used to fire Verify while the user still needed the first code.
                 }
             HStack(spacing: 10) {
                 ForEach(0..<length, id: \.self) { index in
@@ -100,8 +101,8 @@ struct IPadnVerificationStep: View {
                 .font(.title.weight(.bold))
                 .foregroundStyle(.white)
             Text(sent
-                 ? "Apple sent a sign-in request for “\(accountLabel)”. Watch for the Allow sheet with a map on this iPhone (MacBook sign-in), tap Allow, then enter the 6-digit code."
-                 : "Asking Apple to send an Allow sheet (map on this iPhone) for “\(accountLabel)”…")
+                 ? "Apple sent one Allow for “\(accountLabel)”. Tap Allow on the map sheet, read the 6-digit code, type it below, then Verify — wait for this step to finish before Store step 2."
+                 : "Asking Apple to send one Allow sheet (map on this iPhone) for “\(accountLabel)”…")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.55))
                 .multilineTextAlignment(.center)
@@ -165,7 +166,7 @@ struct IPadnVerificationStep: View {
         .alert("Get a verification code", isPresented: $showingHelp) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text("AppAssassin signs in as a MacBook so Apple’s Allow sheet (with a map) and the 6-digit code appear on this iPhone.\n1. Tap Allow on that sheet, then type the code below before anything else.\n2. Turn Focus / Do Not Disturb off if nothing appears.\n3. Tap Resend Code only if you need a fresh Allow — a second Allow burns the first code.")
+            Text("AppAssassin signs in as a MacBook so one Allow sheet (with a map) and one 6-digit code appear on this iPhone.\n1. Tap Allow, type the code below, then Verify.\n2. Turn Focus / Do Not Disturb off if nothing appears.\n3. Use Resend Code only if you need a fresh Allow — never stack a second Allow on top of the first.\n4. Store step 2 opens after this sheet closes, only if downloads still need a second code.")
         }
     }
 }
@@ -236,7 +237,7 @@ struct IPadnLoginView: View {
                         submitTitle: "Verify & Sign In",
                         sent: allowPushSent,
                         stepLabel: "Step 1 of 2 · Apple ID",
-                        footnote: "Allow uses the MacBook sign-in style so the map sheet appears on this iPhone. Enter that code here first. If Store still needs access afterward, tap Unlock Store downloads on Account (step 2) — don’t stack a second Allow yet.",
+                        footnote: "One Allow at a time. Enter this code and Verify. Step 2 (Store) opens only after this sheet closes — never stack two Allows.",
                         resend: resendCode,
                         submit: submit,
                         changeAccount: {

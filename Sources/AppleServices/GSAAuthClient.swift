@@ -113,7 +113,9 @@ final class GSAAuthClient: ObservableObject {
             twoFactorChannel = .trustedDevice
             // Store SMS delivery must skip this GET — a Mac push + SMS on the same challenge
             // leaves MZFinance rejecting the texted digits (“That code didn’t unlock Store”).
-            if requestTrustedDevicePush, hasPendingTwoFactor {
+            // If SRP already reported `pushedCode`, Apple already showed Allow+code — a second
+            // `/trusteddevice` stacks another system sheet and burns the first code.
+            if requestTrustedDevicePush, hasPendingTwoFactor, !twoFactorCodeAlreadySent {
                 _ = await requestTrustedDeviceCodeBestEffort()
             }
             throw AppleAuthError.needsTwoFactor
@@ -688,31 +690,49 @@ final class GSAAuthClient: ObservableObject {
         // MacBook AuthKit only — that is what makes Apple’s map Allow + code overlay
         // this iPhone. A persisted iPhone Client-Info (old Sign-in device setting) sends
         // the push to *other* devices and looks like “trusted device but no location popup”.
+        // Try ONE Mac identity first. Looping every built-in Mac Client-Info after a
+        // successful push shows a second system Allow and burns the first code.
         if preferMacClient {
-            for identity in AuthClientSpoof.macAllowClientInfos() {
-                let (data, code) = try await attempt(spoofClient: true, override: identity)
+            let identities = AuthClientSpoof.macAllowClientInfos()
+            if let primary = identities.first {
+                let (data, code) = try await attempt(spoofClient: true, override: primary)
                 lastData = data
                 lastCode = code
                 if code == 200 || code == 201 || code == 204 || code == 409 {
                     return
                 }
-                if ![403, 433, 500, 503].contains(code) { break }
             }
+            // Hard failure only — soft “already pushed” responses must not retry.
+            if [403, 433, 500, 503].contains(lastCode) {
+                for identity in identities.dropFirst().prefix(1) {
+                    let (data, code) = try await attempt(spoofClient: true, override: identity)
+                    lastData = data
+                    lastCode = code
+                    if code == 200 || code == 201 || code == 204 || code == 409 {
+                        return
+                    }
+                }
+                let (data, code) = try await attempt(spoofClient: false)
+                lastData = data
+                lastCode = code
+                if code == 200 || code == 201 || code == 204 || code == 409 {
+                    return
+                }
+            }
+        } else {
             let (data, code) = try await attempt(spoofClient: false)
             lastData = data
             lastCode = code
             if code == 200 || code == 201 || code == 204 || code == 409 {
                 return
             }
-        } else {
-            for spoofClient in [false, true] {
-                let (data, code) = try await attempt(spoofClient: spoofClient)
-                lastData = data
-                lastCode = code
-                if code == 200 || code == 201 || code == 204 || code == 409 {
+            if [403, 433, 500, 503].contains(code) {
+                let (data2, code2) = try await attempt(spoofClient: true)
+                lastData = data2
+                lastCode = code2
+                if code2 == 200 || code2 == 201 || code2 == 204 || code2 == 409 {
                     return
                 }
-                if ![403, 433, 500, 503].contains(code) { break }
             }
         }
 
