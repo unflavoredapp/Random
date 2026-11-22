@@ -430,7 +430,7 @@ struct AccountHomeView: View {
                                 systemImage: "person.badge.key.fill"
                             )
                         }
-                        Text("Step 1 of 2 — Apple ID. Enter the Allow code here first. Store downloads are a separate Allow you start later from Unlock Store (step 2).")
+                        Text("Step 1 of 2 — Apple ID. One Allow, one code, then Verify. Step 2 opens after this finishes (or tap Unlock Store).")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } header: {
@@ -445,7 +445,7 @@ struct AccountHomeView: View {
                         } label: {
                             Label("Unlock Store downloads…", systemImage: "lock.open.fill")
                         }
-                        Text("Step 2 of 2 — Store. Tap when you’re ready for a second Allow + code (purchases / silent downloads). Finish step 1 first so the codes don’t stack.")
+                        Text("Step 2 of 2 — Store. Second Allow + code for purchases / silent downloads. Starts only after Step 1 is done.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         if let status = store.statusMessage, !status.isEmpty {
@@ -489,7 +489,11 @@ struct AccountHomeView: View {
             .navigationDestination(for: AppAccountPush.self) { dest in
                 accountDestination(dest)
             }
-            .sheet(isPresented: $showIPadnLogin) {
+            .sheet(isPresented: $showIPadnLogin, onDismiss: {
+                nav.presentIPadnLogin = false
+                // Sequential handoff: Step 1 sheet must be fully gone before Step 2.
+                scheduleStoreUnlockIfNeeded()
+            }) {
                 // Only seed email when resuming 2FA — “Add account” must stay blank.
                 IPadnLoginView(
                     initialAccountID: store.authPhase == .awaitingTwoFactor
@@ -497,9 +501,6 @@ struct AccountHomeView: View {
                         : nil
                 ) {
                     showIPadnLogin = false
-                    nav.presentIPadnLogin = false
-                    // Do **not** auto-present Step 2 Store unlock — that stacked a second Allow
-                    // over the first code sheet. Account shows “Unlock Store downloads…” to tap.
                 }
             }
             .sheet(isPresented: $showStoreUnlock) {
@@ -525,6 +526,19 @@ struct AccountHomeView: View {
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
         return candidates.first
+    }
+
+    /// After Step 1 dismisses, open Step 2 only if Store still needs its own Allow+code.
+    private func scheduleStoreUnlockIfNeeded() {
+        guard store.isSignedIn, store.storeNeedsVerification else { return }
+        guard !showIPadnLogin, !showStoreUnlock else { return }
+        Task { @MainActor in
+            // Let the Step 1 sheet finish dismissing so the second Allow cannot stack.
+            try? await Task.sleep(nanoseconds: 700_000_000)
+            guard store.isSignedIn, store.storeNeedsVerification else { return }
+            guard !showIPadnLogin else { return }
+            showStoreUnlock = true
+        }
     }
 
     private func consumePendingAccountNav() {
