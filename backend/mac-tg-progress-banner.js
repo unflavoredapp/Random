@@ -123,14 +123,26 @@ function terminalLogSvg({ logLines, W, H, rightLeft }) {
 }
 
 /** Big numeric % on the left panel (Discord / clean sharp — no terminal log). */
-function percentBadgeSvg({ pct, stage, W, H, rightLeft }) {
+function percentBadgeSvg({ pct, stage, W, H, rightLeft, done }) {
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-  const label = sanitize(String(stage || "").trim() || "Working…", 28);
+  const raw = String(stage || "").trim() || (done ? "Fastest discord\nDecryption Bot" : "Working…");
+  const lines = raw
+    .split(/\n/)
+    .map((l) => sanitize(l, 32))
+    .filter(Boolean)
+    .slice(0, 3);
+  while (lines.length < 1) lines.push(done ? "Fastest discord Decryption Bot" : "Working…");
   const cx = Math.round(rightLeft / 2);
+  const pctFill = done ? "#7CFFB2" : "#ffffff";
+  let labelSvg = "";
+  for (let i = 0; i < lines.length; i++) {
+    const y = 308 + i * 28;
+    labelSvg += `<text x="${cx}" y="${y}" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="600">${lines[i]}</text>`;
+  }
   return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
 <svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
-  <text x="${cx}" y="260" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="112" font-weight="800">${p}%</text>
-  <text x="${cx}" y="310" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${label}</text>
+  <text x="${cx}" y="250" text-anchor="middle" fill="${pctFill}" font-family="Arial, Helvetica, sans-serif" font-size="112" font-weight="800">${p}%</text>
+  ${labelSvg}
 </svg>`);
 }
 
@@ -444,14 +456,18 @@ async function renderProgressBanner({
         left: 0,
         top: 0,
       });
-    } else if (!isDone) {
+    } else {
+      // Progress: live % · Done (hideTerminal): 100% + tagline where the log pane was.
       layers.push({
         input: percentBadgeSvg({
-          pct: p,
-          stage: stage || "",
+          pct: isDone ? 100 : p,
+          stage:
+            stage ||
+            (isDone ? "Fastest discord\nDecryption Bot" : "Working…"),
           W,
           H,
           rightLeft,
+          done: isDone,
         }),
         left: 0,
         top: 0,
