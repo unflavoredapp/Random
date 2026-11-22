@@ -1,31 +1,34 @@
 //
 //  TetherlessBrand.swift
-//  Brand: Tetherless · https://tetherless.dev
+//  Brand: AppAssassin · https://fastdecrypt.ai
+//  (Type name kept for call-site stability; product brand is AppAssassin.)
 //
 
 import Foundation
 import SwiftUI
 import UIKit
 
-/// Canonical product brand for Tetherless (site, ASCII mark, user-agent helpers).
+/// Canonical product brand for AppAssassin (site, ASCII mark, user-agent helpers).
 nonisolated enum TetherlessBrand {
-    static let name = "Tetherless"
-    static let siteHost = "tetherless.dev"
-    static let siteURL = URL(string: "https://tetherless.dev")!
-    static let siteDisplay = "https://tetherless.dev"
-    static let bundleID = "dev.tetherless.app"
-    static let userAgent = "tetherless-ios"
+    static let name = "AppAssassin"
+    static let siteHost = "fastdecrypt.ai"
+    static let siteURL = URL(string: "https://fastdecrypt.ai")!
+    static let siteDisplay = "https://fastdecrypt.ai"
+    /// Home-screen / signing bundle id (lowercase reverse-DNS).
+    static let bundleID = "bot.fastdecrypt.ai"
+    static let appGroup = "group.bot.fastdecrypt.ai"
+    static let userAgent = "appassassin-ios"
     /// Asset catalog name for the home-screen App Icon (also shipped as an imageset for in-app use).
-    static let appIconAsset = "TetherlessAppIcon"
+    static let appIconAsset = "AppAssassinAppIcon"
 
-    /// Figlet-style mark — keep this pure ASCII for logs, README, and About.
-    /// Spells T-e-t-h-e-r-l-e-s-s; tight letter spacing (~65 cols).
+    /// Figlet-style mark — pure ASCII for logs, README, and About.
     static let ascii: String = #"""
-_____           _     _                     _
-|_   _|  ___   | |_  | |__    ___    _ __  | |  ___    ___   ___
-  | |   / _ \  | __| | '_ \  / _ \  | '__| | | / _ \  / __| / __|
-  | |   |  __/ | |_  | | | | |  __/ | |    | | |  __/ \__ \ \__ \
-  |_|   \___|   \__| |_| |_| \___|  |_|    |_| \___|  |___/ |___/
+    _                  _                _
+   / \   _ __  _ __   / \   ___ ___  ___| |__   ___
+  / _ \ | '_ \| '_ \ / _ \ / __/ __|/ _ \ '_ \ / _ \
+ / ___ \| |_) | |_) / ___ \\__ \__ \  __/ |_) | (_) |
+/_/   \_\ .__/| .__/_/   \_\___/___/\___|_.__/ \___/
+        |_|   |_|
 """#
 
     static var asciiBanner: String {
@@ -33,7 +36,7 @@ _____           _     _                     _
     }
 
     /// One-line stamp for file headers / logs.
-    static let stamp = "Brand: Tetherless · https://tetherless.dev"
+    static let stamp = "Brand: AppAssassin · https://fastdecrypt.ai"
 
     static func printBanner() {
         print(asciiBanner)
@@ -42,13 +45,13 @@ _____           _     _                     _
     /// Marketing / About icon — same artwork as the App Store / home-screen icon.
     static func appIconImage() -> UIImage? {
         if let named = UIImage(named: appIconAsset) { return named }
-        // Fallback when the imageset is missing from a thin build.
-        if let url = Bundle.main.url(forResource: "TetherlessAppIcon", withExtension: "png"),
+        if let named = UIImage(named: "TetherlessAppIcon") { return named }
+        if let url = Bundle.main.url(forResource: "AppAssassinAppIcon", withExtension: "png"),
            let data = try? Data(contentsOf: url),
            let img = UIImage(data: data) {
             return img
         }
-        return UIImage(named: "airshare_mark") ?? UIImage(named: "aircore_logo")
+        return UIImage(named: "fastdecrypt_logo") ?? UIImage(named: "airshare_mark")
     }
 }
 
@@ -69,14 +72,17 @@ struct TetherlessAppIconView: View {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: [Color(red: 0.45, green: 0.2, blue: 0.85), Color(red: 0.15, green: 0.75, blue: 0.85)],
+                            colors: [
+                                Color(red: 1.0, green: 0.45, blue: 0.1),
+                                Color(red: 0.85, green: 0.25, blue: 0.05),
+                            ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
                     )
                     .overlay {
-                        Image(systemName: "cable.connector")
-                            .font(.system(size: size * 0.42, weight: .bold))
+                        Text("A")
+                            .font(.system(size: size * 0.48, weight: .black, design: .rounded))
                             .foregroundStyle(.white)
                     }
             }

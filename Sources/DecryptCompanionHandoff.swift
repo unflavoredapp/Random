@@ -7,14 +7,14 @@
 import Foundation
 import UIKit
 
-/// Safe cross-process hints for the Tetherless Decrypt companion.
+/// Safe cross-process hints for the AppAssassin Decrypt companion.
 /// Never store Apple ID passwords, PETs, or store session JSON here.
 /// Entire type is MainActor so FairPlay-ack reads stay isolation-safe under Swift 6.
 @MainActor
 enum DecryptCompanionHandoff {
     // Path helpers are nonisolated so download jobs / background queues can resolve
     // EncryptedIPAs without hopping onto the main actor (Swift 6 / build #204).
-    nonisolated static let suiteName = "group.dev.tetherless.app"
+    nonisolated static let suiteName = TetherlessBrand.appGroup
     static let pendingBundleKey = "tetherless.decrypt.pendingCompanionBundle"
     static let pendingEmbedKey = "tetherless.decrypt.pendingEmbeddedName"
     static let pendingAtKey = "tetherless.decrypt.pendingCompanionAt"
@@ -22,10 +22,10 @@ enum DecryptCompanionHandoff {
     static let clearExportMetaKey = "companion.clearIPA.export"
     static let clearExportDirName = "ClearExports"
     /// Host deep link — companion opens this after publishing a clear IPA.
-    static let hostImportURLString = "tetherless://decrypt-export"
+    static let hostImportURLString = "appassassin://decrypt-export"
     /// Host deep link — companion opens this after on-device ENOMEM / hard FairPlay fail
     /// so the host can finish via Decrypt site URL (Mac HTTPS API / tetherless.dev).
-    static let hostServerFallbackURLString = "tetherless://decrypt-server"
+    static let hostServerFallbackURLString = "appassassin://decrypt-server"
     nonisolated static let encryptedIPADirName = "EncryptedIPAs"
     private static let serverFallbackMetaKey = "companion.serverFallback"
     private static let storeURLKey = "companion.hostStoreURL"
@@ -632,8 +632,8 @@ enum DecryptCompanionHandoff {
         DecryptClient.shared.error = nil
         let verify = meta.verifySummary.trimmingCharacters(in: .whitespacesAndNewlines)
         DecryptClient.shared.message = verify.isEmpty
-            ? "Imported clear IPA from Tetherless Decrypt."
-            : "Imported clear IPA from Tetherless Decrypt · \(verify)"
+            ? "Imported clear IPA from AppAssassin Decrypt."
+            : "Imported clear IPA from AppAssassin Decrypt · \(verify)"
         SideloadIPACache.shared.remember(url: dest, kind: .decrypted, name: meta.displayName)
         IPadnDownloadManager.shared.attachCompanionClearIPA(
             url: dest,

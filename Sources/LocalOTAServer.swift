@@ -460,7 +460,7 @@ nonisolated enum ZefvCert {
             <dict>
               <key>PayloadType</key><string>com.apple.security.root</string>
               <key>PayloadVersion</key><integer>1</integer>
-              <key>PayloadIdentifier</key><string>dev.tetherless.app.packca.\(payloadUUID)</string>
+              <key>PayloadIdentifier</key><string>bot.fastdecrypt.ai.packca.\(payloadUUID)</string>
               <key>PayloadUUID</key><string>\(payloadUUID)</string>
               <key>PayloadDisplayName</key><string>Tetherless OTA Root</string>
               <key>PayloadContent</key>
@@ -469,7 +469,7 @@ nonisolated enum ZefvCert {
           </array>
           <key>PayloadType</key><string>Configuration</string>
           <key>PayloadVersion</key><integer>1</integer>
-          <key>PayloadIdentifier</key><string>dev.tetherless.app.packca.profile.\(profileUUID)</string>
+          <key>PayloadIdentifier</key><string>bot.fastdecrypt.ai.packca.profile.\(profileUUID)</string>
           <key>PayloadUUID</key><string>\(profileUUID)</string>
           <key>PayloadDisplayName</key><string>Tetherless OTA Trust (tetherless.dev)</string>
           <key>PayloadDescription</key><string>Trusts the tetherless.dev OTA certificate authority so on-device installs work. After installing, enable Full Trust in Settings › General › About › Certificate Trust Settings.</string>

@@ -463,7 +463,7 @@ final class FairPlayKeysFetcher: ObservableObject {
 
     private func cacheEmail(_ email: String) {
         UserDefaults.standard.set(email, forKey: "tetherless.appleid.activeEmailCache")
-        UserDefaults(suiteName: "group.dev.tetherless.app")?
+        UserDefaults(suiteName: "group.bot.fastdecrypt.ai")?
             .set(email, forKey: "tetherless.appleid.activeEmailCache")
     }
 

@@ -1,21 +1,22 @@
-<!-- Brand: Tetherless · https://tetherless.dev -->
+<!-- Brand: AppAssassin · https://fastdecrypt.ai -->
 
 <p align="center">
-  <img src="docs/assets/tetherless-icon.png" width="128" alt="Tetherless app icon" />
+  <img src="docs/assets/appassassin-icon.png" width="128" alt="AppAssassin app icon" />
 </p>
 
 <pre align="center">
- _____    _   _               _
-|_   _|__| |_| |__   ___ _ __| | ___  ___ ___
-  | |/ _ \ __| '_ \ / _ \ '__| |/ _ \/ __/ __|
-  | |  __/ |_| | | |  __/ |  | |  __/\__ \__ \
-  |_|\___|\__|_| |_|\___|_|  |_|\___||___/___/
+    _                  _                _
+   / \   _ __  _ __   / \   ___ ___  ___| |__   ___
+  / _ \ | '_ \| '_ \ / _ \ / __/ __|/ _ \ '_ \ / _ \
+ / ___ \| |_) | |_) / ___ \\__ \__ \  __/ |_) | (_) |
+/_/   \_\ .__/| .__/_/   \_\___/___/\___|_.__/ \___/
+        |_|   |_|
 </pre>
 
 <p align="center">
   <strong>On-device sideloading — pair, sign, install. No computer required.</strong><br />
-  <a href="https://tetherless.dev">tetherless.dev</a>
-  · Bundle ID <code>dev.tetherless.app</code>
+  <a href="https://fastdecrypt.ai">fastdecrypt.ai</a>
+  · Bundle ID <code>bot.fastdecrypt.ai</code>
   · v3.8
 </p>
 
@@ -23,12 +24,12 @@
 
 ## Look & feel
 
-Tetherless ships a glassmorphism shell over the existing signing and install stack:
+AppAssassin ships a glassmorphism shell over the existing signing and install stack:
 
 - **Purple → teal** full-bleed gradient background
 - **Glass cards** and capsule controls with soft material blur
 - **Floating tab bar** — Search · Downloads · Purchased · Account. Pair / Files / Library live under Account.
-- **App icon** — Mach-O connector + cable on a full-bleed orange→cyan field
+- **App icon** — AppAssassin orange blade mark on brushed metal
 
 Backends (TrustCore signing, OTA, native install) are unchanged under the new chrome.
 

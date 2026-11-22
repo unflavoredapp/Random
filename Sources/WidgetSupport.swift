@@ -7,7 +7,7 @@ import Foundation
 final class WidgetDataManager {
     static let shared = WidgetDataManager()
 
-    private let suiteName = "group.dev.tetherless.app"
+    private let suiteName = "group.bot.fastdecrypt.ai"
     private var defaults: UserDefaults? { UserDefaults(suiteName: suiteName) }
 
     func refresh() {

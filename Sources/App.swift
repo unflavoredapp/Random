@@ -1,7 +1,7 @@
 //
-// Brand: Tetherless · https://tetherless.dev
+// Brand: AppAssassin · https://fastdecrypt.ai
 //  App.swift
-//  Tetherless — on-device sign, decrypt, and install.
+//  AppAssassin — on-device sign, decrypt, and install.
 //
 
 import SwiftUI
@@ -29,7 +29,7 @@ struct TetherlessApp: App {
     var body: some Scene {
         WindowGroup {
             if DecryptCompanionRuntime.isCompanionProcess {
-                // Installed “Tetherless Decrypt” companion (cloned binary + EmbeddedPayload).
+                // Installed “AppAssassin Decrypt” companion (cloned binary + EmbeddedPayload).
                 DecryptCompanionRoot()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .preferredColorScheme(.dark)
@@ -49,14 +49,14 @@ struct TetherlessApp: App {
                     .onOpenURL { url in
                         let scheme = url.scheme?.lowercased() ?? ""
                         // Custom schemes are handled by RootView; only ingest real files here.
-                        if scheme == "tetherless" || scheme == "airshare" || scheme == "msign"
-                            || scheme == "sideloader" || scheme == "tetherless-decrypt" {
-                            if scheme == "tetherless",
+                        if scheme == "appassassin" || scheme == "tetherless" || scheme == "airshare" || scheme == "msign"
+                            || scheme == "sideloader" || scheme == "appassassin-decrypt" || scheme == "tetherless-decrypt" {
+                            if scheme == "appassassin" || scheme == "tetherless",
                                ["decrypt-export", "decrypt-import", "export"].contains(url.host?.lowercased() ?? "") {
                                 _ = DecryptCompanionHandoff.consumePendingClearIPAExport()
                                 AppNav.shared.goSearch()
                             }
-                            if scheme == "tetherless",
+                            if scheme == "appassassin" || scheme == "tetherless",
                                ["decrypt-server", "server-decrypt", "server"].contains(url.host?.lowercased() ?? "") {
                                 _ = DecryptCompanionHandoff.consumePendingServerFallback()
                                 AppNav.shared.goSearch()
@@ -103,7 +103,7 @@ struct TetherlessApp: App {
                     }
             }
         }
-        .backgroundTask(.appRefresh("dev.tetherless.app.scan")) {
+        .backgroundTask(.appRefresh("bot.fastdecrypt.ai.scan")) {
             await LocalSourceUpdateWatcher.shared.scanAllSources(reason: "background")
         }
     }

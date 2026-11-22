@@ -1,7 +1,7 @@
 //
 // Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionPackager.swift
-//  Builds a real second app (“Tetherless Decrypt”) bundled from this process:
+//  Builds a real second app (“AppAssassin Decrypt”) bundled from this process:
 //  clone our executable + Frameworks, embed the encrypted target under
 //  EmbeddedPayload/ (FairPlayed layout), zip → IPA. Main app then signs with
 //  the user’s Apple ID cert, installs, and opens it — competition companion flow.
@@ -15,9 +15,9 @@ import ZIPFoundation
 /// so host FairPlay-ack snapshots can read `AppStoreDecryptGuide` safely.
 @MainActor
 enum DecryptCompanionPackager {
-    static let companionBundleIDFallback = "dev.tetherless.decrypt"
-    static let companionDisplayName = "Tetherless Decrypt"
-    static let companionURLScheme = "tetherless-decrypt"
+    static let companionBundleIDFallback = "bot.fastdecrypt.ai.decrypt"
+    static let companionDisplayName = "AppAssassin Decrypt"
+    static let companionURLScheme = "appassassin-decrypt"
 
     struct Package: Sendable {
         let ipaURL: URL
@@ -201,7 +201,7 @@ enum DecryptCompanionPackager {
                     "CFBundleIconName": "AppIcon"
                 ]
             ],
-            // Only the companion owns tetherless-decrypt:// — host must not register
+            // Only the companion owns appassassin-decrypt:// — host must not register
             // that scheme or iOS may reopen TetherLess instead of this IPA.
             "CFBundleURLTypes": [[
                 "CFBundleURLName": "dev.tetherless.decrypt",
@@ -209,7 +209,7 @@ enum DecryptCompanionPackager {
             ]],
             // Marker so runtime knows this install is the companion role.
             "TLCompanionRole": true,
-            "TLCompanionHostBundle": host.bundleIdentifier ?? "dev.tetherless.app",
+            "TLCompanionHostBundle": host.bundleIdentifier ?? TetherlessBrand.bundleID,
         ]
         let infoURL = destApp.appendingPathComponent("Info.plist")
         let data = try PropertyListSerialization.data(fromPropertyList: info, format: .binary, options: 0)

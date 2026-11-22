@@ -1,7 +1,7 @@
 //
 // Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionInstaller.swift
-//  Sign + install the companion “Tetherless Decrypt” app with the user’s Apple ID
+//  Sign + install the companion “AppAssassin Decrypt” app with the user’s Apple ID
 //  certificate (trust in Settings › General › VPN & Device Management on first run),
 //  then open it so FairPlay runs inside the companion bundle (EmbeddedPayload).
 //
@@ -82,7 +82,7 @@ enum DecryptCompanionInstaller {
         let sizeMB = Double(package.approximateBytes) / 1_048_576.0
         progress?(String(format: "Companion package · %.0f MB", sizeMB))
 
-        progress?("4/7 · Signing Tetherless Decrypt with \(material.name)…")
+        progress?("4/7 · Signing AppAssassin Decrypt with \(material.name)…")
         var options = SignOptions()
         options.name = DecryptCompanionPackager.companionDisplayName
         options.bundleID = bundleID
@@ -99,7 +99,7 @@ enum DecryptCompanionInstaller {
         // Free/dev profiles rarely grant host App Groups — leaving them on → 0xe8008016.
         options.disableAppGroups = !Self.provisionAllowsAppGroup(
             material.provision,
-            group: "group.dev.tetherless.app"
+            group: TetherlessBrand.appGroup
         )
         options.disablePush = true
         options.disableiCloud = true
@@ -145,13 +145,13 @@ enum DecryptCompanionInstaller {
                 try await OTAInstaller.shared.install(entry)
             } else {
                 throw DecryptError(
-                    "Couldn't install Tetherless Decrypt (\(error.localizedDescription)). After install, open Settings › General › VPN & Device Management and Trust your Apple ID, then retry."
+                    "Couldn't install AppAssassin Decrypt (\(error.localizedDescription)). After install, open Settings › General › VPN & Device Management and Trust your Apple ID, then retry."
                 )
             }
         }
 
         progress?("6/7 · Trust Apple ID under Settings › General › VPN & Device Management if asked…")
-        progress?("7/7 · Opening Tetherless Decrypt…")
+        progress?("7/7 · Opening AppAssassin Decrypt…")
 
         // Host must not keep a fake companion sheet — the console UI is the separate IPA.
         DecryptCompanionController.shared.dismiss()
@@ -169,7 +169,7 @@ enum DecryptCompanionInstaller {
                 embeddedName: package.embeddedAppName
             )
             progress?(
-                "Installed — Trust your Apple ID under Settings › General › VPN & Device Management, then return here (we’ll reopen Tetherless Decrypt)."
+                "Installed — Trust your Apple ID under Settings › General › VPN & Device Management, then return here (we’ll reopen AppAssassin Decrypt)."
             )
             DecryptCompanionHandoff.openTrustSettings()
         } else {
@@ -281,7 +281,7 @@ enum DecryptCompanionInstaller {
             }
         }
 
-        var msg = "No signing certificate for Tetherless Decrypt. Sign in under Account to create a free 7-day Apple ID cert, or import a .p12 + mobileprovision under Account › Settings › Installation › Certificate."
+        var msg = "No signing certificate for AppAssassin Decrypt. Sign in under Account to create a free 7-day Apple ID cert, or import a .p12 + mobileprovision under Account › Settings › Installation › Certificate."
         if let appleIDError, !appleIDError.isEmpty {
             msg += " (Apple ID: \(appleIDError))"
         }

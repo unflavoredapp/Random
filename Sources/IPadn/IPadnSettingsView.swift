@@ -319,7 +319,7 @@ private struct FairPlayDecryptHostField: View {
             Toggle("Server decrypt only (skip on-device companion FairPlay)", isOn: $macOnly)
                 .font(.footnote)
             Text(
-                "Default is off: stock iPhone + free/development Apple ID cert installs the Tetherless Decrypt companion, which runs FairPlay on-device. Turn on only to force every job to Decrypt site URL (Linux VPS Phone Worker queue)."
+                "Default is off: stock iPhone + free/development Apple ID cert installs the AppAssassin Decrypt companion, which runs FairPlay on-device. Turn on only to force every job to Decrypt site URL (Linux VPS Phone Worker queue)."
             )
             .font(.caption2)
             .foregroundStyle(.secondary)
@@ -675,7 +675,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Temp paths")
         } footer: {
-            Text("Free Apple ID certs usually strip App Groups, so stamps under Documents stay host-only. Get always embeds EncryptedSource.ipa inside Tetherless Decrypt for FairPlay. Delete the old companion before Get. Turn Keep off to delete the stamped file after a successful clear export.")
+            Text("Free Apple ID certs usually strip App Groups, so stamps under Documents stay host-only. Get always embeds EncryptedSource.ipa inside AppAssassin Decrypt for FairPlay. Delete the old companion before Get. Turn Keep off to delete the stamped file after a successful clear export.")
         }
 
         Section {
@@ -737,7 +737,7 @@ struct IPadnSettingsRootSections: View {
                             Text(TetherlessBrand.name).font(.headline)
                             Text(appVersion).font(.subheadline).foregroundStyle(.secondary)
                         }
-                        Text("Search, download, sign, and install — branded at tetherless.dev.")
+                        Text("Search, download, sign, and install — branded at fastdecrypt.ai.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -761,7 +761,7 @@ struct IPadnSettingsRootSections: View {
 
             Toggle("Check for updates automatically", isOn: $appUpdateCheck)
 
-            Link("tetherless.dev", destination: TetherlessBrand.siteURL)
+            Link("fastdecrypt.ai", destination: TetherlessBrand.siteURL)
             if let url = URL(string: "https://github.com/mengangs/ipadn") {
                 Link("Open-source Store login (GPL-2.0)", destination: url)
             }

@@ -59,7 +59,7 @@ final class LocalSourceUpdateWatcher: ObservableObject {
     func setNotificationsEnabled(_ value: Bool) { notificationsEnabled = value }
 
     func scheduleNextScan() {
-        let request = BGAppRefreshTaskRequest(identifier: "dev.tetherless.app.scan")
+        let request = BGAppRefreshTaskRequest(identifier: "bot.fastdecrypt.ai.scan")
         request.earliestBeginDate = Date(timeIntervalSinceNow: 15 * 60)
         do {
             try BGTaskScheduler.shared.submit(request)
