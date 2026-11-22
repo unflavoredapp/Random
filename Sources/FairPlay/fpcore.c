@@ -40,8 +40,12 @@
 #include <mach/mach.h>
 #include <mach-o/fat.h>
 #include <mach-o/loader.h>
+#include <mach/machine.h>
 #if __has_include(<os/proc.h>)
 #include <os/proc.h>
+#endif
+#ifndef CPU_TYPE_ARM64
+#define CPU_TYPE_ARM64 ((cpu_type_t)(CPU_TYPE_ARM | CPU_ARCH_ABI64))
 #endif
 
 #pragma mark - Failure class (for Swift UX)
@@ -70,6 +74,16 @@ static void fp_note_errno(int err) {
     else if (err != 0) fp_set_fail(FP_FAIL_OTHER);
 }
 
+uint64_t fp_available_memory(void) {
+#if defined(__APPLE__) && __has_include(<os/proc.h>)
+    if (&os_proc_available_memory != NULL) {
+        size_t avail = os_proc_available_memory();
+        if (avail > 0) return (uint64_t)avail;
+    }
+#endif
+    return 0;
+}
+
 int fp_memory_tight_for(uint64_t cryptsize) {
     // Lean path needs ≈1× cryptsize + remap window; classic path needs ≈3×.
     // Treat as tight when available RAM can't cover classic 3× with headroom,
@@ -77,19 +91,38 @@ int fp_memory_tight_for(uint64_t cryptsize) {
     uint64_t classic_need = cryptsize * 3;
     uint64_t lean_need = cryptsize + (16ull << 20);
     if (cryptsize > (48ull << 20)) classic_need += cryptsize; // large padded remap
-#if defined(__APPLE__) && __has_include(<os/proc.h>)
-    if (&os_proc_available_memory != NULL) {
-        size_t avail = os_proc_available_memory();
-        if (avail > 0) {
-            if ((uint64_t)avail < classic_need + (64ull << 20)) return 1;
-            if ((uint64_t)avail < lean_need + (32ull << 20)) return 1;
-        }
+    uint64_t avail = fp_available_memory();
+    if (avail > 0) {
+        if (avail < classic_need + (64ull << 20)) return 1;
+        if (avail < lean_need + (32ull << 20)) return 1;
     }
-#endif
     (void)classic_need; (void)lean_need;
     // Prefer lean once crypt ≥ 32 MB — phones often jetsam the 3× path here.
     if (cryptsize >= (32ull << 20)) return 1;
     return 0;
+}
+
+int fp_memory_can_decrypt(uint64_t cryptsize) {
+    // File-backed lean keeps the crypt buffer on disk; Jetsam cost is mostly the
+    // remapped crypt window residency + ~48 MB process headroom.
+    uint64_t lean_need = cryptsize + (48ull << 20);
+    uint64_t avail = fp_available_memory();
+    if (avail == 0) {
+        // Unknown budget — allow attempt; crypt ≥ 180 MB is near-hopeless on 3–4 GB phones.
+        return cryptsize < (180ull << 20) ? 1 : 0;
+    }
+    return avail >= lean_need ? 1 : 0;
+}
+
+int64_t fp_largest_cryptsize(const char *path) {
+    fp_slice_t sl[FP_MAX_SLICES]; int n = 0; char err[256] = {0};
+    if (fp_parse(path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) return -1;
+    int64_t best = 0;
+    for (int i = 0; i < n; i++) {
+        if (!sl[i].has_enc || sl[i].cryptid == 0) continue;
+        if ((int64_t)sl[i].cryptsize > best) best = (int64_t)sl[i].cryptsize;
+    }
+    return best;
 }
 
 #ifndef MAP_NOCACHE
@@ -424,13 +457,31 @@ int fp_parse(const char *path, fp_slice_t *slices, int max, int *count, char *er
             }
             // Slice must lie entirely inside the file.
             if (sz == 0 || o > file_size || sz > file_size - o) continue;
-            // Prefer arm64 / arm64e; still accept any 64-bit slice (simulators, etc.).
+            // Device decrypt only needs arm64 / arm64e — skip x86_64 fat siblings
+            // so we never pay a second cryptsize Jetsam tax for simulator slices.
             if (!(ct & CPU_ARCH_ABI64)) continue;
             char e2[128];
-            if (parse_thin(fd, o, sz, &slices[*count], e2, sizeof e2) == 0) (*count)++;
+            if (parse_thin(fd, o, sz, &slices[*count], e2, sizeof e2) == 0) {
+                slices[*count].cputype = ct; // fat cputype for ARM64 filter below
+                (*count)++;
+            }
+        }
+        // Prefer ARM64-only when at least one ARM64 slice parsed.
+        {
+            bool have_arm64 = false;
+            for (int i = 0; i < *count; i++) {
+                if (slices[i].cputype == CPU_TYPE_ARM64) { have_arm64 = true; break; }
+            }
+            if (have_arm64) {
+                int w = 0;
+                for (int i = 0; i < *count; i++) {
+                    if (slices[i].cputype == CPU_TYPE_ARM64) slices[w++] = slices[i];
+                }
+                *count = w;
+            }
         }
         if (*count == 0) {
-            snprintf(err, errlen, "fat Mach-O has no decryptable 64-bit slices");
+            snprintf(err, errlen, "fat Mach-O has no decryptable arm64 slices");
             rc = -1;
         }
     } else if (magic == MH_MAGIC_64) {
@@ -672,6 +723,7 @@ void fp_attempt_describe(const fp_attempt_t *a, char *buf, size_t len) {
 static bool attempt_looks_decrypted(const fp_attempt_t *a) {
     // Primary: full page-in + bytes changed + entropy drop typical of FairPlay ciphertext → code.
     // Encrypted text sits near 8.0 bits/byte; arm64 text usually drops below ~7.5.
+    // Never treat partial page-in as fully decrypted — merge across modes instead.
     if (!(a->mremap_ret == 0 && a->pages_ok == a->pages_total && a->changed)) return false;
     bool entropy_ok = (a->ent_before > 7.85 && a->ent_after < 7.55) ||
                       (a->ent_before - a->ent_after) > 0.35 ||
@@ -681,7 +733,11 @@ static bool attempt_looks_decrypted(const fp_attempt_t *a) {
     // and already low-entropy in ciphertext after packing.
     bool full_transform = a->changed && a->pages_ok == a->pages_total &&
                           (a->ent_before - a->ent_after) > 0.15;
-    return entropy_ok || code_ok || full_transform;
+    // Sample-only lean path: ret/entropy may be from first/mid/last page probes —
+    // still require full page-in + changed before clearing cryptid.
+    bool sample_ok = a->pages_ok == a->pages_total && a->changed &&
+                     (a->ret_after > 0 || a->ent_after < 7.8);
+    return entropy_ok || code_ok || full_transform || sample_ok;
 }
 
 int fp_probe_file(const char *path, const int *modes, int nmodes, fp_log_t log, void *ctx) {
@@ -859,11 +915,13 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         uint64_t page_total = (s->cryptsize + pg - 1) / pg;
         if (page_total == 0) page_total = 1;
 
-        // Classic: cipher + merged + dec (3×). Lean: one dec + page compares via pread,
-        // accumulate good pages into the output file (no second/third full buffers).
+        // Classic: cipher + merged + dec (3×). Lean: file-backed mmap of the output
+        // crypt range (MAP_SHARED) so the anonymous Jetsam footprint stays near 0×;
+        // fall back to one malloc buffer + disk page compares when mmap fails.
         uint8_t *cipher = NULL;
         uint8_t *merged = NULL;
-        uint8_t *dec = malloc(s->cryptsize);
+        uint8_t *dec = NULL;
+        bool dec_mapped = false;
         uint8_t *merged_ok = calloc((size_t)page_total, 1);
         uint8_t *page_cipher = malloc((size_t)pg);
         int cin = open(in_path, O_RDONLY);
@@ -877,6 +935,18 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                 lean = true;
             }
         }
+        if (lean) {
+            void *map = mmap(NULL, (size_t)s->cryptsize, PROT_READ | PROT_WRITE, MAP_SHARED,
+                             out, (off_t)(s->slice_off + s->cryptoff));
+            if (map != MAP_FAILED) {
+                dec = (uint8_t *)map;
+                dec_mapped = true;
+            } else {
+                dec = malloc(s->cryptsize);
+            }
+        } else {
+            dec = malloc(s->cryptsize);
+        }
         bool cipher_ok = false;
         if (!lean && cin >= 0 && cipher) {
             cipher_ok = pread_full(cin, cipher, s->cryptsize,
@@ -884,15 +954,17 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         }
         if (!dec || !merged_ok || !page_cipher || cin < 0 || (!lean && !cipher_ok)) {
             logf_(log, ctx, "  slice[%d] buffer alloc/read failed (ENOMEM?)", i);
-            free(dec); free(cipher); free(merged); free(merged_ok); free(page_cipher);
+            if (dec_mapped) munmap(dec, (size_t)s->cryptsize); else free(dec);
+            free(cipher); free(merged); free(merged_ok); free(page_cipher);
             if (cin >= 0) close(cin);
             fp_set_fail(FP_FAIL_NOMEM);
             rc = -1; break;
         }
         if (lean) {
             logf_(log, ctx,
-                  "  slice[%d] lean path for %.1f MB crypt — 1× buffer + disk page compares",
-                  i, (double)s->cryptsize / (1024.0 * 1024.0));
+                  "  slice[%d] lean path for %.1f MB crypt — %s + disk page compares",
+                  i, (double)s->cryptsize / (1024.0 * 1024.0),
+                  dec_mapped ? "file-backed mmap dec" : "1× buffer");
         }
         if (!lean) memcpy(merged, cipher, s->cryptsize);
         logf_(log, ctx, "  slice[%d] map window pages≈%llu chunk_hint=%llu%s",
@@ -980,18 +1052,38 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                     a.pages_ok = page_total;
                     a.pages_total = page_total;
                     a.changed = 1;
-                    a.ret_after = code_words(dec, s->cryptsize);
-                    a.ent_after = entropy(dec, s->cryptsize);
                     if (!lean) {
+                        a.ret_after = code_words(dec, s->cryptsize);
+                        a.ent_after = entropy(dec, s->cryptsize);
                         a.ret_before = code_words(cipher, s->cryptsize);
                         a.ent_before = entropy(cipher, s->cryptsize);
                     } else {
-                        // Sample ciphertext entropy from the first page on disk.
+                        // Stream heuristic: sample first / middle / last page instead of
+                        // faulting the entire crypt range into RSS for entropy/RET counts.
                         uint64_t sample = s->cryptsize < pg ? s->cryptsize : pg;
-                        if (pread_full(cin, page_cipher, (size_t)sample,
-                                       (off_t)(s->slice_off + s->cryptoff))) {
-                            a.ret_before = code_words(page_cipher, sample);
-                            a.ent_before = entropy(page_cipher, sample);
+                        uint64_t mid = (page_total / 2) * pg;
+                        if (mid + sample > s->cryptsize) mid = s->cryptsize > sample ? s->cryptsize - sample : 0;
+                        uint64_t last = s->cryptsize > sample ? s->cryptsize - sample : 0;
+                        uint32_t ret_b = 0, ret_a = 0;
+                        double ent_b = 0, ent_a = 0;
+                        int samples = 0;
+                        uint64_t offs[3] = { 0, mid, last };
+                        for (int si = 0; si < 3; si++) {
+                            if (!pread_full(cin, page_cipher, (size_t)sample,
+                                            (off_t)(s->slice_off + s->cryptoff + offs[si]))) {
+                                continue;
+                            }
+                            ret_b += code_words(page_cipher, sample);
+                            ent_b += entropy(page_cipher, sample);
+                            ret_a += code_words(dec + offs[si], sample);
+                            ent_a += entropy(dec + offs[si], sample);
+                            samples++;
+                        }
+                        if (samples > 0) {
+                            a.ret_before = ret_b / (uint32_t)samples;
+                            a.ret_after = ret_a / (uint32_t)samples;
+                            a.ent_before = ent_b / (double)samples;
+                            a.ent_after = ent_a / (double)samples;
                         }
                     }
                     done = attempt_looks_decrypted(&a);
@@ -1022,18 +1114,29 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             else if (best.mremap_ret == 0 && !best.changed) fp_set_fail(FP_FAIL_PERM);
             else if (g_fp_last_fail == FP_FAIL_NONE) fp_set_fail(FP_FAIL_STILL_ENC);
             rc = -1;
-            free(dec); free(cipher); free(merged); free(merged_ok); free(page_cipher);
+            if (dec_mapped) munmap(dec, (size_t)s->cryptsize); else free(dec);
+            free(cipher); free(merged); free(merged_ok); free(page_cipher);
             close(cin);
             break;
         }
         if (!lean && merged_pages == page_total) memcpy(dec, merged, s->cryptsize);
         uint32_t zero = 0;
-        // Lean already pwrite'd good pages; still rewrite full crypt range for consistency.
-        if (!pwrite_full(out, dec, s->cryptsize, (off_t)(s->slice_off + s->cryptoff)) ||
-            !pwrite_full(out, &zero, 4, (off_t)(s->enc_lc_off + offsetof(struct encryption_info_command, cryptid)))) {
+        // File-backed lean already holds plaintext in the MAP_SHARED region; still
+        // rewrite cryptid. Non-mapped lean / classic rewrite the full crypt range.
+        if (!dec_mapped) {
+            if (!pwrite_full(out, dec, s->cryptsize, (off_t)(s->slice_off + s->cryptoff))) {
+                logf_(log, ctx, "  write failed: %s", strerror(errno)); rc = -1;
+            }
+        } else {
+            // Ensure dirty mmap pages hit disk before we clear cryptid.
+            (void)msync(dec, (size_t)s->cryptsize, MS_SYNC);
+        }
+        if (rc == 0 && !pwrite_full(out, &zero, 4,
+                (off_t)(s->enc_lc_off + offsetof(struct encryption_info_command, cryptid)))) {
             logf_(log, ctx, "  write failed: %s", strerror(errno)); rc = -1;
         }
-        free(dec); free(cipher); free(merged); free(merged_ok); free(page_cipher);
+        if (dec_mapped) munmap(dec, (size_t)s->cryptsize); else free(dec);
+        free(cipher); free(merged); free(merged_ok); free(page_cipher);
         close(cin);
     }
     if (rc == 0) {

@@ -52,6 +52,9 @@ enum FairPlayAdvancedOptions {
     static let pathDiagnosticsKey = "tetherless.fairplay.pathDiagnostics"
     static let requireAllFrameworksKey = "tetherless.fairplay.requireAllFrameworks"
     static let includeTestFlightKey = "tetherless.fairplay.includeTestFlight"
+    static let forceSerialKey = "tetherless.fairplay.forceSerial"
+    static let bounceLargeCryptKey = "tetherless.fairplay.bounceLargeCrypt"
+    static let partialOnLowRAMKey = "tetherless.fairplay.partialOnLowRAM"
 
     /// Default retry schedule length when unset (matches buddy3).
     static let defaultRetryRounds = 5
@@ -109,6 +112,33 @@ enum FairPlayAdvancedOptions {
         set { UserDefaults.standard.set(newValue, forKey: includeTestFlightKey) }
     }
 
+    /// Always decrypt Mach-Os one at a time (companion default; host can override).
+    static var forceSerialDecrypt: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: forceSerialKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: forceSerialKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: forceSerialKey) }
+    }
+
+    /// Preflight-bounce to Phone Worker when largest crypt exceeds the Jetsam threshold.
+    static var bounceLargeCryptToServer: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: bounceLargeCryptKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: bounceLargeCryptKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: bounceLargeCryptKey) }
+    }
+
+    /// On low RAM, prefer PARTIAL IPA (main clear) over failing the whole job on framework Jetsam.
+    static var preferPartialOnLowRAM: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: partialOnLowRAMKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: partialOnLowRAMKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: partialOnLowRAMKey) }
+    }
+
     /// Resolved options for one decrypt run (host defaults or companion snapshot).
     struct Resolved: Sendable, Equatable {
         var sourceMode: SourceMode
@@ -118,6 +148,9 @@ enum FairPlayAdvancedOptions {
         var pathDiagnostics: Bool
         var requireAllFrameworks: Bool
         var includeTestFlightApps: Bool
+        var forceSerialDecrypt: Bool
+        var bounceLargeCryptToServer: Bool
+        var preferPartialOnLowRAM: Bool
 
         static var current: Resolved {
             Resolved(
@@ -127,7 +160,10 @@ enum FairPlayAdvancedOptions {
                 retryRounds: FairPlayAdvancedOptions.retryRounds,
                 pathDiagnostics: FairPlayAdvancedOptions.pathDiagnostics,
                 requireAllFrameworks: FairPlayAdvancedOptions.requireAllFrameworks,
-                includeTestFlightApps: FairPlayAdvancedOptions.includeTestFlightApps
+                includeTestFlightApps: FairPlayAdvancedOptions.includeTestFlightApps,
+                forceSerialDecrypt: FairPlayAdvancedOptions.forceSerialDecrypt,
+                bounceLargeCryptToServer: FairPlayAdvancedOptions.bounceLargeCryptToServer,
+                preferPartialOnLowRAM: FairPlayAdvancedOptions.preferPartialOnLowRAM
             )
         }
 
@@ -148,6 +184,9 @@ enum FairPlayAdvancedOptions {
             if let v = snapshot["fpPathDiagnostics"] as? Bool { r.pathDiagnostics = v }
             if let v = snapshot["fpRequireAllFrameworks"] as? Bool { r.requireAllFrameworks = v }
             if let v = snapshot["fpIncludeTestFlight"] as? Bool { r.includeTestFlightApps = v }
+            if let v = snapshot["fpForceSerial"] as? Bool { r.forceSerialDecrypt = v }
+            if let v = snapshot["fpBounceLargeCrypt"] as? Bool { r.bounceLargeCryptToServer = v }
+            if let v = snapshot["fpPartialOnLowRAM"] as? Bool { r.preferPartialOnLowRAM = v }
             return r
         }
 
@@ -160,6 +199,9 @@ enum FairPlayAdvancedOptions {
                 "fpPathDiagnostics": pathDiagnostics,
                 "fpRequireAllFrameworks": requireAllFrameworks,
                 "fpIncludeTestFlight": includeTestFlightApps,
+                "fpForceSerial": forceSerialDecrypt,
+                "fpBounceLargeCrypt": bounceLargeCryptToServer,
+                "fpPartialOnLowRAM": preferPartialOnLowRAM,
             ]
         }
 
@@ -177,6 +219,9 @@ enum FairPlayAdvancedOptions {
         retryRounds = defaultRetryRounds
         pathDiagnostics = false
         requireAllFrameworks = false
-        includeTestFlightApps = true
+        includeTestFlightApps = false
+        forceSerialDecrypt = true
+        bounceLargeCryptToServer = true
+        preferPartialOnLowRAM = true
     }
 }

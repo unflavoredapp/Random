@@ -18,11 +18,14 @@ enum FairPlayDecryptError: LocalizedError {
     case missingLicense(String)
     case mainExecutableFailed(String)
     case outOfMemory(String)
+    /// Preflight decided on-device mremap is Jetsam-certain — companion should bounce to server.
+    case bounceToServer(String)
 
     var errorDescription: String? {
         switch self {
         case .failed(let m), .stillEncrypted(let m), .noInstalledApp(let m),
-             .missingLicense(let m), .mainExecutableFailed(let m), .outOfMemory(let m):
+             .missingLicense(let m), .mainExecutableFailed(let m), .outOfMemory(let m),
+             .bounceToServer(let m):
             return m
         }
     }
@@ -63,7 +66,7 @@ enum FairPlayFailureClass: String {
     var userMessage: String {
         switch self {
         case .outOfMemory:
-            return "Not enough memory to decrypt this binary (mremap ENOMEM). Close other apps, keep Tetherless in the foreground, and retry."
+            return "Not enough memory to decrypt this binary (mremap ENOMEM). Close other apps, keep AppAssassin Decrypt in the foreground, and retry — or bounce to Phone Worker / unfairplay."
         case .licenseOrKeys:
             return AppStoreDecryptGuide.failureHint
         case .stillEncrypted:
@@ -465,7 +468,7 @@ enum FairPlayDecrypt {
         // Encrypted IPA / EmbeddedPayload → real full decrypt (every iPhone Mach-O).
         // Live App Store install → hang-safe structured scan (may still triage).
         let liveSource = isLiveAppStoreInstall(sourceApp)
-        let fullIPACoverage = !liveSource || options.requireAllFrameworks
+        var fullIPACoverage = !liveSource || options.requireAllFrameworks
         report.fullIPACoverage = fullIPACoverage
         detail?(
             fullIPACoverage
@@ -498,6 +501,35 @@ enum FairPlayDecrypt {
         }
         report.encryptedBefore = encCount
 
+        // Jetsam preflight: largest crypt across candidates (main preferred).
+        let probeTargets = encryptedBins.isEmpty ? binaries : encryptedBins
+        var largestCrypt: Int64 = 0
+        for url in probeTargets {
+            let c = FairPlayJetsam.largestCryptsize(of: url.path)
+            if c > largestCrypt { largestCrypt = c }
+        }
+        FairPlayJetsam.purgeTransientMemory()
+        switch FairPlayJetsam.preflight(
+            largestCrypt: largestCrypt,
+            allowPartialOnLowRAM: options.preferPartialOnLowRAM && !options.requireAllFrameworks
+        ) {
+        case .ok:
+            break
+        case .bounceToServer(let reason):
+            if options.bounceLargeCryptToServer {
+                detail?(reason)
+                throw FairPlayDecryptError.bounceToServer(reason)
+            }
+            detail?("Preflight bounce disabled — continuing on-device despite: \(reason)")
+        case .preferPartial(let reason):
+            detail?(reason)
+            // Soften full-IPA fail-closed so framework Jetsam can ship PARTIAL.
+            if fullIPACoverage && !options.requireAllFrameworks {
+                fullIPACoverage = false
+                report.fullIPACoverage = false
+            }
+        }
+
         // buddy3 `stage_folder_sinfs`: copy root .sinf next to every encrypted Mach-O
         // (`…/SC_Info/<exe>.sinf`) so fairplayd can resolve licenses without a live install.
         if !liveSource {
@@ -518,10 +550,25 @@ enum FairPlayDecrypt {
         if encCount > 0 {
             detail?("(\(encCount) encrypted slice(s) to clear)")
         }
+        if largestCrypt > 0 {
+            detail?(String(
+                format: "Largest cryptsize ≈ %.1f MB · avail ≈ %llu MB",
+                Double(largestCrypt) / (1024.0 * 1024.0),
+                FairPlayJetsam.availableMemory / (1024 * 1024)
+            ))
+        }
 
-        // Main first (serial), then frameworks/appex in parallel for speed.
+        #if canImport(UIKit)
+        let pressure = FairPlayMemoryPressureObserver()
+        pressure.onWarning = { detail?("Memory warning — purged caches mid-decrypt") }
+        pressure.start()
+        defer { pressure.stop() }
+        #endif
+
+        // Main first (serial), then frameworks/appex — ascending cryptsize, serial under Jetsam.
         let mainFiles = ordered.filter { role(of: $0, under: sourceApp, app: sourceApp) == .main }
-        let otherFiles = ordered.filter { role(of: $0, under: sourceApp, app: sourceApp) != .main }
+        var otherFiles = ordered.filter { role(of: $0, under: sourceApp, app: sourceApp) != .main }
+        otherFiles = sortAscendingCryptsize(otherFiles)
         let total = ordered.count
 
         func absorb(
@@ -589,13 +636,24 @@ enum FairPlayDecrypt {
         }
 
         if !otherFiles.isEmpty {
-            detail?("Fast-decrypting \(otherFiles.count) framework/extension Mach-O(s)…")
+            let maxSecCrypt: UInt64 = otherFiles.reduce(UInt64(0)) { best, url in
+                let c = UInt64(max(0, FairPlayJetsam.largestCryptsize(of: url.path)))
+                return max(best, c)
+            }
+            let forceSerial = FairPlayJetsam.shouldForceSerial(maxSecondaryCrypt: maxSecCrypt)
+                || options.forceSerialDecrypt
+            detail?(
+                forceSerial
+                    ? "Serial-decrypting \(otherFiles.count) framework/extension Mach-O(s) (Jetsam-safe)…"
+                    : "Fast-decrypting \(otherFiles.count) framework/extension Mach-O(s)…"
+            )
             let parallelResults = decryptSecondaryMachOsParallel(
                 files: otherFiles,
                 sourceApp: sourceApp,
                 destApp: destApp,
                 total: total,
                 indexBase: mainFiles.count,
+                forceSerial: forceSerial,
                 detail: detail
             )
             for item in parallelResults {
@@ -960,19 +1018,20 @@ enum FairPlayDecrypt {
                 fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
             }
         }
-        // Main-binary ENOMEM: purge + progressive backoff retries (lean path in fpcore).
-        if rc != 0 && rc != 1 && role == .main {
+        // Main + framework ENOMEM: purge + progressive backoff retries (lean path in fpcore).
+        if rc != 0 && rc != 1 && (role == .main || role == .framework) {
             var klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
+            let maxTries = role == .main ? 4 : 3
             var oomTry = 0
-            while klass == .outOfMemory && oomTry < 3 {
+            while klass == .outOfMemory && oomTry < maxTries {
                 oomTry += 1
                 progress?(
-                    "Main executable hit mremap ENOMEM — freeing memory and retrying "
-                        + "(\(oomTry)/3)…"
+                    "\(role == .main ? "Main executable" : "Framework") hit mremap ENOMEM — freeing memory and retrying "
+                        + "(\(oomTry)/\(maxTries))…"
                 )
                 try? fm.removeItem(at: tmp)
-                Self.purgeTransientMemory()
-                Thread.sleep(forTimeInterval: 1.0 + Double(oomTry) * 1.25)
+                FairPlayJetsam.purgeTransientMemory()
+                Thread.sleep(forTimeInterval: 1.0 + Double(oomTry) * 1.35)
                 pauseIfMemoryPressure(progress: progress)
                 logBuf.clear()
                 rc = decryptInput.path.withCString { inPath in
@@ -1535,7 +1594,8 @@ enum FairPlayDecrypt {
         let index: Int
     }
 
-    /// Decrypt non-main Mach-Os with bounded parallelism (2–3 workers) after main is clear.
+    /// Decrypt non-main Mach-Os with bounded parallelism after main is clear.
+    /// Default / Jetsam path is serial (1 worker) with per-job staging isolation.
     /// Collects outcomes under a lock, then the caller absorbs them serially.
     private static func decryptSecondaryMachOsParallel(
         files: [URL],
@@ -1543,13 +1603,14 @@ enum FairPlayDecrypt {
         destApp: URL,
         total: Int,
         indexBase: Int,
+        forceSerial: Bool = true,
         detail: ((String) -> Void)?
     ) -> [ParallelDecryptItem] {
         guard !files.isEmpty else { return [] }
-        // Cap concurrency — mremap is memory-heavy; under pressure stay serial.
-        let tight = fp_memory_tight_for(48 * 1024 * 1024) != 0
-        let maxWorkers = tight ? 1 : min(3, max(1, files.count))
-        detail?("Parallel FairPlay workers: \(maxWorkers)\(tight ? " (low memory)" : "")")
+        // Cap concurrency — mremap is memory-heavy; companion + large crypts stay serial.
+        let tight = FairPlayJetsam.isTight(forCryptsize: 48 * 1024 * 1024)
+        let maxWorkers = (forceSerial || tight) ? 1 : min(2, max(1, files.count))
+        detail?("FairPlay workers: \(maxWorkers)\(maxWorkers == 1 ? " (serial / Jetsam-safe)" : "")")
         let gate = DispatchSemaphore(value: maxWorkers)
         let lock = NSLock()
         var items: [ParallelDecryptItem] = []
@@ -1579,8 +1640,20 @@ enum FairPlayDecrypt {
         return items.sorted { $0.index < $1.index }
     }
 
+    /// Smallest cryptsize first so Jetsam risk grows gradually after main is clear.
+    private static func sortAscendingCryptsize(_ files: [URL]) -> [URL] {
+        files.sorted { a, b in
+            let ca = FairPlayJetsam.largestCryptsize(of: a.path)
+            let cb = FairPlayJetsam.largestCryptsize(of: b.path)
+            if ca != cb { return ca < cb }
+            return a.path < b.path
+        }
+    }
+
     /// Runs `decryptOne` against an isolated staging `.app` so a timed-out worker cannot
     /// keep writing into `destApp` (or leave a half-moved `.fpdec`) after the caller moves on.
+    /// Pragmatic Jetsam isolation (instead of a true XPC helper): one Mach-O per staging
+    /// tree, serial by default, abandoned workers never promote into `destApp`.
     private static func decryptOneWithTimeout(
         file: URL,
         sourceApp: URL,
@@ -1851,21 +1924,14 @@ enum FairPlayDecrypt {
         return parts.reduce(root) { $0.appendingPathComponent($1, isDirectory: false) }
     }
 
-    /// Drop URL caches so mremap has a better shot after ENOMEM.
+    /// Drop caches / allocator pressure so mremap has a better shot after ENOMEM.
     private static func purgeTransientMemory() {
-        URLCache.shared.removeAllCachedResponses()
+        FairPlayJetsam.purgeTransientMemory()
     }
 
     /// Brief pause when fpcore reports tight memory so Jetsam is less likely mid-decrypt.
     private static func pauseIfMemoryPressure(progress: ((String) -> Void)?) {
-        if fp_memory_tight_for(64 * 1024 * 1024) != 0 {
-            progress?("Low memory — pausing before next Mach-O…")
-            purgeTransientMemory()
-            Thread.sleep(forTimeInterval: 1.2)
-        } else if fp_memory_tight_for(48 * 1024 * 1024) != 0 {
-            progress?("Low memory — pausing before next Mach-O…")
-            Thread.sleep(forTimeInterval: 0.6)
-        }
+        FairPlayJetsam.pauseIfMemoryPressure(progress: progress)
     }
 
     private static func sanitizeFileName(_ name: String) -> String {

@@ -123,11 +123,20 @@ enum FailurePlaybook {
         ),
         FailurePlay(
             id: "fairplay-enomem",
-            title: "Not enough memory (mremap ENOMEM)",
-            summary: "On-device FairPlay ran out of RAM mapping the binary. Charge the device, close other apps, keep AppAssassin Decrypt in the foreground, and retry a smaller third-party app — not TestFlight / Apple system apps. A faster iPad with more free RAM helps; backup server only helps if another worker or unfairplay model is available.",
-            matches: ["enomem", "not enough memory", "mremap", "out of memory"],
-            actionTitle: "Capture FairPlay keys",
-            action: .acknowledgeFairPlay
+            title: "Not enough memory (mremap ENOMEM / Jetsam)",
+            summary: "On-device FairPlay ran out of RAM mapping the binary. Charge the device, close other apps, keep AppAssassin Decrypt in the foreground, then retry — or use Phone Worker / unfairplay for large cryptsizes. Skip TestFlight / Apple system apps. AppAssassin can bounce large jobs to the backup server automatically.",
+            matches: [
+                "enomem",
+                "not enough memory",
+                "mremap",
+                "out of memory",
+                "jetsam",
+                "phone worker",
+                "unfairplay",
+                "bounce to",
+            ],
+            actionTitle: "Open Library",
+            action: .openLibrary
         ),
         FailurePlay(
             id: "pair",

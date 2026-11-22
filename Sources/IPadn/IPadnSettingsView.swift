@@ -584,6 +584,9 @@ private struct FairPlayAdvancedSettingsSection: View {
     @AppStorage(FairPlayAdvancedOptions.pathDiagnosticsKey) private var pathDiagnostics = false
     @AppStorage(FairPlayAdvancedOptions.requireAllFrameworksKey) private var requireAllFrameworks = false
     @AppStorage(FairPlayAdvancedOptions.includeTestFlightKey) private var includeTestFlight = false
+    @AppStorage(FairPlayAdvancedOptions.forceSerialKey) private var forceSerial = true
+    @AppStorage(FairPlayAdvancedOptions.bounceLargeCryptKey) private var bounceLargeCrypt = true
+    @AppStorage(FairPlayAdvancedOptions.partialOnLowRAMKey) private var partialOnLowRAM = true
 
     private var sourceMode: FairPlayAdvancedOptions.SourceMode {
         FairPlayAdvancedOptions.SourceMode(rawValue: sourceModeRaw) ?? .automatic
@@ -635,10 +638,13 @@ private struct FairPlayAdvancedSettingsSection: View {
             Toggle("Verbose FairPlay console", isOn: $verboseConsole)
             Toggle("Show path diagnostics", isOn: $pathDiagnostics)
             Toggle("Require all frameworks", isOn: $requireAllFrameworks)
+            Toggle("Serial Mach-O decrypt", isOn: $forceSerial)
+            Toggle("Bounce large crypt to server", isOn: $bounceLargeCrypt)
+            Toggle("Prefer PARTIAL on low RAM", isOn: $partialOnLowRAM)
         } header: {
             Text("Decrypt engine")
         } footer: {
-            Text("Encrypted IPA Get already fail-closes on every iPhone Mach-O (no fake PARTIAL). Require all frameworks also applies that to live-install triage. Verbose logs retries and SINF staging.")
+            Text("Serial + bounce + PARTIAL are Jetsam mitigations. Encrypted IPA Get still fail-closes unless Prefer PARTIAL softens low-RAM runs. Companion always forces serial. Verbose logs retries and SINF staging.")
         }
 
         Section {
@@ -688,6 +694,9 @@ private struct FairPlayAdvancedSettingsSection: View {
                 pathDiagnostics = false
                 requireAllFrameworks = false
                 includeTestFlight = false
+                forceSerial = true
+                bounceLargeCrypt = true
+                partialOnLowRAM = true
             }
         }
     }
