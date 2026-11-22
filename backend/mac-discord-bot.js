@@ -157,13 +157,14 @@ async function renderSharpCard({ name, version, iconPath, stage, pct, done }) {
       name: name || "App",
       version: version || "",
       stage: stage || (done ? "done" : "working…"),
-      logLines: [stage || (done ? "done" : "working…")],
+      logLines: [],
       pct: done ? 100 : pct || 0,
       iconPath: iconPath || "",
       dest,
       tag: "fastdecrypt",
       brand: BOT_NAME,
       done: !!done,
+      hideTerminal: true,
     });
     return out && fs.existsSync(out) ? out : "";
   } catch (e) {
@@ -172,11 +173,31 @@ async function renderSharpCard({ name, version, iconPath, stage, pct, done }) {
   }
 }
 
-function progressEmbed(appName, stage) {
+function progressEmbed(appName, stage, pct) {
+  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const bits = [];
+  if (stage) bits.push(stage);
+  bits.push(`**${p}%**`);
   return new EmbedBuilder()
     .setColor(0xff9a1f)
     .setTitle(appName || "Decrypting…")
-    .setDescription(stage || "Working…");
+    .setDescription(bits.join(" · "));
+}
+
+function siteButtons(downloadUrl) {
+  const row = new ActionRowBuilder();
+  if (downloadUrl) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setStyle(ButtonStyle.Link)
+        .setLabel("Download IPA")
+        .setURL(downloadUrl)
+    );
+  }
+  row.addComponents(
+    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Website").setURL(SITE)
+  );
+  return [row];
 }
 
 function statusEmbed() {
@@ -276,8 +297,8 @@ async function buildDeliveryPayload(result, { storeUrl, name, iconPath, version:
     embed.setThumbnail("attachment://icon.jpg");
   }
 
-  const components = [];
   let mode = "attach";
+  let downloadUrl = "";
 
   if (st.size <= DISCORD_ATTACH_MAX) {
     files.push(new AttachmentBuilder(file, { name: fileName }));
@@ -290,14 +311,7 @@ async function buildDeliveryPayload(result, { storeUrl, name, iconPath, version:
       );
     }
     mode = "link";
-    components.push(
-      new ActionRowBuilder().addComponents(
-        new ButtonBuilder()
-          .setStyle(ButtonStyle.Link)
-          .setLabel("Download IPA")
-          .setURL(url)
-      )
-    );
+    downloadUrl = url;
     embed.setFooter({
       text: `Link expires in ~${Math.round(publicDl.TTL_MS / 60000)} min`,
     });
@@ -309,14 +323,34 @@ async function buildDeliveryPayload(result, { storeUrl, name, iconPath, version:
     content: null,
     embeds: [embed],
     files,
-    components,
+    components: siteButtons(downloadUrl),
   };
 }
 
-async function sayProgress(progressMsg, appName, stage) {
+async function sayProgress(progressMsg, appName, stage, pct, { iconPath, version } = {}) {
   if (!progressMsg) return;
+  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const bannerPath = await renderSharpCard({
+    name: appName,
+    version: version || "",
+    iconPath: iconPath || "",
+    stage,
+    pct: p,
+    done: false,
+  });
+  const embed = progressEmbed(appName, stage, p);
+  const files = [];
+  if (bannerPath) {
+    files.push(new AttachmentBuilder(bannerPath, { name: "sharp.jpg" }));
+    embed.setImage("attachment://sharp.jpg");
+  }
   await progressMsg
-    .edit({ content: null, embeds: [progressEmbed(appName, stage)], components: [] })
+    .edit({
+      content: null,
+      embeds: [embed],
+      files,
+      components: [],
+    })
     .catch(() => {});
 }
 
@@ -331,53 +365,75 @@ async function decryptStoreUrl(link, progressMsg) {
 
   const lookup = lookupStoreApp(link);
   const appName = lookup.name || "App";
-  await sayProgress(progressMsg, appName, "Looking up…");
+  const ver = lookup.version || "";
+  const iconPath = lookup.iconPath || "";
+  let lastPct = -1;
+  let lastAt = 0;
+  const pushPct = async (pct, stage) => {
+    const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+    const now = Date.now();
+    // Throttle sharp re-renders (Discord rate limits + CPU).
+    if (p < 100 && p - lastPct < 8 && now - lastAt < 2500) return;
+    lastPct = p;
+    lastAt = now;
+    await sayProgress(progressMsg, appName, stage, p, { iconPath, version: ver });
+  };
+
+  await pushPct(5, "Looking up…");
 
   const entry = ipaCache.getByStoreUrl(link, "");
   if (entry && entry.diskPath && fs.existsSync(entry.diskPath)) {
-    await sayProgress(progressMsg, entry.name || appName, "Cache hit…");
+    await pushPct(90, "Cache hit…");
     return buildDeliveryPayload(
       {
         file: entry.diskPath,
-        meta: { name: entry.name || appName, version: entry.version || lookup.version, bid: entry.bid || lookup.bid },
+        meta: { name: entry.name || appName, version: entry.version || ver, bid: entry.bid || lookup.bid },
       },
       {
         storeUrl: link,
         name: entry.name || appName,
-        iconPath: lookup.iconPath,
-        version: entry.version || lookup.version,
+        iconPath,
+        version: entry.version || ver,
       }
     );
   }
 
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
-  await sayProgress(progressMsg, appName, "Fetching IPA…");
+  await pushPct(12, "Fetching IPA…");
   await fairplayBackends.ensureEncryptedSource({
     url: link,
     dir,
     say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
+    onProgress: (pct, msg) => {
+      const mapped = Math.max(12, Math.min(55, Math.round(Number(pct) || 12)));
+      pushPct(mapped, msg || "Fetching IPA…").catch(() => {});
+    },
     vreq: "",
   });
-  await sayProgress(progressMsg, appName, "Decrypting…");
+  await pushPct(60, "Decrypting…");
   const result = await fairplayBackends.tryRemoteBackends({
     url: link,
     dir,
     say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
+    onProgress: (pct, msg) => {
+      const mapped = Math.max(60, Math.min(92, Math.round(Number(pct) || 60)));
+      pushPct(mapped, msg || "Decrypting…").catch(() => {});
+    },
     vreq: "",
   });
-  await sayProgress(progressMsg, appName, "Finishing…");
+  await pushPct(96, "Finishing…");
   const meta = (result && result.meta) || {};
   return buildDeliveryPayload(result, {
     storeUrl: link,
     name: meta.name || meta.title || appName,
-    iconPath: lookup.iconPath,
-    version: meta.version || meta.bundleVersion || lookup.version,
+    iconPath,
+    version: meta.version || meta.bundleVersion || ver,
   });
 }
 
 async function runDecryptFor(channel, link, notifier) {
   const progressMsg = await notifier({
-    embeds: [progressEmbed("Decrypting…", "Starting…")],
+    embeds: [progressEmbed("Decrypting…", "Starting…", 0)],
   });
   try {
     const payload = await queueJob(async () => decryptStoreUrl(link, progressMsg));
@@ -397,7 +453,9 @@ async function runDecryptFor(channel, link, notifier) {
       });
   } catch (e) {
     const why = String((e && e.message) || e).slice(0, 400);
-    await progressMsg.edit({ content: null, embeds: [progressEmbed("Failed", why)] }).catch(() => {});
+    await progressMsg
+      .edit({ content: null, embeds: [progressEmbed("Failed", why, 0)], components: [] })
+      .catch(() => {});
   }
 }
 

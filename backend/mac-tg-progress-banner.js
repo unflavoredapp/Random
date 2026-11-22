@@ -122,6 +122,18 @@ function terminalLogSvg({ logLines, W, H, rightLeft }) {
 </svg>`);
 }
 
+/** Big numeric % on the left panel (Discord / clean sharp — no terminal log). */
+function percentBadgeSvg({ pct, stage, W, H, rightLeft }) {
+  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const label = sanitize(String(stage || "").trim() || "Working…", 28);
+  const cx = Math.round(rightLeft / 2);
+  return Buffer.from(`<?xml version="1.0" encoding="UTF-8"?>
+<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg">
+  <text x="${cx}" y="260" text-anchor="middle" fill="#ffffff" font-family="Arial, Helvetica, sans-serif" font-size="112" font-weight="800">${p}%</text>
+  <text x="${cx}" y="310" text-anchor="middle" fill="#9aa3b5" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="600">${label}</text>
+</svg>`);
+}
+
 function leftPanelSvg({
   brand,
   repoAppCount,
@@ -321,6 +333,7 @@ async function renderProgressBanner({
   tag,
   brand,
   done,
+  hideTerminal,
 } = {}) {
   const sharp = loadSharp();
   if (!sharp) return "";
@@ -336,6 +349,9 @@ async function renderProgressBanner({
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
   // Top-left label next to Delvek icon is always DELvEK.NeT (FastDecrypt stays on credit / @).
   const brandLabel = sanitize("DELvEK.NeT", 18);
+  // Done cards never show the terminal log ("> done"). Discord passes hideTerminal
+  // and gets a big % badge while work is in flight.
+  const noTerminal = isDone || !!hideTerminal;
   const termLines = Array.isArray(logLines) && logLines.length
     ? logLines
     : [stage || (isDone ? "done" : "starting…")];
@@ -417,16 +433,30 @@ async function renderProgressBanner({
       top: 0,
     });
 
-    layers.push({
-      input: terminalLogSvg({
-        logLines: termLines,
-        W,
-        H,
-        rightLeft,
-      }),
-      left: 0,
-      top: 0,
-    });
+    if (!noTerminal) {
+      layers.push({
+        input: terminalLogSvg({
+          logLines: termLines,
+          W,
+          H,
+          rightLeft,
+        }),
+        left: 0,
+        top: 0,
+      });
+    } else if (!isDone) {
+      layers.push({
+        input: percentBadgeSvg({
+          pct: p,
+          stage: stage || "",
+          W,
+          H,
+          rightLeft,
+        }),
+        left: 0,
+        top: 0,
+      });
+    }
 
     layers.push({
       input: rightMetaSvg({
