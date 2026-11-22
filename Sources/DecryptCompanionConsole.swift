@@ -2,7 +2,7 @@
 // Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionConsole.swift
 //  FairPlayed-style companion decrypt UI — shown only by the installed
-//  “AppAssassin Decrypt” companion IPA (`DecryptCompanionRoot`), not as a
+//  “FastDecryptBot” companion IPA (`DecryptCompanionRoot`), not as a
 //  host fullScreenCover.
 //
 
@@ -106,7 +106,7 @@ final class DecryptCompanionController: ObservableObject {
     }
 }
 
-/// Full-screen companion console matching FairPlayed / competition “AppAssassin Decrypt”.
+/// Full-screen companion console for FastDecryptBot.
 struct DecryptCompanionConsole: View {
     @ObservedObject private var companion = DecryptCompanionController.shared
     @ObservedObject private var client = DecryptClient.shared
@@ -163,54 +163,62 @@ struct DecryptCompanionConsole: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
-            if showsDismiss {
-                Button {
-                    companion.dismiss()
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.45))
+        ZStack {
+            // Center brand: FastDecryptBot icon + name.
+            HStack(spacing: 8) {
+                Group {
+                    if UIImage(named: DecryptCompanionPackager.companionIconAsset) != nil {
+                        Image(DecryptCompanionPackager.companionIconAsset)
+                            .resizable()
+                            .scaledToFill()
+                    } else if let img = TetherlessBrand.appIconImage() {
+                        Image(uiImage: img)
+                            .resizable()
+                            .scaledToFill()
+                    } else {
+                        Image(systemName: "bolt.shield.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .foregroundStyle(Color(red: 0.95, green: 0.2, blue: 0.22))
+                            .padding(4)
+                    }
                 }
-                .buttonStyle(.plain)
+                .frame(width: 28, height: 28)
+                .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+
+                Text(DecryptCompanionPackager.companionDisplayName)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .lineLimit(1)
             }
 
-            // TetherLess brand mark (“Theresa” / cable-slash icon).
-            Group {
-                if UIImage(named: "airshare_mark") != nil {
-                    Image("airshare_mark")
-                        .resizable()
-                        .scaledToFit()
-                } else if UIImage(named: "aircore_logo") != nil {
-                    Image("aircore_logo")
-                        .resizable()
-                        .scaledToFit()
+            HStack(spacing: 10) {
+                if showsDismiss {
+                    Button {
+                        companion.dismiss()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.45))
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                Spacer(minLength: 0)
+
+                if companion.done, companion.finishedURL != nil {
+                    Button {
+                        shareURL = companion.finishedURL
+                    } label: {
+                        Image(systemName: "square.and.arrow.up.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white.opacity(0.85))
+                    }
+                    .buttonStyle(.plain)
                 } else {
-                    Image(systemName: "bolt.slash.circle.fill")
-                        .resizable()
-                        .scaledToFit()
-                        .foregroundStyle(TetherlessPalette.accent)
+                    // Keep layout balanced when share isn’t shown.
+                    Color.clear.frame(width: 22, height: 22)
                 }
-            }
-            .frame(width: 28, height: 28)
-            .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-
-            Text("AppAssassin Decrypt")
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.white)
-                .lineLimit(1)
-
-            Spacer(minLength: 0)
-
-            if companion.done, companion.finishedURL != nil {
-                Button {
-                    shareURL = companion.finishedURL
-                } label: {
-                    Image(systemName: "square.and.arrow.up.circle.fill")
-                        .font(.title3)
-                        .foregroundStyle(.white.opacity(0.85))
-                }
-                .buttonStyle(.plain)
             }
         }
         .padding(.horizontal, 16)

@@ -7,7 +7,7 @@
 import Foundation
 import UIKit
 
-/// Safe cross-process hints for the AppAssassin Decrypt companion.
+/// Safe cross-process hints for the FastDecryptBot companion.
 /// Never store Apple ID passwords, PETs, or store session JSON here.
 /// Entire type is MainActor so FairPlay-ack reads stay isolation-safe under Swift 6.
 @MainActor
@@ -632,8 +632,8 @@ enum DecryptCompanionHandoff {
         DecryptClient.shared.error = nil
         let verify = meta.verifySummary.trimmingCharacters(in: .whitespacesAndNewlines)
         DecryptClient.shared.message = verify.isEmpty
-            ? "Imported clear IPA from AppAssassin Decrypt."
-            : "Imported clear IPA from AppAssassin Decrypt · \(verify)"
+            ? "Imported clear IPA from FastDecryptBot."
+            : "Imported clear IPA from FastDecryptBot · \(verify)"
         SideloadIPACache.shared.remember(url: dest, kind: .decrypted, name: meta.displayName)
         IPadnDownloadManager.shared.attachCompanionClearIPA(
             url: dest,

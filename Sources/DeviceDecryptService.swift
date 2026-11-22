@@ -595,7 +595,7 @@ final class DeviceDecryptService: ObservableObject {
         }
         if let verify = try? FairPlayDecrypt.verifyIPA(at: clear), !verify.isFullyClear {
             throw DecryptError(
-                "Phone Worker left encrypted Mach-Os (\(verify.summary)). Install the app from the App Store on this device, confirm FairPlay keys, then retry — or use Get → AppAssassin Decrypt companion."
+                "Phone Worker left encrypted Mach-Os (\(verify.summary)). Install the app from the App Store on this device, confirm FairPlay keys, then retry — or use Get → FastDecryptBot companion."
             )
         }
         return (clear, name, result.item.displayVersion)
@@ -690,7 +690,7 @@ final class DeviceDecryptService: ObservableObject {
         _ = try FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
             self?.publishDecryptProgress(msg)
         }
-        publishDecryptProgress("Building AppAssassin Decrypt companion for \(displayName)…")
+        publishDecryptProgress("Building FastDecryptBot companion for \(displayName)…")
         // Stamp the live path before packaging so the companion FairPlay input is ready
         // even when open(2) of the FairPlay binary EPERMs under the host sandbox.
         let info = NSDictionary(contentsOf: installed.appendingPathComponent("Info.plist")) as? [String: Any]
@@ -890,7 +890,7 @@ final class DeviceDecryptService: ObservableObject {
     private func markCompanionHandoff(displayName: String, companionBundleID: String? = nil) {
         DecryptClient.shared.phase = .handedOff
         DecryptClient.shared.message =
-            "Open AppAssassin Decrypt to finish FairPlay (Trust under Settings › General › VPN & Device Management if asked). The clear IPA returns here for Sign → Install."
+            "Open FastDecryptBot to finish FairPlay (Trust under Settings › General › VPN & Device Management if asked). The clear IPA returns here for Sign → Install."
         DecryptClient.shared.error = nil
         DecryptClient.shared.finishedName = displayName
         if let companionBundleID, !companionBundleID.isEmpty {
@@ -1106,7 +1106,7 @@ final class DeviceDecryptService: ObservableObject {
             publishDecryptProgress("Encrypted IPA is in App Group (companion-readable).")
         } else {
             publishDecryptProgress(
-                "App Group unavailable (common on free Apple ID certs) — companion will embed EncryptedSource.ipa. Delete any old AppAssassin Decrypt app before Get so the new package is installed."
+                "App Group unavailable (common on free Apple ID certs) — companion will embed EncryptedSource.ipa. Delete any old FastDecryptBot app before Get so the new package is installed."
             )
         }
         if fpOpts.pathDiagnostics {
@@ -1116,7 +1116,7 @@ final class DeviceDecryptService: ObservableObject {
             )
         }
 
-        publishDecryptProgress("Building AppAssassin Decrypt companion for \(label)…")
+        publishDecryptProgress("Building FastDecryptBot companion for \(label)…")
         _ = await DeviceLibrary.shared.refreshAwaiting()
 
         // Stamp live install for FairPlay mremap only — do NOT slim-copy from the live

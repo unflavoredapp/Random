@@ -74,7 +74,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-eperm",
             title: "FairPlay needs live install or stamped IPA",
-            summary: "Companion hit EPERM on EmbeddedPayload. Install this app from the App Store (same Apple ID), re-run Get so the encrypted IPA is stamped/bundled, then open AppAssassin Decrypt again.",
+            summary: "Companion hit EPERM on EmbeddedPayload. Install this app from the App Store (same Apple ID), re-run Get so the encrypted IPA is stamped/bundled, then open FastDecryptBot again.",
             matches: [
                 "eperm",
                 "embeddedpayload",
@@ -89,7 +89,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-macho",
             title: "No Mach-O binaries found",
-            summary: "Couldn’t see executables in the live install (common for Flutter apps like Cake Wallet). Sign in under Account, tap Get so the Store IPA embeds EncryptedSource.ipa into AppAssassin Decrypt, delete any old companion, then retry.",
+            summary: "Couldn’t see executables in the live install (common for Flutter apps like Cake Wallet). Sign in under Account, tap Get so the Store IPA embeds EncryptedSource.ipa into FastDecryptBot, delete any old companion, then retry.",
             matches: ["no mach-o binaries found", "no mach-o", "no mach-os"],
             actionTitle: "Open Account",
             action: .openAppStoreSignIn
@@ -124,7 +124,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-enomem",
             title: "Not enough memory (mremap ENOMEM / Jetsam)",
-            summary: "On-device FairPlay ran out of RAM mapping the binary. Charge the device, close other apps, keep AppAssassin Decrypt in the foreground, then retry — or use Phone Worker / unfairplay for large cryptsizes. Skip TestFlight / Apple system apps. AppAssassin can bounce large jobs to the backup server automatically.",
+            summary: "On-device FairPlay ran out of RAM mapping the binary. Charge the device, close other apps, keep FastDecryptBot in the foreground, then retry — or use Phone Worker / unfairplay for large cryptsizes. Skip TestFlight / Apple system apps. AppAssassin can bounce large jobs to the backup server automatically.",
             matches: [
                 "enomem",
                 "not enough memory",

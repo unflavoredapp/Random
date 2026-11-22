@@ -66,7 +66,7 @@ enum FairPlayFailureClass: String {
     var userMessage: String {
         switch self {
         case .outOfMemory:
-            return "Not enough memory to decrypt this binary (mremap ENOMEM). Close other apps, keep AppAssassin Decrypt in the foreground, and retry — or bounce to Phone Worker / unfairplay."
+            return "Not enough memory to decrypt this binary (mremap ENOMEM). Close other apps, keep FastDecryptBot in the foreground, and retry — or bounce to Phone Worker / unfairplay."
         case .licenseOrKeys:
             return AppStoreDecryptGuide.failureHint
         case .stillEncrypted:
