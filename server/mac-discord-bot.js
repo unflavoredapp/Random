@@ -150,13 +150,15 @@ function lookupStoreApp(storeUrl) {
   return out;
 }
 
+const DONE_TAGLINE = "Fastest discord\nDecryption Bot";
+
 async function renderSharpCard({ name, version, iconPath, stage, pct, done }) {
   const dest = path.join(WORK, `sharp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
   try {
     const out = await renderProgressBanner({
       name: name || "App",
       version: version || "",
-      stage: stage || (done ? "done" : "working…"),
+      stage: stage || (done ? DONE_TAGLINE : "working…"),
       logLines: [],
       pct: done ? 100 : pct || 0,
       iconPath: iconPath || "",
@@ -185,19 +187,24 @@ function progressEmbed(appName, stage, pct) {
 }
 
 function siteButtons(downloadUrl) {
-  const row = new ActionRowBuilder();
-  if (downloadUrl) {
-    row.addComponents(
-      new ButtonBuilder()
-        .setStyle(ButtonStyle.Link)
-        .setLabel("Download IPA")
-        .setURL(downloadUrl)
-    );
+  const website = new ButtonBuilder()
+    .setStyle(ButtonStyle.Link)
+    .setLabel("Website")
+    .setURL(SITE);
+  if (!downloadUrl) {
+    // Alone — Discord still left-aligns; no Download to pair with.
+    return [new ActionRowBuilder().addComponents(website)];
   }
-  row.addComponents(
-    new ButtonBuilder().setStyle(ButtonStyle.Link).setLabel("Website").setURL(SITE)
-  );
-  return [row];
+  const download = new ButtonBuilder()
+    .setStyle(ButtonStyle.Link)
+    .setLabel("Download IPA")
+    .setURL(downloadUrl);
+  // Pad pushes Website toward the right edge of the action row (Discord packs left).
+  const pad = new ButtonBuilder()
+    .setStyle(ButtonStyle.Link)
+    .setLabel("\u2003\u2003")
+    .setURL(SITE);
+  return [new ActionRowBuilder().addComponents(download, pad, website)];
 }
 
 function statusEmbed() {
@@ -273,7 +280,7 @@ async function buildDeliveryPayload(result, { storeUrl, name, iconPath, version:
     name: appName,
     version,
     iconPath,
-    stage: "done",
+    stage: DONE_TAGLINE,
     pct: 100,
     done: true,
   });
