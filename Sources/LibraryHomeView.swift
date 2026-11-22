@@ -166,7 +166,7 @@ struct LibraryHomeView: View {
                 StatusRow(
                     kind: .info,
                     title: "Download IPA → companion",
-                    subtitle: "Signed-in Account downloads the Store IPA, then Tetherless Decrypt companion runs FairPlay. No in-app decrypt path."
+                    subtitle: "Signed-in Account downloads the Store IPA, then AppAssassin Decrypt companion runs FairPlay. No in-app decrypt path."
                 )
             }
             if !decrypting.status.isEmpty {

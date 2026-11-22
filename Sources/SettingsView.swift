@@ -569,7 +569,7 @@ private struct AboutScreen: View {
         let name: String, blurb: String, asset: String, symbol: String, url: String
     }
     private let credits: [Credit] = [
-        Credit(name: TetherlessBrand.name, blurb: "Built at tetherless.dev. Sign anything, keep it local.", asset: "airshare_mark", symbol: "person.fill", url: TetherlessBrand.siteDisplay),
+        Credit(name: TetherlessBrand.name, blurb: "Built at fastdecrypt.ai. Sign anything, keep it local.", asset: "AppAssassinAppIcon", symbol: "person.fill", url: TetherlessBrand.siteDisplay),
         Credit(name: "DELvEK", blurb: "Trusted partner. Respected, protected apps updated daily with screenshots.", asset: "delvek_logo", symbol: "pawprint.fill", url: "https://delvek.net"),
         Credit(name: "Store login (open source)", blurb: "App Store search, login, and version history include code derived from mengangs/ipadn (GPL-2.0). FairPlay decrypt is Tetherless.", asset: "", symbol: "arrow.down.app.fill", url: "https://github.com/mengangs/ipadn"),
     ]
@@ -613,7 +613,7 @@ private struct AboutScreen: View {
                     featureRow("signature", "Sign & install any IPA",
                                "Using your free Apple ID, or your own certificate.")
                     featureRow("lock.open.fill", "Get a clean copy of apps you own",
-                               "Stock iPhone FairPlay via the Tetherless Decrypt companion (free/development Apple ID cert). Or enable Phone Worker so this phone grabs queued jobs from a Linux VPS. Sign into Media & Purchases for that Apple ID — no Mac, no jailbreak.")
+                               "Stock iPhone FairPlay via the AppAssassin Decrypt companion (free/development Apple ID cert). Or enable Phone Worker so this phone grabs queued jobs from a Linux VPS. Sign into Media & Purchases for that Apple ID — no Mac, no jailbreak.")
                     featureRow("person.2.fill", "Multiple App Store accounts",
                                "Sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.")
                     featureRow("puzzlepiece.extension.fill", "Tweak injection",

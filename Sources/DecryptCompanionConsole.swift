@@ -2,7 +2,7 @@
 // Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionConsole.swift
 //  FairPlayed-style companion decrypt UI — shown only by the installed
-//  “Tetherless Decrypt” companion IPA (`DecryptCompanionRoot`), not as a
+//  “AppAssassin Decrypt” companion IPA (`DecryptCompanionRoot`), not as a
 //  host fullScreenCover.
 //
 
@@ -106,7 +106,7 @@ final class DecryptCompanionController: ObservableObject {
     }
 }
 
-/// Full-screen companion console matching FairPlayed / competition “Tetherless Decrypt”.
+/// Full-screen companion console matching FairPlayed / competition “AppAssassin Decrypt”.
 struct DecryptCompanionConsole: View {
     @ObservedObject private var companion = DecryptCompanionController.shared
     @ObservedObject private var client = DecryptClient.shared
@@ -195,7 +195,7 @@ struct DecryptCompanionConsole: View {
             .frame(width: 28, height: 28)
             .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
 
-            Text("Tetherless Decrypt")
+            Text("AppAssassin Decrypt")
                 .font(.headline.weight(.semibold))
                 .foregroundStyle(.white)
                 .lineLimit(1)

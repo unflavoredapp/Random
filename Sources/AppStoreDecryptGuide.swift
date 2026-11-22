@@ -136,13 +136,13 @@ enum AppStoreDecryptGuide {
            !email.isEmpty {
             return email
         }
-        if let email = UserDefaults(suiteName: "group.dev.tetherless.app")?
+        if let email = UserDefaults(suiteName: "group.bot.fastdecrypt.ai")?
             .string(forKey: key)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !email.isEmpty {
             return email
         }
-        if let snap = UserDefaults(suiteName: "group.dev.tetherless.app")?
+        if let snap = UserDefaults(suiteName: "group.bot.fastdecrypt.ai")?
             .dictionary(forKey: "companion.hostSnapshot"),
            let email = (snap["hostEmail"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines),

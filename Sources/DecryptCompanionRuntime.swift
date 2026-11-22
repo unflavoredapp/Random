@@ -1,7 +1,7 @@
 //
 // Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionRuntime.swift
-//  When this process is the installed “Tetherless Decrypt” companion (cloned
+//  When this process is the installed “AppAssassin Decrypt” companion (cloned
 //  binary + EmbeddedPayload), run FairPlayed-style export and write the clear IPA
 //  into the shared Documents/Decrypted folder for the host app to pick up.
 //
@@ -70,7 +70,7 @@ enum DecryptCompanionRuntime {
         }
 
         guard let name = embeddedAppName() else {
-            throw DecryptError("No EmbeddedPayload in Tetherless Decrypt — reinstall the companion from TetherLess.")
+            throw DecryptError("No EmbeddedPayload in AppAssassin Decrypt — reinstall the companion from TetherLess.")
         }
         // Path traversal guard — only allow a single path component under EmbeddedPayload.
         guard !name.contains("/") && !name.contains("..") && !name.hasPrefix(".") else {
@@ -209,7 +209,7 @@ enum DecryptCompanionRuntime {
         }
         if before.entries.isEmpty {
             throw DecryptError(
-                "No Mach-Os found (EmbeddedPayload empty and no EncryptedSource.ipa). Delete Tetherless Decrypt, re-run Get from TetherLess so EncryptedSource.ipa is bundled, then open the companion again."
+                "No Mach-Os found (EmbeddedPayload empty and no EncryptedSource.ipa). Delete AppAssassin Decrypt, re-run Get from TetherLess so EncryptedSource.ipa is bundled, then open the companion again."
             )
         }
         let usedLiveInstall = liveURL.map {
@@ -219,7 +219,7 @@ enum DecryptCompanionRuntime {
         if !usedLiveInstall,
            before.encrypted == 0 && before.unknown > 0 && before.clear == 0 && before.plain == 0 {
             throw DecryptError(
-                "Couldn't inspect FairPlay cryptids on EmbeddedPayload (\(before.unknown) unknown). Re-run Get from TetherLess after updating, then open Tetherless Decrypt again."
+                "Couldn't inspect FairPlay cryptids on EmbeddedPayload (\(before.unknown) unknown). Re-run Get from TetherLess after updating, then open AppAssassin Decrypt again."
             )
         }
         // Only fail-closed on slim EmbeddedPayload counts when EncryptedSource isn't available.
@@ -292,12 +292,12 @@ enum DecryptCompanionRuntime {
             let bundled = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
             let hasBundled = fm.fileExists(atPath: bundled.path)
             if !hasBundled {
-                return "FairPlay EPERM on EmbeddedPayload — this Tetherless Decrypt build has no EncryptedSource.ipa. Update TetherLess, delete Tetherless Decrypt, re-run Get so the encrypted IPA is bundled, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
+                return "FairPlay EPERM on EmbeddedPayload — this AppAssassin Decrypt build has no EncryptedSource.ipa. Update TetherLess, delete AppAssassin Decrypt, re-run Get so the encrypted IPA is bundled, then open AppAssassin Decrypt again. \(AppStoreDecryptGuide.failureHint)"
             }
             if triedBundled {
-                return "FairPlay EPERM after unpacking EncryptedSource.ipa — install \(name) from the App Store on this iPhone (same Apple ID) so fairplayd has a live path, re-run Get, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
+                return "FairPlay EPERM after unpacking EncryptedSource.ipa — install \(name) from the App Store on this iPhone (same Apple ID) so fairplayd has a live path, re-run Get, then open AppAssassin Decrypt again. \(AppStoreDecryptGuide.failureHint)"
             }
-            return "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone (same Apple ID), re-run Get from TetherLess so the live path is stamped, then open Tetherless Decrypt again. \(AppStoreDecryptGuide.failureHint)"
+            return "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone (same Apple ID), re-run Get from TetherLess so the live path is stamped, then open AppAssassin Decrypt again. \(AppStoreDecryptGuide.failureHint)"
         }
 
         var report: FairPlayDecryptReport

@@ -26,7 +26,7 @@ final class AirShareAppDelegate: NSObject, UIApplicationDelegate {
 
 nonisolated final class IPADownloader: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
     static let shared = IPADownloader()
-    static let sessionID = "dev.tetherless.app.dl"
+    static let sessionID = "bot.fastdecrypt.ai.dl"
 
     struct Part: Codable { var index: Int; var lo: Int64; var hi: Int64; var done: Bool }   // hi < 0 → whole file
     struct Job: Codable {

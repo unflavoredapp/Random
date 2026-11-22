@@ -33,7 +33,7 @@ enum DecryptChannel: String, CaseIterable, Identifiable {
             if DecryptMacRouting.macOnly {
                 return "Get / companion decrypt is forced to Decrypt site URL (Linux VPS Phone Worker or Mac). On-device companion FairPlay is off."
             }
-            return "Free & purchased apps: Store download → Tetherless Decrypt companion (development cert) runs FairPlay on this stock iPhone — no Mac, no jailbreak."
+            return "Free & purchased apps: Store download → AppAssassin Decrypt companion (development cert) runs FairPlay on this stock iPhone — no Mac, no jailbreak."
         case .telegram:
             return "Your bot queues App Store links; an iPhone Phone Worker (or server CLI) finishes decrypt."
         }

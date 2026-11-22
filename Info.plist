@@ -19,11 +19,11 @@
 	</array>
 	<key>BGTaskSchedulerPermittedIdentifiers</key>
 	<array>
-		<string>dev.tetherless.app.scan</string>
+		<string>bot.fastdecrypt.ai.scan</string>
 		<string>$(PRODUCT_BUNDLE_IDENTIFIER).userTask.*</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>TetherLess uses the local network to pair with this device for native app installation.</string>
+	<string>AppAssassin uses the local network to pair with this device for native app installation.</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_remotepairing-pairable-host._tcp</string>
@@ -71,16 +71,17 @@
 	<key>LSSupportsOpeningDocumentsInPlace</key>
 	<true/>
 	<key>CFBundleDisplayName</key>
-	<string>Tetherless</string>
+	<string>AppAssassin</string>
 	<key>CFBundleName</key>
-	<string>Tetherless</string>
+	<string>AppAssassin</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>ms.msign.party</string>
+			<string>bot.fastdecrypt.ai</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
+				<string>appassassin</string>
 				<string>tetherless</string>
 				<string>airshare</string>
 				<string>msign</string>

@@ -71,15 +71,15 @@ final class DecryptPipeline: ObservableObject {
                 )
 
                 // Companion handoff is a successful terminal state — FairPlay finishes
-                // in Tetherless Decrypt; there is no host-side clear IPA to sign.
+                // in AppAssassin Decrypt; there is no host-side clear IPA to sign.
                 if DecryptClient.shared.phase == .handedOff {
                     let name = DecryptClient.shared.finishedName.isEmpty
                         ? app.name
                         : DecryptClient.shared.finishedName
-                    stage = .done("Companion installed for \(name) — open Tetherless Decrypt to finish.")
+                    stage = .done("Companion installed for \(name) — open AppAssassin Decrypt to finish.")
                     if DecryptClient.shared.message.isEmpty {
                         DecryptClient.shared.message =
-                            "Open Tetherless Decrypt — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
+                            "Open AppAssassin Decrypt — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
                     }
                     return
                 }
