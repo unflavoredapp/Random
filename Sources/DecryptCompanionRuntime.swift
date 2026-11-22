@@ -115,7 +115,9 @@ enum DecryptCompanionRuntime {
 
         // FairPlayed / foulplay: fairplayd resolves SC_Info on the *input* path.
         // Advanced source mode (host-stamped) can force live / stamped IPA / embed.
-        let fpOpts = FairPlayAdvancedOptions.Resolved.from(snapshot: snap)
+        // Companion always serializes Mach-O decrypt — parallel mremap jetsams phones.
+        var fpOpts = FairPlayAdvancedOptions.Resolved.from(snapshot: snap)
+        fpOpts.forceSerialDecrypt = true
         let liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(manifest: man)
         let stampedIPAURL = DecryptCompanionHandoff.resolveEncryptedIPAURL(manifest: man)
         var ipaUnpackRoot: URL?
@@ -173,17 +175,23 @@ enum DecryptCompanionRuntime {
             readRoot = src
             log("Using EmbeddedPayload only (advanced) — FairPlay may EPERM without live licenses.")
         case .automatic:
-            // Prefer live install (fairplayd-friendly), then full stamped/bundled IPA unpack
-            // (complete Mach-O tree), and only then slim EmbeddedPayload.
+            // Prefer live install (fairplayd-friendly). Defer EncryptedSource / stamped IPA
+            // unpack until EmbeddedPayload Mach-O audit fails — avoids holding two full
+            // IPA trees in Jetsam-sensitive memory up front.
             if let liveURL {
                 readRoot = liveURL
                 log("Using live App Store install for FairPlay: \(liveURL.path)")
-            } else if let stampedIPAURL {
-                readRoot = try unpackStampedIPA(stampedIPAURL)
             } else {
                 readRoot = src
-                log("No live install / stamped IPA — FairPlay will try EmbeddedPayload (often EPERM).")
-                log("Re-run Get from TetherLess so EncryptedSource.ipa is bundled into the companion.")
+                if stampedIPAURL != nil || fm.fileExists(
+                    atPath: Bundle.main.bundleURL
+                        .appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName).path
+                ) {
+                    log("Deferred EncryptedSource unpack — trying EmbeddedPayload first (Jetsam-safe).")
+                } else {
+                    log("No live install / stamped IPA — FairPlay will try EmbeddedPayload (often EPERM).")
+                    log("Re-run Get from TetherLess so EncryptedSource.ipa is bundled into the companion.")
+                }
             }
         }
 
@@ -269,6 +277,12 @@ enum DecryptCompanionRuntime {
                 || (msg.hasPrefix("Decrypting ") && msg.contains("Mach-O file"))
                 || msg.localizedCaseInsensitiveContains("retry")
                 || msg.localizedCaseInsensitiveContains("staged")
+                || msg.localizedCaseInsensitiveContains("jetsam")
+                || msg.localizedCaseInsensitiveContains("low memory")
+                || msg.localizedCaseInsensitiveContains("cryptsize")
+                || msg.localizedCaseInsensitiveContains("serial")
+                || msg.localizedCaseInsensitiveContains("partial")
+                || msg.localizedCaseInsensitiveContains("bounce")
             if keep {
                 progress?(msg)
                 Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
@@ -305,6 +319,12 @@ enum DecryptCompanionRuntime {
             report = try runDecrypt(from: readRoot)
         } catch let fp as FairPlayDecryptError {
             switch fp {
+            case .bounceToServer(let reason):
+                log(reason)
+                throw FairPlayDecryptError.outOfMemory(reason)
+            case .outOfMemory(let reason):
+                log(reason)
+                throw fp
             case .missingLicense:
                 throw fp
             case .mainExecutableFailed(let detail)
@@ -634,6 +654,10 @@ struct DecryptCompanionRoot: View {
             || t.contains("not enough memory")
             || t.contains("mremap")
             || t.contains("out of memory")
+            || t.contains("jetsam")
+            || t.contains("phone worker")
+            || t.contains("unfairplay")
+            || t.contains("bounce to")
     }
 
     private static func userFacingError(_ text: String?) -> String {

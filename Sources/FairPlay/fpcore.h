@@ -81,3 +81,9 @@ int  fp_last_fail_kind(void);
 const char *fp_fail_kind_name(int kind);
 /// Soft memory budget hint: 1 if available memory looks tight for a cryptsize remap.
 int  fp_memory_tight_for(uint64_t cryptsize);
+/// 1 if lean remap is realistically possible for cryptsize; 0 if Jetsam is near-certain.
+int  fp_memory_can_decrypt(uint64_t cryptsize);
+/// Largest cryptsize across encrypted slices (0 if none / parse error → -1).
+int64_t fp_largest_cryptsize(const char *path);
+/// Available process memory in bytes (0 if unknown).
+uint64_t fp_available_memory(void);
