@@ -430,7 +430,7 @@ struct AccountHomeView: View {
                                 systemImage: "person.badge.key.fill"
                             )
                         }
-                        Text("Step 1 of 2 — Apple ID. Sign-in uses MacBook style so the Allow sheet (with a map) and code appear on this iPhone. Store downloads are a separate Allow in step 2.")
+                        Text("Step 1 of 2 — Apple ID. Enter the Allow code here first. Store downloads are a separate Allow you start later from Unlock Store (step 2).")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                     } header: {
@@ -445,7 +445,7 @@ struct AccountHomeView: View {
                         } label: {
                             Label("Unlock Store downloads…", systemImage: "lock.open.fill")
                         }
-                        Text("Step 2 of 2 — Store. Apple asks for a second Allow + code so purchases and silent downloads can unlock. This is normal, not a failed sign-in.")
+                        Text("Step 2 of 2 — Store. Tap when you’re ready for a second Allow + code (purchases / silent downloads). Finish step 1 first so the codes don’t stack.")
                             .font(.footnote)
                             .foregroundStyle(.secondary)
                         if let status = store.statusMessage, !status.isEmpty {
@@ -498,10 +498,8 @@ struct AccountHomeView: View {
                 ) {
                     showIPadnLogin = false
                     nav.presentIPadnLogin = false
-                    // User finished step 1 intentionally — offer step 2 Store unlock once.
-                    if store.isSignedIn, store.storeNeedsVerification {
-                        showStoreUnlock = true
-                    }
+                    // Do **not** auto-present Step 2 Store unlock — that stacked a second Allow
+                    // over the first code sheet. Account shows “Unlock Store downloads…” to tap.
                 }
             }
             .sheet(isPresented: $showStoreUnlock) {

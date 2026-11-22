@@ -407,9 +407,15 @@ final class AppleIDStore: ObservableObject {
     }
 
     /// Optional GrandSlam portal after Store is already green (signing certs / manage).
+    /// Never fires a trusted-device Allow here — a second push burns the Store/step-1 code
+    /// the user is still typing. Portal 2FA waits until Certificate create / refreshPortalSession.
     private func attemptPortalAfterIPadnStore(email: String, password: String) async {
         do {
-            let portal = try await GSAAuthClient.shared.authenticate(email: email, password: password)
+            let portal = try await GSAAuthClient.shared.authenticate(
+                email: email,
+                password: password,
+                requestTrustedDevicePush: false
+            )
             if let idx = accounts.firstIndex(where: { $0.email.caseInsensitiveCompare(email) == .orderedSame }) {
                 accounts[idx].portalSessionJSON = try? JSONEncoder().encode(portal)
                 accounts[idx].teamID = portal.teamID
@@ -417,14 +423,12 @@ final class AppleIDStore: ObservableObject {
                 save()
             }
         } catch AppleAuthError.needsTwoFactor {
-            // Keep the GSA challenge alive so IPadnLoginView can finish portal tokens
-            // for free signing. Cancelling here left store login without portal session.
-            refreshTwoFactorChannelFromGSA()
-            withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
-            statusMessage = "Store ready — enter the 6-digit code if prompted (signing)."
-            lastError = nil
+            // Drop the silent challenge — do not flip UI back to awaitingTwoFactor or push Allow.
+            GSAAuthClient.shared.cancel()
+            twoFactorUsesSMS = false
+            twoFactorPhoneHint = nil
         } catch {
-            // Non-fatal for downloads — portal tokens can finish on the next Account sign-in.
+            // Non-fatal for downloads — portal tokens can finish on the next Certificate create.
         }
     }
 
@@ -596,10 +600,10 @@ final class AppleIDStore: ObservableObject {
     /// Fire trusted-device Allow once so the in-app code field has digits to enter.
     /// MZFinance `needsTwoFactor` does not send the system Allow sheet by itself.
     private func deliverAllowPushForStoreCode(force: Bool) async {
-        // Reset a stuck iPhone AuthKit identity and re-push as MacBook when needed —
-        // otherwise Apple never shows the location Allow on this phone.
-        let resetFromiPhone = AuthClientSpoof.ensureMacBookForAllowOverlay()
-        await requestTrustedDevicePush(forStoreUnlock: false, force: force || resetFromiPhone)
+        // Ensure MacBook AuthKit *before* the first push — do not OR into `force`, or a
+        // spoof reset immediately fires a second `/trusteddevice` and burns the first code.
+        _ = AuthClientSpoof.ensureMacBookForAllowOverlay()
+        await requestTrustedDevicePush(forStoreUnlock: false, force: force)
         if authPhase != .awaitingTwoFactor, authPhase != .verifying {
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
         }
@@ -769,11 +773,13 @@ final class AppleIDStore: ObservableObject {
     /// Trusted-device Allow push (“Send again to devices”).
     /// - Parameter forStoreUnlock: Second-step Store unlock after Apple ID is already signed in.
     /// - Parameter force: When false, keep an Allow that was already sent (a second push burns the first code).
+    ///   Only pass `true` from an explicit Resend — never from AuthKit MacBook spoof reset alone.
     func requestTrustedDevicePush(forStoreUnlock: Bool = false, force: Bool = false) async {
         lastError = nil
         // Always MacBook for map Allow on this iPhone (Store unlock + Apple ID Step 1).
-        let resetFromiPhone = AuthClientSpoof.ensureMacBookForAllowOverlay()
-        let forcePush = force || resetFromiPhone
+        // Spoof reset only affects the *next* push identity — it must not force a second push.
+        _ = AuthClientSpoof.ensureMacBookForAllowOverlay()
+        let forcePush = force
         let keepStoreSheet = forStoreUnlock || (isSignedIn && storeNeedsVerification)
         authPhase = .verifying
         statusMessage = forcePush
@@ -836,8 +842,8 @@ final class AppleIDStore: ObservableObject {
                 }
             }
 
-            // Challenge already live: only re-push when the user explicitly asks (force),
-            // or we just flipped AuthKit back to MacBook (prior iPhone push won't overlay here).
+            // Challenge already live: only re-push when the user explicitly asks (force).
+            // A second `/trusteddevice` while the first code is on screen invalidates it.
             if gsa.twoFactorCodeAlreadySent, !forcePush {
                 finishWaitingForCode()
                 return
