@@ -32,6 +32,7 @@ const {
 } = require("./mac-tg-progress-banner");
 const publicDl = require("./mac-tg-public-dl");
 const cordBrand = require("./mac-tg-cord-brand");
+const tgVip = require("./mac-tg-vip");
 
 /** token → version sharp-card carousel state (before decrypt progress card). */
 const pendingVerPicks = new Map();
@@ -84,13 +85,6 @@ const ALLOWED = String(process.env.TELEGRAM_ALLOWED_IDS || "")
 const VIP_CONTACT = String(
   process.env.TELEGRAM_VIP_CONTACT || process.env.DELVEK_VIP_CONTACT || "mrzefie"
 ).replace(/^@/, "");
-/** Telegram user ids with VIP (comma-separated). Empty = nobody has VIP yet. */
-const VIP_IDS = new Set(
-  String(process.env.TELEGRAM_VIP_IDS || "")
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean)
-);
 const WORK = process.env.MAC_TG_WORK_DIR || path.join(os.tmpdir(), "tetherless-mac-tg");
 const DROP = process.env.MAC_TG_DROP_DIR || path.join(os.homedir(), "tetherless-drop");
 const PREMIUM_UPLOAD = path.join(__dirname, "mac-tg-premium-upload.py");
@@ -351,7 +345,18 @@ function vipContactHandle() {
 }
 
 function userHasVip(chatId) {
-  return VIP_IDS.has(String(chatId));
+  return tgVip.isVip(chatId);
+}
+
+async function refuseIfNoQuota(chatId) {
+  const r = tgVip.consumeQuota(chatId);
+  if (r.ok) return true;
+  await tgApi("sendMessage", {
+    chat_id: chatId,
+    text: String(r.error || "Daily limit reached.").slice(0, 400),
+    disable_web_page_preview: true,
+  }).catch(() => {});
+  return false;
 }
 
 function siteLinkButtons() {
@@ -404,20 +409,26 @@ function resultKeyboard(downloadUrl) {
 
 function vipStatusText(chatId) {
   const who = vipContactHandle();
-  if (userHasVip(chatId)) {
+  const st = tgVip.quotaStatus(chatId);
+  if (st.vip) {
+    const when = st.permanent
+      ? "Expires: <b>lifetime</b>"
+      : `Time left: <b>${escapeHtml(st.left)}</b>`;
     return (
       `⭐ <b>VIP active</b>\n\n` +
-      `You have VIP access on this bot.\n` +
+      `${when}\n` +
+      `Unlimited decrypts · older versions · no size cap.\n` +
       `Questions? Contact @${escapeHtml(who)}.`
     );
   }
   return (
     `🔐 You do not have VIP access. Contact <b>@${escapeHtml(who)}</b> to purchase VIP access.\n\n` +
-    `VIP perks include:\n` +
-    `✅ Unlimited decryptions (no daily limit)\n` +
+    `Free today: <b>${st.remaining}/${st.limit}</b> · max ${(tgVip.FREE_MAX_BYTES / (1024 * 1024 * 1024)).toFixed(0)} GB each\n\n` +
+    `VIP perks:\n` +
+    `✅ Unlimited decrypts (countdown timer, not a daily cap)\n` +
     `✅ No file size restrictions\n` +
-    `✅ TestFlight app decryption\n` +
-    `✅ Decrypt older app versions`
+    `✅ TestFlight IPA drop + older versions\n` +
+    `✅ Plans: 7 / 30 / 90 / 180 / 365 days`
   );
 }
 
@@ -467,7 +478,7 @@ async function sendStatus(chatId) {
     `🧠 Model: ${modelReady ? "ready" : "not ready"}\n` +
     `📦 Cache: ${clearN} clear · ${encN} encrypted\n` +
     `${uploadLine}\n` +
-    `⭐ VIP: ${userHasVip(chatId) ? "yes" : "no"}`;
+    `⭐ ${escapeHtml(tgVip.quotaLabel(tgVip.quotaStatus(chatId)))}`;
   await tgApi("sendMessage", {
     chat_id: chatId,
     text,
@@ -2016,11 +2027,10 @@ function startScreenText() {
     `📌 <b>To get started:</b>\n` +
     `• Send an App Store link <b>or just the app name</b> (e.g. <code>Vinted</code>).\n` +
     `• Optional version: <code>Vinted 26.45.0</code> or <code>Vinted v26.45.0</code>.\n` +
-    `• Free users get 3 decryptions per day (up to 1 GB each).\n` +
-    `• ⭐ VIP users get unlimited decryptions with no size restrictions.\n` +
-    `• ⭐ VIP users can also decrypt TestFlight apps — just send a TestFlight invite link!\n` +
-    `• ⭐ VIP users can use /version to browse &amp; decrypt older app versions.\n` +
-    `• Use /vip to check your VIP status or learn how to upgrade.\n` +
+    `• Free users get ${tgVip.FREE_DAILY} decryptions per day (up to ${(tgVip.FREE_MAX_BYTES / (1024 * 1024 * 1024)).toFixed(0)} GB each).\n` +
+    `• ⭐ VIP is timed (7 / 30 / 90 / 180 / 365 days) — unlimited while active, with a countdown on /vip.\n` +
+    `• ⭐ VIP: no size cap · older versions · TestFlight IPA drop.\n` +
+    `• Use /vip to check time remaining or how to upgrade.\n` +
     `🌍 Supported App Store regions: HK, US, CA, PL, CN, AU, DE, FR, VN, JP, RU`
   );
 }
@@ -2440,7 +2450,7 @@ async function offerVersionPick(chatId, link) {
   }
 
   const adamForCache = storeMeta.adam || ipaCache.adamFromStoreUrl(link) || "";
-  const picks = versions.map((v, i) => {
+  let picks = versions.map((v, i) => {
     const ver = String(v.v || v.version || v.label || "—").slice(0, 24);
     const ext = String(v.externalVersionId || v.external_id || "").trim();
     const marketing = isExternalVersionId(ver) ? "" : ver;
@@ -2467,6 +2477,11 @@ async function offerVersionPick(chatId, link) {
       current: !!v.current,
     };
   });
+  // Free tier: latest only (VIP unlocks full history).
+  if (!tgVip.isVip(chatId)) {
+    const latest = picks.find((p) => p.current) || picks[0];
+    picks = latest ? [latest] : [];
+  }
   // Warm encrypted cache for latest in the background (feature 2) when missing.
   try {
     const extras = require("./mac-ipatool-extras");
@@ -2512,6 +2527,20 @@ async function startDecryptFromVersionPick(pending, { vreq, versionLabel, label,
       chat_id: chatId,
       message_id: pending.messageId,
     }).catch(() => {});
+  }
+
+  if (
+    pending.mode !== "library" &&
+    pick &&
+    !pick.current &&
+    !tgVip.isVip(chatId)
+  ) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: `Older versions need VIP — /vip\n${tgVip.VIP_URL}`,
+      disable_web_page_preview: true,
+    }).catch(() => {});
+    return;
   }
 
   // /library AppName pick → re-send cached decrypted IPA (no re-decrypt).
@@ -2973,6 +3002,16 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
   if (!fs.existsSync(ipaPath) || fs.statSync(ipaPath).size < 100) {
     throw new Error("IPA not found or empty: " + ipaPath);
   }
+  if (!(await refuseIfNoQuota(chatId))) return;
+  const encBytes = fs.statSync(ipaPath).size;
+  const sizeGate = tgVip.checkSizeAllowed(chatId, encBytes);
+  if (!sizeGate.ok) {
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: String(sizeGate.error || "File too large for free tier.").slice(0, 400),
+    }).catch(() => {});
+    return;
+  }
   const card = createProgressCard(chatId);
   await card.start("", label || path.basename(ipaPath, ".ipa") || "App");
   await card.setStage("Decrypting…", 20);
@@ -3145,6 +3184,7 @@ async function decryptStoreUrl(chatId, link, vreq, opts = {}) {
     });
     return;
   }
+  if (!(await refuseIfNoQuota(chatId))) return;
   if (await trySendCached(chatId, link, vreq)) return;
 
   const card = createProgressCard(chatId);
@@ -3236,6 +3276,20 @@ async function decryptStoreUrl(chatId, link, vreq, opts = {}) {
 }
 
 async function deliverResult(chatId, result, opts = {}) {
+  try {
+    const bytes = fs.statSync(result.file).size;
+    const sizeGate = tgVip.checkSizeAllowed(chatId, bytes);
+    if (!sizeGate.ok) {
+      const msg = String(sizeGate.error || "File too large for free tier.").slice(0, 400);
+      if (opts.card) await opts.card.fail(msg);
+      else {
+        await tgApi("sendMessage", { chat_id: chatId, text: msg }).catch(() => {});
+      }
+      return;
+    }
+  } catch {
+    /* ignore size probe */
+  }
   const ipaMeta = readIpaMeta(result.file);
   const name = opts.label || ipaMeta.name || result.name || (opts.card && opts.card.name) || "App";
   // Prefer Info.plist / picker marketing version — never show external-version-id gibberish.
@@ -3909,6 +3963,86 @@ async function handleMessage(msg) {
 
   if (/^\/vip(?:@\w+)?\b/i.test(text)) {
     await sendVip(chatId);
+    return;
+  }
+
+  // Admin: /grantvip <days>  (reply to user)  OR  /grantvip <user_id> <days>
+  if (/^\/grantvip(?:@\w+)?\b/i.test(text)) {
+    if (!tgVip.isAdmin(chatId)) {
+      await tgApi("sendMessage", { chat_id: chatId, text: "Admin only." });
+      return;
+    }
+    const args = text.replace(/^\/grantvip(?:@\w+)?\s*/i, "").trim().split(/\s+/).filter(Boolean);
+    let targetId = "";
+    let days = 0;
+    if (args.length >= 2 && /^\d{5,25}$/.test(args[0])) {
+      targetId = args[0];
+      days = Number(args[1]);
+    } else if (args.length >= 1 && /^\d{1,4}$/.test(args[0])) {
+      days = Number(args[0]);
+      const replied = msg.reply_to_message && msg.reply_to_message.from;
+      targetId = replied && !replied.is_bot ? String(replied.id) : "";
+    }
+    if (!targetId || !days) {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text:
+          "Usage:\n" +
+          "<code>/grantvip &lt;user_id&gt; &lt;days&gt;</code>\n" +
+          "or reply to a user: <code>/grantvip 30</code>\n" +
+          "Days: 7 / 30 / 90 / 180 / 365",
+        parse_mode: "HTML",
+      });
+      return;
+    }
+    const result = tgVip.grantVip(targetId, days, String(chatId));
+    if (!result.ok) {
+      await tgApi("sendMessage", { chat_id: chatId, text: result.error });
+      return;
+    }
+    userLog.logUse({
+      chatId,
+      from: msg.from,
+      kind: "grantvip",
+      detail: `${targetId} ${days}d → ${result.left}`,
+      platform: "telegram",
+    });
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text:
+        `⭐ VIP granted\n` +
+        `User: <code>${escapeHtml(targetId)}</code>\n` +
+        `Added: <b>${days} days</b>${result.stacked ? " (stacked)" : ""}\n` +
+        `Time left: <b>${escapeHtml(result.left)}</b>`,
+      parse_mode: "HTML",
+    });
+    return;
+  }
+
+  if (/^\/revokevip(?:@\w+)?\b/i.test(text)) {
+    if (!tgVip.isAdmin(chatId)) {
+      await tgApi("sendMessage", { chat_id: chatId, text: "Admin only." });
+      return;
+    }
+    const arg = text.replace(/^\/revokevip(?:@\w+)?\s*/i, "").trim();
+    let targetId = arg.split(/\s+/)[0] || "";
+    if (!targetId && msg.reply_to_message && msg.reply_to_message.from) {
+      targetId = String(msg.reply_to_message.from.id);
+    }
+    if (!/^\d{5,25}$/.test(targetId)) {
+      await tgApi("sendMessage", {
+        chat_id: chatId,
+        text: "Usage: <code>/revokevip &lt;user_id&gt;</code> (or reply to a user)",
+        parse_mode: "HTML",
+      });
+      return;
+    }
+    const result = tgVip.revokeVip(targetId);
+    await tgApi("sendMessage", {
+      chat_id: chatId,
+      text: result.ok ? `Revoked timed VIP for <code>${escapeHtml(targetId)}</code>` : result.error,
+      parse_mode: "HTML",
+    });
     return;
   }
 
