@@ -91,7 +91,7 @@ struct PhoneDecryptWorkerCard: View {
                         Text("Phone Worker")
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text("Connect this iPhone to your Linux VPS (or site / Telegram bot): claim decrypt jobs, grab FairPlay on-device, upload the clear IPA. No Mac enrollment. Keep the app open while jobs run.")
+                        Text("Connect this stock iPhone to your Linux VPS: claim jobs, run FairPlay on-device (development cert + companion for Get; Phone Worker decrypts here), upload the clear IPA. No Mac. Keep the app open / Trust your free Apple ID cert under VPN & Device Management.")
                             .font(.caption)
                             .foregroundStyle(.white.opacity(0.45))
                             .fixedSize(horizontal: false, vertical: true)

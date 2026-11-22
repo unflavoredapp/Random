@@ -226,8 +226,8 @@ enum DecryptCompanionHandoff {
         DecryptClient.shared.start(url: url, version: ver, display: name)
         if DecryptClient.shared.busy {
             DecryptClient.shared.message = DecryptMacRouting.macOnly
-                ? "Decrypting on Mac…"
-                : "On-device FairPlay failed — decrypting on backup server…"
+                ? "Decrypting on server…"
+                : "On-device companion FairPlay failed — decrypting on backup server…"
         }
         return true
     }

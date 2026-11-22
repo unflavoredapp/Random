@@ -311,7 +311,7 @@ final class DecryptClient: ObservableObject {
             return
         }
         task?.cancel()
-        let macMsg = DecryptMacRouting.macOnly ? "Decrypting on Mac…" : "Queued"
+        let macMsg = DecryptMacRouting.macOnly ? "Decrypting on server…" : "Queued"
         phase = .queued; message = macMsg; queue = 0; error = nil; finished = nil; finishedName = display
         task = Task { [weak self] in
             guard let self else { return }
@@ -322,13 +322,13 @@ final class DecryptClient: ObservableObject {
                    !sf.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     body["storefront"] = sf.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
                 }
-                // Mac API jobs can take a long time (ipatool + unfairplay); don't use the 30s default.
+                // Server / Phone Worker jobs can take a long time; don't use the 30s default.
                 let postTimeout: TimeInterval = DecryptMacRouting.macOnly ? 120 : 30
                 let o = try await self.send(self.makeRequest("api/decrypt", body: body, timeout: postTimeout))
                 guard let id = o["id"] as? String else { throw DecryptError("Server didn't start the job.") }
                 if let q = (o["quota"] as? [String: Any]).flatMap({ DecryptQuota(json: $0) }) { self.quota = q }
                 self.phase = .running
-                self.message = DecryptMacRouting.macOnly ? "Decrypting on Mac…" : "Running"
+                self.message = DecryptMacRouting.macOnly ? "Decrypting on server…" : "Running"
 
                 var up: String?
                 var name = display, ver = ""
@@ -346,9 +346,10 @@ final class DecryptClient: ObservableObject {
                     if let pct = pctVal, pct != lastPct {
                         lastPct = pct
                         if self.message.isEmpty || self.message == macMsg || self.message == "Running"
-                            || self.message.hasPrefix("Decrypting on Mac") {
+                            || self.message.hasPrefix("Decrypting on Mac")
+                            || self.message.hasPrefix("Decrypting on server") {
                             self.message = DecryptMacRouting.macOnly
-                                ? "Decrypting on Mac… \(max(0, min(99, pct)))%"
+                                ? "Decrypting on server… \(max(0, min(99, pct)))%"
                                 : "Running \(max(0, min(99, pct)))%"
                         }
                     }
@@ -407,16 +408,16 @@ final class DecryptClient: ObservableObject {
         let dest = AppPaths.dir("inbox").appendingPathComponent(file)
         try? FileManager.default.removeItem(at: dest)
         try FileManager.default.moveItem(at: tmp, to: dest)
-        // Mac / Telegram IPAs should already be clear — don't re-run on-device FairPlay.
+        // Server / Telegram IPAs should already be clear — don't re-run on-device FairPlay.
         if DecryptMacRouting.macOnly || DecryptChannel.current == .telegram {
             if let verify = try? FairPlayDecrypt.verifyIPA(at: dest), verify.isFullyClear {
                 message = DecryptMacRouting.macOnly
-                    ? "Saved from Mac · \(verify.summary)"
+                    ? "Saved from server · \(verify.summary)"
                     : "Saved from Telegram bot · \(verify.summary)"
                 return dest
             }
             if DecryptMacRouting.macOnly {
-                message = "Saved from Mac"
+                message = "Saved from server"
                 return dest
             }
         }

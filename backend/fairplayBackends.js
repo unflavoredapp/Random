@@ -3,9 +3,9 @@
 /**
  * FairPlay decrypt backends for the site decrypt queue.
  *
- * Preferred on Debian/Linux VPS: `phone` — keep TetherLess open on an iPhone
- * signed into the owning Apple ID; Phone Worker claims jobs, runs on-device
- * FairPlay, uploads the clear IPA. No Mac enrollment, no credential.bin.
+ * Preferred on Debian/Linux VPS: `phone` — stock iPhone with a free/development
+ * Apple ID cert; Phone Worker (and interactive Get → Tetherless Decrypt companion)
+ * run FairPlay on-device and upload/save the clear IPA. No Mac, no jailbreak.
  *
  * Optional CLI backends (need secrets minted elsewhere):
  *   1. unfairplay       — Tetherless CLI (needs Mac-minted enrollment model)

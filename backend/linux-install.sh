@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Install FastDecrypt / Tetherless on Debian 13 (Trixie) with iPhone Phone Worker.
-# No Mac enrollment required — the iPhone runs FairPlay on-device and uploads clear IPAs.
+# Install FastDecrypt / Tetherless on Debian 13 (Trixie) with a stock iPhone Phone Worker.
+# FairPlay runs on the phone (development cert + companion / worker) — no Mac, no jailbreak.
 #
 # Usage (as root, from repo root):
 #   bash server/linux-install.sh
@@ -147,10 +147,11 @@ Next:
   1) Edit $ENV_FILE — set MAC_PUBLIC_BASE / bot tokens if needed
   2) Point DNS + Caddy at :8787 — see server/Caddyfile.linux.example
   3) systemctl enable --now tetherless-api.service
-  4) On iPhone (same Apple ID that owns the apps):
+  4) On a stock iPhone (same Apple ID that owns the apps):
+       • Link free/development Apple ID cert; Trust under VPN & Device Management
+       • Media & Purchases signed in; leave “Server decrypt only” OFF for companion Get
        • TetherLess → FairPlay Decrypt → Decrypt site URL = your https:// host
        • Settings → Phone Worker → paste token → Enable → keep app open
-       • Optional: FairPlay Keys sheet to confirm Media & Purchases + SC_Info
   5) bash $SERVER_DIR/linux-ctl.sh status
 
 Docs: $SERVER_DIR/fairplay-backends.md

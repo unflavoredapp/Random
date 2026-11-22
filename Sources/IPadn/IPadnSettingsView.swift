@@ -305,20 +305,26 @@ private struct PhoneDecryptWorkerInline: View {
     }
 }
 
-/// Override `as_site_base` so Store/Telegram/companion jobs hit the Mac HTTPS API
-/// (`mac-https-api.js` behind cloudflared — not tetherless.dev).
+/// Override `as_site_base` so Store/Telegram/Phone Worker jobs hit the decrypt HTTPS API
+/// (`mac-https-api.js` on a Linux VPS or Mac — not tetherless.dev).
 private struct FairPlayDecryptHostField: View {
     @AppStorage("as_site_base") private var siteBase = ""
-    @AppStorage("tetherless.decrypt.macOnly") private var macOnly = true
+    @AppStorage("tetherless.decrypt.macOnly") private var macOnly = false
     @AppStorage("tetherless.ipatool.storefront") private var storefront = "us"
     @State private var draft = ""
     @State private var note = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle("Mac decrypt only (skip on-device companion FairPlay)", isOn: $macOnly)
+            Toggle("Server decrypt only (skip on-device companion FairPlay)", isOn: $macOnly)
                 .font(.footnote)
-            TextField("Mac API URL (https://….trycloudflare.com/)", text: $draft)
+            Text(
+                "Default is off: stock iPhone + free/development Apple ID cert installs the Tetherless Decrypt companion, which runs FairPlay on-device. Turn on only to force every job to Decrypt site URL (Linux VPS Phone Worker queue)."
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            TextField("Decrypt site URL (https://fastdecrypt.bot/ or VPS)", text: $draft)
                 .textInputAutocapitalization(.never)
                 .autocorrectionDisabled()
                 .keyboardType(.URL)
@@ -326,11 +332,11 @@ private struct FairPlayDecryptHostField: View {
                 .onAppear {
                     draft = siteBase
                     if Self.isDeadLookingHost(siteBase) {
-                        note = "Previous Mac tunnel may be dead — Refresh clears it, then paste a new Mac API URL."
+                        note = "Previous tunnel/host may be dead — Refresh clears it, then paste a new Decrypt site URL."
                     }
                 }
             HStack {
-                Button("Save Mac API") {
+                Button("Save site URL") {
                     saveMacAPI(draft)
                 }
                 .buttonStyle(.borderedProminent)
