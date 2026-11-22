@@ -21,9 +21,11 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
+const { spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
 const ipaCache = require("./mac-tg-ipa-cache");
 const publicDl = require("./mac-tg-public-dl");
+const { renderProgressBanner } = require("./mac-tg-progress-banner");
 
 const TOKEN = String(process.env.DISCORD_BOT_TOKEN || "").trim();
 const BOT_NAME = String(process.env.DISCORD_BOT_NAME || "FastDecrypt").trim() || "FastDecrypt";
@@ -59,6 +61,9 @@ const {
   Partials,
   EmbedBuilder,
   AttachmentBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
   SlashCommandBuilder,
   REST,
   Routes,
@@ -109,26 +114,86 @@ function isStoreUrl(t) {
   return /^https:\/\/(?:apps|itunes)\.apple\.com\//i.test(String(t || "").trim());
 }
 
+/** iTunes lookup → app name + icon (same source Telegram sharp cards use). */
+function lookupStoreApp(storeUrl) {
+  const adam = ipaCache.adamFromStoreUrl(storeUrl);
+  const out = { adam, name: "", version: "", iconPath: "", bid: "" };
+  if (!adam) return out;
+  try {
+    const cc = ((/apps\.apple\.com\/([a-z]{2})\//i.exec(storeUrl) || [])[1] || "us").toLowerCase();
+    const lookup = spawnSync(
+      "curl",
+      ["-fsSL", `https://itunes.apple.com/lookup?id=${adam}&country=${cc}`],
+      { encoding: "utf8", maxBuffer: 2 * 1024 * 1024 }
+    );
+    if (lookup.status !== 0) return out;
+    const j = JSON.parse(lookup.stdout || "{}");
+    const r = j && j.results && j.results[0];
+    if (!r) return out;
+    out.name = String(r.trackName || r.trackCensoredName || "").trim();
+    out.version = String(r.version || "").trim();
+    out.bid = String(r.bundleId || "").trim();
+    const art = r.artworkUrl512 || r.artworkUrl100;
+    if (art) {
+      const dest = path.join(WORK, `icon-${adam}.jpg`);
+      const artUrl = String(art)
+        .replace(/\/\d+x\d+bb(\.[a-z]+)?$/i, "/256x256bb$1")
+        .replace("100x100", "256x256");
+      const dl = spawnSync("curl", ["-fsSL", "-o", dest, artUrl], { encoding: "utf8" });
+      if (dl.status === 0 && fs.existsSync(dest) && fs.statSync(dest).size > 100) {
+        out.iconPath = dest;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return out;
+}
+
+async function renderSharpCard({ name, version, iconPath, stage, pct, done }) {
+  const dest = path.join(WORK, `sharp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`);
+  try {
+    const out = await renderProgressBanner({
+      name: name || "App",
+      version: version || "",
+      stage: stage || (done ? "done" : "working…"),
+      logLines: [stage || (done ? "done" : "working…")],
+      pct: done ? 100 : pct || 0,
+      iconPath: iconPath || "",
+      dest,
+      tag: "fastdecrypt",
+      brand: BOT_NAME,
+      done: !!done,
+    });
+    return out && fs.existsSync(out) ? out : "";
+  } catch (e) {
+    console.warn("[discord] sharp banner:", (e && e.message) || e);
+    return "";
+  }
+}
+
+function progressEmbed(appName, stage) {
+  return new EmbedBuilder()
+    .setColor(0xff9a1f)
+    .setTitle(appName || "Decrypting…")
+    .setDescription(stage || "Working…");
+}
+
 function statusEmbed() {
   const st =
     (fairplayBackends.backendStatus && fairplayBackends.backendStatus()) || {};
   const decryptReady = !!(st.unfairplay && st.unfairplay.ready);
   const modelReady = !!(st.enrollmentModel && st.enrollmentModel.ready);
-  const pub = publicDl.resolvePublicBase() || "";
   return new EmbedBuilder()
     .setColor(0xff9a1f)
-    .setTitle(`${BOT_NAME} status`)
+    .setTitle(BOT_NAME)
     .setDescription(
       [
-        `**Decrypt:** ${decryptReady ? "ready" : "not ready"}`,
-        `**Model:** ${modelReady ? "ready" : "not ready"}`,
-        `**Workers:** ${activeWorkers}/${MAX_WORKERS}` +
+        decryptReady ? "Decrypt ready" : "Decrypt not ready",
+        modelReady ? "Model ready" : "Model not ready",
+        `Workers ${activeWorkers}/${MAX_WORKERS}` +
           (waiters.length ? ` · ${waiters.length} queued` : ""),
-        `**Cache:** ${ipaCache.list().length} clear · ${ipaCache.listEncrypted().length} encrypted`,
-        pub
-          ? `**Big IPA:** HTTPS \`${pub}/d/…\``
-          : `**Big IPA:** run \`mac-ssh.sh api\` for download links (>25 MB)`,
-        `**Site:** ${SITE}`,
+        SITE,
       ].join("\n")
     );
 }
@@ -136,43 +201,42 @@ function statusEmbed() {
 function helpEmbed() {
   return new EmbedBuilder()
     .setColor(0xff9a1f)
-    .setTitle(`${BOT_NAME}`)
+    .setTitle(BOT_NAME)
     .setDescription(
       [
-        `Decrypt App Store IPAs on the Mac host.`,
+        `Decrypt App Store IPAs.`,
         ``,
         `• \`/decrypt url:<App Store link>\``,
-        `• \`/status\` — Mac decrypt readiness`,
-        WANT_MESSAGE_CONTENT
-          ? `• Or paste an App Store link in chat`
-          : `• Paste-URL needs Message Content Intent + DISCORD_MESSAGE_CONTENT=1`,
-        ``,
-        `Files over ~25 MB are sent as an HTTPS download link.`,
+        `• \`/status\``,
+        WANT_MESSAGE_CONTENT ? `• Or paste an App Store link` : "",
         SITE,
-      ].join("\n")
+      ]
+        .filter(Boolean)
+        .join("\n")
     );
 }
 
-async function deliverIpa(channel, result, { storeUrl, name }) {
+/** Telegram-style result: sharp card image + app name title (no URL dump). */
+async function buildDeliveryPayload(result, { storeUrl, name, iconPath, version: verHint }) {
   const file = result && result.file;
   if (!file || !fs.existsSync(file)) throw new Error("Decrypt produced no IPA");
   const st = fs.statSync(file);
   const meta = result.meta || {};
   const appName = name || meta.name || meta.title || "App";
-  const version = meta.version || meta.bundleVersion || "";
+  const version = verHint || meta.version || meta.bundleVersion || "";
+  const bid = meta.bid || meta.bundleId || "";
   const fileName = `${String(appName).replace(/[^\w.\- +]+/g, "_")}${
     version ? `_v${version}` : ""
   }-[FastDecrypt.Bot].ipa`;
   const mb = (st.size / 1024 / 1024).toFixed(1);
 
-  // Cache disk for later Discord re-sends / Telegram if both run.
   try {
     const adam = ipaCache.adamFromStoreUrl(storeUrl) || "";
     if (adam) {
       ipaCache.put({
         adam,
         version: version || "",
-        bid: meta.bid || meta.bundleId || "",
+        bid,
         name: appName,
         storeUrl: storeUrl || "",
         fileName,
@@ -184,39 +248,79 @@ async function deliverIpa(channel, result, { storeUrl, name }) {
     console.warn("[discord] cache put:", (e && e.message) || e);
   }
 
-  if (st.size <= DISCORD_ATTACH_MAX) {
-    const attach = new AttachmentBuilder(file, { name: fileName });
-    const embed = new EmbedBuilder()
-      .setColor(0x2fd16b)
-      .setTitle(`${appName}${version ? ` · v${version}` : ""}`)
-      .setDescription(`Decrypted · ${mb} MB\n${storeUrl || ""}`.trim());
-    await channel.send({ embeds: [embed], files: [attach] });
-    return { ok: true, mode: "attach" };
-  }
+  const bannerPath = await renderSharpCard({
+    name: appName,
+    version,
+    iconPath,
+    stage: "done",
+    pct: 100,
+    done: true,
+  });
 
-  const staged = publicDl.stageIpa(file, { fileName, bytes: st.size });
-  const url = publicDl.downloadUrlFor(staged.token);
-  if (!url) {
-    throw new Error(
-      `IPA is ${mb} MB (over Discord’s ~25 MB attach cap). Run: zsh ~/tetherless/server/mac-ssh.sh api`
-    );
-  }
+  const files = [];
   const embed = new EmbedBuilder()
     .setColor(0xff9a1f)
-    .setTitle(`${appName}${version ? ` · v${version}` : ""}`)
-    .setDescription(
-      [
-        `Decrypted · **${mb} MB** (too large for Discord attach)`,
-        `[Download IPA](${url})`,
-        `\`${url}\``,
-        `_Link expires in ~${Math.round(publicDl.TTL_MS / 60000)} minutes._`,
-      ].join("\n")
+    .setTitle(appName);
+
+  const lines = [];
+  if (version) lines.push(`v${version}`);
+  lines.push(`${mb} MB`);
+  if (bid) lines.push(bid);
+  embed.setDescription(lines.join(" · "));
+
+  if (bannerPath) {
+    files.push(new AttachmentBuilder(bannerPath, { name: "sharp.jpg" }));
+    embed.setImage("attachment://sharp.jpg");
+  } else if (iconPath && fs.existsSync(iconPath)) {
+    files.push(new AttachmentBuilder(iconPath, { name: "icon.jpg" }));
+    embed.setThumbnail("attachment://icon.jpg");
+  }
+
+  const components = [];
+  let mode = "attach";
+
+  if (st.size <= DISCORD_ATTACH_MAX) {
+    files.push(new AttachmentBuilder(file, { name: fileName }));
+  } else {
+    const staged = publicDl.stageIpa(file, { fileName, bytes: st.size });
+    const url = publicDl.downloadUrlFor(staged.token);
+    if (!url) {
+      throw new Error(
+        `IPA is ${mb} MB (over Discord’s ~25 MB attach cap). Run: zsh ~/tetherless/server/mac-ssh.sh api`
+      );
+    }
+    mode = "link";
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setStyle(ButtonStyle.Link)
+          .setLabel("Download IPA")
+          .setURL(url)
+      )
     );
-  await channel.send({ embeds: [embed] });
-  return { ok: true, mode: "link", url };
+    embed.setFooter({
+      text: `Link expires in ~${Math.round(publicDl.TTL_MS / 60000)} min`,
+    });
+  }
+
+  return {
+    ok: true,
+    mode,
+    content: null,
+    embeds: [embed],
+    files,
+    components,
+  };
 }
 
-async function decryptStoreUrl(channel, link, progressMsg) {
+async function sayProgress(progressMsg, appName, stage) {
+  if (!progressMsg) return;
+  await progressMsg
+    .edit({ content: null, embeds: [progressEmbed(appName, stage)], components: [] })
+    .catch(() => {});
+}
+
+async function decryptStoreUrl(link, progressMsg) {
   if (typeof fairplayBackends.unlockKeychain === "function") {
     fairplayBackends.unlockKeychain();
   }
@@ -225,61 +329,75 @@ async function decryptStoreUrl(channel, link, progressMsg) {
     if (!pre.ok) throw new Error(pre.error);
   }
 
-  // Cache hit
+  const lookup = lookupStoreApp(link);
+  const appName = lookup.name || "App";
+  await sayProgress(progressMsg, appName, "Looking up…");
+
   const entry = ipaCache.getByStoreUrl(link, "");
   if (entry && entry.diskPath && fs.existsSync(entry.diskPath)) {
-    if (progressMsg) {
-      await progressMsg.edit({ content: `Cache hit — sending **${entry.name || "App"}**…` }).catch(() => {});
-    }
-    return deliverIpa(
-      channel,
-      { file: entry.diskPath, meta: { name: entry.name, version: entry.version, bid: entry.bid } },
-      { storeUrl: link, name: entry.name }
+    await sayProgress(progressMsg, entry.name || appName, "Cache hit…");
+    return buildDeliveryPayload(
+      {
+        file: entry.diskPath,
+        meta: { name: entry.name || appName, version: entry.version || lookup.version, bid: entry.bid || lookup.bid },
+      },
+      {
+        storeUrl: link,
+        name: entry.name || appName,
+        iconPath: lookup.iconPath,
+        version: entry.version || lookup.version,
+      }
     );
   }
 
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
-  try {
-    if (progressMsg) {
-      await progressMsg.edit({ content: "Fetching App Store IPA…" }).catch(() => {});
-    }
-    await fairplayBackends.ensureEncryptedSource({
-      url: link,
-      dir,
-      say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
-      vreq: "",
-    });
-    if (progressMsg) {
-      await progressMsg.edit({ content: "Decrypting (FairPlay)…" }).catch(() => {});
-    }
-    const result = await fairplayBackends.tryRemoteBackends({
-      url: link,
-      dir,
-      say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
-      vreq: "",
-    });
-    if (progressMsg) {
-      await progressMsg.edit({ content: "Uploading / linking…" }).catch(() => {});
-    }
-    return await deliverIpa(channel, result, { storeUrl: link });
-  } finally {
-    // keep decrypted file if cached via put(diskPath); temp dir may still hold intermediates
-    try {
-      /* leave dir for debugging; OS tmp cleans eventually */
-    } catch {
-      /* ignore */
-    }
-  }
+  await sayProgress(progressMsg, appName, "Fetching IPA…");
+  await fairplayBackends.ensureEncryptedSource({
+    url: link,
+    dir,
+    say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
+    vreq: "",
+  });
+  await sayProgress(progressMsg, appName, "Decrypting…");
+  const result = await fairplayBackends.tryRemoteBackends({
+    url: link,
+    dir,
+    say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
+    vreq: "",
+  });
+  await sayProgress(progressMsg, appName, "Finishing…");
+  const meta = (result && result.meta) || {};
+  return buildDeliveryPayload(result, {
+    storeUrl: link,
+    name: meta.name || meta.title || appName,
+    iconPath: lookup.iconPath,
+    version: meta.version || meta.bundleVersion || lookup.version,
+  });
 }
 
 async function runDecryptFor(channel, link, notifier) {
-  const progressMsg = await notifier(`Decrypting…\n${link}`);
+  const progressMsg = await notifier({
+    embeds: [progressEmbed("Decrypting…", "Starting…")],
+  });
   try {
-    await queueJob(async () => decryptStoreUrl(channel, link, progressMsg));
-    await progressMsg.edit({ content: "Done." }).catch(() => {});
+    const payload = await queueJob(async () => decryptStoreUrl(link, progressMsg));
+    await progressMsg
+      .edit({
+        content: null,
+        embeds: payload.embeds,
+        files: payload.files,
+        components: payload.components || [],
+      })
+      .catch(async () => {
+        await channel.send({
+          embeds: payload.embeds,
+          files: payload.files,
+          components: payload.components || [],
+        });
+      });
   } catch (e) {
     const why = String((e && e.message) || e).slice(0, 400);
-    await progressMsg.edit({ content: `Failed: ${why}` }).catch(() => {});
+    await progressMsg.edit({ content: null, embeds: [progressEmbed("Failed", why)] }).catch(() => {});
   }
 }
 
@@ -352,13 +470,20 @@ client.on("interactionCreate", async (interaction) => {
         edit: (payload) => interaction.editReply(payload),
       };
       try {
-        await queueJob(async () =>
-          decryptStoreUrl(interaction.channel, url, progressMsg)
-        );
-        await interaction.editReply({ content: "Done." });
+        const payload = await queueJob(async () => decryptStoreUrl(url, progressMsg));
+        await interaction.editReply({
+          content: null,
+          embeds: payload.embeds,
+          files: payload.files,
+          components: payload.components || [],
+        });
       } catch (e) {
         await interaction.editReply({
-          content: `Failed: ${String((e && e.message) || e).slice(0, 400)}`,
+          content: null,
+          embeds: [
+            progressEmbed("Failed", String((e && e.message) || e).slice(0, 400)),
+          ],
+          components: [],
         });
       }
     }
@@ -395,8 +520,8 @@ client.on("messageCreate", async (message) => {
   const m = text.match(/https:\/\/(?:apps|itunes)\.apple\.com\/[^\s>]+/i);
   if (!m) return;
   const link = m[0].replace(/[)>,.]+$/g, "");
-  await runDecryptFor(message.channel, link, async (content) =>
-    message.reply({ content })
+  await runDecryptFor(message.channel, link, async (payload) =>
+    message.reply(payload)
   );
 });
 
