@@ -155,15 +155,14 @@ private enum FairPlayBinaryRole {
     case other
 
     /// Fail the whole job if this role can't decrypt.
-    /// - live triage: main + frameworks required; Watch / App Clip / widgets soft
-    /// - encrypted IPA full decrypt: everything except Watch (not decryptable on iPhone)
+    /// Tetherless-style: main is always required; frameworks / appex soft-fail unless
+    /// `requireAllFrameworks` (fullIPACoverage) is on — tiny Firebase helpers must not abort.
     func isRequired(fullIPACoverage: Bool) -> Bool {
         switch self {
-        case .main, .framework: return true
-        case .appex, .other: return fullIPACoverage
+        case .main: return true
+        case .framework, .appex, .other: return fullIPACoverage
         case .nestedApp:
             // Watch stays optional — iPhone fairplayd cannot clear watchOS text.
-            // App Clip / Messages nested apps are required for full IPA coverage.
             return fullIPACoverage
         }
     }
@@ -465,15 +464,15 @@ enum FairPlayDecrypt {
             if staged > 0 { detail?("Staged \(staged) Manifest SINF license(s)…") }
         }
 
-        // Encrypted IPA / EmbeddedPayload → real full decrypt (every iPhone Mach-O).
-        // Live App Store install → hang-safe structured scan (may still triage).
+        // Tetherless-style: only fail-closed on every Mach-O when the user opts in
+        // (`requireAllFrameworks`). Otherwise main is required; frameworks soft-fail → PARTIAL.
         let liveSource = isLiveAppStoreInstall(sourceApp)
-        var fullIPACoverage = !liveSource || options.requireAllFrameworks
+        var fullIPACoverage = options.requireAllFrameworks
         report.fullIPACoverage = fullIPACoverage
         detail?(
             fullIPACoverage
-                ? "Full Mach-O coverage (encrypted IPA / fail-closed)…"
-                : "Locating Mach-Os under install path…"
+                ? "Full Mach-O coverage (require all frameworks)…"
+                : "Main-required decrypt (frameworks soft-fail → PARTIAL if needed)…"
         )
         let binaries = try collectMachOs(
             under: sourceApp,
@@ -516,15 +515,19 @@ enum FairPlayDecrypt {
         case .ok:
             break
         case .bounceToServer(let reason):
+            // Default: never bounce — keep trying on-device like Tetherless; soften to PARTIAL.
             if options.bounceLargeCryptToServer {
                 detail?(reason)
                 throw FairPlayDecryptError.bounceToServer(reason)
             }
-            detail?("Preflight bounce disabled — continuing on-device despite: \(reason)")
+            detail?("\(reason) — continuing on-device (bounce off; PARTIAL OK if frameworks Jetsam)")
+            if !options.requireAllFrameworks {
+                fullIPACoverage = false
+                report.fullIPACoverage = false
+            }
         case .preferPartial(let reason):
             detail?(reason)
-            // Soften full-IPA fail-closed so framework Jetsam can ship PARTIAL.
-            if fullIPACoverage && !options.requireAllFrameworks {
+            if !options.requireAllFrameworks {
                 fullIPACoverage = false
                 report.fullIPACoverage = false
             }
@@ -671,8 +674,11 @@ enum FairPlayDecrypt {
             progress: detail
         )
 
-        // Encrypted IPA / full coverage: never ship a fake PARTIAL — every scanned iPhone
-        // Mach-O must clear. Live-install triage may still mark PARTIAL when main is clear.
+        // Promote leftover soft-fails into failed when require-all is on.
+        if fullIPACoverage, !report.softFailed.isEmpty {
+            report.failed.append(contentsOf: report.softFailed)
+            report.softFailed.removeAll()
+        }
         if !report.failed.isEmpty {
             let names = report.failed.prefix(4).joined(separator: ", ")
             let suffix = report.failed.count > 4 ? "…" : ""
@@ -685,11 +691,22 @@ enum FairPlayDecrypt {
                 || report.plain.contains { isMainExecutable($0, app: sourceApp) }
             if mainClear {
                 report.isPartial = true
-                detail?("Main clear — packaging PARTIAL (\(report.failed.count) required leftover)…")
+                detail?(
+                    "Main clear — packaging PARTIAL "
+                        + "(\(report.failed.count) leftover, \(report.softFailed.count) soft-fail)…"
+                )
             } else {
                 throw FairPlayDecryptError.stillEncrypted(
                     "FairPlay left \(report.failed.count) required binary(ies) encrypted: \(names)\(suffix). \(AppStoreDecryptGuide.failureHint)"
                 )
+            }
+        } else if !report.softFailed.isEmpty {
+            // Main clear, only soft framework leftovers — still a usable PARTIAL.
+            let mainClear = report.decrypted.contains { isMainExecutable($0, app: sourceApp) }
+                || report.plain.contains { isMainExecutable($0, app: sourceApp) }
+            if mainClear {
+                report.isPartial = true
+                detail?("Main clear — packaging PARTIAL (\(report.softFailed.count) soft-fail framework(s))…")
             }
         }
         return report
@@ -1054,17 +1071,14 @@ enum FairPlayDecrypt {
                 if sourceApp != destApp {
                     _ = copyFileChunked(from: decryptInput, to: outFile, timeout: 60)
                 }
-                // Outer decryptMachOs promotes appex soft→hard when fullIPACoverage is on.
-                if role == .main || role == .framework {
+                // Frameworks soft-fail unless require-all (outer absorb); main always hard-fails.
+                if role == .main {
                     report.failed.append(rel)
-                    if role == .main {
-                        throw FairPlayDecryptError.mainExecutableFailed(
-                            "Main executable still encrypted after decrypt. \(FairPlayFailureClass.stillEncrypted.userMessage)"
-                        )
-                    }
-                } else {
-                    report.softFailed.append(rel)
+                    throw FairPlayDecryptError.mainExecutableFailed(
+                        "Main executable still encrypted after decrypt. \(FairPlayFailureClass.stillEncrypted.userMessage)"
+                    )
                 }
+                report.softFailed.append(rel)
             } else {
                 report.decrypted.append(rel)
             }
@@ -1077,31 +1091,31 @@ enum FairPlayDecrypt {
         } else {
             try? fm.removeItem(at: tmp)
             let detail = logBuf.lines.suffix(2).joined(separator: " | ")
-            if role == .main || role == .framework {
+            if role == .main {
                 report.failed.append(rel)
-                if role == .main {
-                    let klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
-                    if klass == .outOfMemory {
-                        throw FairPlayDecryptError.outOfMemory(
-                            "Couldn't decrypt the main executable (\(rel)). \(klass.userMessage)"
-                        )
-                    }
-                    // Prefer actionable license/keys guidance over raw mremap dumps (Roblox EPERM).
-                    if klass == .licenseOrKeys {
-                        throw FairPlayDecryptError.mainExecutableFailed(
-                            "Couldn't decrypt the main executable (\(rel)). \(klass.userMessage)"
-                        )
-                    }
-                    throw FairPlayDecryptError.mainExecutableFailed(
-                        "Couldn't decrypt the main executable (\(rel)). \(detail.isEmpty ? klass.userMessage : detail)"
+                let klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
+                if klass == .outOfMemory {
+                    throw FairPlayDecryptError.outOfMemory(
+                        "Couldn't decrypt the main executable (\(rel)). \(klass.userMessage)"
                     )
                 }
-            } else {
-                // Keep whatever was copied into dest (may still be encrypted).
-                if sourceApp != destApp, !fm.fileExists(atPath: outFile.path) {
-                    _ = copyFileChunked(from: decryptInput, to: outFile, timeout: 60)
+                if klass == .licenseOrKeys {
+                    throw FairPlayDecryptError.mainExecutableFailed(
+                        "Couldn't decrypt the main executable (\(rel)). \(klass.userMessage)"
+                    )
                 }
-                report.softFailed.append(rel)
+                throw FairPlayDecryptError.mainExecutableFailed(
+                    "Couldn't decrypt the main executable (\(rel)). \(detail.isEmpty ? klass.userMessage : detail)"
+                )
+            }
+            // Frameworks / appex / nested: soft-fail (Tetherless tiny-helper behavior).
+            // Outer absorb promotes to hard only when requireAllFrameworks is on.
+            if sourceApp != destApp, !fm.fileExists(atPath: outFile.path) {
+                _ = copyFileChunked(from: decryptInput, to: outFile, timeout: 60)
+            }
+            report.softFailed.append(rel)
+            if role == .framework {
+                progress?("[soft-fail] \(rel) — continuing (main-required / PARTIAL OK)")
             }
         }
     }

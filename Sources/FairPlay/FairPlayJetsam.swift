@@ -12,12 +12,13 @@ import UIKit
 
 /// Jetsam / memory policy for on-device FairPlay decrypt.
 enum FairPlayJetsam {
-    /// Cryptsize (bytes) above which we prefer Phone Worker / unfairplay over on-device mremap.
-    static let serverBounceCryptBytes: UInt64 = 96 * 1024 * 1024
+    /// Cryptsize (bytes) above which we *recommend* Phone Worker — only used when bounce is enabled.
+    /// Default path never bounces; we try on-device and allow PARTIAL instead (Tetherless-style).
+    static let serverBounceCryptBytes: UInt64 = 256 * 1024 * 1024
     /// Available-memory floor before starting a large decrypt (lean + headroom).
-    static let minAvailableBytes: UInt64 = 96 * 1024 * 1024
+    static let minAvailableBytes: UInt64 = 64 * 1024 * 1024
     /// Soft threshold: prefer PARTIAL (main-only) when free RAM is below this and option is on.
-    static let partialPreferAvailableBytes: UInt64 = 180 * 1024 * 1024
+    static let partialPreferAvailableBytes: UInt64 = 256 * 1024 * 1024
 
     static var availableMemory: UInt64 { fp_available_memory() }
 

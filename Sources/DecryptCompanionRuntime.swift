@@ -115,9 +115,12 @@ enum DecryptCompanionRuntime {
 
         // FairPlayed / foulplay: fairplayd resolves SC_Info on the *input* path.
         // Advanced source mode (host-stamped) can force live / stamped IPA / embed.
-        // Companion always serializes Mach-O decrypt — parallel mremap jetsams phones.
+        // Tetherless-style companion policy: serial, never auto-bounce, PARTIAL OK.
         var fpOpts = FairPlayAdvancedOptions.Resolved.from(snapshot: snap)
         fpOpts.forceSerialDecrypt = true
+        fpOpts.bounceLargeCryptToServer = false
+        fpOpts.preferPartialOnLowRAM = true
+        fpOpts.requireAllFrameworks = false
         let liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(manifest: man)
         let stampedIPAURL = DecryptCompanionHandoff.resolveEncryptedIPAURL(manifest: man)
         var ipaUnpackRoot: URL?
@@ -286,6 +289,8 @@ enum DecryptCompanionRuntime {
                 || msg.localizedCaseInsensitiveContains("stream")
                 || msg.localizedCaseInsensitiveContains("lean")
                 || msg.localizedCaseInsensitiveContains("enomem")
+                || msg.localizedCaseInsensitiveContains("soft-fail")
+                || msg.localizedCaseInsensitiveContains("partial")
             if keep {
                 progress?(msg)
                 Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
@@ -397,13 +402,13 @@ enum DecryptCompanionRuntime {
         let plainN = report.plain.count
         log("Done: \(decN) decrypted, \(plainN) already plain.")
 
-        if report.isPartial || !report.failed.isEmpty {
+        if !report.failed.isEmpty, !report.isPartial {
             let names = report.failed.prefix(6).joined(separator: ", ")
             throw FairPlayDecryptError.stillEncrypted(
-                "Companion DRM check failed — \(report.failed.count) required binary(ies) still encrypted: \(names)\(report.failed.count > 6 ? "…" : ""). Full IPA decrypt refuses PARTIAL. \(AppStoreDecryptGuide.failureHint)"
+                "Companion DRM check failed — \(report.failed.count) required binary(ies) still encrypted: \(names)\(report.failed.count > 6 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
             )
         }
-        // Encrypted IPA path stamps fullIPACoverage — leftover soft-fails (appex etc.) are not OK.
+        // Opt-in fail-closed only when Require all frameworks is on.
         if report.fullIPACoverage, !report.softFailed.isEmpty {
             let names = report.softFailed.prefix(6).joined(separator: ", ")
             throw FairPlayDecryptError.stillEncrypted(
@@ -415,12 +420,16 @@ enum DecryptCompanionRuntime {
                 "DRM was present (\(before.encrypted) encrypted) but nothing was decrypted. \(AppStoreDecryptGuide.failureHint)"
             )
         }
+        if report.isPartial {
+            log("PARTIAL OK — main clear, \(report.softFailed.count) soft-fail / \(report.failed.count) leftover (Tetherless-style).")
+        }
 
         DecryptCompanionController.shared.statusTitle = "Done — saving automatically…"
         let afterCopy = try FairPlayDecrypt.verifyApp(at: destApp)
-        try assertFullyClear(afterCopy, stage: "copied Payload")
+        try assertDecryptAcceptable(afterCopy, stage: "copied Payload", partial: report.isPartial, app: destApp)
 
-        log("Packaging \(name)-decrypted.ipa…")
+        let tag = report.isPartial ? "-PARTIAL" : "-decrypted"
+        log("Packaging \(name)\(tag).ipa…")
         try stripLicenseArtifacts(in: destApp)
 
         // Brand decrypted app icons with the Mach-O cord (lower-left watermark).
@@ -439,7 +448,7 @@ enum DecryptCompanionRuntime {
         try fm.createDirectory(at: outDir, withIntermediateDirectories: true)
         let safeName = name.replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "..", with: "_")
-        let outIPA = outDir.appendingPathComponent("\(safeName)-decrypted.ipa")
+        let outIPA = outDir.appendingPathComponent("\(safeName)\(tag).ipa")
         try? fm.removeItem(at: outIPA)
 
         let tmpZip = outIPA.appendingPathExtension("tmp")
@@ -448,12 +457,12 @@ enum DecryptCompanionRuntime {
         try fm.moveItem(at: tmpZip, to: outIPA)
 
         let ipaVerify = try FairPlayDecrypt.verifyIPA(at: outIPA)
-        try assertFullyClear(ipaVerify, stage: "packaged IPA")
+        try assertDecryptAcceptable(ipaVerify, stage: "packaged IPA", partial: report.isPartial, app: destApp)
 
         DecryptCompanionController.shared.verifySummary = ipaVerify.summary
         DecryptCompanionController.shared.markFinished(url: outIPA, name: name)
-        DecryptCompanionController.shared.statusTitle = "Done"
-        log("Wrote \(safeName)-decrypted.ipa.")
+        DecryptCompanionController.shared.statusTitle = report.isPartial ? "Done (PARTIAL)" : "Done"
+        log("Wrote \(safeName)\(tag).ipa.")
 
         let info = NSDictionary(contentsOf: src.appendingPathComponent("Info.plist")) as? [String: Any]
         let bundleID = (info?["CFBundleIdentifier"] as? String)?
@@ -527,8 +536,44 @@ enum DecryptCompanionRuntime {
     // MARK: - Audit helpers
 
     private static func assertFullyClear(_ report: FairPlayVerifyReport, stage: String) throws {
+        try assertDecryptAcceptable(report, stage: stage, partial: false, app: nil)
+    }
+
+    /// Full clear normally; PARTIAL only requires the main executable cryptid=0.
+    private static func assertDecryptAcceptable(
+        _ report: FairPlayVerifyReport,
+        stage: String,
+        partial: Bool,
+        app: URL?
+    ) throws {
         guard !report.entries.isEmpty else {
             throw DecryptError("DRM verify found no Mach-Os in \(stage).")
+        }
+        if partial {
+            let mainNames: Set<String> = {
+                guard let app,
+                      let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist")) as? [String: Any],
+                      let exe = info["CFBundleExecutable"] as? String else {
+                    return []
+                }
+                return [exe, "\(exe).dylib"]
+            }()
+            let mainEncrypted = report.entries.filter { entry in
+                guard entry.isEncrypted else { return false }
+                let base = URL(fileURLWithPath: entry.path).lastPathComponent
+                if !mainNames.isEmpty { return mainNames.contains(base) }
+                // Fallback: shallowest path that isn't inside Frameworks/PlugIns.
+                return !entry.path.contains(".framework/")
+                    && !entry.path.contains(".appex/")
+                    && !entry.path.hasPrefix("Watch/")
+            }
+            if !mainEncrypted.isEmpty {
+                let names = mainEncrypted.prefix(4).map(\.path).joined(separator: ", ")
+                throw FairPlayDecryptError.stillEncrypted(
+                    "PARTIAL verify failed on \(stage): main still encrypted (\(names)). \(AppStoreDecryptGuide.failureHint)"
+                )
+            }
+            return
         }
         guard report.isFullyClear else {
             if report.encrypted > 0 {

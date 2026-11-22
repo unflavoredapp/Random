@@ -140,37 +140,13 @@ enum DecryptCompanionPackager {
             throw DecryptError("Couldn't locate TetherLess executable to clone into the companion.")
         }
         let exeName = exeURL.lastPathComponent
-        progress?("Cloning TetherLess binary into companion…")
+        progress?("Building lean FastDecryptBot shell…")
         try fm.copyItem(at: exeURL, to: destApp.appendingPathComponent(exeName))
 
-        // Shared Frameworks the host links (SwiftUI / third-party SPM dylibs live here).
-        if let fw = host.privateFrameworksURL ?? host.url(forResource: "Frameworks", withExtension: nil),
-           fm.fileExists(atPath: fw.path) {
-            progress?("Copying Frameworks into companion…")
-            let destFW = destApp.appendingPathComponent("Frameworks", isDirectory: true)
-            try? fm.createDirectory(at: destFW, withIntermediateDirectories: true)
-            if let items = try? fm.contentsOfDirectory(at: fw, includingPropertiesForKeys: nil) {
-                for item in items {
-                    let out = destFW.appendingPathComponent(item.lastPathComponent)
-                    try? fm.removeItem(at: out)
-                    try? fm.copyItem(at: item, to: out)
-                }
-            }
-        }
-        // Also try Bundle.main.bundleURL/Frameworks (common layout).
-        let hostFW = host.bundleURL.appendingPathComponent("Frameworks", isDirectory: true)
-        if fm.fileExists(atPath: hostFW.path) {
-            let destFW = destApp.appendingPathComponent("Frameworks", isDirectory: true)
-            try? fm.createDirectory(at: destFW, withIntermediateDirectories: true)
-            if let items = try? fm.contentsOfDirectory(at: hostFW, includingPropertiesForKeys: nil) {
-                for item in items {
-                    let out = destFW.appendingPathComponent(item.lastPathComponent)
-                    if !fm.fileExists(atPath: out.path) {
-                        try? fm.copyItem(at: item, to: out)
-                    }
-                }
-            }
-        }
+        // Copy only dyld-required Frameworks — skip known host-only bulk (Stripe UI,
+        // Vapor server, etc. still must ship if the binary links them). Prefer lean
+        // by omitting non-code resource bundles next to frameworks.
+        try copyLeanFrameworks(from: host, into: destApp, progress: progress)
 
         // Minimal Info.plist — companion identity + URL scheme for handoff.
         let info: [String: Any] = [
@@ -220,16 +196,55 @@ enum DecryptCompanionPackager {
         // PkgInfo keeps some installd paths happy.
         try Data("APPL????".utf8).write(to: destApp.appendingPathComponent("PkgInfo"), options: .atomic)
 
-        // FastDecryptBot icon (not the host AppAssassin tile).
+        // FastDecryptBot icon (not the host AppAssassin tile). Skip host Assets.car —
+        // that catalog is tens of MB and only serves the host UI, not FairPlay.
         writeCompanionIcons(into: destApp)
-        for folder in ["Assets.car", "Base.lproj"] {
-            let src = host.bundleURL.appendingPathComponent(folder)
-            if fm.fileExists(atPath: src.path) {
-                let out = destApp.appendingPathComponent(folder)
-                try? fm.removeItem(at: out)
-                try? fm.copyItem(at: src, to: out)
+    }
+
+    /// Copy Frameworks the cloned host binary needs, skipping nested *.bundle resource
+    /// trees that inflate the companion without helping mremap.
+    private static func copyLeanFrameworks(
+        from host: Bundle,
+        into destApp: URL,
+        progress: ((String) -> Void)?
+    ) throws {
+        let fm = FileManager.default
+        let destFW = destApp.appendingPathComponent("Frameworks", isDirectory: true)
+        try? fm.createDirectory(at: destFW, withIntermediateDirectories: true)
+
+        var sources: [URL] = []
+        if let fw = host.privateFrameworksURL ?? host.url(forResource: "Frameworks", withExtension: nil),
+           fm.fileExists(atPath: fw.path) {
+            sources.append(fw)
+        }
+        let hostFW = host.bundleURL.appendingPathComponent("Frameworks", isDirectory: true)
+        if fm.fileExists(atPath: hostFW.path) {
+            sources.append(hostFW)
+        }
+
+        var copied = 0
+        var skippedBundles = 0
+        for fwRoot in sources {
+            guard let items = try? fm.contentsOfDirectory(at: fwRoot, includingPropertiesForKeys: nil) else {
+                continue
+            }
+            for item in items {
+                let name = item.lastPathComponent
+                // Skip loose resource-only bundles dumped next to frameworks.
+                if name.hasSuffix(".bundle") || name.hasSuffix(".momd") || name == "Assets.car" {
+                    skippedBundles += 1
+                    continue
+                }
+                let out = destFW.appendingPathComponent(name)
+                if fm.fileExists(atPath: out.path) { continue }
+                try? fm.copyItem(at: item, to: out)
+                copied += 1
             }
         }
+        progress?(
+            "Lean Frameworks: \(copied) copied"
+                + (skippedBundles > 0 ? ", \(skippedBundles) resource bundles skipped" : "")
+        )
     }
 
     // MARK: - FairPlayed EmbeddedPayload

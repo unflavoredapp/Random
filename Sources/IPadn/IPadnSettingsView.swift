@@ -585,7 +585,7 @@ private struct FairPlayAdvancedSettingsSection: View {
     @AppStorage(FairPlayAdvancedOptions.requireAllFrameworksKey) private var requireAllFrameworks = false
     @AppStorage(FairPlayAdvancedOptions.includeTestFlightKey) private var includeTestFlight = false
     @AppStorage(FairPlayAdvancedOptions.forceSerialKey) private var forceSerial = true
-    @AppStorage(FairPlayAdvancedOptions.bounceLargeCryptKey) private var bounceLargeCrypt = true
+    @AppStorage(FairPlayAdvancedOptions.bounceLargeCryptKey) private var bounceLargeCrypt = false
     @AppStorage(FairPlayAdvancedOptions.partialOnLowRAMKey) private var partialOnLowRAM = true
 
     private var sourceMode: FairPlayAdvancedOptions.SourceMode {
@@ -644,7 +644,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Decrypt engine")
         } footer: {
-            Text("Serial + bounce + PARTIAL are Jetsam mitigations. Encrypted IPA Get still fail-closes unless Prefer PARTIAL softens low-RAM runs. Companion always forces serial. Verbose logs retries and SINF staging.")
+            Text("Tetherless-style defaults: serial on, bounce off, PARTIAL on. Main must clear; frameworks soft-fail unless Require all frameworks is on. Companion never auto-bounces.")
         }
 
         Section {
@@ -695,7 +695,7 @@ private struct FairPlayAdvancedSettingsSection: View {
                 requireAllFrameworks = false
                 includeTestFlight = false
                 forceSerial = true
-                bounceLargeCrypt = true
+                bounceLargeCrypt = false
                 partialOnLowRAM = true
             }
         }

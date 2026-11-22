@@ -122,9 +122,10 @@ enum FairPlayAdvancedOptions {
     }
 
     /// Preflight-bounce to Phone Worker when largest crypt exceeds the Jetsam threshold.
+    /// Default off — match Tetherless: always try on-device (PARTIAL if needed), never auto-bounce.
     static var bounceLargeCryptToServer: Bool {
         get {
-            if UserDefaults.standard.object(forKey: bounceLargeCryptKey) == nil { return true }
+            if UserDefaults.standard.object(forKey: bounceLargeCryptKey) == nil { return false }
             return UserDefaults.standard.bool(forKey: bounceLargeCryptKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: bounceLargeCryptKey) }
@@ -221,7 +222,7 @@ enum FairPlayAdvancedOptions {
         requireAllFrameworks = false
         includeTestFlightApps = false
         forceSerialDecrypt = true
-        bounceLargeCryptToServer = true
+        bounceLargeCryptToServer = false
         preferPartialOnLowRAM = true
     }
 }
