@@ -360,6 +360,18 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
 
     func retry(_ id: UUID) { resume(id) }
 
+    /// After FairPlay keys Confirm, resume Downloads jobs that failed only on the Media & Purchases gate.
+    func retryFailedFairPlayGateJobs() {
+        for job in jobs where job.status == .failed {
+            let err = (job.error ?? "").lowercased()
+            guard err.contains("capture fairplay keys")
+                || err.contains("before companion decrypt")
+                || err.contains("media & purchases")
+                || err.contains("confirming fairplay keys") else { continue }
+            retry(job.id)
+        }
+    }
+
     func pauseAll() {
         for job in jobs where [.queued, .running].contains(job.status) {
             pause(job.id)

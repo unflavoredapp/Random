@@ -125,7 +125,7 @@ enum AppStoreDecryptGuide {
 
     nonisolated static var failureHint: String {
         let who = owningAppleIDDescription()
-        return "FairPlay needs \(who) enrolled on this iPhone (App Store / Media & Purchases) with ≥1 App Store app installed under that account. TetherLess decrypts on-device like fouldecrypt/FairPlayed — it cannot mint a jailbreak credential. Sign in once, Confirm keys, then retry."
+        return "FairPlay needs \(who) enrolled on this iPhone (App Store / Media & Purchases) with ≥1 App Store app installed under that account. AppAssassin decrypts on-device like fouldecrypt/FairPlayed — it cannot mint a jailbreak credential. Sign in once, Confirm keys, then retry."
     }
 
     /// Host email from standard defaults, App Group cache, or companion host snapshot.

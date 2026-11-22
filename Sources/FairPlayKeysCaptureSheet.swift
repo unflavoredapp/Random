@@ -89,7 +89,7 @@ struct FairPlayKeysCaptureSheet: View {
             Label("Capture keys for companion decrypt", systemImage: "key.fill")
                 .font(.title3.weight(.semibold))
                 .foregroundStyle(.white)
-            Text("Open-source decryptors (fairplay-decrypt / ipadecrypt) mint a credential only on jailbreak. TetherLess uses on-device mremap like fouldecrypt/FairPlayed: enroll Media & Purchases for this Apple ID, keep ≥1 App Store app installed, then Confirm.")
+            Text("Open-source decryptors (fairplay-decrypt / ipadecrypt) mint a credential only on jailbreak. AppAssassin uses on-device mremap like fouldecrypt/FairPlayed: enroll Media & Purchases for this Apple ID, keep ≥1 App Store app installed, then Confirm.")
                 .font(.subheadline)
                 .foregroundStyle(.white.opacity(0.62))
                 .fixedSize(horizontal: false, vertical: true)

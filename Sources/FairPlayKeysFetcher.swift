@@ -287,7 +287,7 @@ final class FairPlayKeysFetcher: ObservableObject {
     private func beginVerify(email: String) {
         verifyTask?.cancel()
         phase = .verifying(email: email)
-        banner = "Back in TetherLess — checking readiness for \(email)…"
+        banner = "Back in AppAssassin — checking readiness for \(email)…"
         verifyLines = ["Returned from App Store"]
         verifyTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 250_000_000)
@@ -355,6 +355,12 @@ final class FairPlayKeysFetcher: ObservableObject {
         openedAt = nil
         armReturnAfter = nil
         AppNav.shared.presentFairPlayKeysCapture = false
+        // Resume Search Get / Downloads jobs that were waiting only on this ack.
+        let resumedSearch = FairPlayKeyGate.resumePendingSearchRetryIfNeeded()
+        IPadnDownloadManager.shared.retryFailedFairPlayGateJobs()
+        if resumedSearch {
+            banner = "Keys ready — retrying Get…"
+        }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 7_000_000_000)
             if case .grabbed = self.phase { self.banner = nil }

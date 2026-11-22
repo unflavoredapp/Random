@@ -1,5 +1,5 @@
 //
-// Brand: Tetherless · https://tetherless.dev
+// Brand: AppAssassin · https://fastdecrypt.ai
 //  FairPlayKeyGate.swift
 //  Hard gate: require one-time App Store / Media & Purchases sign-in before silent download.
 //
@@ -13,16 +13,41 @@ enum FairPlayKeyGateError: LocalizedError {
         switch self {
         case .notAcknowledged(let email):
             let who = email.isEmpty ? "your Apple Account" : email
-            return "Before companion decrypt, capture FairPlay keys for \(who): open App Store Account Settings (or Media & Purchases), sign in once as that Apple ID, then tap Confirm keys in TetherLess."
+            return "Before companion decrypt, capture FairPlay keys for \(who): open App Store Account Settings (or Media & Purchases), sign in once as that Apple ID, then tap Confirm keys in AppAssassin."
         }
     }
 }
 
 @MainActor
 enum FairPlayKeyGate {
+    private static let pendingSearchRetryKey = "tetherless.fairplay.pendingSearchRetry"
+
     static var enforce: Bool {
         get { UserDefaults.standard.object(forKey: "tetherless.fairplay.gate") as? Bool ?? true }
         set { UserDefaults.standard.set(newValue, forKey: "tetherless.fairplay.gate") }
+    }
+
+    /// Remember that Search Get failed only for missing FairPlay ack — resume after Confirm.
+    static func rememberPendingSearchRetry() {
+        UserDefaults.standard.set(true, forKey: pendingSearchRetryKey)
+    }
+
+    static func clearPendingSearchRetry() {
+        UserDefaults.standard.set(false, forKey: pendingSearchRetryKey)
+    }
+
+    /// After Confirm keys, retry the Search decrypt that was waiting on Media & Purchases.
+    @discardableResult
+    static func resumePendingSearchRetryIfNeeded() -> Bool {
+        guard UserDefaults.standard.bool(forKey: pendingSearchRetryKey) else { return false }
+        clearPendingSearchRetry()
+        guard let app = DecryptClient.shared.selected else { return false }
+        DeviceDecryptService.shared.decryptFromSearch(
+            app,
+            version: app.version.isEmpty ? nil : app.version,
+            externalVersionId: app.externalVersionId.isEmpty ? nil : app.externalVersionId
+        )
+        return true
     }
 
     /// Resolve email inside the body — default-arg expressions are nonisolated and

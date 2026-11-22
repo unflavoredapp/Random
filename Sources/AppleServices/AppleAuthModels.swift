@@ -162,7 +162,7 @@ enum AppleAuthError: LocalizedError, Sendable {
                 return "Developer Portal session expired — sign in again under Account."
             }
             if c == 1200 || m.localizedCaseInsensitiveContains("not allowed to perform") {
-                return "Developer Portal blocked this free-certificate step (1200). Sign out and back in under Account, then tap Create again — Tetherless will revoke the orphan portal slot and recreate like SideStore."
+                return "Developer Portal blocked this free-certificate step (1200). AppAssassin will revoke the orphan portal slot and recreate like SideStore — tap Create again, or import a custom .p12 under Certificate if it keeps failing."
             }
             return "Developer Portal error \(c): \(m)"
         case .csrFailed(let m): return "CSR generation failed: \(m)"
