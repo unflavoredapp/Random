@@ -192,19 +192,47 @@ function siteButtons(downloadUrl) {
     .setLabel("Website")
     .setURL(SITE);
   if (!downloadUrl) {
-    // Alone — Discord still left-aligns; no Download to pair with.
     return [new ActionRowBuilder().addComponents(website)];
   }
+  // Download left · Website right (no spacer — Discord rejects blank labels).
   const download = new ButtonBuilder()
     .setStyle(ButtonStyle.Link)
     .setLabel("Download IPA")
     .setURL(downloadUrl);
-  // Pad pushes Website toward the right edge of the action row (Discord packs left).
-  const pad = new ButtonBuilder()
-    .setStyle(ButtonStyle.Link)
-    .setLabel("\u2003\u2003")
-    .setURL(SITE);
-  return [new ActionRowBuilder().addComponents(download, pad, website)];
+  return [new ActionRowBuilder().addComponents(download, website)];
+}
+
+/** User-facing stage only — never raw ipatool / path / INF lines. */
+function friendlyStage(pct) {
+  const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  if (p >= 100) return DONE_TAGLINE;
+  if (p >= 93) return "Finishing…";
+  if (p >= 56) return "Decrypting…";
+  if (p >= 10) return "Fetching IPA…";
+  if (p >= 5) return "Looking up…";
+  return "Starting…";
+}
+
+function friendlyError(err) {
+  const raw = String((err && err.message) || err || "").trim();
+  if (/BASE_TYPE_REQUIRED|Invalid Form Body|components\[/i.test(raw)) {
+    return "Couldn’t send the download buttons — retry /decrypt.";
+  }
+  if (/login missing|keychain|ipatool auth/i.test(raw)) {
+    return "App Store login needed on the Mac — run: zsh ~/tetherless/server/mac-ssh.sh login";
+  }
+  if (/over Discord|attach cap|mac-ssh\.sh api/i.test(raw)) {
+    return "IPA too large for Discord attach — start the Mac API tunnel, then retry.";
+  }
+  // Strip paths, INF logs, temp dirs.
+  let s = raw
+    .replace(/\/(?:var|Users|tmp|private)\/[^\s]+/gi, "")
+    .replace(/\b\d{1,2}:\d{2}(?:AM|PM)?\s+INF\b[^\n]*/gi, "")
+    .replace(/\boutput=\S+/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+  if (!s || s.length < 3) return "Decrypt failed — try again.";
+  return s.slice(0, 180);
 }
 
 function statusEmbed() {
@@ -334,9 +362,10 @@ async function buildDeliveryPayload(result, { storeUrl, name, iconPath, version:
   };
 }
 
-async function sayProgress(progressMsg, appName, stage, pct, { iconPath, version } = {}) {
+async function sayProgress(progressMsg, appName, pct, { iconPath, version } = {}) {
   if (!progressMsg) return;
   const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  const stage = friendlyStage(p);
   const bannerPath = await renderSharpCard({
     name: appName,
     version: version || "",
@@ -345,11 +374,14 @@ async function sayProgress(progressMsg, appName, stage, pct, { iconPath, version
     pct: p,
     done: false,
   });
-  const embed = progressEmbed(appName, stage, p);
+  // Embed title = app name only; % lives on the sharp card (no backend text).
+  const embed = new EmbedBuilder().setColor(0xff9a1f).setTitle(appName || "Decrypting…");
   const files = [];
   if (bannerPath) {
     files.push(new AttachmentBuilder(bannerPath, { name: "sharp.jpg" }));
     embed.setImage("attachment://sharp.jpg");
+  } else {
+    embed.setDescription(`**${p}%** · ${stage}`);
   }
   await progressMsg
     .edit({
@@ -376,21 +408,21 @@ async function decryptStoreUrl(link, progressMsg) {
   const iconPath = lookup.iconPath || "";
   let lastPct = -1;
   let lastAt = 0;
-  const pushPct = async (pct, stage) => {
+  const pushPct = async (pct) => {
     const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
     const now = Date.now();
     // Throttle sharp re-renders (Discord rate limits + CPU).
     if (p < 100 && p - lastPct < 8 && now - lastAt < 2500) return;
     lastPct = p;
     lastAt = now;
-    await sayProgress(progressMsg, appName, stage, p, { iconPath, version: ver });
+    await sayProgress(progressMsg, appName, p, { iconPath, version: ver });
   };
 
-  await pushPct(5, "Looking up…");
+  await pushPct(5);
 
   const entry = ipaCache.getByStoreUrl(link, "");
   if (entry && entry.diskPath && fs.existsSync(entry.diskPath)) {
-    await pushPct(90, "Cache hit…");
+    await pushPct(90);
     return buildDeliveryPayload(
       {
         file: entry.diskPath,
@@ -406,29 +438,29 @@ async function decryptStoreUrl(link, progressMsg) {
   }
 
   const dir = fs.mkdtempSync(path.join(WORK, "job-"));
-  await pushPct(12, "Fetching IPA…");
+  await pushPct(12);
   await fairplayBackends.ensureEncryptedSource({
     url: link,
     dir,
     say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
-    onProgress: (pct, msg) => {
+    onProgress: (pct) => {
       const mapped = Math.max(12, Math.min(55, Math.round(Number(pct) || 12)));
-      pushPct(mapped, msg || "Fetching IPA…").catch(() => {});
+      pushPct(mapped).catch(() => {});
     },
     vreq: "",
   });
-  await pushPct(60, "Decrypting…");
+  await pushPct(60);
   const result = await fairplayBackends.tryRemoteBackends({
     url: link,
     dir,
     say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
-    onProgress: (pct, msg) => {
+    onProgress: (pct) => {
       const mapped = Math.max(60, Math.min(92, Math.round(Number(pct) || 60)));
-      pushPct(mapped, msg || "Decrypting…").catch(() => {});
+      pushPct(mapped).catch(() => {});
     },
     vreq: "",
   });
-  await pushPct(96, "Finishing…");
+  await pushPct(96);
   const meta = (result && result.meta) || {};
   return buildDeliveryPayload(result, {
     storeUrl: link,
@@ -459,9 +491,12 @@ async function runDecryptFor(channel, link, notifier) {
         });
       });
   } catch (e) {
-    const why = String((e && e.message) || e).slice(0, 400);
     await progressMsg
-      .edit({ content: null, embeds: [progressEmbed("Failed", why, 0)], components: [] })
+      .edit({
+        content: null,
+        embeds: [progressEmbed("Failed", friendlyError(e), 0)],
+        components: [],
+      })
       .catch(() => {});
   }
 }
@@ -545,9 +580,7 @@ client.on("interactionCreate", async (interaction) => {
       } catch (e) {
         await interaction.editReply({
           content: null,
-          embeds: [
-            progressEmbed("Failed", String((e && e.message) || e).slice(0, 400)),
-          ],
+          embeds: [progressEmbed("Failed", friendlyError(e), 0)],
           components: [],
         });
       }
@@ -555,7 +588,7 @@ client.on("interactionCreate", async (interaction) => {
   } catch (e) {
     console.warn("[discord] interaction:", (e && e.message) || e);
     try {
-      const msg = String((e && e.message) || e).slice(0, 200);
+      const msg = friendlyError(e);
       if (interaction.deferred || interaction.replied) {
         await interaction.followUp({ content: msg, ephemeral: true });
       } else {
