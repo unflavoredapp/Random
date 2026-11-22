@@ -147,7 +147,8 @@ function friendlyIpatoolError(err) {
   if (/keyring|keychain|failed to get account|failed to get item|specified item could not be found/i.test(s)) {
     return (
       "App Store login missing on Mac (ipatool keychain). " +
-      "WebSSH: zsh ~/tetherless/server/mac-ssh.sh unlock && ipatool auth login"
+      "WebSSH: add TETHERLESS_KEYCHAIN_PASSWORD to ~/.tetherless-mac.env, then " +
+      "zsh ~/tetherless/server/mac-ssh.sh login"
     );
   }
   if (/two[- ]?factor|2fa|verification code|trusted device|enter the code/i.test(s)) {
