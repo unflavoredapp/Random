@@ -13,6 +13,8 @@ import Foundation
 /// development-cert companion on this iPhone.
 enum DecryptMacRouting {
     static let macOnlyKey = "tetherless.decrypt.macOnly"
+    /// One-shot clear of sticky `macOnly=true` left from the Mac-only default era (#221).
+    private static let macOnlyMigrated38Key = "tetherless.decrypt.macOnly.migrated38"
 
     /// Default OFF — stock iPhone uses development-cert companion FairPlay.
     /// Opt in only to force every job onto Decrypt site URL (Linux VPS / Mac).
@@ -22,6 +24,17 @@ enum DecryptMacRouting {
             return UserDefaults.standard.bool(forKey: macOnlyKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: macOnlyKey) }
+    }
+
+    /// Call once at host launch. Clears a persisted server-only flag so Get uses companion again.
+    /// Users who still want VPS-only can re-enable “Server decrypt only” in FairPlay settings.
+    static func migrateStickyServerOnlyIfNeeded() {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: macOnlyMigrated38Key) == nil else { return }
+        defaults.set(true, forKey: macOnlyMigrated38Key)
+        if defaults.object(forKey: macOnlyKey) != nil, defaults.bool(forKey: macOnlyKey) {
+            defaults.set(false, forKey: macOnlyKey)
+        }
     }
 
     /// Site root used for server decrypt (same as `DecryptClient.siteBase`).

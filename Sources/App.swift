@@ -22,6 +22,8 @@ struct TetherlessApp: App {
         DevicePairingService.registerBackgroundTask()
         // iPadn Store search on by default (Decrypt name / App ID / link + version feeds).
         IPadnOptional.registerDefaults()
+        // 3.8: unstick Mac-only default so stock iPad companion FairPlay is used again.
+        DecryptMacRouting.migrateStickyServerOnlyIfNeeded()
     }
 
     var body: some Scene {

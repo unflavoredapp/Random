@@ -99,10 +99,11 @@ enum FairPlayAdvancedOptions {
         set { UserDefaults.standard.set(newValue, forKey: requireAllFrameworksKey) }
     }
 
-    /// When true (default), installed TestFlight betas appear as FairPlay decrypt targets.
+    /// When true, installed TestFlight betas appear as FairPlay decrypt targets.
+    /// Default off — Apple system / TestFlight titles often hit mremap ENOMEM and are gated.
     static var includeTestFlightApps: Bool {
         get {
-            if UserDefaults.standard.object(forKey: includeTestFlightKey) == nil { return true }
+            if UserDefaults.standard.object(forKey: includeTestFlightKey) == nil { return false }
             return UserDefaults.standard.bool(forKey: includeTestFlightKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: includeTestFlightKey) }

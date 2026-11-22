@@ -583,7 +583,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         FairPlayAdvancedOptions.defaultRetryRounds
     @AppStorage(FairPlayAdvancedOptions.pathDiagnosticsKey) private var pathDiagnostics = false
     @AppStorage(FairPlayAdvancedOptions.requireAllFrameworksKey) private var requireAllFrameworks = false
-    @AppStorage(FairPlayAdvancedOptions.includeTestFlightKey) private var includeTestFlight = true
+    @AppStorage(FairPlayAdvancedOptions.includeTestFlightKey) private var includeTestFlight = false
 
     private var sourceMode: FairPlayAdvancedOptions.SourceMode {
         FairPlayAdvancedOptions.SourceMode(rawValue: sourceModeRaw) ?? .automatic
@@ -687,7 +687,7 @@ private struct FairPlayAdvancedSettingsSection: View {
                 retryRounds = FairPlayAdvancedOptions.defaultRetryRounds
                 pathDiagnostics = false
                 requireAllFrameworks = false
-                includeTestFlight = true
+                includeTestFlight = false
             }
         }
     }

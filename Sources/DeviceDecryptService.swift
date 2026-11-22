@@ -32,19 +32,19 @@ final class DeviceDecryptService: ObservableObject {
         return DeviceLibrary.shared.apps.filter { $0.isDecryptTarget(includeTestFlight: includeTF) }
     }
 
-    /// Known-free App Store listing used for one-tap Store → download → companion smoke tests.
-    /// TestFlight is free on every storefront and small enough to validate the path quickly.
+    /// Known-free *third-party* App Store listing for Store → companion smoke tests.
+    /// Do not use Apple system apps (TestFlight, etc.) — they are gated and often mremap-ENOMEM.
     static let smokeTestApp = DecryptApp(
-        id: "smoke-testflight",
-        name: "TestFlight",
-        bundle: "com.apple.TestFlight",
+        id: "smoke-duckduckgo",
+        name: "DuckDuckGo",
+        bundle: "com.duckduckgo.mobile.ios",
         icon: nil,
-        dev: "Apple",
+        dev: "DuckDuckGo",
         version: "",
-        url: "https://apps.apple.com/app/id899247664"
+        url: "https://apps.apple.com/app/id663592361"
     )
 
-    /// One-tap path: reinforce Store → silent download TestFlight → companion install/open.
+    /// One-tap path: silent download a free third-party app → companion FairPlay.
     func runStoreConnectionSmokeTest() {
         // Force device channel so Telegram bot mode can't swallow the smoke test.
         DecryptChannel.current = .device
@@ -544,6 +544,9 @@ final class DeviceDecryptService: ObservableObject {
         guard AppleIDStore.shared.isSignedIn else {
             throw DecryptError("Sign in under Account first.")
         }
+        if AppleSystemAppGate.isBlocked(bundleID: nil, storeURL: storeURL) {
+            throw DecryptError(AppleSystemAppGate.userMessage)
+        }
         try FairPlayKeyGate.requireReady()
         let adam = try await resolveAdamId(bundleID: "", storeURL: storeURL)
         guard let adam else {
@@ -566,12 +569,34 @@ final class DeviceDecryptService: ObservableObject {
             version: version
         )
         let name = displayName.isEmpty ? "App" : displayName
-        progress?("Decrypting on this iPhone…")
-        let clear = try FairPlayDecrypt.decryptIPA(
-            at: result.url,
-            displayName: name
-        ) { msg in
-            progress?(msg)
+        // Prefer a live App Store install’s SC_Info when present — IPA-only mremap usually fails.
+        // Best reliability: install the app once from the Store on this device, then keep Phone Worker on.
+        progress?("Decrypting on this iPhone (live install licenses when available)…")
+        let clear: URL
+        do {
+            clear = try FairPlayDecrypt.decryptIPA(
+                at: result.url,
+                displayName: name,
+                preferIPAContentsOnly: false
+            ) { msg in
+                progress?(msg)
+            }
+        } catch {
+            let text = error.localizedDescription
+            if text.localizedCaseInsensitiveContains("still encrypted")
+                || text.localizedCaseInsensitiveContains("cryptid")
+                || text.localizedCaseInsensitiveContains("eperm")
+                || text.localizedCaseInsensitiveContains("operation not permitted") {
+                throw DecryptError(
+                    "Phone Worker FairPlay needs this app installed from the App Store on this iPhone (same Apple ID), or use Get → companion. \(text)"
+                )
+            }
+            throw error
+        }
+        if let verify = try? FairPlayDecrypt.verifyIPA(at: clear), !verify.isFullyClear {
+            throw DecryptError(
+                "Phone Worker left encrypted Mach-Os (\(verify.summary)). Install the app from the App Store on this device, confirm FairPlay keys, then retry — or use Get → Tetherless Decrypt companion."
+            )
         }
         return (clear, name, result.item.displayVersion)
     }
@@ -580,6 +605,14 @@ final class DeviceDecryptService: ObservableObject {
     /// otherwise embed the live install into the companion. No in-app FairPlay.
     func decryptInstalled(_ app: DeviceApp, version: String? = nil) async {
         guard !busy else { return }
+        if AppleSystemAppGate.isBlocked(bundleID: app.bundleID, storeURL: nil) {
+            lastError = AppleSystemAppGate.userMessage
+            status = AppleSystemAppGate.userMessage
+            DecryptClient.shared.phase = .failed
+            DecryptClient.shared.error = AppleSystemAppGate.userMessage
+            DecryptClient.shared.message = AppleSystemAppGate.userMessage
+            return
+        }
         busy = true
         lastError = nil
         status = "Preparing \(app.name)…"
