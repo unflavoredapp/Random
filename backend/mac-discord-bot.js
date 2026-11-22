@@ -393,6 +393,88 @@ async function sayProgress(progressMsg, appName, pct, { iconPath, version } = {}
     .catch(() => {});
 }
 
+/**
+ * Smooth % buffer: display eases +1–2 at a time toward the real target, and
+ * slowly creeps ahead while the Mac is still working so the bar never feels stuck.
+ * By the time the number reaches a milestone, that work is usually already done.
+ */
+function createPctBuffer({ paint, intervalMs = 500 }) {
+  let target = 0;
+  let display = 0;
+  let ceiling = 8;
+  let timer = null;
+  let painting = false;
+  let lastPainted = -1;
+  let stopped = false;
+
+  const paintSafe = async (p) => {
+    if (painting || stopped) return;
+    if (p === lastPainted) return;
+    painting = true;
+    lastPainted = p;
+    try {
+      await paint(p);
+    } catch {
+      /* ignore Discord edit races */
+    } finally {
+      painting = false;
+    }
+  };
+
+  const tick = () => {
+    if (stopped) return;
+    // Ease toward known target; if caught up, creep toward ceiling (anticipates next chunk).
+    let aim = target;
+    if (display >= target && display < ceiling) aim = Math.min(ceiling, display + 1);
+    if (display < aim) {
+      const gap = aim - display;
+      display = Math.min(aim, display + (gap >= 10 ? 2 : 1));
+    }
+    display = Math.max(0, Math.min(100, display));
+    paintSafe(display).catch(() => {});
+  };
+
+  const ensureTimer = () => {
+    if (stopped || timer) return;
+    timer = setInterval(tick, intervalMs);
+  };
+
+  return {
+    /** Raise the real progress floor and optional phase ceiling (fetch≤55, decrypt≤92…). */
+    setTarget(pct, phaseCeil) {
+      if (stopped) return;
+      const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+      target = Math.max(target, p);
+      if (phaseCeil != null) {
+        ceiling = Math.max(ceiling, Math.min(99, Math.round(Number(phaseCeil) || ceiling)));
+      }
+      // Never let ceiling fall behind target.
+      ceiling = Math.max(ceiling, Math.min(99, target));
+      ensureTimer();
+      tick();
+    },
+    async flush(to = 100) {
+      if (stopped) return;
+      target = Math.max(target, to);
+      ceiling = Math.max(ceiling, to);
+      while (display < to && !stopped) {
+        display = Math.min(to, display + 3);
+        await paintSafe(display);
+        await new Promise((r) => setTimeout(r, 180));
+      }
+      this.stop();
+    },
+    stop() {
+      stopped = true;
+      if (timer) clearInterval(timer);
+      timer = null;
+    },
+    get display() {
+      return display;
+    },
+  };
+}
+
 async function decryptStoreUrl(link, progressMsg) {
   if (typeof fairplayBackends.unlockKeychain === "function") {
     fairplayBackends.unlockKeychain();
@@ -406,68 +488,76 @@ async function decryptStoreUrl(link, progressMsg) {
   const appName = lookup.name || "App";
   const ver = lookup.version || "";
   const iconPath = lookup.iconPath || "";
-  let lastPct = -1;
-  let lastAt = 0;
-  const pushPct = async (pct) => {
-    const p = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
-    const now = Date.now();
-    // Throttle sharp re-renders (Discord rate limits + CPU).
-    if (p < 100 && p - lastPct < 8 && now - lastAt < 2500) return;
-    lastPct = p;
-    lastAt = now;
-    await sayProgress(progressMsg, appName, p, { iconPath, version: ver });
-  };
 
-  await pushPct(5);
+  const buf = createPctBuffer({
+    paint: (p) => sayProgress(progressMsg, appName, p, { iconPath, version: ver }),
+    intervalMs: 500,
+  });
 
-  const entry = ipaCache.getByStoreUrl(link, "");
-  if (entry && entry.diskPath && fs.existsSync(entry.diskPath)) {
-    await pushPct(90);
-    return buildDeliveryPayload(
-      {
-        file: entry.diskPath,
-        meta: { name: entry.name || appName, version: entry.version || ver, bid: entry.bid || lookup.bid },
+  try {
+    buf.setTarget(3, 10);
+
+    const entry = ipaCache.getByStoreUrl(link, "");
+    if (entry && entry.diskPath && fs.existsSync(entry.diskPath)) {
+      buf.setTarget(70, 95);
+      await buf.flush(100);
+      return buildDeliveryPayload(
+        {
+          file: entry.diskPath,
+          meta: {
+            name: entry.name || appName,
+            version: entry.version || ver,
+            bid: entry.bid || lookup.bid,
+          },
+        },
+        {
+          storeUrl: link,
+          name: entry.name || appName,
+          iconPath,
+          version: entry.version || ver,
+        }
+      );
+    }
+
+    const dir = fs.mkdtempSync(path.join(WORK, "job-"));
+    buf.setTarget(10, 55);
+    await fairplayBackends.ensureEncryptedSource({
+      url: link,
+      dir,
+      say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
+      onProgress: (pct) => {
+        const mapped = Math.max(12, Math.min(55, Math.round(Number(pct) || 12)));
+        buf.setTarget(mapped, 55);
       },
-      {
-        storeUrl: link,
-        name: entry.name || appName,
-        iconPath,
-        version: entry.version || ver,
-      }
-    );
-  }
+      vreq: "",
+    });
+    buf.setTarget(55, 55);
 
-  const dir = fs.mkdtempSync(path.join(WORK, "job-"));
-  await pushPct(12);
-  await fairplayBackends.ensureEncryptedSource({
-    url: link,
-    dir,
-    say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
-    onProgress: (pct) => {
-      const mapped = Math.max(12, Math.min(55, Math.round(Number(pct) || 12)));
-      pushPct(mapped).catch(() => {});
-    },
-    vreq: "",
-  });
-  await pushPct(60);
-  const result = await fairplayBackends.tryRemoteBackends({
-    url: link,
-    dir,
-    say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
-    onProgress: (pct) => {
-      const mapped = Math.max(60, Math.min(92, Math.round(Number(pct) || 60)));
-      pushPct(mapped).catch(() => {});
-    },
-    vreq: "",
-  });
-  await pushPct(96);
-  const meta = (result && result.meta) || {};
-  return buildDeliveryPayload(result, {
-    storeUrl: link,
-    name: meta.name || meta.title || appName,
-    iconPath,
-    version: meta.version || meta.bundleVersion || ver,
-  });
+    buf.setTarget(58, 92);
+    const result = await fairplayBackends.tryRemoteBackends({
+      url: link,
+      dir,
+      say: (t) => console.log("[discord]", String(t || "").slice(0, 160)),
+      onProgress: (pct) => {
+        const mapped = Math.max(60, Math.min(92, Math.round(Number(pct) || 60)));
+        buf.setTarget(mapped, 92);
+      },
+      vreq: "",
+    });
+    buf.setTarget(92, 97);
+    await buf.flush(100);
+
+    const meta = (result && result.meta) || {};
+    return buildDeliveryPayload(result, {
+      storeUrl: link,
+      name: meta.name || meta.title || appName,
+      iconPath,
+      version: meta.version || meta.bundleVersion || ver,
+    });
+  } catch (e) {
+    buf.stop();
+    throw e;
+  }
 }
 
 async function runDecryptFor(channel, link, notifier) {
