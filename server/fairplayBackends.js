@@ -3,31 +3,31 @@
 /**
  * FairPlay decrypt backends for the site decrypt queue.
  *
- * Preferred: run this Node server on a rented/enrolled Mac (Apple Silicon) and
- * decrypt there with Tetherless (internal backend id: unfairplay) — enroll once,
- * every job stays on that Mac. Optional: Linux host with a copied enrollment
- * model / credential.bin.
+ * Preferred on Debian/Linux VPS: `phone` — keep TetherLess open on an iPhone
+ * signed into the owning Apple ID; Phone Worker claims jobs, runs on-device
+ * FairPlay, uploads the clear IPA. No Mac enrollment, no credential.bin.
  *
- * Backends (no jailbreak / TrollStore / Phone Worker required):
- *   1. unfairplay       — Tetherless decrypt CLI (macOS arm64 or Linux; model or live Mac setup)
- *   2. fairplay-decrypt — EthanArbuckle CLI + 16-byte credential.bin
+ * Optional CLI backends (need secrets minted elsewhere):
+ *   1. unfairplay       — Tetherless CLI (needs Mac-minted enrollment model)
+ *   2. fairplay-decrypt — EthanArbuckle CLI + 16-byte credential.bin (jailbreak mint)
  *   3. ipadecrypt       — londek CLI
  *   4. ipa-decrypter    — ac0d3r HTTP/Docker
  *
- * Opt-in only: phone, unfaird
+ * Opt-in: unfaird (jailbreak LAN daemon)
  *
  * Env:
  *   FAIRPLAY_HOST=mac|linux          (default: detect process.platform)
- *   DECRYPT_BACKENDS=…              (mac default: unfairplay; linux: fairplay-decrypt,unfairplay)
+ *   DECRYPT_BACKENDS=…              (linux default: phone; mac default: unfairplay)
+ *   DECRYPT_WORKER_TOKEN=…          (required when phone is enabled)
  *   FAIRPLAY_CREDENTIAL_BIN=/var/lib/tetherless/credential.bin
- *   FAIRPLAY_REQUIRE_CREDENTIAL=1   (linux / fairplay-decrypt; Mac unfairplay-only can skip)
+ *   FAIRPLAY_REQUIRE_CREDENTIAL=0|1 (default: on only when fairplay-decrypt is enabled)
  *   FAIRPLAY_DECRYPT_BIN=…
  *   FAIRPLAY_IPATOOL_BIN=ipatool
  *   UNFAIRPLAY_BIN=unfairplay
- *   UNFAIRPLAY_MODEL_DIR=…          (optional; else Mac uses default saved models)
- *   FAIRPLAY_ENROLLMENT_MODEL=…     (Linux copy of the model file)
+ *   UNFAIRPLAY_MODEL_DIR=…          (optional; Mac-minted model for unfairplay)
+ *   FAIRPLAY_ENROLLMENT_MODEL=…     (optional; same)
  *
- * See server/fairplay-backends.md.
+ * See server/fairplay-backends.md and server/linux-host.env.example.
  *
  * This module shells out / HTTP-calls those tools — it does not embed their crypto.
  */
@@ -85,7 +85,7 @@ function hostResources() {
   };
 }
 
-/** Suggested parallel decrypt workers for this Mac (16 GB → 2). */
+/** Suggested parallel decrypt workers (16 GB host → 2). */
 function suggestedWorkers(fallback = 3) {
   const env = Number(process.env.MAC_TG_WORKERS || 0);
   if (env >= 1) return Math.max(1, Math.min(8, env));
@@ -104,19 +104,23 @@ function preflightDecrypt(opts = {}) {
   const minFreeGb = Number(opts.minFreeGb || process.env.MAC_TG_MIN_FREE_DISK_GB || 8) || 8;
   const bytes = Number(opts.bytes || 0) || 0;
   const need = bytes > 0 ? bytes * 2.5 : minFreeGb * 1024 ** 3;
+  const cacheHint =
+    process.env.MAC_TG_IPA_CACHE_DIR ||
+    process.env.TETHERLESS_IPA_CACHE_DIR ||
+    "/var/lib/tetherless/ipa-cache";
   if (res.freeDisk > 0 && res.freeDisk < Math.max(need, minFreeGb * 1024 ** 3)) {
     const free = res.freeDiskGb.toFixed(1);
     const want = (need / 1024 ** 3).toFixed(1);
     return {
       ok: false,
-      error: `Not enough free disk on this Mac (${free} GB free, need ~${want} GB). Free space in ~/tetherless-ipa-cache and try again.`,
+      error: `Not enough free disk on this host (${free} GB free, need ~${want} GB). Free space under ${cacheHint} and try again.`,
       resources: res,
     };
   }
   if (bytes > 0 && res.totalMem > 0 && bytes > res.totalMem * 0.85) {
     return {
       ok: false,
-      error: `IPA is ~${(bytes / 1024 ** 3).toFixed(1)} GB — too large for this Mac’s ${(res.totalMemGb).toFixed(0)} GB RAM (unfairplay may OOM).`,
+      error: `IPA is ~${(bytes / 1024 ** 3).toFixed(1)} GB — too large for this host’s ${(res.totalMemGb).toFixed(0)} GB RAM (unfairplay may OOM).`,
       resources: res,
     };
   }
@@ -126,13 +130,13 @@ function preflightDecrypt(opts = {}) {
 function friendlyDecryptError(err) {
   const s = String((err && err.message) || err || "");
   if (/timed out|Timeout/i.test(s)) {
-    return "Decrypt timed out on this Mac — try again, or free RAM/disk and re-run.";
+    return "Decrypt timed out on this host — try again, or free RAM/disk and re-run.";
   }
   if (/ENOMEM|out of memory|Cannot allocate|killed|SIGKILL|signal 9/i.test(s)) {
-    return "Decrypt ran out of memory on this Mac. Close other jobs or use a smaller app.";
+    return "Decrypt ran out of memory on this host. Close other jobs or use a smaller app.";
   }
   if (/No space|ENOSPC|not enough free disk/i.test(s)) {
-    return "Mac disk is full — free space under ~/tetherless-ipa-cache and retry.";
+    return "Host disk is full — free space under the IPA cache dir and retry.";
   }
   return "";
 }
@@ -142,23 +146,29 @@ function friendlyIpatoolError(err) {
   if (decryptHint) return decryptHint;
   const s = String((err && err.message) || err || "");
   if (/maximum call stack|call stack size exceeded|RangeError/i.test(s)) {
-    return "Mac decrypt hit a Store/progress bug — update the Mac host and retry.";
+    return "Decrypt hit a Store/progress bug — update the host and retry.";
   }
   if (/keyring|keychain|failed to get account|failed to get item|specified item could not be found/i.test(s)) {
+    if (hostMode() === "mac") {
+      return (
+        "App Store login missing on Mac (ipatool keychain). " +
+        "WebSSH: add TETHERLESS_KEYCHAIN_PASSWORD to ~/.tetherless-mac.env, then " +
+        "zsh ~/tetherless/server/mac-ssh.sh login"
+      );
+    }
     return (
-      "App Store login missing on Mac (ipatool keychain). " +
-      "WebSSH: add TETHERLESS_KEYCHAIN_PASSWORD to ~/.tetherless-mac.env, then " +
-      "zsh ~/tetherless/server/mac-ssh.sh login"
+      "App Store login missing on this Linux host (ipatool). " +
+      "Run: bash server/linux-ctl.sh login   (or: ipatool auth login)"
     );
   }
   if (/two[- ]?factor|2fa|verification code|trusted device|enter the code/i.test(s)) {
-    return "App Store needs 2FA on this Mac — finish ipatool auth login over WebSSH, then retry.";
+    return "App Store needs 2FA on this host — finish ipatool auth login, then retry.";
   }
   if (/rate.?limit|too many requests|429|try again later|slow down/i.test(s)) {
     return "App Store rate-limited ipatool — wait a minute and paste the link again.";
   }
   if (/unknown flag:\s*--country/i.test(s)) {
-    return "This ipatool build doesn’t support --country — update the Mac host and retry.";
+    return "This ipatool build doesn’t support --country — update the host and retry.";
   }
   if (/version.*(not found|unavailable|invalid)|external.version|no matching version/i.test(s)) {
     return "That app version isn’t available for this Apple ID — try latest or another owned version.";
@@ -264,16 +274,17 @@ function hostMode() {
 }
 
 function defaultBackends() {
-  // Mac host: Tetherless can use the live enrollment / default model dir — no Linux hop.
-  return hostMode() === "mac" ? ["unfairplay"] : ["fairplay-decrypt", "unfairplay"];
+  // Linux VPS: iPhone Phone Worker grabs FairPlay on-device (no Mac enrollment).
+  // Mac host: local unfairplay after App Store enrollment on that box.
+  return hostMode() === "mac" ? ["unfairplay"] : ["phone"];
 }
 
 function requireCredential() {
   const raw = String(process.env.FAIRPLAY_REQUIRE_CREDENTIAL ?? "").trim().toLowerCase();
   if (raw === "0" || raw === "false" || raw === "no" || raw === "off") return false;
   if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") return true;
-  // Default on for Linux; off for Mac unfairplay-only (enrollment lives on the box).
-  return hostMode() !== "mac";
+  // credential.bin only matters for fairplay-decrypt; unfairplay-only Linux needs a model instead.
+  return configuredBackends().includes("fairplay-decrypt");
 }
 
 function credentialPath() {
@@ -315,16 +326,18 @@ function homeDir() {
   return String(process.env.HOME || process.env.USERPROFILE || "").trim();
 }
 
-/** Local copies from MacDuty / Tetherless decrypt setup (never commit these files). */
+/** Local copies from Linux VPS / MacDuty / Tetherless decrypt setup (never commit these files). */
 function localEnrollmentCandidates() {
   const home = homeDir();
   const out = [];
+  out.push(DEFAULT_ENROLLMENT_PATH);
+  out.push("/var/lib/tetherless/models");
   if (home) {
     out.push(path.join(home, "unfairplay", "models", "fairplay-enrollment.bin"));
+    out.push(path.join(home, "unfairplay", "models"));
     // MacDuty sudo-setup often lands models under the managed account home.
     out.push(path.join(home, "Library", "Application Support", "unfairplay", "models"));
   }
-  out.push(DEFAULT_ENROLLMENT_PATH);
   return out;
 }
 
@@ -372,19 +385,19 @@ function enrollmentModelReady() {
 function unfairplayModelDir() {
   const fromEnv = String(process.env.UNFAIRPLAY_MODEL_DIR || "").trim();
   if (fromEnv) return fromEnv;
+  const candidates = [];
+  candidates.push("/var/lib/tetherless/models");
   const home = homeDir();
-  if (!home) return "";
-  const macDefault = path.join(home, "Library", "Application Support", "unfairplay", "models");
-  const localCopy = path.join(home, "unfairplay", "models");
-  try {
-    if (fs.existsSync(macDefault) && fs.statSync(macDefault).isDirectory()) return macDefault;
-  } catch {
-    /* ignore */
+  if (home) {
+    candidates.push(path.join(home, "Library", "Application Support", "unfairplay", "models"));
+    candidates.push(path.join(home, "unfairplay", "models"));
   }
-  try {
-    if (fs.existsSync(localCopy) && fs.statSync(localCopy).isDirectory()) return localCopy;
-  } catch {
-    /* ignore */
+  for (const dir of candidates) {
+    try {
+      if (fs.existsSync(dir) && fs.statSync(dir).isDirectory()) return dir;
+    } catch {
+      /* ignore */
+    }
   }
   return "";
 }
@@ -475,8 +488,8 @@ function backendStatus() {
       bin: process.env.UNFAIRPLAY_BIN || "unfairplay",
       note:
         host === "mac"
-          ? "Preferred on Mac — setup once on this host, decrypt every job here"
-          : "Linux binary — needs FAIRPLAY_ENROLLMENT_MODEL or UNFAIRPLAY_MODEL_DIR",
+          ? "Optional on Mac — setup once on this host for offline CLI decrypt"
+          : "Optional on Linux — needs a Mac-minted FAIRPLAY_ENROLLMENT_MODEL (prefer phone)",
     },
     ipadecrypt: {
       ready: !!which(process.env.IPADECRYPT_BIN || "ipadecrypt"),
@@ -489,8 +502,12 @@ function backendStatus() {
       note: "ac0d3r/ipa-decrypter Docker/HTTP",
     },
     phone: {
-      ready: true,
-      note: "Opt-in only — not needed for Mac/Linux offline decrypt",
+      ready: !!String(process.env.DECRYPT_WORKER_TOKEN || "").trim(),
+      tokenConfigured: !!String(process.env.DECRYPT_WORKER_TOKEN || "").trim(),
+      note:
+        host === "linux"
+          ? "Preferred on Linux VPS — iPhone Phone Worker runs FairPlay on-device and uploads clear IPAs"
+          : "iPhone Phone Worker — claim jobs from this host",
     },
     unfaird: {
       ready: !!process.env.UNFAIRD_URL,
@@ -500,7 +517,12 @@ function backendStatus() {
     ipatool: (() => {
       const bin = ipatoolBin();
       if (!bin) {
-        return { ready: false, bin: "ipatool", error: "ipatool not on PATH", note: "Needed to fetch encrypted IPAs" };
+        return {
+          ready: false,
+          bin: "ipatool",
+          error: "ipatool not on PATH",
+          note: "Only needed for unfairplay / fairplay-decrypt CLI backends (phone downloads on-device)",
+        };
       }
       const auth = ipatoolAuthStatus();
       return {
@@ -511,7 +533,7 @@ function backendStatus() {
         error: auth.error || "",
         note: auth.ready
           ? `Logged in${auth.email ? " as " + auth.email : ""}`
-          : auth.error || "Run: ipatool auth login (after mac-ssh.sh unlock)",
+          : auth.error || "Run: ipatool auth login (CLI backends only)",
       };
     })(),
   };
@@ -950,7 +972,10 @@ function brandBackend(name) {
  * (caller still may try phone).
  */
 async function tryRemoteBackends({ url, dir, say, vreq, skip = [], storefront, onProgress } = {}) {
-  const backends = configuredBackends().filter((b) => b !== "phone" && !skip.includes(b));
+  const configured = configuredBackends();
+  const wantsPhone = configured.includes("phone");
+  // phone is handled by decrypt.js waitForWorker — never run it here.
+  const backends = configured.filter((b) => b !== "phone" && !skip.includes(b));
   if (!backends.length) return null;
   // Stash for ensureEncryptedSource via closure on runUnfairplay / runFairplayDecrypt —
   // pass through env for this job so nested helpers see the storefront.
@@ -985,29 +1010,37 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [], storefront, o
   const wantsUnfairplay = backends.includes("unfairplay");
   say(`Tetherless host: ${host}`);
   if (wantsDecrypt && !cred.ok) {
-    if (!(wantsUnfairplay && unfairOk)) {
+    if (wantsUnfairplay && unfairOk) {
+      say(`credential.bin missing — trying Tetherless decrypt…`);
+    } else if (wantsPhone) {
+      say(`credential.bin missing — will fall back to iPhone Phone Worker…`);
+    } else {
       throw new Error(
         `FairPlay credential.bin required for fairplay-decrypt: ${cred.error}. ` +
-          `Prefer running the site on a Mac with DECRYPT_BACKENDS=unfairplay, or set FAIRPLAY_CREDENTIAL_BIN. ` +
+          `Prefer DECRYPT_BACKENDS=phone (iPhone Worker) on Linux, or set FAIRPLAY_CREDENTIAL_BIN. ` +
           `See server/fairplay-backends.md.`
       );
     }
-    say(`credential.bin missing — trying Tetherless decrypt…`);
   } else if (cred.ok) {
     say(`Using credential.bin (${cred.bytes} bytes)…`);
   }
-  if (host === "mac" && wantsUnfairplay) {
-    say(`Tetherless decrypt on this Mac…`);
+  if (host === "mac" && wantsUnfairplay && !modelOk) {
+    say(`Tetherless decrypt on this Mac (default model dir)…`);
   } else if (modelOk) {
     say(`Tetherless enrollment model ready…`);
   } else if (wantsUnfairplay && !wantsDecrypt && !unfairOk) {
+    if (wantsPhone) {
+      say(`No enrollment model — will fall back to iPhone Phone Worker…`);
+    } else {
+      throw new Error(
+        `Tetherless needs a model (FAIRPLAY_ENROLLMENT_MODEL / UNFAIRPLAY_MODEL_DIR), ` +
+          `or set DECRYPT_BACKENDS=phone and connect an iPhone Phone Worker. ` +
+          `See server/fairplay-backends.md.`
+      );
+    }
+  } else if (requireCredential() && !cred.ok && !unfairOk && !wantsPhone) {
     throw new Error(
-      `Tetherless needs a model (FAIRPLAY_ENROLLMENT_MODEL / UNFAIRPLAY_MODEL_DIR) or FAIRPLAY_HOST=mac with local setup. ` +
-        `See server/fairplay-backends.md.`
-    );
-  } else if (requireCredential() && !cred.ok && !unfairOk) {
-    throw new Error(
-      `FairPlay secret required: set FAIRPLAY_CREDENTIAL_BIN and/or enrollment model, or run on a Mac (FAIRPLAY_HOST=mac). ` +
+      `FairPlay secret required: set DECRYPT_BACKENDS=phone (iPhone), or FAIRPLAY_ENROLLMENT_MODEL / FAIRPLAY_CREDENTIAL_BIN. ` +
         `See server/fairplay-backends.md.`
     );
   }
@@ -1028,6 +1061,8 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [], storefront, o
         result = await runIpaDecrypter({ url, dir, say, vreq });
       } else if (backend === "unfaird") {
         result = await runUnfaird({ url, dir, say, vreq });
+      } else {
+        continue;
       }
       if (result && result.file && fs.existsSync(result.file)) {
         say(`${label} produced IPA…`);
@@ -1041,7 +1076,7 @@ async function tryRemoteBackends({ url, dir, say, vreq, skip = [], storefront, o
       say(`${label} failed — ${msg.slice(0, 120)}`);
     }
   }
-  if (errors.length && !configuredBackends().includes("phone")) {
+  if (errors.length && !wantsPhone) {
     throw new Error("All Tetherless decrypt backends failed: " + errors.join(" | "));
   }
   return null;
@@ -1091,7 +1126,7 @@ async function runUnfairplay({ url, dir, say, vreq }) {
   else if (unfairplayModelDirReady()) modelArg = unfairplayModelDir();
   else if (hostMode() !== "mac") {
     throw new Error(
-      `Tetherless needs FAIRPLAY_ENROLLMENT_MODEL or UNFAIRPLAY_MODEL_DIR (or FAIRPLAY_HOST=mac)`
+      `Tetherless needs FAIRPLAY_ENROLLMENT_MODEL or UNFAIRPLAY_MODEL_DIR on Linux (mode 0600 model from Mac enrollment)`
     );
   }
 

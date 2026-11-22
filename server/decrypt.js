@@ -87,9 +87,8 @@ function create({ db /*, secret */ }) {
 
   /**
    * Called from site.js runDecrypt.
-   * Default: Mac host → unfairplay on this machine; Linux → fairplay-decrypt
-   * + unfairplay with copied secrets. Phone / unfaird only if listed in
-   * DECRYPT_BACKENDS (not needed without jailbreak / TrollStore).
+   * Default: Linux → phone (iPhone Phone Worker grabs FairPlay on-device);
+   * Mac → unfairplay on this machine. CLI secrets / unfaird only if listed.
    */
   async function request(url, dir, say, tryCache, vreq, job) {
     if (!validUrl(url)) throw new Error("Paste an App Store link.");
@@ -524,20 +523,23 @@ function create({ db /*, secret */ }) {
     let error = "";
     const model = fp.enrollmentModel || {};
     const unfair = fp.unfairplay || {};
-    if (fp.requireCredential && !cred.ready && !model.ready && !unfair.ready) {
+    const phone = fp.phone || {};
+    if (wantsPhone && !WORKER_TOKEN) {
+      error =
+        "Set DECRYPT_WORKER_TOKEN and enable Phone Worker on an iPhone (TetherLess → Settings → Phone Worker). See server/fairplay-backends.md.";
+    } else if (fp.requireCredential && !cred.ready && !model.ready && !unfair.ready && !wantsPhone) {
       error =
         cred.error ||
-        "Set FAIRPLAY_CREDENTIAL_BIN / FAIRPLAY_ENROLLMENT_MODEL, or run on a Mac (FAIRPLAY_HOST=mac) with Tetherless setup — see server/fairplay-backends.md.";
-    } else if (wantsPhone && !WORKER_TOKEN) {
-      error = "Set DECRYPT_WORKER_TOKEN and enable Phone Worker in the iOS app (or drop phone from DECRYPT_BACKENDS).";
-    } else if (!BOT_TOKEN) {
+        "Set DECRYPT_BACKENDS=phone (iPhone Worker), or FAIRPLAY_ENROLLMENT_MODEL / FAIRPLAY_CREDENTIAL_BIN — see server/fairplay-backends.md.";
+    } else if (!BOT_TOKEN && !wantsPhone && !unfair.ready) {
       error =
-        "TELEGRAM_BOT_TOKEN optional. Prefer FAIRPLAY_HOST=mac + DECRYPT_BACKENDS=unfairplay on a rented Mac — see server/fairplay-backends.md.";
+        "TELEGRAM_BOT_TOKEN optional. On Linux prefer DECRYPT_BACKENDS=phone + an iPhone Phone Worker — see server/fairplay-backends.md.";
     }
     return {
       lib: true,
-      mode: fp.backends.join("+") || (fp.host === "mac" ? "unfairplay" : "fairplay-decrypt+unfairplay"),
+      mode: fp.backends.join("+") || (fp.host === "mac" ? "unfairplay" : "phone"),
       host: fp.host || "linux",
+      phoneWorker: !!(wantsPhone && WORKER_TOKEN && phone.ready !== false),
       authed: !!BOT_TOKEN,
       who: BOT_TOKEN ? { name: "Bot API", username: BOT_USERNAME } : {},
       workerConfigured: !!WORKER_TOKEN,

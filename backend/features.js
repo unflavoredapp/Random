@@ -559,8 +559,8 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
         const model = fp.enrollmentModel || {};
         const unfair = fp.unfairplay || {};
         const hostLine = host === "mac"
-          ? "Host: <code class=\"k\">mac</code> — enroll + decrypt on this Mac (preferred for a rented Mac)."
-          : "Host: <code class=\"k\">linux</code> — needs copied enrollment model / credential.bin (or set <code class=\"k\">FAIRPLAY_HOST=mac</code> on a Mac box).";
+          ? "Host: <code class=\"k\">mac</code> — local unfairplay after Mac App Store enrollment."
+          : "Host: <code class=\"k\">linux</code> — preferred: iPhone Phone Worker grabs FairPlay on-device (no Mac).";
         const credLine = cred.ready
           ? `credential.bin OK (<code class="k">${esc(cred.path || "")}</code> · 16 bytes).`
           : `credential.bin — ${esc(cred.error || "optional on Mac Tetherless-only; set FAIRPLAY_CREDENTIAL_BIN for fairplay-decrypt")}.`;
@@ -593,7 +593,7 @@ ${hid.length ? `<h2>HIDDEN (${hid.length})</h2><div class="box">${hidden}</div>`
 <p class="mm">${worker}</p>
 <p class="mm">Backends: ${readyBits || "—"}</p>
 <p class="mm">Build ${esc(s.build || "")} \u00b7 mode ${esc(s.mode || order)} \u00b7 waiting ${esc(String(s.waiting || 0))}</p>
-<p class="mm">Prefer <code class=\"k\">FAIRPLAY_HOST=mac</code> + <code class=\"k\">DECRYPT_BACKENDS=unfairplay</code> on a rented Mac. Docs: <code class=\"k\">server/fairplay-backends.md</code>.</p>
+<p class="mm">Prefer Linux VPS + <code class=\"k\">DECRYPT_BACKENDS=phone</code> + iPhone Phone Worker (<code class=\"k\">DECRYPT_WORKER_TOKEN</code>). Docs: <code class=\"k\">server/fairplay-backends.md</code>.</p>
 <p class="mm">Create a bot with <b>@BotFather</b>, set <code class=\"k\">TELEGRAM_BOT_TOKEN</code>, optional <code class=\"k\">TELEGRAM_BOT_USERNAME</code> / <code class=\"k\">TELEGRAM_ALLOWED_IDS</code>.</p></div>
 </main></div></div></body></html>`);
       });
