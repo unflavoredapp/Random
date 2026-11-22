@@ -1073,9 +1073,18 @@ function createPctBuffer({ paint, intervalMs = 550 }) {
   let lastPainted = -1;
   let stopped = false;
 
-  const paintSafe = async (p) => {
-    if (painting || stopped) return;
-    if (p === lastPainted) return;
+  const waitPaintIdle = async () => {
+    while (painting) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+  };
+
+  const paintSafe = async (p, { force = false } = {}) => {
+    if (stopped) return;
+    if (!force && p === lastPainted) return;
+    await waitPaintIdle();
+    if (stopped) return;
+    if (!force && p === lastPainted) return;
     painting = true;
     lastPainted = p;
     try {
@@ -1088,7 +1097,7 @@ function createPctBuffer({ paint, intervalMs = 550 }) {
   };
 
   const tick = () => {
-    if (stopped) return;
+    if (stopped || painting) return;
     let aim = target;
     if (display >= target && display < ceiling) aim = Math.min(ceiling, display + 1);
     if (display < aim) {
@@ -1118,12 +1127,23 @@ function createPctBuffer({ paint, intervalMs = 550 }) {
     },
     async flush(to = 100) {
       if (stopped) return;
+      // Stop the creep timer so it can't race the final paints.
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
       target = Math.max(target, to);
       ceiling = Math.max(ceiling, to);
+      await waitPaintIdle();
       while (display < to && !stopped) {
-        display = Math.min(to, display + 3);
-        await paintSafe(display);
-        await new Promise((r) => setTimeout(r, 180));
+        const step = to - display > 20 ? 6 : to - display > 8 ? 4 : 3;
+        display = Math.min(to, display + step);
+        await paintSafe(display, { force: true });
+        if (display < to) await new Promise((r) => setTimeout(r, 100));
+      }
+      if (!stopped) {
+        display = to;
+        await paintSafe(to, { force: true });
       }
       this.stop();
     },
@@ -1140,6 +1160,7 @@ function createPctBuffer({ paint, intervalMs = 550 }) {
 
 function phaseCeilForStage(stage) {
   const s = String(stage || "");
+  if (/publish|finish|ready/i.test(s)) return 99;
   if (/upload|send|brand/i.test(s)) return 99;
   if (/decrypt/i.test(s)) return 92;
   if (/download/i.test(s)) return 55;
@@ -3127,7 +3148,7 @@ async function decryptLocalIpa(chatId, ipaPath, label) {
     if (!result || !result.file || !fs.existsSync(result.file)) {
       throw new Error("Decrypt produced no IPA");
     }
-    await card.setStage("Uploading…", 74);
+    await card.setStage("Finishing…", 86);
     await deliverResult(chatId, result, { label, card });
   } catch (e) {
     await card.fail((e && e.message) || e);
@@ -3346,12 +3367,12 @@ async function decryptStoreUrl(chatId, link, vreq, opts = {}) {
       if (buildIcon) {
         buildIcon =
           rememberVersionIcon(adam, [vreq, versionLabel], buildIcon) || buildIcon;
-        await card.setIcon(buildIcon, "Uploading…", 74);
+        await card.setIcon(buildIcon, "Finishing…", 74);
       }
     } else {
       rememberVersionIcon(adam, [vreq, versionLabel], buildIcon);
     }
-    await card.setStage("Uploading…", 74);
+    await card.setStage("Finishing…", 86);
     await deliverResult(chatId, result, {
       storeUrl: link,
       versionHint: vreq,
@@ -3465,8 +3486,13 @@ async function deliverResult(chatId, result, opts = {}) {
       }
     }
   }
+  const useHttps = preferHttpsIpaDelivery(bytes);
   if (iconPath && card && typeof card.setIcon === "function") {
-    await card.setIcon(iconPath, "Uploading…", 92);
+    await card.setIcon(
+      iconPath,
+      useHttps ? "Publishing…" : "Uploading…",
+      useHttps ? 94 : 92
+    );
   }
 
   if (adam) {
@@ -3486,14 +3512,12 @@ async function deliverResult(chatId, result, opts = {}) {
     console.log("[cache] stored disk-ready", adam, version || "latest", keep);
   }
 
-  if (card) await card.setStage("Uploading…", 92);
-  if (card && typeof card.flush === "function") {
-    await card.flush(100).catch(() => {});
-  }
-
-  // Can't upload through Telegram (cloud Bot ~50 MB / Premium 4 GB) → HTTPS download.
-  // Skips broken Premium-session login entirely when MAC_PUBLIC_BASE / api tunnel is up.
-  if (needsHttpsIpaLink(bytes)) {
+  // Website host (fastdecrypt.bot /d/…) — not a Telegram upload.
+  if (useHttps) {
+    if (card) await card.setStage("Publishing…", 96);
+    if (card && typeof card.flush === "function") {
+      await card.flush(100).catch(() => {});
+    }
     const linkSent = await deliverOversizedViaLink(chatId, {
       diskPath: keep,
       fileName,
@@ -3501,7 +3525,7 @@ async function deliverResult(chatId, result, opts = {}) {
       name,
       bytes,
       storeUrl,
-    }, { card });
+    }, { card, preferHttps: true });
     if (!linkSent || !linkSent.ok) {
       const why = (linkSent && linkSent.description) || "download link failed";
       if (card) await card.fail(why);
@@ -3509,13 +3533,18 @@ async function deliverResult(chatId, result, opts = {}) {
         await tgApi("sendMessage", {
           chat_id: chatId,
           text:
-            `Decrypted (${mb} MB) but Telegram can't host this file and HTTPS link failed.\n` +
+            `Decrypted (${mb} MB) but HTTPS link failed.\n` +
             `${String(why).slice(0, 300)}\n\nSaved on Mac:\n\`${keep}\``,
           parse_mode: "Markdown",
         });
       }
     }
     return;
+  }
+
+  if (card) await card.setStage("Uploading…", 92);
+  if (card && typeof card.flush === "function") {
+    await card.flush(100).catch(() => {});
   }
 
   // Sharp card → IPA document (same message). Download-arrow thumb = native TG download.
@@ -3560,10 +3589,24 @@ function needsHttpsIpaLink(bytes) {
 }
 
 /**
- * IPA too large for Telegram upload → tokenized HTTPS download on the Mac API
- * (mac-ssh.sh api + MAC_PUBLIC_BASE=https://fastdecrypt.bot). No Premium session required.
+ * FastDecrypt hosts IPAs on fastdecrypt.bot by default (no Telegram file upload).
+ * Set MAC_TG_HTTPS_IPA=0 to restore Telegram document upload when size allows.
  */
-async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
+function preferHttpsIpaDelivery(bytes) {
+  const pub = publicDl.resolvePublicBase();
+  if (!pub) return needsHttpsIpaLink(bytes);
+  const flag = String(
+    process.env.MAC_TG_HTTPS_IPA || (isFastDecryptBrand() ? "1" : "0")
+  ).trim();
+  if (flag !== "0" && flag.toLowerCase() !== "false") return true;
+  return needsHttpsIpaLink(bytes);
+}
+
+/**
+ * Tokenized HTTPS download on the Mac API (fastdecrypt.bot /d/…).
+ * Used for oversized Telegram files and FastDecrypt’s preferred website host path.
+ */
+async function deliverOversizedViaLink(chatId, pending, { card, preferHttps = false } = {}) {
   const bytes = pending.bytes || 0;
   const mb = (bytes / (1024 * 1024)).toFixed(1);
   const fileName = displayIpaFileName(pending.fileName || "App.ipa");
@@ -3582,8 +3625,9 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
     };
   }
   const caption = pending.caption || "";
-  const reason =
-    bytes > TG_PREMIUM_DOC_MAX
+  const reason = preferHttps
+    ? "Download from FastDecrypt (HTTPS)."
+    : bytes > TG_PREMIUM_DOC_MAX
       ? "Too large for Telegram’s 4 GB file cap."
       : "Too large for Telegram Bot upload (~50 MB) — download from the Mac instead.";
   const text =
@@ -3597,7 +3641,7 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
   const openMarkup = resultKeyboard(url);
   const mid = card && card.messageId;
   if (mid) {
-    // Keep the sharp card photo; put the link as caption + Patch/VIP + Open in.
+    // Keep the sharp card photo (already flushed to 100%); put the link as caption.
     await tgApi("editMessageCaption", {
       chat_id: chatId,
       message_id: mid,
@@ -3606,9 +3650,8 @@ async function deliverOversizedViaLink(chatId, pending, { card } = {}) {
       reply_markup: openMarkup,
     }).catch(() => {});
     await ensureIpaButtonTabs(chatId, mid, { caption: text, replyMarkup: openMarkup });
-    if (card && typeof card.flush === "function") await card.flush(100).catch(() => {});
     if (card && typeof card.release === "function") await card.release();
-    console.log("[job] oversized IPA → download link on card", url);
+    console.log("[job] IPA → HTTPS download link on card", url);
     return { ok: true, url, inPlace: true };
   }
 
