@@ -4,13 +4,13 @@
 /**
  * Tetherless Mac backup decrypt HTTPS API (App → Decrypt site URL).
  *
- * Run via WebSSH (dedicated keychain) behind Cloudflare tunnel:
+ * Run via WebSSH (dedicated keychain); public host is fastdecrypt.bot:
  *   zsh server/mac-ssh.sh api
  *   source ~/.tetherless-mac.env
  *   node server/mac-https-api.js
- *   # other terminal: cloudflared tunnel --url http://127.0.0.1:8787
+ *   # proxy https://fastdecrypt.bot → http://127.0.0.1:8787
  *
- * Then in the iOS app: FairPlay Decrypt → Decrypt site URL → https://….trycloudflare.com/
+ * Then in the iOS app: FairPlay Decrypt → Decrypt site URL → https://fastdecrypt.bot/
  *
  * Auth: accepts the app's Bearer token when MAC_API_OPEN=1 (default on Mac backup).
  * Optional: MAC_API_BEARER=secret to require that exact token instead.
@@ -24,13 +24,15 @@ const { spawn, spawnSync } = require("child_process");
 const fairplayBackends = require("./fairplayBackends");
 const publicDl = require("./mac-tg-public-dl");
 const ipatoolExtras = require("./mac-ipatool-extras");
+const webDecrypt = require("./mac-web-decrypt");
 
 const PORT = Number(process.env.MAC_API_PORT || 8787);
 const OPEN = String(process.env.MAC_API_OPEN || "1") !== "0";
 const REQUIRE = String(process.env.MAC_API_BEARER || "").trim();
 const WORK = process.env.MAC_API_WORK_DIR || path.join(os.tmpdir(), "tetherless-mac-api");
-const BUILD = "tetherless-mac-https-api-3-tg-admin";
+const BUILD = "tetherless-mac-https-api-4-web-decrypt";
 const AUTH_PY = path.join(__dirname, "mac-tg-auth-web.py");
+const WEB_MAX_BYTES = webDecrypt.WEB_MAX_BYTES;
 
 function runTgAuth(cmd, bodyObj) {
   return new Promise((resolve) => {
@@ -301,16 +303,48 @@ async function runJob(j) {
     const keep = path.join(WORK, "out", `${up}.ipa`);
     fs.copyFileSync(result.file, keep);
     const st = fs.statSync(keep);
+    if (st.size > WEB_MAX_BYTES) {
+      try {
+        fs.rmSync(keep, { force: true });
+      } catch {
+        /* ignore */
+      }
+      const gb = (WEB_MAX_BYTES / (1024 * 1024 * 1024)).toFixed(0);
+      j.status = "error";
+      j.error = `IPA is larger than ${gb} GB — too big for web download.`;
+      j.msg = "Failed";
+      return;
+    }
     uploads.set(up, {
       file: keep,
       name: result.name || "App",
       expires: Date.now() + 60 * 60 * 1000,
     });
+    let downloadUrl = "";
+    let dlToken = "";
+    try {
+      const fileName = `${String(result.name || "App").replace(/[^\w.-]+/g, "_")}.ipa`;
+      const staged = publicDl.stageIpa(keep, { fileName, bytes: st.size });
+      dlToken = staged.token;
+      downloadUrl = publicDl.downloadUrlFor(staged.token) || "";
+    } catch (e) {
+      console.warn("[api] public stage failed:", (e && e.message) || e);
+    }
+    let openMenuUrl = "";
+    try {
+      const openIn = require("./mac-open-in");
+      openMenuUrl = (downloadUrl && openIn.menuUrl(downloadUrl)) || "";
+    } catch {
+      /* ignore */
+    }
     Object.assign(j, {
       status: "done",
       msg: "Done",
       progress: 100,
       up,
+      dl: dlToken,
+      downloadUrl,
+      openMenuUrl,
       name: result.name || "App",
       bid: result.bid || "",
       ver: j.vreq || "",
@@ -358,6 +392,17 @@ async function handle(req, res) {
     return res.end();
   }
 
+  // Browser → FastDecrypt web decrypt; API clients keep JSON on /health.
+  if (p === "/decrypt" && req.method === "GET") {
+    return webDecrypt.sendHtml(res, { build: BUILD });
+  }
+  if (p === "/" && req.method === "GET") {
+    const accept = String(req.headers.accept || "");
+    if (/\btext\/html\b/i.test(accept)) {
+      return webDecrypt.sendHtml(res, { build: BUILD });
+    }
+  }
+
   if (p === "/" || p === "/health" || p === "/api/mac-host") {
     const fp = fairplayBackends.backendStatus();
     const resHost = fairplayBackends.hostResources ? fairplayBackends.hostResources() : null;
@@ -381,6 +426,8 @@ async function handle(req, res) {
       model: !!(fp.enrollmentModel && fp.enrollmentModel.ready),
       publicBase: macApi || undefined,
       macApiUrl: macApi ? macApi + "/" : undefined,
+      webDecrypt: macApi ? `${macApi}/decrypt` : "/decrypt",
+      webMaxBytes: WEB_MAX_BYTES,
       tgLogin: macApi ? `${macApi}/tg-login` : "/tg-login",
       buildTgAdmin: BUILD,
       ipatoolSession: session,
@@ -425,7 +472,8 @@ async function handle(req, res) {
     return json(res, 200, await runTgAuth("logout", {}));
   }
 
-  // Open-in bridge: Discord Link buttons → custom schemes (TrollStore / Feather / …).
+  // Open-in bridge: Discord/Telegram → custom schemes (TrollStore / Feather / …).
+  // /open/menu?u=… = HTML dropdown; /open/<app>?u=… = single-app handoff.
   const openMatch = /^\/open\/([a-z0-9-]+)$/i.exec(p);
   if (openMatch && req.method === "GET") {
     let openIn;
@@ -434,12 +482,20 @@ async function handle(req, res) {
     } catch (e) {
       return fail(res, 500, "Open-in helper missing");
     }
-    const targetId = openMatch[1];
+    const targetId = openMatch[1].toLowerCase();
     const ipa = openIn.sanitizeIpaUrl(u.searchParams.get("u") || u.searchParams.get("url") || "");
-    if (!ipa || !openIn.targetById(targetId)) {
-      return fail(res, 400, "Need /open/<trollstore|feather|esign|flarestore|shrubsign>?u=https://…ipa");
+    if (!ipa) {
+      return fail(res, 400, "Need /open/menu?u=https://…ipa or /open/<app>?u=…");
     }
-    const html = openIn.bridgeHtml({ targetId, ipaHttps: ipa });
+    const html =
+      targetId === "menu"
+        ? openIn.menuHtml(ipa)
+        : openIn.targetById(targetId)
+          ? openIn.bridgeHtml({ targetId, ipaHttps: ipa })
+          : null;
+    if (!html) {
+      return fail(res, 400, "Need /open/<trollstore|feather|esign|flarestore|shrubsign|menu>?u=https://…ipa");
+    }
     res.writeHead(200, {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
@@ -495,6 +551,8 @@ async function handle(req, res) {
       used: 0,
       left: null,
       unlimited: true,
+      maxBytes: WEB_MAX_BYTES,
+      maxGb: WEB_MAX_BYTES / (1024 * 1024 * 1024),
     });
   }
 
@@ -652,7 +710,19 @@ async function handle(req, res) {
       progress: j.progress || 0,
     };
     if (j.status === "queued" || j.status === "running") out.queue = 0;
-    if (j.status === "done") Object.assign(out, { up: j.up, name: j.name, bid: j.bid, ver: j.ver, size: j.size, progress: 100 });
+    if (j.status === "done") {
+      Object.assign(out, {
+        up: j.up,
+        dl: j.dl || "",
+        downloadUrl: j.downloadUrl || "",
+        openMenuUrl: j.openMenuUrl || "",
+        name: j.name,
+        bid: j.bid,
+        ver: j.ver,
+        size: j.size,
+        progress: 100,
+      });
+    }
     return json(res, 200, out);
   }
 
@@ -689,11 +759,17 @@ const server = http.createServer((req, res) => {
   });
 });
 
+// Large IPA downloads (up to ~6 GB) need long-lived responses.
+server.requestTimeout = 0;
+server.headersTimeout = 65 * 1000;
+server.timeout = 0;
+
 server.listen(PORT, "127.0.0.1", () => {
   console.log(`Tetherless Mac HTTPS API on http://127.0.0.1:${PORT}`);
   console.log(`host=${fp.host} decrypt=${!!(fp.unfairplay && fp.unfairplay.ready)} model=${!!(fp.enrollmentModel && fp.enrollmentModel.ready)}`);
-  console.log("Expose with: cloudflared tunnel --url http://127.0.0.1:" + PORT);
-  console.log("Then set iOS Decrypt site URL to that https://….trycloudflare.com/");
+  console.log("Public base default: https://fastdecrypt.bot (proxy /d/ and /open/ here on :" + PORT + ")");
+  console.log(`Web decrypt: https://fastdecrypt.bot/decrypt · max ${(WEB_MAX_BYTES / (1024 ** 3)).toFixed(0)} GB`);
+  console.log("Optional: MAC_USE_CLOUDFLARED=1 for a temporary trycloudflare tunnel.");
   try {
     ipatoolExtras.startPrefetchLoop();
     const sess = ipatoolExtras.sessionWatch({ force: true });
