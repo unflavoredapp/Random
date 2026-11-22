@@ -1,7 +1,8 @@
 // Brand: FastDecrypt · https://fastdecrypt.bot
 "use strict";
 /**
- * Discord extras: App Store name search, version list, VIP / daily quotas, admin users.
+ * Discord extras: App Store name search, version list,
+ * timed VIP grants (countdown), free daily quota, admin users.
  */
 const fs = require("fs");
 const os = require("os");
@@ -10,6 +11,7 @@ const crypto = require("crypto");
 const { spawnSync } = require("child_process");
 const userLog = require("./mac-tg-user-log");
 
+/** Lifetime VIP (no expiry) — comma-separated Discord user ids. */
 const VIP_IDS = new Set(
   String(process.env.DISCORD_VIP_IDS || "")
     .split(",")
@@ -17,7 +19,7 @@ const VIP_IDS = new Set(
     .filter(Boolean)
 );
 const ADMIN_IDS = new Set(
-  String(process.env.DISCORD_ADMIN_IDS || process.env.DISCORD_VIP_IDS || "")
+  String(process.env.DISCORD_ADMIN_IDS || "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)
@@ -26,20 +28,20 @@ const FREE_DAILY = Math.max(
   1,
   Math.min(100, Number(process.env.DISCORD_FREE_DAILY || 5) || 5)
 );
-const VIP_DAILY = Math.max(
-  FREE_DAILY,
-  Math.min(500, Number(process.env.DISCORD_VIP_DAILY || 100) || 100)
-);
+/** @deprecated daily VIP quota removed — timed VIP is unlimited while active. */
+const VIP_DAILY = 0;
 const VIP_URL = String(
   process.env.FASTDECRYPT_VIP_URL ||
     process.env.DISCORD_VIP_URL ||
     "https://fastdecrypt.bot/vip"
 ).trim();
 
-const QUOTA_PATH = path.join(
-  process.env.MAC_TG_USER_LOG_DIR || path.join(os.homedir(), "tetherless-user-log"),
-  "discord-quota.json"
-);
+const VIP_DAY_CHOICES = [7, 30, 90, 180, 365];
+
+const LOG_DIR =
+  process.env.MAC_TG_USER_LOG_DIR || path.join(os.homedir(), "tetherless-user-log");
+const QUOTA_PATH = path.join(LOG_DIR, "discord-quota.json");
+const VIP_GRANTS_PATH = path.join(LOG_DIR, "discord-vip-grants.json");
 
 const SEARCH_COUNTRIES = String(
   process.env.MAC_TG_SEARCH_COUNTRIES ||
@@ -54,14 +56,6 @@ const SEARCH_COUNTRIES = String(
 const pending = new Map();
 const PICK_TTL_MS = 15 * 60 * 1000;
 
-function isVip(userId) {
-  return VIP_IDS.has(String(userId || ""));
-}
-
-function isAdmin(userId) {
-  return ADMIN_IDS.has(String(userId || "")) || isVip(userId);
-}
-
 function dayKey(ms = Date.now()) {
   const d = new Date(ms);
   return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(
@@ -69,51 +63,188 @@ function dayKey(ms = Date.now()) {
   ).padStart(2, "0")}`;
 }
 
-function loadQuota() {
+function loadJson(fp, fallback) {
   try {
-    return JSON.parse(fs.readFileSync(QUOTA_PATH, "utf8"));
+    return JSON.parse(fs.readFileSync(fp, "utf8"));
   } catch {
-    return {};
+    return fallback;
   }
 }
 
-function saveQuota(db) {
-  fs.mkdirSync(path.dirname(QUOTA_PATH), { recursive: true });
-  const tmp = QUOTA_PATH + ".tmp";
+function saveJson(fp, db) {
+  fs.mkdirSync(path.dirname(fp), { recursive: true });
+  const tmp = fp + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(db, null, 2));
-  fs.renameSync(tmp, QUOTA_PATH);
+  fs.renameSync(tmp, fp);
+}
+
+function loadQuota() {
+  return loadJson(QUOTA_PATH, {});
+}
+
+function saveQuota(db) {
+  saveJson(QUOTA_PATH, db);
+}
+
+function loadVipGrants() {
+  return loadJson(VIP_GRANTS_PATH, {});
+}
+
+function saveVipGrants(db) {
+  saveJson(VIP_GRANTS_PATH, db);
+}
+
+function formatCountdown(ms) {
+  const n = Math.max(0, Number(ms) || 0);
+  if (n <= 0) return "expired";
+  const sec = Math.floor(n / 1000);
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d >= 2) return `${d}d ${h}h`;
+  if (d === 1) return `1d ${h}h`;
+  if (h >= 1) return `${h}h ${m}m`;
+  return `${Math.max(1, m)}m`;
+}
+
+function vipGrant(userId) {
+  const id = String(userId || "");
+  if (!id) return null;
+  if (VIP_IDS.has(id)) {
+    return { permanent: true, expiresAt: null, days: null, source: "env" };
+  }
+  const db = loadVipGrants();
+  const row = db[id];
+  if (!row || !row.expiresAt) return null;
+  if (Number(row.expiresAt) <= Date.now()) {
+    delete db[id];
+    saveVipGrants(db);
+    return null;
+  }
+  return {
+    permanent: false,
+    expiresAt: Number(row.expiresAt),
+    days: Number(row.days) || null,
+    grantedBy: row.grantedBy || "",
+    grantedAt: Number(row.grantedAt) || 0,
+    source: "grant",
+  };
+}
+
+function isVip(userId) {
+  return !!vipGrant(userId);
+}
+
+function isAdmin(userId) {
+  const id = String(userId || "");
+  if (ADMIN_IDS.has(id)) return true;
+  // Bootstrap: if no admins configured, lifetime VIPs can admin.
+  if (ADMIN_IDS.size === 0 && VIP_IDS.has(id)) return true;
+  return false;
+}
+
+/**
+ * Grant timed VIP. Extends from now (or stacks from current expiry if still active).
+ * @returns {{ ok: true, expiresAt: number, days: number, stacked: boolean } | { ok: false, error: string }}
+ */
+function grantVip(userId, days, grantedBy = "") {
+  const id = String(userId || "").trim();
+  const d = Math.round(Number(days));
+  if (!/^\d{5,25}$/.test(id)) return { ok: false, error: "Bad Discord user id." };
+  if (!Number.isFinite(d) || d < 1 || d > 3650) {
+    return { ok: false, error: "Days must be 1–3650." };
+  }
+  if (VIP_IDS.has(id)) {
+    return { ok: false, error: "That user already has lifetime VIP (DISCORD_VIP_IDS)." };
+  }
+  const db = loadVipGrants();
+  const prev = db[id];
+  const now = Date.now();
+  const base =
+    prev && Number(prev.expiresAt) > now ? Number(prev.expiresAt) : now;
+  const stacked = base > now;
+  const expiresAt = base + d * 86400000;
+  db[id] = {
+    expiresAt,
+    days: d,
+    grantedBy: String(grantedBy || "").slice(0, 40),
+    grantedAt: now,
+  };
+  // Drop expired rows
+  for (const [k, v] of Object.entries(db)) {
+    if (!v || Number(v.expiresAt) <= now) delete db[k];
+  }
+  saveVipGrants(db);
+  return { ok: true, expiresAt, days: d, stacked, left: formatCountdown(expiresAt - now) };
+}
+
+function revokeVip(userId) {
+  const id = String(userId || "").trim();
+  const db = loadVipGrants();
+  if (!db[id]) return { ok: false, error: "No timed VIP grant for that user." };
+  delete db[id];
+  saveVipGrants(db);
+  return { ok: true };
+}
+
+function quotaLabel(st) {
+  if (!st) return "";
+  if (st.vip) {
+    if (st.permanent) return "VIP · lifetime · unlimited decrypts";
+    return `VIP · ${st.left || "active"} left · unlimited decrypts`;
+  }
+  return `Free · ${st.remaining}/${st.limit} decrypts left today`;
 }
 
 function quotaStatus(userId) {
-  const vip = isVip(userId);
-  const limit = vip ? VIP_DAILY : FREE_DAILY;
+  const grant = vipGrant(userId);
   const day = dayKey();
+  if (grant) {
+    const leftMs = grant.permanent ? null : Math.max(0, grant.expiresAt - Date.now());
+    return {
+      vip: true,
+      permanent: !!grant.permanent,
+      unlimited: true,
+      limit: null,
+      used: 0,
+      remaining: null,
+      day,
+      expiresAt: grant.expiresAt || null,
+      leftMs,
+      left: grant.permanent ? "lifetime" : formatCountdown(leftMs),
+      expiresIso: grant.expiresAt ? new Date(grant.expiresAt).toISOString() : null,
+    };
+  }
   const db = loadQuota();
   const used = Number((db[day] && db[day][String(userId)]) || 0);
   return {
-    vip,
-    limit,
+    vip: false,
+    permanent: false,
+    unlimited: false,
+    limit: FREE_DAILY,
     used,
-    remaining: Math.max(0, limit - used),
+    remaining: Math.max(0, FREE_DAILY - used),
     day,
+    expiresAt: null,
+    leftMs: null,
+    left: null,
+    expiresIso: null,
   };
 }
 
 /** @returns {{ ok: true } | { ok: false, error: string }} */
 function consumeQuota(userId) {
   const st = quotaStatus(userId);
+  if (st.vip) return { ok: true, ...st };
   if (st.used >= st.limit) {
     return {
       ok: false,
-      error: st.vip
-        ? `Daily VIP limit reached (${st.limit}). Try again tomorrow.`
-        : `Free limit: ${st.limit}/day. Get VIP: ${VIP_URL}`,
+      error: `Free limit: ${st.limit}/day. Get VIP: ${VIP_URL}`,
     };
   }
   const db = loadQuota();
   if (!db[st.day]) db[st.day] = {};
   db[st.day][String(userId)] = st.used + 1;
-  // Drop older days
   for (const k of Object.keys(db)) {
     if (k !== st.day && k < dayKey(Date.now() - 3 * 86400000)) delete db[k];
   }
@@ -313,8 +444,15 @@ module.exports = {
   VIP_URL,
   FREE_DAILY,
   VIP_DAILY,
+  VIP_DAY_CHOICES,
+  VIP_GRANTS_PATH,
   isVip,
   isAdmin,
+  vipGrant,
+  grantVip,
+  revokeVip,
+  formatCountdown,
+  quotaLabel,
   quotaStatus,
   consumeQuota,
   searchAppsByName,
