@@ -283,13 +283,29 @@ enum DecryptCompanionRuntime {
                 || msg.localizedCaseInsensitiveContains("serial")
                 || msg.localizedCaseInsensitiveContains("partial")
                 || msg.localizedCaseInsensitiveContains("bounce")
+                || msg.localizedCaseInsensitiveContains("stream")
+                || msg.localizedCaseInsensitiveContains("lean")
+                || msg.localizedCaseInsensitiveContains("enomem")
             if keep {
                 progress?(msg)
                 Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
             }
         }
         func runDecrypt(from root: URL) throws -> FairPlayDecryptReport {
-            try FairPlayDecrypt.decryptMachOs(
+            // Drop any deferred EncryptedSource unpack before mremap — holding two
+            // full IPA trees is what Jetsams ~20 MB mains even with lean buffers.
+            let usingLive = liveURL.map {
+                root.resolvingSymlinksInPath().standardizedFileURL
+                    == $0.resolvingSymlinksInPath().standardizedFileURL
+            } ?? false
+            if usingLive, let unpack = ipaUnpackRoot {
+                try? fm.removeItem(at: unpack)
+                ipaUnpackRoot = nil
+                log("Freed EncryptedSource unpack before FairPlay remap…")
+            }
+            FairPlayJetsam.purgeTransientMemory()
+            log("Streaming FairPlay page capture (lean / file-backed)…")
+            return try FairPlayDecrypt.decryptMachOs(
                 readingFrom: root,
                 writingTo: destApp,
                 quietConsole: !verbose,
