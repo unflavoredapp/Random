@@ -161,10 +161,18 @@ cmd_start() {
   nohup node server/mac-tg-bot.js >>"$BOT_LOG" 2>&1 &
   echo $! >"$BOT_PID"
   sleep 1
+  # Public HTTPS for big-IPA /d/ links + /tg-login web admin (decrypt.team-style).
+  if ! alive_pid "$API_PID" || ! alive_pid "$CF_PID"; then
+    echo "Starting Mac API + Cloudflare for /tg-login and IPA downloads…"
+    cmd_api
+  fi
   if alive_pid "$BOT_PID"; then
     echo "Bot started (pid $(cat "$BOT_PID")) · workers=${MAC_TG_WORKERS:-3}"
     echo "Logs: tail -f $BOT_LOG"
     echo "Stop: zsh $REPO/server/mac-ssh.sh stop"
+    if [[ -n "${MAC_PUBLIC_BASE:-}" ]]; then
+      echo "Telegram web login: ${MAC_PUBLIC_BASE%/}/tg-login"
+    fi
     # Confirm the running tree has the circle banner (not the old pill card).
     grep -q 'homescreenOverlaySvg' "$REPO/server/mac-tg-progress-banner.js" 2>/dev/null \
       && echo "Banner: homescreen-circle OK" \
@@ -279,17 +287,17 @@ cmd_session() {
     echo "Phone + login-code mode (flaky — prefer HTTPS /tg-login)."
   else
     # Always restart API so /tg-login from latest pull is loaded (old process → Not found).
-    echo "Restarting public Mac API (Cloudflare HTTPS) for /tg-login…"
+    echo "Restarting public Mac API (Cloudflare HTTPS) for web Telegram login…"
     cmd_api
     if [[ -n "${MAC_PUBLIC_BASE:-}" ]]; then
       echo
-      echo ">>> On iPhone Safari open EXACTLY:"
+      echo ">>> On iPhone Safari open (decrypt.team-style login):"
       echo ">>>   ${MAC_PUBLIC_BASE%/}/tg-login"
       echo
     else
       echo "WARN: tunnel URL missing — check: tail -f $CF_LOG"
     fi
-    echo "Phone-code instead: zsh $REPO/server/mac-ssh.sh session --code"
+    echo "CLI phone-code instead: zsh $REPO/server/mac-ssh.sh session --code"
   fi
   if [[ -z "${TELEGRAM_API_ID:-}" || -z "${TELEGRAM_API_HASH:-}" ]]; then
     echo "Tip: set TELEGRAM_API_ID / TELEGRAM_API_HASH in ~/.tetherless-mac.env first."
