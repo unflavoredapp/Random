@@ -27,6 +27,7 @@ const ipaCache = require("./mac-tg-ipa-cache");
 const publicDl = require("./mac-tg-public-dl");
 const { renderProgressBanner } = require("./mac-tg-progress-banner");
 const userLog = require("./mac-tg-user-log");
+const feat = require("./mac-discord-features");
 
 const TOKEN = String(process.env.DISCORD_BOT_TOKEN || "").trim();
 const BOT_NAME = String(process.env.DISCORD_BOT_NAME || "FastDecrypt").trim() || "FastDecrypt";
@@ -66,6 +67,8 @@ const {
   ButtonBuilder,
   ButtonStyle,
   SlashCommandBuilder,
+  StringSelectMenuBuilder,
+  StringSelectMenuOptionBuilder,
   REST,
   Routes,
   ActivityType,
@@ -90,9 +93,11 @@ const client = new Client({
 let activeWorkers = 0;
 const waiters = [];
 
-function queueJob(fn) {
+function queueJob(fn, { priority = false } = {}) {
   return new Promise((resolve, reject) => {
-    waiters.push({ fn, resolve, reject });
+    const job = { fn, resolve, reject };
+    if (priority) waiters.unshift(job);
+    else waiters.push(job);
     pump();
   });
 }
@@ -255,7 +260,8 @@ function statusEmbed() {
     );
 }
 
-function helpEmbed() {
+function helpEmbed(userId) {
+  const q = feat.quotaStatus(userId);
   return new EmbedBuilder()
     .setColor(0xff9a1f)
     .setTitle(BOT_NAME)
@@ -263,9 +269,15 @@ function helpEmbed() {
       [
         `Decrypt App Store IPAs.`,
         ``,
-        `• \`/decrypt url:<App Store link>\``,
+        `• \`/decrypt url:<link>\` or \`name:Vinted\``,
+        `• \`/search query:<app name>\` — pick from results`,
+        `• \`/vip\` — status & upgrade`,
         `• \`/status\``,
-        WANT_MESSAGE_CONTENT ? `• Or paste an App Store link` : "",
+        WANT_MESSAGE_CONTENT ? `• Or paste a link / type an app name` : "",
+        ``,
+        q.vip
+          ? `VIP · ${q.remaining}/${q.limit} decrypts left today`
+          : `Free · ${q.remaining}/${q.limit} decrypts left today`,
         SITE,
       ]
         .filter(Boolean)
@@ -274,7 +286,10 @@ function helpEmbed() {
 }
 
 /** Telegram-style result: sharp card image + app name title (no URL dump). */
-async function buildDeliveryPayload(result, { storeUrl, name, iconPath, version: verHint }) {
+async function buildDeliveryPayload(
+  result,
+  { storeUrl, name, iconPath, version: verHint, cached = false }
+) {
   const file = result && result.file;
   if (!file || !fs.existsSync(file)) throw new Error("Decrypt produced no IPA");
   const st = fs.statSync(file);
@@ -305,21 +320,23 @@ async function buildDeliveryPayload(result, { storeUrl, name, iconPath, version:
     console.warn("[discord] cache put:", (e && e.message) || e);
   }
 
+  const doneStage = cached ? `instant · cached\n${DONE_TAGLINE}` : DONE_TAGLINE;
   const bannerPath = await renderSharpCard({
     name: appName,
     version,
     iconPath,
-    stage: DONE_TAGLINE,
+    stage: doneStage,
     pct: 100,
     done: true,
   });
 
   const files = [];
   const embed = new EmbedBuilder()
-    .setColor(0xff9a1f)
+    .setColor(cached ? 0x2fd16b : 0xff9a1f)
     .setTitle(appName);
 
   const lines = [];
+  if (cached) lines.push("instant · cached");
   if (version) lines.push(`v${version}`);
   lines.push(`${mb} MB`);
   if (bid) lines.push(bid);
@@ -476,7 +493,7 @@ function createPctBuffer({ paint, intervalMs = 500 }) {
   };
 }
 
-async function decryptStoreUrl(link, progressMsg) {
+async function decryptStoreUrl(link, progressMsg, { vreq = "" } = {}) {
   if (typeof fairplayBackends.unlockKeychain === "function") {
     fairplayBackends.unlockKeychain();
   }
@@ -487,18 +504,19 @@ async function decryptStoreUrl(link, progressMsg) {
 
   const lookup = lookupStoreApp(link);
   const appName = lookup.name || "App";
-  const ver = lookup.version || "";
+  const verHint = String(vreq || "").trim();
+  const ver = verHint || lookup.version || "";
   const iconPath = lookup.iconPath || "";
 
   const buf = createPctBuffer({
-    paint: (p) => sayProgress(progressMsg, appName, p, { iconPath, version: ver }),
+    paint: (p) => sayProgress(progressMsg, appName, p, { iconPath, version: lookup.version || ver }),
     intervalMs: 500,
   });
 
   try {
     buf.setTarget(3, 10);
 
-    const entry = ipaCache.getByStoreUrl(link, "");
+    const entry = ipaCache.getByStoreUrl(link, verHint);
     if (entry && entry.diskPath && fs.existsSync(entry.diskPath)) {
       buf.setTarget(70, 95);
       await buf.flush(100);
@@ -516,6 +534,7 @@ async function decryptStoreUrl(link, progressMsg) {
           name: entry.name || appName,
           iconPath,
           version: entry.version || ver,
+          cached: true,
         }
       );
     }
@@ -530,7 +549,7 @@ async function decryptStoreUrl(link, progressMsg) {
         const mapped = Math.max(12, Math.min(55, Math.round(Number(pct) || 12)));
         buf.setTarget(mapped, 55);
       },
-      vreq: "",
+      vreq: verHint,
     });
     buf.setTarget(55, 55);
 
@@ -543,7 +562,7 @@ async function decryptStoreUrl(link, progressMsg) {
         const mapped = Math.max(60, Math.min(92, Math.round(Number(pct) || 60)));
         buf.setTarget(mapped, 92);
       },
-      vreq: "",
+      vreq: verHint,
     });
     buf.setTarget(92, 97);
     await buf.flush(100);
@@ -554,6 +573,7 @@ async function decryptStoreUrl(link, progressMsg) {
       name: meta.name || meta.title || appName,
       iconPath,
       version: meta.version || meta.bundleVersion || ver,
+      cached: false,
     });
   } catch (e) {
     buf.stop();
@@ -561,12 +581,136 @@ async function decryptStoreUrl(link, progressMsg) {
   }
 }
 
-async function runDecryptFor(channel, link, notifier) {
+function embedTitle(payload) {
+  try {
+    const e0 = payload && payload.embeds && payload.embeds[0];
+    if (!e0) return "ok";
+    if (e0.data && e0.data.title) return e0.data.title;
+    if (e0.title) return e0.title;
+  } catch {
+    /* ignore */
+  }
+  return "ok";
+}
+
+/** Run decrypt after quota check; VIP gets priority queue. */
+async function runDecryptJob(userId, link, progressMsg, { vreq = "" } = {}) {
+  const gate = feat.consumeQuota(userId);
+  if (!gate.ok) throw new Error(gate.error);
+  const priority = feat.isVip(userId);
+  return queueJob(() => decryptStoreUrl(link, progressMsg, { vreq }), { priority });
+}
+
+async function offerVersionPicker(interactionOrMsg, link, userId, { reply }) {
+  const listed = await feat.listVersionsForUrl(link);
+  const vip = feat.isVip(userId);
+  const choices = feat.versionChoices(listed, { vip, max: 20 });
+  const title = String((listed && listed.title) || "App").slice(0, 80) || "App";
+
+  if (!choices.length) {
+    return { mode: "decrypt", link, vreq: "" };
+  }
+  if (choices.length === 1 && !vip) {
+    return { mode: "decrypt", link, vreq: choices[0].vreq || "" };
+  }
+
+  const token = feat.putPending({
+    type: "version",
+    userId: String(userId),
+    link,
+    items: choices,
+  });
+  const menu = new StringSelectMenuBuilder()
+    .setCustomId(`ver:${token}`)
+    .setPlaceholder(vip ? "Pick a version…" : "Latest only (VIP unlocks history)")
+    .addOptions(
+      choices.slice(0, 25).map(
+        (c, i) =>
+          new StringSelectMenuOptionBuilder()
+            .setLabel(c.label.slice(0, 100))
+            .setValue(String(i))
+            .setDescription(
+              (c.current ? "Current App Store build" : c.ext ? `id ${c.ext}` : "Build").slice(
+                0,
+                100
+              )
+            )
+      )
+    );
+  const row = new ActionRowBuilder().addComponents(menu);
+  const embed = new EmbedBuilder()
+    .setColor(0xff9a1f)
+    .setTitle(title)
+    .setDescription(
+      vip
+        ? "Choose a version to decrypt."
+        : `Latest only on free tier. Older builds → VIP · ${feat.VIP_URL}`
+    );
+  await reply({ embeds: [embed], components: [row] });
+  return { mode: "picker" };
+}
+
+function appPickComponents(token, items) {
+  const rows = [];
+  let row = new ActionRowBuilder();
+  items.slice(0, 8).forEach((it, i) => {
+    if (row.components.length >= 5) {
+      rows.push(row);
+      row = new ActionRowBuilder();
+    }
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`app:${token}:${i}`)
+        .setStyle(ButtonStyle.Secondary)
+        .setLabel(`${i + 1}. ${it.name}`.slice(0, 80))
+    );
+  });
+  if (row.components.length) rows.push(row);
+  return rows;
+}
+
+async function offerAppSearch(reply, userId, query) {
+  const items = feat.searchAppsByName(query, { limit: 8 });
+  if (!items.length) {
+    await reply({
+      embeds: [
+        new EmbedBuilder()
+          .setColor(0xff9a1f)
+          .setTitle("No apps found")
+          .setDescription(`Nothing matched **${query.slice(0, 60)}**. Try another name.`),
+      ],
+      components: [],
+    });
+    return;
+  }
+  const token = feat.putPending({
+    type: "app",
+    userId: String(userId),
+    items,
+  });
+  const lines = items
+    .map((it, i) => {
+      const ver = it.version ? ` · v${it.version}` : "";
+      return `**${i + 1}.** ${it.name}${ver}`;
+    })
+    .join("\n");
+  await reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xff9a1f)
+        .setTitle(`Search: ${query.slice(0, 40)}`)
+        .setDescription(lines),
+    ],
+    components: appPickComponents(token, items),
+  });
+}
+
+async function runDecryptFor(channel, link, notifier, { userId, vreq = "" } = {}) {
   const progressMsg = await notifier({
     embeds: [progressEmbed("Decrypting…", "Starting…", 0)],
   });
   try {
-    const payload = await queueJob(async () => decryptStoreUrl(link, progressMsg));
+    const payload = await runDecryptJob(userId, link, progressMsg, { vreq });
     await progressMsg
       .edit({
         content: null,
@@ -601,11 +745,32 @@ async function registerCommands(appId) {
       .setName("status")
       .setDescription("Mac decrypt status"),
     new SlashCommandBuilder()
+      .setName("vip")
+      .setDescription("VIP status and upgrade link"),
+    new SlashCommandBuilder()
+      .setName("search")
+      .setDescription("Search App Store by name")
+      .addStringOption((o) =>
+        o.setName("query").setDescription("App name e.g. Vinted").setRequired(true)
+      ),
+    new SlashCommandBuilder()
       .setName("decrypt")
       .setDescription("Decrypt an App Store IPA")
       .addStringOption((o) =>
-        o.setName("url").setDescription("App Store link").setRequired(true)
+        o.setName("url").setDescription("App Store link").setRequired(false)
+      )
+      .addStringOption((o) =>
+        o.setName("name").setDescription("App name e.g. Vinted").setRequired(false)
+      )
+      .addStringOption((o) =>
+        o
+          .setName("version")
+          .setDescription("Version (VIP for older builds)")
+          .setRequired(false)
       ),
+    new SlashCommandBuilder()
+      .setName("users")
+      .setDescription("Admin: Discord usage (last 24h)"),
   ].map((c) => c.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(TOKEN);
@@ -642,78 +807,300 @@ client.once("ready", async () => {
   );
 });
 
-client.on("interactionCreate", async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  const name = interaction.commandName;
-  userLog.logDiscord({
-    interaction,
-    kind: "cmd",
-    detail: `/${name}`,
-  });
+async function startDecryptReply(interaction, link, vreq) {
+  const progressMsg = {
+    edit: (payload) => interaction.editReply(payload),
+  };
   try {
-    if (name === "start") {
-      await interaction.reply({ embeds: [helpEmbed()] });
-      return;
-    }
-    if (name === "status") {
-      await interaction.reply({ embeds: [statusEmbed()] });
-      return;
-    }
-    if (name === "decrypt") {
-      const url = String(interaction.options.getString("url") || "").trim();
-      if (!isStoreUrl(url)) {
-        userLog.logDiscord({
-          interaction,
-          kind: "decrypt_bad_url",
-          detail: url.slice(0, 80),
+    const payload = await runDecryptJob(interaction.user.id, link, progressMsg, {
+      vreq: vreq || "",
+    });
+    userLog.logDiscord({
+      interaction,
+      kind: "decrypt_ok",
+      detail: String(embedTitle(payload)).slice(0, 80),
+    });
+    await interaction.editReply({
+      content: null,
+      embeds: payload.embeds,
+      files: payload.files,
+      components: payload.components || [],
+    });
+  } catch (e) {
+    userLog.logDiscord({
+      interaction,
+      kind: "decrypt_fail",
+      detail: friendlyError(e).slice(0, 120),
+    });
+    await interaction.editReply({
+      content: null,
+      embeds: [progressEmbed("Failed", friendlyError(e), 0)],
+      components: [],
+    });
+  }
+}
+
+client.on("interactionCreate", async (interaction) => {
+  try {
+    // ── App pick buttons ──────────────────────────────────────────
+    if (interaction.isButton()) {
+      const m = String(interaction.customId || "").match(/^app:([a-f0-9]+):(\d+)$/i);
+      if (!m) return;
+      const pending = feat.getPending(m[1]);
+      if (!pending || pending.type !== "app") {
+        await interaction.reply({ content: "That search expired — run /search again.", ephemeral: true });
+        return;
+      }
+      if (String(pending.userId) !== String(interaction.user.id)) {
+        await interaction.reply({ content: "That’s someone else’s search.", ephemeral: true });
+        return;
+      }
+      const item = pending.items[Number(m[2])];
+      if (!item || !item.url) {
+        await interaction.reply({ content: "Invalid pick.", ephemeral: true });
+        return;
+      }
+      feat.takePending(m[1]);
+      userLog.logDiscord({
+        interaction,
+        kind: "app_pick",
+        detail: String(item.name || item.url).slice(0, 80),
+      });
+      await interaction.deferUpdate();
+      const pick = await offerVersionPicker(interaction, item.url, interaction.user.id, {
+        reply: (p) => interaction.editReply(p),
+      });
+      if (pick.mode === "decrypt") {
+        await interaction.editReply({
+          content: null,
+          embeds: [progressEmbed(item.name || "Decrypting…", "Starting…", 0)],
+          components: [],
         });
+        await startDecryptReply(interaction, pick.link, pick.vreq);
+      }
+      return;
+    }
+
+    // ── Version select ────────────────────────────────────────────
+    if (interaction.isStringSelectMenu()) {
+      const m = String(interaction.customId || "").match(/^ver:([a-f0-9]+)$/i);
+      if (!m) return;
+      const pending = feat.takePending(m[1]);
+      if (!pending || pending.type !== "version") {
+        await interaction.reply({ content: "That version list expired — decrypt again.", ephemeral: true });
+        return;
+      }
+      if (String(pending.userId) !== String(interaction.user.id)) {
+        await interaction.reply({ content: "That’s someone else’s picker.", ephemeral: true });
+        return;
+      }
+      const idx = Number(interaction.values[0]);
+      const choice = pending.items[idx];
+      if (!choice) {
+        await interaction.reply({ content: "Invalid version.", ephemeral: true });
+        return;
+      }
+      if (!feat.isVip(interaction.user.id) && !choice.current && idx > 0) {
         await interaction.reply({
-          content: "Paste a full App Store link (`https://apps.apple.com/...`).",
+          content: `Older versions need VIP · ${feat.VIP_URL}`,
           ephemeral: true,
         });
         return;
       }
       userLog.logDiscord({
         interaction,
-        kind: "decrypt",
-        detail: url.slice(0, 120),
+        kind: "ver_pick",
+        detail: String(choice.label || choice.vreq).slice(0, 80),
       });
+      await interaction.deferUpdate();
+      await interaction.editReply({
+        content: null,
+        embeds: [progressEmbed("Decrypting…", "Starting…", 0)],
+        components: [],
+      });
+      await startDecryptReply(interaction, pending.link, choice.vreq || "");
+      return;
+    }
+
+    if (!interaction.isChatInputCommand()) return;
+    const name = interaction.commandName;
+    userLog.logDiscord({
+      interaction,
+      kind: "cmd",
+      detail: `/${name}`,
+    });
+
+    if (name === "start") {
+      await interaction.reply({ embeds: [helpEmbed(interaction.user.id)] });
+      return;
+    }
+    if (name === "status") {
+      const q = feat.quotaStatus(interaction.user.id);
+      const base = statusEmbed();
+      const prev =
+        (base.data && base.data.description) ||
+        "FastDecrypt status";
+      await interaction.reply({
+        embeds: [
+          base.setDescription(
+            `${prev}\n**Tier:** ${q.vip ? "VIP" : "Free"} · ${q.remaining}/${q.limit} today`
+          ),
+        ],
+      });
+      return;
+    }
+    if (name === "vip") {
+      const q = feat.quotaStatus(interaction.user.id);
+      await interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xff9a1f)
+            .setTitle("VIP")
+            .setDescription(
+              [
+                q.vip ? "You have VIP." : "You’re on the free tier.",
+                `Decrypts today: **${q.remaining}/${q.limit}**`,
+                q.vip
+                  ? "Older versions + priority queue unlocked."
+                  : `Upgrade for older builds + higher limits:\n${feat.VIP_URL}`,
+              ].join("\n")
+            ),
+        ],
+        components: [
+          new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setStyle(ButtonStyle.Link)
+              .setLabel(q.vip ? "Website" : "Get VIP")
+              .setURL(feat.VIP_URL)
+          ),
+        ],
+      });
+      return;
+    }
+    if (name === "users") {
+      if (!feat.isAdmin(interaction.user.id)) {
+        await interaction.reply({ content: "Admin only.", ephemeral: true });
+        return;
+      }
+      const summary = feat.adminUsersSummary({ hours: 24, limit: 15 });
+      const lines = summary.top.length
+        ? summary.top.map((u, i) => {
+            const who = u.username ? `@${u.username}` : u.name || u.id;
+            return `**${i + 1}.** ${who} · \`${u.id}\` · ${u.n}`;
+          })
+        : ["_No Discord decrypts in the last 24h._"];
+      await interaction.reply({
+        embeds: [
+          new EmbedBuilder()
+            .setColor(0xff9a1f)
+            .setTitle("Discord users · last 24h")
+            .setDescription(
+              [`Total tracked: **${summary.totalDiscordUsers}**`, "", ...lines].join("\n")
+            ),
+        ],
+        ephemeral: true,
+      });
+      return;
+    }
+    if (name === "search") {
+      const query = String(interaction.options.getString("query") || "").trim();
+      if (query.length < 2) {
+        await interaction.reply({ content: "Type at least 2 characters.", ephemeral: true });
+        return;
+      }
       await interaction.deferReply();
-      const progressMsg = {
-        edit: (payload) => interaction.editReply(payload),
-      };
-      try {
-        const payload = await queueJob(async () => decryptStoreUrl(url, progressMsg));
-        const title =
-          (payload.embeds &&
-            payload.embeds[0] &&
-            typeof payload.embeds[0].data?.title === "string" &&
-            payload.embeds[0].data.title) ||
-          (payload.embeds && payload.embeds[0] && payload.embeds[0].title) ||
-          "ok";
-        userLog.logDiscord({
-          interaction,
-          kind: "decrypt_ok",
-          detail: String(title).slice(0, 80),
+      await offerAppSearch((p) => interaction.editReply(p), interaction.user.id, query);
+      return;
+    }
+    if (name === "decrypt") {
+      const url = String(interaction.options.getString("url") || "").trim();
+      const appName = String(interaction.options.getString("name") || "").trim();
+      const version = String(interaction.options.getString("version") || "").trim();
+
+      if (url && isStoreUrl(url)) {
+        userLog.logDiscord({ interaction, kind: "decrypt", detail: url.slice(0, 120) });
+        await interaction.deferReply();
+        if (version && !feat.isVip(interaction.user.id)) {
+          // Free: ignore older version requests → latest
+          const pick = await offerVersionPicker(interaction, url, interaction.user.id, {
+            reply: (p) => interaction.editReply(p),
+          });
+          if (pick.mode === "picker") return;
+          await interaction.editReply({
+            embeds: [progressEmbed("Decrypting…", "Starting…", 0)],
+            components: [],
+          });
+          await startDecryptReply(interaction, pick.link, pick.vreq);
+          return;
+        }
+        if (version) {
+          await interaction.editReply({
+            embeds: [progressEmbed("Decrypting…", "Starting…", 0)],
+            components: [],
+          });
+          await startDecryptReply(interaction, url, version);
+          return;
+        }
+        const pick = await offerVersionPicker(interaction, url, interaction.user.id, {
+          reply: (p) => interaction.editReply(p),
         });
+        if (pick.mode === "picker") return;
         await interaction.editReply({
-          content: null,
-          embeds: payload.embeds,
-          files: payload.files,
-          components: payload.components || [],
-        });
-      } catch (e) {
-        userLog.logDiscord({
-          interaction,
-          kind: "decrypt_fail",
-          detail: friendlyError(e).slice(0, 120),
-        });
-        await interaction.editReply({
-          content: null,
-          embeds: [progressEmbed("Failed", friendlyError(e), 0)],
+          embeds: [progressEmbed("Decrypting…", "Starting…", 0)],
           components: [],
         });
+        await startDecryptReply(interaction, pick.link, pick.vreq);
+        return;
       }
+
+      if (appName) {
+        userLog.logDiscord({
+          interaction,
+          kind: "decrypt_name",
+          detail: `${appName}${version ? " " + version : ""}`.slice(0, 80),
+        });
+        await interaction.deferReply();
+        const items = feat.searchAppsByName(appName, { limit: 8 });
+        if (!items.length) {
+          await interaction.editReply({
+            embeds: [
+              new EmbedBuilder()
+                .setColor(0xff9a1f)
+                .setTitle("No apps found")
+                .setDescription(`Nothing matched **${appName.slice(0, 60)}**.`),
+            ],
+          });
+          return;
+        }
+        if (items.length === 1 || items[0].name.toLowerCase() === appName.toLowerCase()) {
+          const hit = items.find((it) => it.name.toLowerCase() === appName.toLowerCase()) || items[0];
+          if (version && feat.isVip(interaction.user.id)) {
+            await interaction.editReply({
+              embeds: [progressEmbed(hit.name, "Starting…", 0)],
+              components: [],
+            });
+            await startDecryptReply(interaction, hit.url, version);
+            return;
+          }
+          const pick = await offerVersionPicker(interaction, hit.url, interaction.user.id, {
+            reply: (p) => interaction.editReply(p),
+          });
+          if (pick.mode === "picker") return;
+          await interaction.editReply({
+            embeds: [progressEmbed(hit.name, "Starting…", 0)],
+            components: [],
+          });
+          await startDecryptReply(interaction, pick.link, pick.vreq);
+          return;
+        }
+        await offerAppSearch((p) => interaction.editReply(p), interaction.user.id, appName);
+        return;
+      }
+
+      await interaction.reply({
+        content: "Provide `url:` (App Store link) or `name:` (app name).",
+        ephemeral: true,
+      });
     }
   } catch (e) {
     console.warn("[discord] interaction:", (e && e.message) || e);
@@ -738,7 +1125,7 @@ client.on("messageCreate", async (message) => {
 
   if (/^\/?(start|help)\b/i.test(text)) {
     userLog.logDiscord({ message, kind: "cmd", detail: "/start" });
-    await message.reply({ embeds: [helpEmbed()] });
+    await message.reply({ embeds: [helpEmbed(message.author.id)] });
     return;
   }
   if (/^\/?status\b/i.test(text)) {
@@ -748,16 +1135,86 @@ client.on("messageCreate", async (message) => {
   }
 
   const m = text.match(/https:\/\/(?:apps|itunes)\.apple\.com\/[^\s>]+/i);
-  if (!m) return;
-  const link = m[0].replace(/[)>,.]+$/g, "");
+  if (m) {
+    const link = m[0].replace(/[)>,.]+$/g, "");
+    userLog.logDiscord({
+      message,
+      kind: "decrypt",
+      detail: link.slice(0, 120),
+    });
+    const progressMsg = await message.reply({
+      embeds: [progressEmbed("Decrypting…", "Starting…", 0)],
+    });
+    try {
+      const listed = await feat.listVersionsForUrl(link);
+      const choices = feat.versionChoices(listed, {
+        vip: feat.isVip(message.author.id),
+        max: 20,
+      });
+      if (choices.length > 1 && feat.isVip(message.author.id)) {
+        const token = feat.putPending({
+          type: "version",
+          userId: String(message.author.id),
+          link,
+          items: choices,
+        });
+        const menu = new StringSelectMenuBuilder()
+          .setCustomId(`ver:${token}`)
+          .setPlaceholder("Pick a version…")
+          .addOptions(
+            choices.slice(0, 25).map((c, i) =>
+              new StringSelectMenuOptionBuilder()
+                .setLabel(c.label.slice(0, 100))
+                .setValue(String(i))
+            )
+          );
+        await progressMsg.edit({
+          embeds: [
+            new EmbedBuilder()
+              .setColor(0xff9a1f)
+              .setTitle(String((listed && listed.title) || "App").slice(0, 80))
+              .setDescription("Choose a version to decrypt."),
+          ],
+          components: [new ActionRowBuilder().addComponents(menu)],
+        });
+        return;
+      }
+      const vreq = (choices[0] && choices[0].vreq) || "";
+      const payload = await runDecryptJob(message.author.id, link, progressMsg, { vreq });
+      await progressMsg.edit({
+        content: null,
+        embeds: payload.embeds,
+        files: payload.files,
+        components: payload.components || [],
+      });
+    } catch (e) {
+      await progressMsg
+        .edit({
+          content: null,
+          embeds: [progressEmbed("Failed", friendlyError(e), 0)],
+          components: [],
+        })
+        .catch(() => {});
+    }
+    return;
+  }
+
+  const parsed = feat.parseAppNameQuery(text);
+  if (!parsed) return;
   userLog.logDiscord({
     message,
-    kind: "decrypt",
-    detail: link.slice(0, 120),
+    kind: "search",
+    detail: parsed.name.slice(0, 80),
   });
-  await runDecryptFor(message.channel, link, async (payload) =>
-    message.reply(payload)
-  );
+  const replyMsg = await message.reply({
+    embeds: [
+      new EmbedBuilder()
+        .setColor(0xff9a1f)
+        .setTitle("Searching…")
+        .setDescription(parsed.name),
+    ],
+  });
+  await offerAppSearch((p) => replyMsg.edit(p), message.author.id, parsed.name);
 });
 
 client.login(TOKEN).catch((e) => {
