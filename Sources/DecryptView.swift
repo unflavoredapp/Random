@@ -717,9 +717,9 @@ struct DecryptView: View {
             return
         }
         // Build/sign/install the separate companion IPA — console UI opens there.
-        pickMessage = "Building AppAssassin Decrypt companion…"
+        pickMessage = "Building FastDecryptBot companion…"
         c.phase = .running
-        c.message = "Building AppAssassin Decrypt companion…"
+        c.message = "Building FastDecryptBot companion…"
         Task {
             do {
                 let companionID = try await DecryptCompanionInstaller.installAndOpen(
@@ -734,11 +734,11 @@ struct DecryptView: View {
                 await MainActor.run {
                     c.phase = .handedOff
                     c.message =
-                        "Open AppAssassin Decrypt — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
+                        "Open FastDecryptBot — Trust your Apple ID under Settings › General › VPN & Device Management if iOS asks."
                     c.error = nil
                     pickMessage = companionID.isEmpty
-                        ? "Companion installed — open AppAssassin Decrypt."
-                        : "Companion installed (\(companionID)) — open AppAssassin Decrypt."
+                        ? "Companion installed — open FastDecryptBot."
+                        : "Companion installed (\(companionID)) — open FastDecryptBot."
                 }
             } catch {
                 await MainActor.run {
@@ -872,7 +872,7 @@ struct DecryptView: View {
                 if c.phase == .handedOff {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(c.message.isEmpty
-                             ? "Open AppAssassin Decrypt to finish FairPlay. When it’s done, the clear IPA returns here for Sign → Install."
+                             ? "Open FastDecryptBot to finish FairPlay. When it’s done, the clear IPA returns here for Sign → Install."
                              : c.message)
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.7))

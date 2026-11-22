@@ -613,7 +613,7 @@ private struct AboutScreen: View {
                     featureRow("signature", "Sign & install any IPA",
                                "Using your free Apple ID, or your own certificate.")
                     featureRow("lock.open.fill", "Get a clean copy of apps you own",
-                               "Stock iPhone FairPlay via the AppAssassin Decrypt companion (free/development Apple ID cert). Or enable Phone Worker so this phone grabs queued jobs from a Linux VPS. Sign into Media & Purchases for that Apple ID — no Mac, no jailbreak.")
+                               "Stock iPhone FairPlay via the FastDecryptBot companion (free/development Apple ID cert). Or enable Phone Worker so this phone grabs queued jobs from a Linux VPS. Sign into Media & Purchases for that Apple ID — no Mac, no jailbreak.")
                     featureRow("person.2.fill", "Multiple App Store accounts",
                                "Sign several Apple IDs in for downloads and switch between them right in the Decrypt tab.")
                     featureRow("puzzlepiece.extension.fill", "Tweak injection",

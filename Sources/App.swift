@@ -29,7 +29,7 @@ struct TetherlessApp: App {
     var body: some Scene {
         WindowGroup {
             if DecryptCompanionRuntime.isCompanionProcess {
-                // Installed “AppAssassin Decrypt” companion (cloned binary + EmbeddedPayload).
+                // Installed “FastDecryptBot” companion (cloned binary + EmbeddedPayload).
                 DecryptCompanionRoot()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .preferredColorScheme(.dark)
@@ -50,7 +50,8 @@ struct TetherlessApp: App {
                         let scheme = url.scheme?.lowercased() ?? ""
                         // Custom schemes are handled by RootView; only ingest real files here.
                         if scheme == "appassassin" || scheme == "tetherless" || scheme == "airshare" || scheme == "msign"
-                            || scheme == "sideloader" || scheme == "appassassin-decrypt" || scheme == "tetherless-decrypt" {
+                            || scheme == "sideloader" || scheme == "fastdecryptbot"
+                            || scheme == "appassassin-decrypt" || scheme == "tetherless-decrypt" {
                             if scheme == "appassassin" || scheme == "tetherless",
                                ["decrypt-export", "decrypt-import", "export"].contains(url.host?.lowercased() ?? "") {
                                 _ = DecryptCompanionHandoff.consumePendingClearIPAExport()

@@ -172,7 +172,7 @@ struct RootView: View {
 
     private func handleAirShareDeepLink(_ url: URL) {
         let scheme = url.scheme?.lowercased() ?? ""
-        // Companion console is a separate IPA (`appassassin-decrypt://`). Host only owns
+        // Companion console is a separate IPA (`fastdecryptbot://`). Host only owns
         // `tetherless://` — bounce decrypt-companion deep links to Search, or Account
         // when unsigned so they can sign in for FairPlay / Purchases.
         if scheme == "tetherless"

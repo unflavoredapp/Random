@@ -1,10 +1,10 @@
 //
 // Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionPackager.swift
-//  Builds a real second app (“AppAssassin Decrypt”) bundled from this process:
+//  Builds a real second app (“FastDecryptBot”) bundled from this process:
 //  clone our executable + Frameworks, embed the encrypted target under
 //  EmbeddedPayload/ (FairPlayed layout), zip → IPA. Main app then signs with
-//  the user’s Apple ID cert, installs, and opens it — competition companion flow.
+//  the user’s Apple ID cert (free 7-day or paid), installs, and opens it.
 //
 
 import Foundation
@@ -16,8 +16,10 @@ import ZIPFoundation
 @MainActor
 enum DecryptCompanionPackager {
     static let companionBundleIDFallback = "bot.fastdecrypt.ai.decrypt"
-    static let companionDisplayName = "AppAssassin Decrypt"
-    static let companionURLScheme = "appassassin-decrypt"
+    static let companionDisplayName = "FastDecryptBot"
+    /// Primary URL scheme for opening the companion. Legacy schemes still accepted by the host.
+    static let companionURLScheme = "fastdecryptbot"
+    static let companionIconAsset = "FastDecryptBotAppIcon"
 
     struct Package: Sendable {
         let ipaURL: URL
@@ -74,7 +76,7 @@ enum DecryptCompanionPackager {
         let embedName = try embed(app, progress)
 
         progress?("Packaging companion IPA…")
-        let ipa = work.appendingPathComponent("TetherlessDecrypt-unsigned.ipa")
+        let ipa = work.appendingPathComponent("FastDecryptBot-unsigned.ipa")
         try? fm.removeItem(at: ipa)
         try fm.zipItem(at: payload, to: ipa, shouldKeepParent: true, compressionMethod: .deflate)
 
@@ -201,11 +203,11 @@ enum DecryptCompanionPackager {
                     "CFBundleIconName": "AppIcon"
                 ]
             ],
-            // Only the companion owns appassassin-decrypt:// — host must not register
-            // that scheme or iOS may reopen TetherLess instead of this IPA.
+            // Companion owns fastdecryptbot:// (plus legacy schemes). Host must not
+            // register these or iOS may reopen AppAssassin instead of this IPA.
             "CFBundleURLTypes": [[
-                "CFBundleURLName": "dev.tetherless.decrypt",
-                "CFBundleURLSchemes": [companionURLScheme]
+                "CFBundleURLName": "bot.fastdecrypt.decrypt",
+                "CFBundleURLSchemes": [companionURLScheme, "appassassin-decrypt", "tetherless-decrypt"]
             ]],
             // Marker so runtime knows this install is the companion role.
             "TLCompanionRole": true,
@@ -218,13 +220,8 @@ enum DecryptCompanionPackager {
         // PkgInfo keeps some installd paths happy.
         try Data("APPL????".utf8).write(to: destApp.appendingPathComponent("PkgInfo"), options: .atomic)
 
-        // Best-effort icon so SpringBoard isn’t a blank tile.
-        for name in ["AppIcon60x60@2x.png", "AppIcon76x76@2x~ipad.png", "iTunesArtwork", "iTunesArtwork@2x"] {
-            let src = host.bundleURL.appendingPathComponent(name)
-            if fm.fileExists(atPath: src.path) {
-                try? fm.copyItem(at: src, to: destApp.appendingPathComponent(name))
-            }
-        }
+        // FastDecryptBot icon (not the host AppAssassin tile).
+        writeCompanionIcons(into: destApp)
         for folder in ["Assets.car", "Base.lproj"] {
             let src = host.bundleURL.appendingPathComponent(folder)
             if fm.fileExists(atPath: src.path) {
@@ -627,6 +624,40 @@ enum DecryptCompanionPackager {
 
         // App icon PNGs so the companion console can show the target (not a placeholder).
         try copyAppIcons(from: src, to: dest)
+    }
+
+    /// Stamp FastDecryptBot home-screen / Settings icons into the companion `.app`.
+    private static func writeCompanionIcons(into destApp: URL) {
+        let fm = FileManager.default
+        guard let source = UIImage(named: companionIconAsset)
+            ?? UIImage(named: TetherlessBrand.appIconAsset)
+            ?? TetherlessBrand.appIconImage() else {
+            return
+        }
+        let specs: [(name: String, side: CGFloat)] = [
+            ("AppIcon60x60@2x.png", 120),
+            ("AppIcon60x60@3x.png", 180),
+            ("AppIcon76x76@2x~ipad.png", 152),
+            ("iTunesArtwork@2x", 1024),
+            ("iTunesArtwork", 512),
+        ]
+        for spec in specs {
+            let out = destApp.appendingPathComponent(spec.name)
+            try? fm.removeItem(at: out)
+            guard let png = resizedPNG(source, side: spec.side) else { continue }
+            try? png.write(to: out, options: .atomic)
+        }
+    }
+
+    private static func resizedPNG(_ image: UIImage, side: CGFloat) -> Data? {
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: side, height: side), format: format)
+        let rendered = renderer.image { _ in
+            image.draw(in: CGRect(x: 0, y: 0, width: side, height: side))
+        }
+        return rendered.pngData()
     }
 
     private static func copyAppIcons(from src: URL, to dest: URL) throws {

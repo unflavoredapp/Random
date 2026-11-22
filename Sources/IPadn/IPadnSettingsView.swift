@@ -319,7 +319,7 @@ private struct FairPlayDecryptHostField: View {
             Toggle("Server decrypt only (skip on-device companion FairPlay)", isOn: $macOnly)
                 .font(.footnote)
             Text(
-                "Default is off: stock iPhone + free/development Apple ID cert installs the AppAssassin Decrypt companion, which runs FairPlay on-device. Turn on only to force every job to Decrypt site URL (Linux VPS Phone Worker queue)."
+                "Default is off: stock iPhone + free/development Apple ID cert installs the FastDecryptBot companion, which runs FairPlay on-device. Turn on only to force every job to Decrypt site URL (Linux VPS Phone Worker queue)."
             )
             .font(.caption2)
             .foregroundStyle(.secondary)
@@ -681,7 +681,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Temp paths")
         } footer: {
-            Text("Free Apple ID certs usually strip App Groups, so stamps under Documents stay host-only. Get always embeds EncryptedSource.ipa inside AppAssassin Decrypt for FairPlay. Delete the old companion before Get. Turn Keep off to delete the stamped file after a successful clear export.")
+            Text("Free Apple ID certs usually strip App Groups, so stamps under Documents stay host-only. Get always embeds EncryptedSource.ipa inside FastDecryptBot for FairPlay. Delete the old companion before Get. Turn Keep off to delete the stamped file after a successful clear export.")
         }
 
         Section {
