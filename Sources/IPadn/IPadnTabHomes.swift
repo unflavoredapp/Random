@@ -375,12 +375,20 @@ struct PurchasedHomeView: View {
 
 // MARK: - Account
 
+private enum AccountAuthSheet: String, Identifiable {
+    case appleID
+    case storeUnlock
+    var id: String { rawValue }
+}
+
 struct AccountHomeView: View {
     @ObservedObject private var store = AppleIDStore.shared
     @ObservedObject private var nav = AppNav.shared
     @State private var path = NavigationPath()
-    @State private var showIPadnLogin = false
-    @State private var showStoreUnlock = false
+    /// One sheet at a time — never stack Apple ID + Store (iOS double-sheet).
+    @State private var authSheet: AccountAuthSheet?
+    /// Tracks which sheet just closed so Store handoff only follows Apple ID.
+    @State private var lastAuthSheet: AccountAuthSheet?
     @State private var appleIDExpanded = true
     @State private var settingsStatus: String?
 
@@ -417,10 +425,10 @@ struct AccountHomeView: View {
                     }
                 }
 
-                // Separate Apple ID vs Store — each opens its own sheet (Settings / Account).
+                // Sole Sign-in UI on Account (Settings root no longer duplicates these rows).
                 Section {
                     Button {
-                        showIPadnLogin = true
+                        presentAuthSheet(.appleID)
                     } label: {
                         Label(
                             store.authPhase == .awaitingTwoFactor
@@ -434,7 +442,7 @@ struct AccountHomeView: View {
                         .foregroundStyle(.secondary)
 
                     Button {
-                        showStoreUnlock = true
+                        presentAuthSheet(.storeUnlock)
                     } label: {
                         Label(
                             store.storeNeedsVerification
@@ -489,25 +497,29 @@ struct AccountHomeView: View {
             .navigationDestination(for: AppAccountPush.self) { dest in
                 accountDestination(dest)
             }
-            .sheet(isPresented: $showIPadnLogin, onDismiss: {
+            .sheet(item: $authSheet, onDismiss: {
                 nav.presentIPadnLogin = false
-                // Sequential handoff: Step 1 sheet must be fully gone before Step 2.
-                scheduleStoreUnlockIfNeeded()
-            }) {
-                // Only seed email when resuming 2FA — “Add account” must stay blank.
-                IPadnLoginView(
-                    initialAccountID: store.authPhase == .awaitingTwoFactor
-                        ? loginSeedAccountID
-                        : nil
-                ) {
-                    showIPadnLogin = false
-                }
-            }
-            .sheet(isPresented: $showStoreUnlock, onDismiss: {
                 nav.presentStoreUnlock = false
-            }) {
-                IPadnStoreUnlockSheet {
-                    showStoreUnlock = false
+                let closed = lastAuthSheet
+                lastAuthSheet = nil
+                // Only chain Store after Apple ID — never re-open Store on its own dismiss.
+                if closed == .appleID {
+                    scheduleStoreUnlockIfNeeded()
+                }
+            }) { sheet in
+                switch sheet {
+                case .appleID:
+                    IPadnLoginView(
+                        initialAccountID: store.authPhase == .awaitingTwoFactor
+                            ? loginSeedAccountID
+                            : nil
+                    ) {
+                        authSheet = nil
+                    }
+                case .storeUnlock:
+                    IPadnStoreUnlockSheet {
+                        authSheet = nil
+                    }
                 }
             }
             .onAppear {
@@ -516,18 +528,10 @@ struct AccountHomeView: View {
             .onChange(of: nav.accountPush) { _ in consumePendingAccountNav() }
             .onChange(of: nav.openAccountScreen) { _ in consumePendingAccountNav() }
             .onChange(of: nav.presentIPadnLogin) { open in
-                // Explicit nav from Search / Settings — Apple ID sheet only.
-                if open {
-                    showStoreUnlock = false
-                    showIPadnLogin = true
-                }
+                if open { presentAuthSheet(.appleID) }
             }
             .onChange(of: nav.presentStoreUnlock) { open in
-                // Settings “Store login” — never folds into Apple ID sheet.
-                if open {
-                    showIPadnLogin = false
-                    showStoreUnlock = true
-                }
+                if open { presentAuthSheet(.storeUnlock) }
             }
         }
     }
@@ -540,16 +544,25 @@ struct AccountHomeView: View {
         return candidates.first
     }
 
+    /// Exclusive presenter — replaces any open auth sheet; clears AppNav request flags.
+    private func presentAuthSheet(_ sheet: AccountAuthSheet) {
+        nav.presentIPadnLogin = false
+        nav.presentStoreUnlock = false
+        lastAuthSheet = sheet
+        authSheet = sheet
+    }
+
     /// After Step 1 dismisses, open Step 2 only if Store still needs its own Allow+code.
     private func scheduleStoreUnlockIfNeeded() {
         guard store.isSignedIn, store.storeNeedsVerification else { return }
-        guard !showIPadnLogin, !showStoreUnlock else { return }
+        guard authSheet == nil else { return }
         Task { @MainActor in
             // Let the Step 1 sheet finish dismissing so the second Allow cannot stack.
             try? await Task.sleep(nanoseconds: 700_000_000)
             guard store.isSignedIn, store.storeNeedsVerification else { return }
-            guard !showIPadnLogin else { return }
-            showStoreUnlock = true
+            guard authSheet == nil else { return }
+            lastAuthSheet = .storeUnlock
+            authSheet = .storeUnlock
         }
     }
 
@@ -568,12 +581,9 @@ struct AccountHomeView: View {
             path = NavigationPath()
         }
         if nav.presentIPadnLogin {
-            showStoreUnlock = false
-            showIPadnLogin = true
-        }
-        if nav.presentStoreUnlock {
-            showIPadnLogin = false
-            showStoreUnlock = true
+            presentAuthSheet(.appleID)
+        } else if nav.presentStoreUnlock {
+            presentAuthSheet(.storeUnlock)
         }
     }
 
@@ -610,7 +620,7 @@ struct AccountHomeView: View {
     @ViewBuilder private var accountRows: some View {
         if store.accounts.isEmpty {
             Button {
-                showIPadnLogin = true
+                presentAuthSheet(.appleID)
             } label: {
                 Label("Sign in to Apple Account", systemImage: "plus")
             }
@@ -642,7 +652,7 @@ struct AccountHomeView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Button {
-                showIPadnLogin = true
+                presentAuthSheet(.appleID)
             } label: {
                 Label("Add account", systemImage: "plus")
             }
