@@ -798,7 +798,7 @@ enum DecryptCompanionPackager {
 
         // App icon PNGs so the companion console can show the target (not a placeholder).
         try copyAppIcons(from: src, to: dest)
-        // Also stamp TargetIcon.png at companion .app root for instant top-bar paint.
+        // Stamp TargetIcon.png at companion .app root for the target app card (not the top bar).
         writeTargetIcon(from: dest, into: companionAppRoot(fromEmbeddedDest: dest), progress: progress)
     }
 
