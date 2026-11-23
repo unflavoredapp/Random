@@ -31,6 +31,13 @@ enum DecryptCompanionInstaller {
             DecryptCompanionHandoff.publishEncryptedIPAPath(encryptedIPA.path, bundleID: bid)
             progress?("Stamped encrypted IPA for FairPlay: \(encryptedIPA.path)")
         }
+        // fairplayd needs the live Store install for keys — stamp it when present.
+        if !bid.isEmpty,
+           let live = FairPlayDecrypt.installedAppURL(bundleID: bid),
+           FairPlayDecrypt.isLiveAppStoreInstall(live) {
+            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
+            progress?("Stamped live App Store install for FairPlay: \(live.path)")
+        }
         return try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
             try DecryptCompanionPackager.buildCompanionIPA(
                 embedding: encryptedIPA,

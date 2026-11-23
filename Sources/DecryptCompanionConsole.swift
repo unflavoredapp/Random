@@ -164,15 +164,15 @@ struct DecryptCompanionConsole: View {
 
     private var header: some View {
         ZStack {
-            // Center brand: FastDecryptBot icon + name.
+            // Center: target app icon when known, else FastDecryptBot brand mark.
             HStack(spacing: 8) {
                 Group {
-                    if UIImage(named: DecryptCompanionIdentity.companionIconAsset) != nil {
-                        Image(DecryptCompanionIdentity.companionIconAsset)
+                    if let img = companion.iconImage {
+                        Image(uiImage: img)
                             .resizable()
                             .scaledToFill()
-                    } else if let img = TetherlessBrand.appIconImage() {
-                        Image(uiImage: img)
+                    } else if let brand = Self.companionBrandIcon() {
+                        Image(uiImage: brand)
                             .resizable()
                             .scaledToFill()
                     } else {
@@ -186,7 +186,11 @@ struct DecryptCompanionConsole: View {
                 .frame(width: 28, height: 28)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
 
-                Text(DecryptCompanionIdentity.companionDisplayName)
+                Text(
+                    companion.displayName.isEmpty
+                        ? DecryptCompanionIdentity.companionDisplayName
+                        : companion.displayName
+                )
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)
@@ -386,5 +390,23 @@ struct DecryptCompanionConsole: View {
             return Color.cyan.opacity(0.9)
         }
         return Color.white.opacity(0.78)
+    }
+
+    /// Companion ships flat PNGs (no Assets.car) — `Image(named:)` misses them.
+    private static func companionBrandIcon() -> UIImage? {
+        if let named = UIImage(named: DecryptCompanionIdentity.companionIconAsset) { return named }
+        let bundle = Bundle.main.bundleURL
+        let candidates = [
+            "AppIcon60x60@3x.png",
+            "AppIcon60x60@2x.png",
+            "AppIcon76x76@2x~ipad.png",
+            "iTunesArtwork@2x",
+            "iTunesArtwork",
+        ]
+        for name in candidates {
+            let url = bundle.appendingPathComponent(name)
+            if let img = UIImage(contentsOfFile: url.path) { return img }
+        }
+        return TetherlessBrand.appIconImage()
     }
 }
