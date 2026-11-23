@@ -201,7 +201,7 @@ enum FreeAppleIDSigning {
                 "No development team for this Apple ID. Sign out and back in under Account, then tap Create again."
             )
         }
-        return Team(id: remembered, name: "Personal Team", isFree: auth.isFreeTeam || true)
+        return Team(id: remembered, name: "Personal Team", isFree: true)
     }
 
     private static func isPortalAuthBlocked(_ error: Error) -> Bool {
