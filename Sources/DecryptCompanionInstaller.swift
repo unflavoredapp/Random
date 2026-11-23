@@ -21,7 +21,7 @@ enum DecryptCompanionInstaller {
         displayName: String,
         progress: ((String) -> Void)? = nil
     ) async throws -> String {
-        // Resolve target bid *before* clearing foreign stamps.
+        // Resolve target bid *before* clearing foreign stamps / packaging.
         let bid = DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID
             ?? Self.bundleIDHint(fromEncryptedIPAFileName: encryptedIPA)
             ?? ""
@@ -38,7 +38,11 @@ enum DecryptCompanionInstaller {
             DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
             progress?("Stamped live App Store install for FairPlay: \(live.path)")
         }
-        return try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
+        return try await installAndOpen(
+            displayName: displayName,
+            targetBundleID: bid.isEmpty ? nil : bid,
+            progress: progress
+        ) { bundleID, progress in
             try DecryptCompanionPackager.buildCompanionIPA(
                 embedding: encryptedIPA,
                 bundleID: bundleID,
@@ -54,8 +58,6 @@ enum DecryptCompanionInstaller {
         displayName: String,
         progress: ((String) -> Void)? = nil
     ) async throws -> String {
-        // Publish before packaging so the companion can FairPlay-mremap this live path
-        // even if open(2) of the FairPlay binary EPERMs under the host (Roblox).
         let info = NSDictionary(contentsOf: installedApp.appendingPathComponent("Info.plist")) as? [String: Any]
         let bid = (info?["CFBundleIdentifier"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -63,7 +65,11 @@ enum DecryptCompanionInstaller {
         if !bid.isEmpty {
             DecryptCompanionHandoff.publishLiveInstallPath(installedApp.path, bundleID: bid)
         }
-        return try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
+        return try await installAndOpen(
+            displayName: displayName,
+            targetBundleID: bid.isEmpty ? nil : bid,
+            progress: progress
+        ) { bundleID, progress in
             try DecryptCompanionPackager.buildCompanionIPA(
                 embeddingInstalledApp: installedApp,
                 bundleID: bundleID,
@@ -83,15 +89,19 @@ enum DecryptCompanionInstaller {
 
     private static func installAndOpen(
         displayName: String,
+        targetBundleID: String? = nil,
         progress: ((String) -> Void)?,
         build: (_ bundleID: String, _ progress: ((String) -> Void)?) throws -> DecryptCompanionPackager.Package
     ) async throws -> String {
-        // Step 1 — never package/open companion until Media & Purchases ack is on record.
-        progress?("1/7 · Confirming FairPlay keys on this iPhone…")
-        let keyEmail = try FairPlayKeyGate.confirmReadyForCompanion { msg in
+        // Never package/open FastDecryptBot until Apple ID + Store + keys
+        // (+ live install when bid is known) are ready on the *host*.
+        progress?("1/7 · Host FairPlay readiness (before FastDecryptBot)…")
+        _ = try FairPlayKeyGate.confirmReadyForCompanion(
+            bundleID: targetBundleID,
+            displayName: displayName
+        ) { msg in
             progress?("1/7 · \(msg)")
         }
-        _ = keyEmail
 
         progress?("2/7 · Preparing signing certificate (Apple ID, then custom)…")
         let material = try await resolveCompanionSigningMaterial(progress: progress)

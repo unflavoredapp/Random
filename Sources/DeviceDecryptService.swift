@@ -687,15 +687,18 @@ final class DeviceDecryptService: ObservableObject {
         _ installed: URL,
         displayName: String
     ) async throws {
-        _ = try FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
+        let info = NSDictionary(contentsOf: installed.appendingPathComponent("Info.plist")) as? [String: Any]
+        let bid = (info?["CFBundleIdentifier"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        _ = try FairPlayKeyGate.confirmReadyForCompanion(
+            bundleID: bid.isEmpty ? nil : bid,
+            displayName: displayName
+        ) { [weak self] msg in
             self?.publishDecryptProgress(msg)
         }
         publishDecryptProgress("Building FastDecryptBot companion for \(displayName)…")
         // Stamp the live path before packaging so the companion FairPlay input is ready
         // even when open(2) of the FairPlay binary EPERMs under the host sandbox.
-        let info = NSDictionary(contentsOf: installed.appendingPathComponent("Info.plist")) as? [String: Any]
-        let bid = (info?["CFBundleIdentifier"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !bid.isEmpty {
             DecryptCompanionHandoff.publishLiveInstallPath(installed.path, bundleID: bid)
         }
@@ -1084,13 +1087,17 @@ final class DeviceDecryptService: ObservableObject {
         bundleID: String? = nil
     ) async throws {
         let label = downloadedVersion.isEmpty ? displayName : "\(displayName) v\(downloadedVersion)"
-        _ = try FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
-            self?.publishDecryptProgress(msg)
-        }
-
         let resolvedBid = (bundleID?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
             $0.isEmpty ? nil : $0
         } ?? Self.bundleIDFromStoreIPA(ipa) ?? ""
+
+        // Host gate with bid so live App Store install is required before FastDecryptBot.
+        _ = try FairPlayKeyGate.confirmReadyForCompanion(
+            bundleID: resolvedBid.isEmpty ? nil : resolvedBid,
+            displayName: displayName
+        ) { [weak self] msg in
+            self?.publishDecryptProgress(msg)
+        }
 
         // Always retain + stamp the encrypted Store IPA path for FairPlay capture.
         let retained = try DecryptCompanionHandoff.retainEncryptedIPA(
