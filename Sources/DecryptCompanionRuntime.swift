@@ -72,18 +72,24 @@ enum DecryptCompanionRuntime {
         ctrl.appendLog("Preparing FairPlay…")
         ctrl.appendLog(FairPlayJetsam.memorySummary(prefix: "boot"))
         let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
+        let snap = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
         let embedInfo = NSDictionary(
             contentsOf: src.appendingPathComponent("Info.plist")
         ) as? [String: Any]
         let bid = (embedInfo?["CFBundleIdentifier"] as? String)
             ?? (man?["bundleID"] as? String)
+            ?? (snap["bundleID"] as? String)
             ?? ""
         if !bid.isEmpty {
             ctrl.appendLog("Target · \(bid)")
         }
-        if let live = (man?["hostLiveInstallPath"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !live.isEmpty {
+        let live = ((man?["hostLiveInstallPath"] as? String)
+            ?? (snap["hostLiveInstallPath"] as? String))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !live.isEmpty {
             ctrl.appendLog("Preflight live · \(live)")
+        } else {
+            ctrl.appendLog("Preflight live · (not stamped — re-Get after App Store install)")
         }
         if let n = man?["encryptedMachOs"] as? Int ?? (man?["encryptedMachOs"] as? NSNumber)?.intValue {
             ctrl.appendLog("Preflight · \(n) encrypted Mach-O(s)")
@@ -191,24 +197,46 @@ enum DecryptCompanionRuntime {
         log("policy=serial+partialOK+stream · FairPlay=live-install-only (never EncryptedSource)")
 #endif
         log(FairPlayJetsam.memorySummary(prefix: "preflight"))
+        let snapBid = (snap["bundleID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let expectedBid = (embedBid
             ?? (man?["bundleID"] as? String)
+            ?? (snapBid.isEmpty ? nil : snapBid)
             ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !expectedBid.isEmpty {
+            log("Target bid · \(expectedBid)")
+        } else {
+            log("Target bid · (missing from EmbeddedPayload / manifest)")
+        }
         var liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(
             manifest: man,
             expectedBundleID: expectedBid
         )
+        if let liveURL {
+            log("Stamped live install path: \(liveURL.path)")
+        } else {
+            log("Stamped live install path: (none readable yet)")
+        }
         // Host stamp can be missing (App Group stripped / bid mismatch). Rediscover on-device.
         if liveURL == nil, !expectedBid.isEmpty {
-            let known = (man?["hostLiveInstallPath"] as? String)?
+            let known = ((man?["hostLiveInstallPath"] as? String)
+                ?? (snap["hostLiveInstallPath"] as? String))?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
-            if let found = FairPlayDecrypt.installedAppURL(
+            if let known, !known.isEmpty {
+                let knownURL = URL(fileURLWithPath: known)
+                // Trust host-stamped Bundle/Application paths even when fileExists lies.
+                if FairPlayDecrypt.isLiveAppStoreInstall(knownURL) {
+                    liveURL = knownURL
+                    log("Using host-stamped live path (sandbox may hide fileExists): \(known)")
+                }
+            }
+            if liveURL == nil,
+               let found = FairPlayDecrypt.installedAppURL(
                 bundleID: expectedBid,
                 knownPath: (known?.isEmpty == false) ? known : nil
-            ), FairPlayDecrypt.isLiveAppStoreInstall(found) {
+               ), FairPlayDecrypt.isLiveAppStoreInstall(found) {
                 liveURL = found
-                log("Rediscovered live App Store install for \(expectedBid)")
+                log("Rediscovered live App Store install for \(expectedBid): \(found.path)")
                 DecryptCompanionHandoff.publishLiveInstallPath(found.path, bundleID: expectedBid)
             }
         }
@@ -218,11 +246,11 @@ enum DecryptCompanionRuntime {
 
         guard let liveURL else {
             throw DecryptError(
-                "No live App Store install for \(expectedBid.isEmpty ? name : expectedBid). Install \(name) from the App Store on this iPhone (same Apple ID), re-run Get from FastDecryptBot, then open the companion again. EncryptedSource / EmbeddedPayload are not FairPlay paths."
+                "No live App Store install for \(expectedBid.isEmpty ? name : expectedBid). Install \(name) from the App Store on this iPhone (same Apple ID), delete FastDecryptBot, re-run Get so the live path is stamped into the companion, then open it again. EncryptedSource / EmbeddedPayload are not FairPlay paths."
             )
         }
         let readRoot = liveURL
-        log("Using live App Store install for FairPlay: \(liveURL.path)")
+        log("Live install path: \(liveURL.path)")
 
         // Live installs often refuse cryptid probes — still proceed; fairplayd mremaps.
         var before = try FairPlayDecrypt.verifyApp(at: readRoot)

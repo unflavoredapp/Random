@@ -609,17 +609,39 @@ enum DecryptCompanionHandoff {
     }
 
     static func readHostSnapshot(fromManifest manifest: [String: Any]?) -> [String: Any] {
-        if let snap = suite?.dictionary(forKey: "companion.hostSnapshot") { return snap }
-        if let snap = local.dictionary(forKey: "companion.hostSnapshot") { return snap }
-        guard let manifest else { return [:] }
-        var out: [String: Any] = [:]
-        for key in Self.manifestAllowList {
-            if let v = manifest[key] { out[key] = v }
+        // Companion UserDefaults / App Group are often empty (free cert strips groups).
+        // Never prefer an empty defaults snap over EmbeddedPayload/manifest.plist.
+        func useful(_ snap: [String: Any]?) -> [String: Any]? {
+            guard let snap, !snap.isEmpty else { return nil }
+            let live = (snap["hostLiveInstallPath"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let bid = (snap["bundleID"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let email = (snap["hostEmail"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if live.isEmpty, bid.isEmpty, email.isEmpty { return nil }
+            return snap
         }
-        // Strip anything that looks like FairPlay key / session material if a
-        // stale manifest ever carried it (helper must use live Store path only).
+        var out: [String: Any] = [:]
+        if let snap = useful(suite?.dictionary(forKey: "companion.hostSnapshot")) {
+            out = snap
+        } else if let snap = useful(local.dictionary(forKey: "companion.hostSnapshot")) {
+            out = snap
+        }
+        if let manifest {
+            for key in Self.manifestAllowList {
+                guard let v = manifest[key] else { continue }
+                if out[key] == nil {
+                    out[key] = v
+                    continue
+                }
+                if key == "hostLiveInstallPath" || key == "bundleID" {
+                    let cur = (out[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    if cur.isEmpty { out[key] = v }
+                }
+            }
+        }
         Self.stripForbiddenSecrets(&out)
-        // Seed companion defaults so FairPlay failure copy names the owning Apple ID.
         if let email = (out["hostEmail"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines),
            !email.isEmpty {
@@ -642,15 +664,21 @@ enum DecryptCompanionHandoff {
         let expected = expectedBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
 
         func acceptLiveURL(_ url: URL, stampedBid: String) -> URL? {
-            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
             let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+            let path = resolved.path
+            // Companion sandbox often lies about fileExists for other apps' Store
+            // containers — fairplayd can still mremap. Trust host-stamped
+            // /var/containers/Bundle/Application paths even when fileExists is false.
+            let looksLive = FairPlayDecrypt.isLiveAppStoreInstall(resolved)
+            let exists = FileManager.default.fileExists(atPath: path)
+            guard exists || looksLive else { return nil }
             if !expected.isEmpty {
-                // Prefer stamped bid; also verify Info.plist when present.
                 if !stampedBid.isEmpty, !bundleIDsMatch(stampedBid, expected) {
                     return nil
                 }
-                let info = NSDictionary(contentsOf: resolved.appendingPathComponent("Info.plist")) as? [String: Any]
-                if let liveBid = (info?["CFBundleIdentifier"] as? String)?
+                // Info.plist may also be unreadable under sandbox — only reject on mismatch.
+                if let info = NSDictionary(contentsOf: resolved.appendingPathComponent("Info.plist")) as? [String: Any],
+                   let liveBid = (info["CFBundleIdentifier"] as? String)?
                     .trimmingCharacters(in: .whitespacesAndNewlines),
                    !liveBid.isEmpty,
                    !bundleIDsMatch(liveBid, expected) {
