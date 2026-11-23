@@ -589,22 +589,17 @@ private struct FairPlayAdvancedSettingsSection: View {
     @AppStorage(FairPlayAdvancedOptions.partialOnLowRAMKey) private var partialOnLowRAM = true
 
     var body: some View {
-        // Login lives once on Account › Sign-in — do not duplicate Apple ID / Store here.
+        // Apple ID / Store login live only on Account › Sign-in — keys only here.
         Section {
             Button {
                 FairPlayKeysFetcher.shared.presentCaptureSheet()
             } label: {
                 Label("FairPlay keys…", systemImage: "key.fill")
             }
-            Button {
-                AppNav.shared.goSettings()
-            } label: {
-                Label("Account › Sign-in for Apple ID / Store…", systemImage: "person.badge.key")
-            }
         } header: {
             Text("Keys")
         } footer: {
-            Text("Sign in under Account › Sign-in (Apple ID and Store are separate sheets there). Keys stay on-device for fairplayd — never pushed into the companion.")
+            Text("Sign in under Account › Sign-in. Keys stay on-device for fairplayd — never pushed into the companion.")
         }
 
         Section {
