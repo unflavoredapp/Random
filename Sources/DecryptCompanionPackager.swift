@@ -535,11 +535,27 @@ enum DecryptCompanionPackager {
             )
         }
 
-        let embeddedBundleID: String? = {
-            let info = NSDictionary(contentsOf: dest.appendingPathComponent("Info.plist")) as? [String: Any]
-            let raw = (info?["CFBundleIdentifier"] as? String)?
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return (raw?.isEmpty == false) ? raw : nil
+        // Prefer dest Info.plist, then source tree, then handoff stamp — never omit bid.
+        let embeddedBundleID: String = {
+            if let info = NSDictionary(contentsOf: dest.appendingPathComponent("Info.plist")) as? [String: Any],
+               let b = (info["CFBundleIdentifier"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !b.isEmpty {
+                return b
+            }
+            if let info = NSDictionary(contentsOf: srcApp.appendingPathComponent("Info.plist")) as? [String: Any],
+               let b = (info["CFBundleIdentifier"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !b.isEmpty {
+                return b
+            }
+            if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID, !stamped.isEmpty {
+                return stamped
+            }
+            if let stamped = DecryptCompanionHandoff.readLiveInstallPath()?.bundleID, !stamped.isEmpty {
+                return stamped
+            }
+            return ""
         }()
         var meta: [String: Any] = [
             "name": name,
@@ -555,23 +571,24 @@ enum DecryptCompanionPackager {
             "hostSkippedLiveAudit": liveInstall,
             "slimEmbed": true,
         ]
-        if let embeddedBundleID, !embeddedBundleID.isEmpty {
-            meta["bundleID"] = embeddedBundleID
-            // Companion sandbox often cannot LS/MI-lookup other apps. Host resolves the
-            // live Store path (Pair / LaunchServices) and stamps it into the manifest so
-            // FairPlay mremap can read from a path fairplayd accepts (Roblox EPERM).
-            if let live = Self.resolveLiveInstallURL(bundleID: embeddedBundleID, preferring: liveInstall ? srcApp : nil) {
-                meta["hostLiveInstallPath"] = live.path
-                progress?("Stamped live install for FairPlay: \(live.path)")
-                // Also publish via App Group so the companion can recover the path if
-                // LS/MI still can't see the app at decrypt time (Roblox mremap EPERM).
-                DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: embeddedBundleID)
-            } else {
-                DecryptCompanionHandoff.clearLiveInstallPath()
-                throw DecryptError(
-                    "No live App Store install for \(embeddedBundleID). Install it from the App Store (same Apple ID) before packaging FastDecryptBot — EncryptedSource / EmbeddedPayload are not FairPlay paths."
-                )
-            }
+        guard !embeddedBundleID.isEmpty else {
+            throw DecryptError(
+                "Couldn't determine bundle ID for \(name). Re-run Get so EmbeddedPayload / Store IPA include Info.plist."
+            )
+        }
+        meta["bundleID"] = embeddedBundleID
+        // Companion sandbox often cannot LS/MI-lookup other apps. Host resolves the
+        // live Store path (Pair / LaunchServices) and stamps it into the manifest so
+        // FairPlay mremap can read from a path fairplayd accepts (Roblox EPERM).
+        if let live = Self.resolveLiveInstallURL(bundleID: embeddedBundleID, preferring: liveInstall ? srcApp : nil) {
+            meta["hostLiveInstallPath"] = live.path
+            progress?("Live install path: \(live.path)")
+            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: embeddedBundleID)
+        } else {
+            DecryptCompanionHandoff.clearLiveInstallPath()
+            throw DecryptError(
+                "No live App Store install for \(embeddedBundleID) (\(name)). Install it from the App Store (same Apple ID) before packaging FastDecryptBot — EncryptedSource / EmbeddedPayload are not FairPlay paths."
+            )
         }
         // Preflight identity pack — helper paints instantly; never embeds FairPlay key blobs.
         let companionRoot = companionApp

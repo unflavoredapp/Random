@@ -178,9 +178,23 @@ enum FairPlayDecrypt {
         let id = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty else { return nil }
 
-        if let known = knownPath?.trimmingCharacters(in: .whitespacesAndNewlines), !known.isEmpty,
-           let url = existingAppDirectory(URL(fileURLWithPath: known)) {
-            return url
+        if let known = knownPath?.trimmingCharacters(in: .whitespacesAndNewlines), !known.isEmpty {
+            let knownURL = URL(fileURLWithPath: known)
+            // Companion sandbox often reports fileExists=false for other apps' Store
+            // containers. Trust a host-stamped live path shape even when probes fail —
+            // fairplayd can still mremap from that path.
+            if let url = existingAppDirectory(knownURL) {
+                return url
+            }
+            if isLiveAppStoreInstall(knownURL) {
+                var candidate = knownURL.resolvingSymlinksInPath().standardizedFileURL
+                if candidate.pathExtension == "app" { return candidate }
+                while candidate.path != "/" {
+                    if candidate.pathExtension == "app" { return candidate }
+                    candidate = candidate.deletingLastPathComponent()
+                }
+                return knownURL
+            }
         }
         if let url = lsWorkspaceURL(bundleID: id) { return url }
         if let url = lsRecordURL(bundleID: id) { return url }
