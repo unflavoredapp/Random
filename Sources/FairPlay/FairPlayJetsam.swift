@@ -95,14 +95,19 @@ enum FairPlayJetsam {
         if avail > 0 && avail < minAvailableBytes {
             progress?("\(memorySummary(prefix: "Low memory")) — reclaiming before next Mach-O…")
             purgeTransientMemory()
-            Thread.sleep(forTimeInterval: 1.6)
+            Thread.sleep(forTimeInterval: 2.0)
         } else if isTight(forCryptsize: 64 * 1024 * 1024) {
             progress?("\(memorySummary(prefix: "Low memory")) — pausing before next Mach-O…")
             purgeTransientMemory()
-            Thread.sleep(forTimeInterval: 1.2)
+            Thread.sleep(forTimeInterval: 1.6)
         } else if isTight(forCryptsize: 48 * 1024 * 1024) {
             progress?("\(memorySummary(prefix: "Pressure")) — pausing before next Mach-O…")
-            Thread.sleep(forTimeInterval: 0.6)
+            purgeTransientMemory()
+            Thread.sleep(forTimeInterval: 0.9)
+        } else if isTight(forCryptsize: 20 * 1024 * 1024) {
+            // Host-class ~20 MB crypts: light reclaim even when "available" looks OK.
+            purgeTransientMemory()
+            Thread.sleep(forTimeInterval: 0.45)
         }
     }
 

@@ -386,27 +386,45 @@ enum DecryptCompanionRuntime {
                 || msg.localizedCaseInsensitiveContains("enomem")
                 || msg.localizedCaseInsensitiveContains("soft-fail")
                 || msg.localizedCaseInsensitiveContains("partial")
+                || msg.localizedCaseInsensitiveContains("rss")
+                || msg.localizedCaseInsensitiveContains("freed")
             if keep {
                 progress?(msg)
                 Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
             }
         }
         func runDecrypt(from root: URL) throws -> FairPlayDecryptReport {
-            // Drop any deferred EncryptedSource unpack before mremap — holding two
-            // full IPA trees is what Jetsams ~20 MB mains even with lean buffers.
-            let usingLive = liveURL.map {
-                root.resolvingSymlinksInPath().standardizedFileURL
-                    == $0.resolvingSymlinksInPath().standardizedFileURL
-            } ?? false
-            if usingLive, let unpack = ipaUnpackRoot {
-                try? fm.removeItem(at: unpack)
-                ipaUnpackRoot = nil
-                log("Freed EncryptedSource unpack before FairPlay remap…")
+            var readFrom = root
+            // Collapse EncryptedSource unpack → destApp before mremap so we never
+            // hold two full IPA trees through the remmap window (Host ~20 MB Jetsam).
+            if let unpack = ipaUnpackRoot {
+                let unpackPath = unpack.resolvingSymlinksInPath().standardizedFileURL.path
+                let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
+                let underUnpack = rootPath == unpackPath
+                    || rootPath.hasPrefix(unpackPath.hasSuffix("/") ? unpackPath : unpackPath + "/")
+                let usingLive = liveURL.map {
+                    root.resolvingSymlinksInPath().standardizedFileURL
+                        == $0.resolvingSymlinksInPath().standardizedFileURL
+                } ?? false
+                if underUnpack {
+                    // Re-seed destApp from the unpack (covers EPERM retry where dest
+                    // was first copied from a sparse EmbeddedPayload).
+                    try copyTree(from: root, to: destApp)
+                    readFrom = destApp
+                    try? fm.removeItem(at: unpack)
+                    ipaUnpackRoot = nil
+                    log("Freed EncryptedSource unpack — FairPlay in-place on export tree…")
+                } else if usingLive {
+                    try? fm.removeItem(at: unpack)
+                    ipaUnpackRoot = nil
+                    log("Freed EncryptedSource unpack before FairPlay remap…")
+                }
             }
             FairPlayJetsam.purgeTransientMemory()
+            log(FairPlayJetsam.memorySummary(prefix: "pre-mremap"))
             log("Streaming FairPlay page capture (lean / file-backed)…")
             return try FairPlayDecrypt.decryptMachOs(
-                readingFrom: root,
+                readingFrom: readFrom,
                 writingTo: destApp,
                 quietConsole: !verbose,
                 options: fpOpts,
