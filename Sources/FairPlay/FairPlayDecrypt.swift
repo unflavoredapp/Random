@@ -629,6 +629,9 @@ enum FairPlayDecrypt {
         }
 
         for (index, file) in mainFiles.enumerated() {
+            // Stronger reclaim right before the main remmap window (Host-class crypts).
+            FairPlayJetsam.purgeTransientMemory()
+            detail?(FairPlayJetsam.memorySummary(prefix: "pre-main"))
             pauseIfMemoryPressure(progress: detail)
             let budget: TimeInterval = 180
             let outcome = decryptOneWithTimeout(
@@ -1035,20 +1038,21 @@ enum FairPlayDecrypt {
                 fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
             }
         }
-        // Main + framework ENOMEM: purge + progressive backoff retries (lean path in fpcore).
+        // Main + framework ENOMEM: one coordinated purge+retry (fpcore already
+        // short-circuits its mode storm). Extra Swift loops just re-Jetsam the window.
         if rc != 0 && rc != 1 && (role == .main || role == .framework) {
             var klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
-            let maxTries = role == .main ? 4 : 3
+            let maxTries = role == .main ? 2 : 1
             var oomTry = 0
             while klass == .outOfMemory && oomTry < maxTries {
                 oomTry += 1
                 progress?(
                     "\(role == .main ? "Main executable" : "Framework") hit mremap ENOMEM — freeing memory and retrying "
-                        + "(\(oomTry)/\(maxTries))…"
+                        + "(\(oomTry)/\(maxTries)) · \(FairPlayJetsam.memorySummary())…"
                 )
                 try? fm.removeItem(at: tmp)
                 FairPlayJetsam.purgeTransientMemory()
-                Thread.sleep(forTimeInterval: 1.0 + Double(oomTry) * 1.35)
+                Thread.sleep(forTimeInterval: 1.6 + Double(oomTry) * 1.5)
                 pauseIfMemoryPressure(progress: progress)
                 logBuf.clear()
                 rc = decryptInput.path.withCString { inPath in
