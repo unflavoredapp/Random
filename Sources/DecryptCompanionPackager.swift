@@ -28,6 +28,14 @@ enum DecryptCompanionPackager {
         let displayName: String
         let embeddedAppName: String
         let approximateBytes: Int64
+        /// Temporary `tl-companion-*` workspace that owns `ipaURL`. Caller must
+        /// `cleanupWorkDirectory()` after `Signer.signDetached` finishes (success or failure).
+        let workDirectory: URL
+
+        /// Remove the packaging workspace (unsigned IPA + Payload extract). Safe to call twice.
+        func cleanupWorkDirectory() {
+            try? FileManager.default.removeItem(at: workDirectory)
+        }
     }
 
     /// Build an unsigned companion IPA ready for SignEngine.
@@ -88,43 +96,67 @@ enum DecryptCompanionPackager {
             bundleID: bundleID,
             displayName: companionDisplayName,
             embeddedAppName: embedName,
-            approximateBytes: bytes
+            approximateBytes: bytes,
+            workDirectory: work
         )
     }
 
     /// Pick a companion bundle ID that fits the active provisioning profile.
-    static func companionBundleID(forProvision provision: Data) -> String {
-        guard let xml = provisionPlistXML(provision),
-              let plist = try? PropertyListSerialization.propertyList(from: xml, options: [], format: nil) as? [String: Any],
-              let ents = plist["Entitlements"] as? [String: Any],
-              let appID = ents["application-identifier"] as? String else {
-            return companionBundleIDFallback
+    /// - Throws when an explicit profile would force the companion to share the host’s bundle ID
+    ///   (install would replace AppAssassin).
+    static func companionBundleID(forProvision provision: Data) throws -> String {
+        let host = (Bundle.main.bundleIdentifier ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolved: String
+        if let xml = provisionPlistXML(provision),
+           let plist = try? PropertyListSerialization.propertyList(from: xml, options: [], format: nil) as? [String: Any],
+           let ents = plist["Entitlements"] as? [String: Any],
+           let appID = ents["application-identifier"] as? String {
+            // TEAMID.*              → hostBundle.decrypt (free Apple ID wildcard)
+            // TEAMID.com.example.*  → com.example.decrypt
+            // TEAMID.com.example.app → exact App ID (must not equal host)
+            let parts = appID.split(separator: ".", maxSplits: 1).map(String.init)
+            guard parts.count == 2 else {
+                resolved = companionBundleIDFallback
+                try assertCompanionBundleIDDistinct(resolved, host: host)
+                return resolved
+            }
+            let rest = parts[1]
+            let hostDecrypt: String = {
+                if host.hasSuffix(".decrypt") { return host.isEmpty ? companionBundleIDFallback : host }
+                return host.isEmpty ? companionBundleIDFallback : host + ".decrypt"
+            }()
+            if rest == "*" || rest == ".*" {
+                resolved = hostDecrypt
+            } else if rest.hasSuffix(".*") {
+                let prefix = String(rest.dropLast(2))
+                resolved = prefix.isEmpty ? hostDecrypt : prefix + ".decrypt"
+            } else if rest.contains("*") {
+                let replaced = rest.replacingOccurrences(of: "*", with: "decrypt")
+                resolved = replaced.isEmpty ? hostDecrypt : replaced
+            } else {
+                // Explicit App ID — must use the profile’s exact bundle ID.
+                // Inventing a `.decrypt` sibling causes installd 0xe8008016 (invalid entitlements).
+                resolved = rest
+            }
+        } else {
+            resolved = companionBundleIDFallback
         }
-        // TEAMID.*              → hostBundle.decrypt (free Apple ID wildcard)
-        // TEAMID.com.example.*  → com.example.decrypt
-        // TEAMID.com.example.app → com.example.decrypt (sibling)
-        let parts = appID.split(separator: ".", maxSplits: 1).map(String.init)
-        guard parts.count == 2 else { return companionBundleIDFallback }
-        let rest = parts[1]
-        let host = Bundle.main.bundleIdentifier ?? companionBundleIDFallback
-        let hostDecrypt: String = {
-            if host.hasSuffix(".decrypt") { return host }
-            return host + ".decrypt"
-        }()
-        if rest == "*" || rest == ".*" {
-            return hostDecrypt
+        try assertCompanionBundleIDDistinct(resolved, host: host)
+        return resolved
+    }
+
+    /// Refuse to package a companion that would collide with the running host app.
+    private static func assertCompanionBundleIDDistinct(_ bundleID: String, host: String) throws {
+        let companion = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let hostID = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !companion.isEmpty else {
+            throw DecryptError("Companion provisioning profile did not yield a bundle ID.")
         }
-        if rest.hasSuffix(".*") {
-            let prefix = String(rest.dropLast(2))
-            return prefix.isEmpty ? hostDecrypt : prefix + ".decrypt"
+        if !hostID.isEmpty, companion.caseInsensitiveCompare(hostID) == .orderedSame {
+            throw DecryptError(
+                "Companion provisioning profile uses the host app’s bundle ID (\(hostID)). A separate companion App ID / wildcard profile is required so FastDecryptBot doesn’t replace AppAssassin."
+            )
         }
-        if rest.contains("*") {
-            let replaced = rest.replacingOccurrences(of: "*", with: "decrypt")
-            return replaced.isEmpty ? hostDecrypt : replaced
-        }
-        // Explicit App ID — must use the profile’s exact bundle ID.
-        // Inventing a `.decrypt` sibling causes installd 0xe8008016 (invalid entitlements).
-        return rest
     }
 
     // MARK: - Lean DecryptHelper shell
@@ -263,6 +295,7 @@ enum DecryptCompanionPackager {
 
         var copied = 0
         var skippedBundles = 0
+        var failedFrameworks: [String] = []
         for fwRoot in sources {
             guard let items = try? fm.contentsOfDirectory(at: fwRoot, includingPropertiesForKeys: nil) else {
                 continue
@@ -276,14 +309,29 @@ enum DecryptCompanionPackager {
                 }
                 let out = destFW.appendingPathComponent(name)
                 if fm.fileExists(atPath: out.path) { continue }
-                try? fm.copyItem(at: item, to: out)
-                copied += 1
+                do {
+                    try fm.copyItem(at: item, to: out)
+                    copied += 1
+                } catch {
+                    progress?(
+                        "Framework copy failed for \(name): \(error.localizedDescription)"
+                    )
+                    if name.hasSuffix(".framework") {
+                        failedFrameworks.append(name)
+                    }
+                }
             }
         }
         progress?(
             "Lean Frameworks: \(copied) copied"
                 + (skippedBundles > 0 ? ", \(skippedBundles) resource bundles skipped" : "")
+                + (failedFrameworks.isEmpty ? "" : ", \(failedFrameworks.count) failed")
         )
+        if !failedFrameworks.isEmpty {
+            throw DecryptError(
+                "Required Frameworks failed to copy into FastDecryptBot: \(failedFrameworks.joined(separator: ", ")). Reinstall AppAssassin / re-run Get."
+            )
+        }
     }
 
     // MARK: - FairPlayed EmbeddedPayload
@@ -351,12 +399,23 @@ enum DecryptCompanionPackager {
               isDir.boolValue else {
             throw DecryptError("Installed app path missing: \(installedApp.lastPathComponent).")
         }
-        // Live-install embed still needs EncryptedSource.ipa when App Group is stripped.
-        if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath() {
+        // Live-install embed still needs EncryptedSource.ipa when App Group is stripped —
+        // only reuse a stamped IPA for the *same* target bundle ID.
+        let installedBid = (
+            (NSDictionary(contentsOf: installedApp.appendingPathComponent("Info.plist")) as? [String: Any])?
+                ["CFBundleIdentifier"] as? String
+        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath(matchingBundleID: installedBid) {
             let src = URL(fileURLWithPath: stamped.path)
             if FileManager.default.fileExists(atPath: src.path) {
-                try? Self.bundleEncryptedSourceIPA(src, into: companionApp, progress: progress)
+                do {
+                    try Self.bundleEncryptedSourceIPA(src, into: companionApp, progress: progress)
+                } catch {
+                    progress?("Stamped EncryptedSource.ipa skipped: \(error.localizedDescription)")
+                }
             }
+        } else if !installedBid.isEmpty {
+            progress?("No target-matched encrypted IPA stamp for \(installedBid) — EmbeddedPayload only.")
         }
         return try stageEmbeddedPayload(
             from: installedApp,
@@ -388,7 +447,8 @@ enum DecryptCompanionPackager {
         try? fm.removeItem(at: dest)
         try fm.createDirectory(at: dest, withIntermediateDirectories: true)
 
-        try? fm.removeItem(at: srcApp.appendingPathComponent("Watch"))
+        // Never mutate the source application (live App Store installs share this path).
+        // Remove Watch only from the staged EmbeddedPayload below.
 
         // Live installs + any path labeled "install path" must never call verifyApp on
         // the source tree — cryptid probes hang the host (Cake Wallet / TestFlight).
@@ -529,7 +589,7 @@ enum DecryptCompanionPackager {
             meta["bundledEncryptedIPA"] = DecryptCompanionHandoff.bundledEncryptedIPAName
             progress?("Companion carries \(DecryptCompanionHandoff.bundledEncryptedIPAName) for FairPlay unpack")
         }
-        if let enc = DecryptCompanionHandoff.readEncryptedIPAPath() {
+        if let enc = DecryptCompanionHandoff.readEncryptedIPAPath(matchingBundleID: embeddedBundleID ?? "") {
             meta["hostEncryptedIPAPath"] = enc.path
             progress?("Stamped encrypted IPA for FairPlay: \(enc.path)")
             if !DecryptCompanionHandoff.encryptedIPADirectoryIsShared {
@@ -621,8 +681,11 @@ enum DecryptCompanionPackager {
         var copied = 0
         var skipped: [String] = []
         for file in machos {
-            let rel = relative(file, under: src)
-            let safeRel = rel.isEmpty ? file.lastPathComponent : rel
+            guard let safeRel = relativePath(file, under: src) else {
+                skipped.append(file.lastPathComponent)
+                progress?("Skipped Mach-O with unresolvable relative path: \(file.lastPathComponent)")
+                continue
+            }
             let out: URL
             if let secured = FairPlayDecrypt.secureChildURL(root: dest, relative: safeRel) {
                 out = secured
@@ -665,14 +728,46 @@ enum DecryptCompanionPackager {
             }
         }
 
-        // Copy every SC_Info directory tree (main + nested).
+        // Copy every SC_Info directory tree (main + nested) — report completeness.
+        var scDiscovered = 0
+        var scCopied = 0
+        var scFailed: [String] = []
         if let en = fm.enumerator(at: src, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
             for case let dir as URL in en where dir.lastPathComponent == "SC_Info" {
-                let rel = relative(dir, under: src)
-                guard let out = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) else { continue }
-                try? fm.removeItem(at: out)
-                try? fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? fm.copyItem(at: dir, to: out)
+                scDiscovered += 1
+                guard let rel = relativePath(dir, under: src) else {
+                    scFailed.append(dir.path)
+                    progress?("SC_Info path unresolvable under \(src.lastPathComponent)")
+                    continue
+                }
+                guard let out = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) else {
+                    scFailed.append(rel)
+                    progress?("SC_Info rejected unsafe path: \(rel)")
+                    continue
+                }
+                do {
+                    try? fm.removeItem(at: out)
+                    try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try fm.copyItem(at: dir, to: out)
+                    scCopied += 1
+                } catch {
+                    scFailed.append(rel)
+                    progress?("SC_Info copy failed for \(rel): \(error.localizedDescription)")
+                }
+            }
+        }
+        if scDiscovered > 0 {
+            progress?(
+                "SC_Info: \(scCopied)/\(scDiscovered) copied"
+                    + (scFailed.isEmpty ? "" : ", \(scFailed.count) failed")
+            )
+        }
+        // Main executable license material — diagnostic only (don’t abort on nested misses).
+        if let main = FairPlayDecrypt.mainExecutableForEmbed(in: src) {
+            let mainSC = main.deletingLastPathComponent().appendingPathComponent("SC_Info", isDirectory: true)
+            let stagedSC = dest.appendingPathComponent("SC_Info", isDirectory: true)
+            if fm.fileExists(atPath: mainSC.path), !fm.fileExists(atPath: stagedSC.path) {
+                progress?("Warning: main executable SC_Info missing from EmbeddedPayload after copy.")
             }
         }
 
@@ -768,22 +863,18 @@ enum DecryptCompanionPackager {
         return !parts.isEmpty && !parts.contains("..") && !parts.contains(".")
     }
 
-    private static func relative(_ file: URL, under root: URL) -> String {
+    /// Relative path of `file` under `root`, or `nil` when prefixes disagree / escape.
+    /// Never flattens to `lastPathComponent` — that can collide nested Frameworks binaries.
+    private static func relativePath(_ file: URL, under root: URL) -> String? {
         // Resolve symlinks so live `/var/containers` vs `/private/var/containers` still yields a relative path.
         let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
         let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
         let path = file.resolvingSymlinksInPath().standardizedFileURL.path
-        if path.hasPrefix(prefix) {
-            let rel = String(path.dropFirst(prefix.count))
-            // Refuse escapes — never stage files outside the source .app.
-            if rel.contains("..") { return file.lastPathComponent }
-            return rel
-        }
-        // Last resort: rebuild relative path from lastPathComponent chain when prefixes disagree.
-        if path.hasSuffix("/" + file.lastPathComponent) || path.hasSuffix(file.lastPathComponent) {
-            return file.lastPathComponent
-        }
-        return file.lastPathComponent
+        guard path.hasPrefix(prefix) else { return nil }
+        let rel = String(path.dropFirst(prefix.count))
+        // Refuse escapes — never stage files outside the source .app.
+        guard !rel.isEmpty, isSafeRelativeEmbedPath(rel) else { return nil }
+        return rel
     }
 
     private static func provisionPlistXML(_ data: Data) -> Data? {
