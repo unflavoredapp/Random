@@ -169,14 +169,10 @@ struct DecryptCompanionConsole: View {
 
     private var header: some View {
         ZStack {
-            // Center: target app icon when known, else FastDecryptBot brand mark.
+            // Center: always FastDecryptBot brand (target name/icon live in the app card).
             HStack(spacing: 8) {
                 Group {
-                    if let img = companion.iconImage {
-                        Image(uiImage: img)
-                            .resizable()
-                            .scaledToFill()
-                    } else if let brand = Self.companionBrandIcon() {
+                    if let brand = Self.companionBrandIcon() {
                         Image(uiImage: brand)
                             .resizable()
                             .scaledToFill()
@@ -191,11 +187,7 @@ struct DecryptCompanionConsole: View {
                 .frame(width: 28, height: 28)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
 
-                Text(
-                    companion.displayName.isEmpty
-                        ? DecryptCompanionIdentity.companionDisplayName
-                        : companion.displayName
-                )
+                Text(DecryptCompanionIdentity.companionDisplayName)
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)

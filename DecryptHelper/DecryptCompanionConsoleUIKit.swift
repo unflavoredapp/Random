@@ -87,8 +87,17 @@ final class DecryptCompanionConsoleViewController: UIViewController {
         statusCard.translatesAutoresizingMaskIntoConstraints = false
         statusCard.tag = 42
 
-        view.addSubview(headerIcon)
-        view.addSubview(headerTitle)
+        // Top bar: always FastDecryptBot brand (never the target app name/icon).
+        headerTitle.text = DecryptCompanionIdentity.companionDisplayName
+        headerIcon.image = Self.loadBrandIcon()
+
+        let headerRow = UIStackView(arrangedSubviews: [headerIcon, headerTitle])
+        headerRow.axis = .horizontal
+        headerRow.alignment = .center
+        headerRow.spacing = 8
+        headerRow.translatesAutoresizingMaskIntoConstraints = false
+
+        view.addSubview(headerRow)
         view.addSubview(appCard)
         appCard.addSubview(appIcon)
         appCard.addSubview(appName)
@@ -100,16 +109,15 @@ final class DecryptCompanionConsoleViewController: UIViewController {
         view.addSubview(logView)
 
         NSLayoutConstraint.activate([
-            headerIcon.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            headerIcon.centerXAnchor.constraint(equalTo: view.centerXAnchor, constant: -70),
             headerIcon.widthAnchor.constraint(equalToConstant: 28),
             headerIcon.heightAnchor.constraint(equalToConstant: 28),
 
-            headerTitle.centerYAnchor.constraint(equalTo: headerIcon.centerYAnchor),
-            headerTitle.leadingAnchor.constraint(equalTo: headerIcon.trailingAnchor, constant: 8),
-            headerTitle.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16),
+            headerRow.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            headerRow.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            headerRow.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 16),
+            headerRow.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -16),
 
-            appCard.topAnchor.constraint(equalTo: headerIcon.bottomAnchor, constant: 16),
+            appCard.topAnchor.constraint(equalTo: headerRow.bottomAnchor, constant: 16),
             appCard.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             appCard.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
 
@@ -182,10 +190,9 @@ final class DecryptCompanionConsoleViewController: UIViewController {
     }
 
     private func refresh() {
-        let title = companion.displayName.isEmpty
-            ? DecryptCompanionIdentity.companionDisplayName
-            : companion.displayName
-        headerTitle.text = title
+        // Brand chrome stays put; target identity lives in the app card only.
+        headerTitle.text = DecryptCompanionIdentity.companionDisplayName
+        headerIcon.image = Self.loadBrandIcon()
         appName.text = companion.displayName.isEmpty ? "App" : companion.displayName
         appVersion.text = companion.version.isEmpty ? "" : "Version \(companion.version)"
         statusLabel.text = companion.statusTitle
@@ -194,11 +201,9 @@ final class DecryptCompanionConsoleViewController: UIViewController {
         } else {
             spinner.stopAnimating()
         }
-        let icon = companion.iconImage
+        appIcon.image = companion.iconImage
             ?? Self.loadTargetIcon()
             ?? Self.loadBrandIcon()
-        headerIcon.image = icon
-        appIcon.image = icon
         logView.text = companion.logLines.joined(separator: "\n")
         if !companion.logLines.isEmpty {
             let end = NSRange(location: max(0, logView.text.count - 1), length: 1)
