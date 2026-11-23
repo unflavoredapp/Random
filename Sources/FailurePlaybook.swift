@@ -17,6 +17,7 @@ struct FailurePlay: Identifiable, Equatable {
 
     enum PlayAction: Equatable {
         case openAppStoreSignIn
+        case openAppStore
         case reauthStore
         case refreshPortal
         case turnOffClientInfoRewrite
@@ -72,9 +73,25 @@ enum FailurePlaybook {
             action: .reauthStore
         ),
         FailurePlay(
+            id: "fairplay-live-install",
+            title: "Install this app from the App Store",
+            summary: "FairPlay keys alone are not enough. Install the target from the App Store (same Apple ID), then retry Get — fairplayd needs the live install path before FastDecryptBot.",
+            matches: [
+                "keys ready is not enough",
+                "before opening fastdecryptbot",
+                "live install path",
+                "needs the live install",
+                "install it from the app store",
+                "install splash",
+                "no live app store install",
+            ],
+            actionTitle: "Open App Store",
+            action: .openAppStore
+        ),
+        FailurePlay(
             id: "fairplay-eperm",
-            title: "FairPlay needs live install or stamped IPA",
-            summary: "Companion hit EPERM on EmbeddedPayload. Install this app from the App Store (same Apple ID), re-run Get so the encrypted IPA is stamped/bundled, then open FastDecryptBot again.",
+            title: "FairPlay needs the live App Store install",
+            summary: "Companion hit EPERM without a usable live Store path. Install this app from the App Store (same Apple ID), re-run Get, then open FastDecryptBot again.",
             matches: [
                 "eperm",
                 "embeddedpayload",
@@ -83,16 +100,22 @@ enum FailurePlaybook {
                 "live path is stamped",
                 "operation not permitted",
             ],
-            actionTitle: "Capture FairPlay keys",
-            action: .openAppStoreSignIn
+            actionTitle: "Open App Store",
+            action: .openAppStore
         ),
         FailurePlay(
             id: "fairplay-macho",
             title: "No Mach-O binaries found",
-            summary: "Couldn’t see executables in the live install (common for Flutter apps like Cake Wallet). Sign in under Account, tap Get so the Store IPA embeds EncryptedSource.ipa into FastDecryptBot, delete any old companion, then retry.",
-            matches: ["no mach-o binaries found", "no mach-o", "no mach-os"],
-            actionTitle: "Open Account",
-            action: .openAppStoreSignIn
+            summary: "Couldn’t copy executables from the live install (common for Flutter apps like Cake Wallet). Keep the app installed from the App Store, retry Get — FairPlay mremaps the live path even when EmbeddedPayload is sparse.",
+            matches: [
+                "no mach-o binaries found",
+                "no mach-o",
+                "no mach-os",
+                "refusing empty embeddedpayload",
+                "slim embed copied 0",
+            ],
+            actionTitle: "Open App Store",
+            action: .openAppStore
         ),
         FailurePlay(
             id: "fairplay-gate",
@@ -107,8 +130,8 @@ enum FailurePlaybook {
                 "i've signed in on this iphone",
                 "media & purchases",
                 "confirming fairplay keys",
-                "fairplay keys ready",
                 "never stored media",
+                "notacknowledged",
             ],
             actionTitle: "Capture FairPlay keys",
             action: .openAppStoreSignIn
@@ -162,6 +185,9 @@ enum FailurePlaybook {
             FairPlayKeyGate.rememberPendingSearchRetry()
             FairPlayKeysFetcher.shared.presentCaptureSheet()
             FairPlayKeysFetcher.shared.startFetchFromSession()
+        case .openAppStore:
+            FairPlayKeyGate.rememberPendingSearchRetry()
+            AppStoreDecryptGuide.openAppStore()
         case .acknowledgeFairPlay:
             let email = AppleIDStore.shared.email
             if email.isEmpty {
