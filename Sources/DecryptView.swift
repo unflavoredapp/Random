@@ -77,12 +77,6 @@ struct DecryptHistoryItem: Identifiable, Hashable {
     var id: String { appID + "|" + vreq }
 }
 
-struct DecryptError: LocalizedError {
-    let message: String
-    init(_ m: String) { message = m }
-    var errorDescription: String? { message }
-}
-
 // MARK: - Client
 
 @MainActor

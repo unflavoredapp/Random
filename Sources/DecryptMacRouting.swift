@@ -44,6 +44,7 @@ enum DecryptMacRouting {
         return !raw.isEmpty
     }
 
+#if !DECRYPT_HELPER
     @MainActor
     static func startMacDecrypt(storeURL: String, version: String?, displayName: String) {
         let url = storeURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -102,6 +103,7 @@ enum DecryptMacRouting {
             }
         }
     }
+#endif
 }
 
 private extension String {

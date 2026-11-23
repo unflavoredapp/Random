@@ -129,6 +129,27 @@ APP_PATH="$(ls -d "$ARCHIVE"/Products/Applications/*.app 2>/dev/null | head -n1)
 [ -n "$APP_PATH" ] || { echo "ERROR: no .app inside $ARCHIVE"; dump_errors 1; exit 1; }
 echo ""; echo "==> Built: $APP_PATH"
 
+# Lean DecryptHelper must ship inside the host Resources (companion packs this Mach-O).
+HELPER_APP="$(find "$APP_PATH" -maxdepth 2 -type d -name 'DecryptHelper.app' 2>/dev/null | head -n1)"
+if [ -z "$HELPER_APP" ]; then
+  echo "ERROR: DecryptHelper.app was not embedded into $APP_PATH"
+  echo "       FastDecryptBot would fall back to cloning the ~45 MB host binary."
+  dump_errors 1
+  exit 1
+fi
+HELPER_EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$HELPER_APP/Info.plist" 2>/dev/null || echo DecryptHelper)"
+HELPER_BIN="$HELPER_APP/$HELPER_EXE"
+[ -f "$HELPER_BIN" ] || { echo "ERROR: missing DecryptHelper executable at $HELPER_BIN"; dump_errors 1; exit 1; }
+HELPER_BYTES=$(stat -f%z "$HELPER_BIN" 2>/dev/null || stat -c%s "$HELPER_BIN")
+HELPER_MB=$(awk -v b="$HELPER_BYTES" 'BEGIN { printf "%.2f", b/1024/1024 }')
+echo "==> DecryptHelper: $HELPER_BIN (${HELPER_MB} MB)"
+# Soft ceiling — keep Jetsam headroom vs the ~45 MB host clone. Fail CI if we regressed hard.
+if [ "$HELPER_BYTES" -gt $((8 * 1024 * 1024)) ]; then
+  echo "ERROR: DecryptHelper is ${HELPER_MB} MB (> 8 MB). Lean FairPlay shell regressed."
+  dump_errors 1
+  exit 1
+fi
+
 # Package: Payload/<App>.app → .ipa (no exportArchive — that needs a signing identity).
 rm -rf "$OUT"; mkdir -p "$OUT/Payload"
 cp -R "$APP_PATH" "$OUT/Payload/"

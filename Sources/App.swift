@@ -29,7 +29,7 @@ struct TetherlessApp: App {
     var body: some Scene {
         WindowGroup {
             if DecryptCompanionRuntime.isCompanionProcess {
-                // Installed “FastDecryptBot” companion (cloned binary + EmbeddedPayload).
+                // Installed “FastDecryptBot” companion (DecryptHelper / host fallback + EmbeddedPayload).
                 DecryptCompanionRoot()
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .preferredColorScheme(.dark)

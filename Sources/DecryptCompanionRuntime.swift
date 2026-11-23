@@ -1,8 +1,8 @@
 //
 // Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionRuntime.swift
-//  When this process is the installed “FastDecryptBot” companion (cloned
-//  binary + EmbeddedPayload), run FairPlayed-style export and write the clear IPA
+//  When this process is the installed “FastDecryptBot” companion (lean
+//  DecryptHelper binary + EmbeddedPayload), run FairPlayed-style export and write the clear IPA
 //  into the shared Documents/Decrypted folder for the host app to pick up.
 //
 

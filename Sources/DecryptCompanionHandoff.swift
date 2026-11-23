@@ -205,6 +205,7 @@ enum DecryptCompanionHandoff {
         UIApplication.shared.open(deep)
     }
 
+#if !DECRYPT_HELPER
     /// Host: start `DecryptClient` against Decrypt site URL (Mac HTTPS / tetherless.dev).
     @discardableResult
     static func consumePendingServerFallback() -> Bool {
@@ -231,6 +232,7 @@ enum DecryptCompanionHandoff {
         }
         return true
     }
+#endif
 
     /// Publish snapshot to App Group when the free/paid provision still has the group.
     static func publishHostSnapshot() {
@@ -515,6 +517,7 @@ enum DecryptCompanionHandoff {
         }
     }
 
+#if !DECRYPT_HELPER
     /// On host foreground: retry opening a companion that needed Trust.
     @discardableResult
     static func resumePendingOpenIfNeeded() async -> Bool {
@@ -526,6 +529,7 @@ enum DecryptCompanionHandoff {
         if opened { clearPendingOpen() }
         return opened
     }
+#endif
 
     // MARK: - Clear IPA export (companion → host)
 
@@ -599,6 +603,7 @@ enum DecryptCompanionHandoff {
         UIApplication.shared.open(url)
     }
 
+#if !DECRYPT_HELPER
     /// Host: copy a pending companion clear IPA into `AppPaths.dir("inbox")`, wire DecryptClient,
     /// and attach it to a matching Downloads job when possible.
     @discardableResult
@@ -673,6 +678,7 @@ enum DecryptCompanionHandoff {
         )
         return dest
     }
+#endif
 
     private static func sanitizeFileName(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)

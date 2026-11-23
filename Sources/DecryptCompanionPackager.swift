@@ -2,7 +2,8 @@
 // Brand: Tetherless · https://tetherless.dev
 //  DecryptCompanionPackager.swift
 //  Builds a real second app (“FastDecryptBot”) bundled from this process:
-//  clone our executable + Frameworks, embed the encrypted target under
+//  prefer embedded DecryptHelper.app Mach-O (lean FairPlay shell); fall back to
+//  cloning the host executable + Frameworks. Embed the encrypted target under
 //  EmbeddedPayload/ (FairPlayed layout), zip → IPA. Main app then signs with
 //  the user’s Apple ID cert (free 7-day or paid), installs, and opens it.
 //
@@ -15,11 +16,11 @@ import ZIPFoundation
 /// so host FairPlay-ack snapshots can read `AppStoreDecryptGuide` safely.
 @MainActor
 enum DecryptCompanionPackager {
-    static let companionBundleIDFallback = "bot.fastdecrypt.ai.decrypt"
-    static let companionDisplayName = "FastDecryptBot"
+    static let companionBundleIDFallback = DecryptCompanionIdentity.companionBundleIDFallback
+    static let companionDisplayName = DecryptCompanionIdentity.companionDisplayName
     /// Primary URL scheme for opening the companion. Legacy schemes still accepted by the host.
-    static let companionURLScheme = "fastdecryptbot"
-    static let companionIconAsset = "FastDecryptBotAppIcon"
+    static let companionURLScheme = DecryptCompanionIdentity.companionURLScheme
+    static let companionIconAsset = DecryptCompanionIdentity.companionIconAsset
 
     struct Package: Sendable {
         let ipaURL: URL
@@ -126,7 +127,38 @@ enum DecryptCompanionPackager {
         return rest
     }
 
-    // MARK: - Host clone
+    // MARK: - Lean DecryptHelper shell
+
+    /// Prefer the embedded `DecryptHelper.app` Mach-O (~2 MB FairPlay shell). Fall back to
+    /// cloning the host executable only when the helper was stripped from the IPA.
+    private static func resolveHelperExecutable() throws -> (url: URL, name: String, isLeanHelper: Bool) {
+        let fm = FileManager.default
+        let helperName = DecryptCompanionIdentity.helperProductName
+        if let helperApp = Bundle.main.url(forResource: helperName, withExtension: "app") {
+            let infoURL = helperApp.appendingPathComponent("Info.plist")
+            let exeName: String = {
+                if let dict = NSDictionary(contentsOf: infoURL) as? [String: Any],
+                   let name = dict["CFBundleExecutable"] as? String,
+                   !name.isEmpty {
+                    return name
+                }
+                return helperName
+            }()
+            let exe = helperApp.appendingPathComponent(exeName)
+            if fm.isExecutableFile(atPath: exe.path) {
+                return (exe, exeName, true)
+            }
+        }
+        // Also accept a bare Mach-O dropped next to Resources (older embed layouts).
+        if let bare = Bundle.main.url(forResource: helperName, withExtension: nil),
+           fm.isExecutableFile(atPath: bare.path) {
+            return (bare, helperName, true)
+        }
+        guard let hostExe = Bundle.main.executableURL else {
+            throw DecryptError("Couldn't locate DecryptHelper or host executable for FastDecryptBot.")
+        }
+        return (hostExe, hostExe.lastPathComponent, false)
+    }
 
     private static func cloneHostApp(
         into destApp: URL,
@@ -136,17 +168,23 @@ enum DecryptCompanionPackager {
         let fm = FileManager.default
         let host = Bundle.main
 
-        guard let exeURL = host.executableURL else {
-            throw DecryptError("Couldn't locate TetherLess executable to clone into the companion.")
+        let resolved = try resolveHelperExecutable()
+        let exeURL = resolved.url
+        let exeName = resolved.name
+        if resolved.isLeanHelper {
+            progress?("Embedding DecryptHelper binary…")
+        } else {
+            progress?("Building lean FastDecryptBot shell (host fallback)…")
         }
-        let exeName = exeURL.lastPathComponent
-        progress?("Building lean FastDecryptBot shell…")
         try fm.copyItem(at: exeURL, to: destApp.appendingPathComponent(exeName))
 
-        // Copy only dyld-required Frameworks — skip known host-only bulk (Stripe UI,
-        // Vapor server, etc. still must ship if the binary links them). Prefer lean
-        // by omitting non-code resource bundles next to frameworks.
-        try copyLeanFrameworks(from: host, into: destApp, progress: progress)
+        // Lean DecryptHelper is statically linked (ZIPFoundation only) — skip host Frameworks.
+        // Host-fallback still needs OpenSSL / whatever the fat Mach-O links.
+        if !resolved.isLeanHelper {
+            try copyLeanFrameworks(from: host, into: destApp, progress: progress)
+        } else {
+            progress?("DecryptHelper — no host Frameworks (lean shell)")
+        }
 
         // Minimal Info.plist — companion identity + URL scheme for handoff.
         let info: [String: Any] = [
@@ -188,6 +226,7 @@ enum DecryptCompanionPackager {
             // Marker so runtime knows this install is the companion role.
             "TLCompanionRole": true,
             "TLCompanionHostBundle": host.bundleIdentifier ?? TetherlessBrand.bundleID,
+            "TLDecryptHelper": resolved.isLeanHelper,
         ]
         let infoURL = destApp.appendingPathComponent("Info.plist")
         let data = try PropertyListSerialization.data(fromPropertyList: info, format: .binary, options: 0)
