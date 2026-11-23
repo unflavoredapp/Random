@@ -39,13 +39,11 @@ enum FairPlayKeyGate {
         set { UserDefaults.standard.set(newValue, forKey: "tetherless.fairplay.gate") }
     }
 
-    /// When true (default), refuse companion packaging without a live App Store install
-    /// for the target bid — the failure mode in Host EPERM screenshots.
+    /// Always require a live App Store install before FastDecryptBot — EncryptedSource
+    /// alone is not a FairPlay path (fairplayd / EPERM).
     static var requireLiveInstallForCompanion: Bool {
-        get {
-            UserDefaults.standard.object(forKey: "tetherless.fairplay.requireLiveInstall") as? Bool ?? true
-        }
-        set { UserDefaults.standard.set(newValue, forKey: "tetherless.fairplay.requireLiveInstall") }
+        get { true }
+        set { /* live-install-only policy — ignore overrides */ }
     }
 
     /// Remember that Search Get failed only for missing FairPlay ack — resume after Confirm.

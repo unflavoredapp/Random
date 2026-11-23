@@ -176,18 +176,19 @@ enum DecryptCompanionRuntime {
             log("FairPlay Apple ID · \(email)")
         }
 
-        // FairPlayed / foulplay: fairplayd resolves SC_Info on the *input* path.
-        // Advanced source mode (host-stamped) can force live / stamped IPA / embed.
+        // FairPlayed / foulplay: fairplayd resolves SC_Info on the *live Store* path.
+        // Live install is the only FairPlay read path — never EncryptedSource / EmbeddedPayload.
         // Tetherless-style companion policy: serial, never auto-bounce, PARTIAL OK.
         // Streaming page capture is forced in fpcore (FP_FORCE_LEAN) on device.
         var fpOpts = FairPlayAdvancedOptions.Resolved.from(snapshot: snap)
+        fpOpts.sourceMode = .liveInstall
         fpOpts.forceSerialDecrypt = true
         fpOpts.bounceLargeCryptToServer = false
         fpOpts.preferPartialOnLowRAM = true
         fpOpts.requireAllFrameworks = false
 #if DECRYPT_HELPER
         // Helper contract: stream-only, no key blobs, subordinate installed process.
-        log("policy=serial+partialOK+stream · keys=live-path-only (never exported)")
+        log("policy=serial+partialOK+stream · FairPlay=live-install-only (never EncryptedSource)")
 #endif
         log(FairPlayJetsam.memorySummary(prefix: "preflight"))
         let expectedBid = (embedBid
@@ -198,8 +199,7 @@ enum DecryptCompanionRuntime {
             manifest: man,
             expectedBundleID: expectedBid
         )
-        // Host stamp can be missing (App Group stripped / bid mismatch). Rediscover on-device —
-        // fairplayd needs the live Store path for keys; EmbeddedPayload alone often EPERMs.
+        // Host stamp can be missing (App Group stripped / bid mismatch). Rediscover on-device.
         if liveURL == nil, !expectedBid.isEmpty {
             let known = (man?["hostLiveInstallPath"] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -210,137 +210,35 @@ enum DecryptCompanionRuntime {
                 liveURL = found
                 log("Rediscovered live App Store install for \(expectedBid)")
                 DecryptCompanionHandoff.publishLiveInstallPath(found.path, bundleID: expectedBid)
-            } else {
-                log("No live App Store install for \(expectedBid) — FairPlay may EPERM without it.")
-            }
-        }
-        let stampedIPAURL = DecryptCompanionHandoff.resolveEncryptedIPAURL(
-            manifest: man,
-            expectedBundleID: expectedBid
-        )
-        var ipaUnpackRoot: URL?
-        defer {
-            if let ipaUnpackRoot {
-                try? fm.removeItem(at: ipaUnpackRoot)
             }
         }
 
-        func unpackStampedIPA(_ ipaURL: URL) throws -> URL {
-            log("Using stamped encrypted IPA for FairPlay: \(ipaURL.path)")
-            let unpack = fm.temporaryDirectory
-                .appendingPathComponent("tl-ipa-\(UUID().uuidString)", isDirectory: true)
-            try fm.createDirectory(at: unpack, withIntermediateDirectories: true)
-            try fm.unzipItem(at: ipaURL, to: unpack)
-            let payload = unpack.appendingPathComponent("Payload", isDirectory: true)
-            let app = try fm.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
-                .first(where: { $0.pathExtension == "app" })
-            guard let app else {
-                throw DecryptError("Stamped encrypted IPA has no Payload/*.app — re-run Get from TetherLess.")
-            }
-            ipaUnpackRoot = unpack
-            log("Unpacked encrypted IPA → \(app.lastPathComponent)")
-            return app
-        }
+        log("Advanced FairPlay · source=Live install only · retries=\(fpOpts.retryRounds)")
+        log("EmbeddedPayload (export seed only): \(src.path)")
 
-        // Always log advanced source + path diagnostics for EPERM triage (screenshots).
-        log("Advanced FairPlay · source=\(fpOpts.sourceMode.title) · retries=\(fpOpts.retryRounds)")
-        if let liveURL { log("Live path: \(liveURL.path)") }
-        if let stampedIPAURL {
-            log("Stamped IPA: \(stampedIPAURL.path)")
-        } else {
-            log("Stamped IPA: (none readable — check App Group / EncryptedSource.ipa)")
+        guard let liveURL else {
+            throw DecryptError(
+                "No live App Store install for \(expectedBid.isEmpty ? name : expectedBid). Install \(name) from the App Store on this iPhone (same Apple ID), re-run Get from FastDecryptBot, then open the companion again. EncryptedSource / EmbeddedPayload are not FairPlay paths."
+            )
         }
-        log("EmbeddedPayload: \(src.path)")
+        let readRoot = liveURL
+        log("Using live App Store install for FairPlay: \(liveURL.path)")
 
-        var readRoot: URL
-        switch fpOpts.sourceMode {
-        case .liveInstall:
-            guard let liveURL else {
-                throw DecryptError(
-                    "Advanced FairPlay is set to Live install only, but no live App Store path was stamped. Install \(name) from the App Store, re-run Get, or switch source mode to Automatic."
-                )
-            }
-            readRoot = liveURL
-            log("Using live App Store install for FairPlay: \(liveURL.path)")
-        case .stampedIPA:
-            guard let stampedIPAURL else {
-                throw DecryptError(
-                    "Advanced FairPlay is set to Stamped IPA only, but no encrypted IPA was stamped or bundled. Re-run Get from TetherLess."
-                )
-            }
-            readRoot = try unpackStampedIPA(stampedIPAURL)
-        case .embeddedPayload:
-            readRoot = src
-            log("Using EmbeddedPayload only (advanced) — FairPlay may EPERM without live licenses.")
-        case .automatic:
-            // Prefer live install (fairplayd-friendly). Defer EncryptedSource / stamped IPA
-            // unpack until EmbeddedPayload Mach-O audit fails — avoids holding two full
-            // IPA trees in Jetsam-sensitive memory up front.
-            if let liveURL {
-                readRoot = liveURL
-                log("Using live App Store install for FairPlay: \(liveURL.path)")
-            } else {
-                readRoot = src
-                if stampedIPAURL != nil || fm.fileExists(
-                    atPath: Bundle.main.bundleURL
-                        .appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName).path
-                ) {
-                    log("Deferred EncryptedSource unpack — trying EmbeddedPayload first (Jetsam-safe).")
-                } else {
-                    log("No live install / stamped IPA — FairPlay will try EmbeddedPayload (often EPERM).")
-                    log("Re-run Get from TetherLess so EncryptedSource.ipa is bundled into the companion.")
-                }
-            }
-        }
-
-        // Fail-closed DRM checks stay silent in the console (TetherlessiOS-style log).
-        // Live App Store installs often refuse cryptid probes — fall back to embed audit for counts.
+        // Live installs often refuse cryptid probes — still proceed; fairplayd mremaps.
         var before = try FairPlayDecrypt.verifyApp(at: readRoot)
         if before.entries.isEmpty {
-            before = try FairPlayDecrypt.verifyApp(at: src)
-        }
-        if before.entries.isEmpty {
-            // Slim EmbeddedPayload may be empty when host sandbox couldn't copy Mach-Os;
-            // EncryptedSource.ipa still carries the full IPA for FairPlay.
-            let bundled = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
-            if let stampedIPAURL {
-                log("No Mach-Os on live/embed audit — unpacking stamped encrypted IPA…")
-                readRoot = try unpackStampedIPA(stampedIPAURL)
-                before = try FairPlayDecrypt.verifyApp(at: readRoot)
-            } else if fm.fileExists(atPath: bundled.path) {
-                log("No Mach-Os on live/embed audit — unpacking bundled EncryptedSource.ipa…")
-                readRoot = try unpackStampedIPA(bundled)
-                before = try FairPlayDecrypt.verifyApp(at: readRoot)
+            // Audit counts from EmbeddedPayload for console only — do not switch readRoot.
+            let embedAudit = try FairPlayDecrypt.verifyApp(at: src)
+            if !embedAudit.entries.isEmpty {
+                before = embedAudit
+                log("Live path cryptid probe empty — using EmbeddedPayload counts for console (\(before.encrypted) encrypted). FairPlay still reads the live install.")
             }
         }
         if before.entries.isEmpty {
             throw DecryptError(
-                "No Mach-Os found (EmbeddedPayload empty and no EncryptedSource.ipa). Delete FastDecryptBot, re-run Get from TetherLess so EncryptedSource.ipa is bundled, then open the companion again."
+                "No Mach-Os found under the live App Store install for \(name). Reinstall from the App Store, refresh Installed, re-run Get, then open FastDecryptBot again."
             )
         }
-        let usedLiveInstall = liveURL.map {
-            readRoot.resolvingSymlinksInPath().standardizedFileURL
-                == $0.resolvingSymlinksInPath().standardizedFileURL
-        } ?? false
-        if !usedLiveInstall,
-           before.encrypted == 0 && before.unknown > 0 && before.clear == 0 && before.plain == 0 {
-            throw DecryptError(
-                "Couldn't inspect FairPlay cryptids on EmbeddedPayload (\(before.unknown) unknown). Re-run Get from TetherLess after updating, then open FastDecryptBot again."
-            )
-        }
-        // Only fail-closed on slim EmbeddedPayload counts when EncryptedSource isn't available.
-        // With EncryptedSource.ipa, FairPlay unpacks the full IPA (TestFlight 3/4 slim was OK).
-        let hasBundledEncryptedSource = fm.fileExists(
-            atPath: Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName).path
-        )
-        if !usedLiveInstall,
-           !hasBundledEncryptedSource,
-           let expected = expectedEncryptedCount(), expected > 0, before.encrypted < expected, before.unknown == 0 {
-            throw DecryptError(
-                "EmbeddedPayload is missing FairPlay binaries (\(before.encrypted) encrypted vs \(expected) in the full IPA). Re-run Get so EncryptedSource.ipa is bundled."
-            )
-        }
-
         let work = fm.temporaryDirectory.appendingPathComponent("tl-export-\(UUID().uuidString)", isDirectory: true)
         defer { try? fm.removeItem(at: work) }
         let payload = work.appendingPathComponent("Payload", isDirectory: true)
@@ -348,22 +246,8 @@ enum DecryptCompanionRuntime {
         try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
 
         log("Copying app bundle…")
-        // Seed Payload from EmbeddedPayload resources; Mach-Os are overwritten from readRoot.
-        // When slim embed is empty (sandbox) but we unpacked EncryptedSource/stamped IPA,
-        // copy resources from that full tree so the export IPA isn't a hollow shell.
-        let seedRoot: URL = {
-            let usedIPA = ipaUnpackRoot != nil
-                && readRoot.path.hasPrefix((ipaUnpackRoot?.path ?? "") + "/")
-            if usedIPA {
-                let embedCount = (try? fm.contentsOfDirectory(at: src, includingPropertiesForKeys: nil))?.count ?? 0
-                if embedCount <= 2 { return readRoot }
-            }
-            return src
-        }()
-        if seedRoot != src {
-            log("Seeding export from unpacked encrypted IPA (EmbeddedPayload was sparse)…")
-        }
-        try copyTree(from: seedRoot, to: destApp)
+        // Seed export resources from EmbeddedPayload; FairPlay overwrites Mach-Os from live.
+        try copyTree(from: src, to: destApp)
 
         let verbose = fpOpts.verboseConsole
         let progressBridge: @Sendable (String) -> Void = { msg in
@@ -394,37 +278,11 @@ enum DecryptCompanionRuntime {
             }
         }
         func runDecrypt(from root: URL) throws -> FairPlayDecryptReport {
-            var readFrom = root
-            // Collapse EncryptedSource unpack → destApp before mremap so we never
-            // hold two full IPA trees through the remmap window (Host ~20 MB Jetsam).
-            if let unpack = ipaUnpackRoot {
-                let unpackPath = unpack.resolvingSymlinksInPath().standardizedFileURL.path
-                let rootPath = root.resolvingSymlinksInPath().standardizedFileURL.path
-                let underUnpack = rootPath == unpackPath
-                    || rootPath.hasPrefix(unpackPath.hasSuffix("/") ? unpackPath : unpackPath + "/")
-                let usingLive = liveURL.map {
-                    root.resolvingSymlinksInPath().standardizedFileURL
-                        == $0.resolvingSymlinksInPath().standardizedFileURL
-                } ?? false
-                if underUnpack {
-                    // Re-seed destApp from the unpack (covers EPERM retry where dest
-                    // was first copied from a sparse EmbeddedPayload).
-                    try copyTree(from: root, to: destApp)
-                    readFrom = destApp
-                    try? fm.removeItem(at: unpack)
-                    ipaUnpackRoot = nil
-                    log("Freed EncryptedSource unpack — FairPlay in-place on export tree…")
-                } else if usingLive {
-                    try? fm.removeItem(at: unpack)
-                    ipaUnpackRoot = nil
-                    log("Freed EncryptedSource unpack before FairPlay remap…")
-                }
-            }
             FairPlayJetsam.purgeTransientMemory()
             log(FairPlayJetsam.memorySummary(prefix: "pre-mremap"))
-            log("Streaming FairPlay page capture (lean / file-backed)…")
+            log("Streaming FairPlay page capture from live install…")
             return try FairPlayDecrypt.decryptMachOs(
-                readingFrom: readFrom,
+                readingFrom: root,
                 writingTo: destApp,
                 quietConsole: !verbose,
                 options: fpOpts,
@@ -436,17 +294,8 @@ enum DecryptCompanionRuntime {
             FairPlayFailureClass.current(fromLogs: [error.localizedDescription]) == .licenseOrKeys
         }
 
-        func epermGuidance(triedBundled: Bool) -> String {
-            let bundled = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
-            let hasBundled = fm.fileExists(atPath: bundled.path)
-            if !hasBundled {
-                return "FairPlay EPERM on EmbeddedPayload — this FastDecryptBot build has no EncryptedSource.ipa. Update TetherLess, delete FastDecryptBot, re-run Get so the encrypted IPA is bundled, then open FastDecryptBot again. \(AppStoreDecryptGuide.failureHint)"
-            }
-            if triedBundled {
-                return "FairPlay EPERM after unpacking EncryptedSource.ipa — install \(name) from the App Store on this iPhone (same Apple ID) so fairplayd has a live path, re-run Get, then open FastDecryptBot again. \(AppStoreDecryptGuide.failureHint)"
-            }
-            return "FairPlay EPERM on EmbeddedPayload — install \(name) from the App Store on this iPhone (same Apple ID), re-run Get from TetherLess so the live path is stamped, then open FastDecryptBot again. \(AppStoreDecryptGuide.failureHint)"
-        }
+        let liveEPERMHint =
+            "FairPlay EPERM on the live App Store install for \(name). Confirm Store login + Media & Purchases for the owning Apple ID, delete/reinstall \(name) from the App Store, re-run Get, then open FastDecryptBot again. \(AppStoreDecryptGuide.failureHint)"
 
         var report: FairPlayDecryptReport
         do {
@@ -463,50 +312,15 @@ enum DecryptCompanionRuntime {
                 throw fp
             case .mainExecutableFailed(let detail)
                 where FairPlayFailureClass.current(fromLogs: [detail]) == .licenseOrKeys:
-                // Auto-retry once from bundled EncryptedSource.ipa when we started on EmbeddedPayload.
-                let bundled = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
-                let usedEmbed = readRoot.resolvingSymlinksInPath().standardizedFileURL
-                    == src.resolvingSymlinksInPath().standardizedFileURL
-                if !usedLiveInstall, usedEmbed, fm.fileExists(atPath: bundled.path) {
-                    log("EmbeddedPayload EPERM — retrying FairPlay from bundled EncryptedSource.ipa…")
-                    try? fm.removeItem(at: destApp)
-                    try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
-                    try copyTree(from: src, to: destApp)
-                    do {
-                        let unpacked = try unpackStampedIPA(bundled)
-                        report = try runDecrypt(from: unpacked)
-                    } catch {
-                        throw FairPlayDecryptError.missingLicense(epermGuidance(triedBundled: true))
-                    }
-                } else if !usedLiveInstall {
-                    throw FairPlayDecryptError.missingLicense(epermGuidance(triedBundled: false))
-                } else {
-                    throw FairPlayDecryptError.missingLicense(FairPlayFailureClass.licenseOrKeys.userMessage)
-                }
+                // No EncryptedSource fallback — live install is the only FairPlay path.
+                log(detail)
+                throw FairPlayDecryptError.missingLicense(liveEPERMHint)
             default:
                 throw fp
             }
         } catch {
             if isLicenseEPERM(error) {
-                let bundled = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
-                let usedEmbed = readRoot.resolvingSymlinksInPath().standardizedFileURL
-                    == src.resolvingSymlinksInPath().standardizedFileURL
-                if !usedLiveInstall, usedEmbed, fm.fileExists(atPath: bundled.path) {
-                    log("EmbeddedPayload EPERM — retrying FairPlay from bundled EncryptedSource.ipa…")
-                    try? fm.removeItem(at: destApp)
-                    try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
-                    try copyTree(from: src, to: destApp)
-                    do {
-                        let unpacked = try unpackStampedIPA(bundled)
-                        report = try runDecrypt(from: unpacked)
-                    } catch {
-                        throw FairPlayDecryptError.missingLicense(epermGuidance(triedBundled: true))
-                    }
-                } else if !usedLiveInstall {
-                    throw FairPlayDecryptError.missingLicense(epermGuidance(triedBundled: false))
-                } else {
-                    throw FairPlayDecryptError.missingLicense(FairPlayFailureClass.licenseOrKeys.userMessage)
-                }
+                throw FairPlayDecryptError.missingLicense(liveEPERMHint)
             } else {
                 throw error
             }

@@ -1113,12 +1113,12 @@ final class DeviceDecryptService: ObservableObject {
             publishDecryptProgress("Encrypted IPA is in App Group (companion-readable).")
         } else {
             publishDecryptProgress(
-                "App Group unavailable (common on free Apple ID certs) — companion will embed EncryptedSource.ipa. Delete any old FastDecryptBot app before Get so the new package is installed."
+                "App Group unavailable (common on free Apple ID certs) — live install path must still be stamped for FairPlay. Delete any old FastDecryptBot app before Get so the new package is installed."
             )
         }
         if fpOpts.pathDiagnostics {
             publishDecryptProgress(
-                "Advanced FairPlay · \(fpOpts.sourceMode.title) · retries \(fpOpts.retryRounds)"
+                "Advanced FairPlay · Live install only · retries \(fpOpts.retryRounds)"
                 + (fpOpts.verboseConsole ? " · verbose" : "")
             )
         }
@@ -1126,10 +1126,8 @@ final class DeviceDecryptService: ObservableObject {
         publishDecryptProgress("Building FastDecryptBot companion for \(label)…")
         _ = await DeviceLibrary.shared.refreshAwaiting()
 
-        // Stamp live install for FairPlay mremap only — do NOT slim-copy from the live
-        // container first. Same-device sandbox often can't see foreign FairPlay binaries
-        // (Cake Wallet Runner.app → “No Mach-O binaries found”), which aborted Get before
-        // the companion was installed. Always embed the retained Store IPA + EncryptedSource.
+        // FairPlay mremap only from the live App Store install — EncryptedSource is packaging
+        // only. Gate already required live when bid is known; re-stamp here for the companion.
         if !resolvedBid.isEmpty,
            let live = await resolveInstalledAppURL(bundleID: resolvedBid) {
             DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: resolvedBid)
