@@ -453,20 +453,35 @@ enum FairPlayDecrypt {
                 "Refusing to write into a live App Store install. Decrypt output must be a Payload/temp copy or companion EmbeddedPayload."
             )
         }
+
+        // Path-agnostic single-tree contract: when the read root is NOT a live Store
+        // install, collapse into destApp before remmap so every entry (IPA / embed /
+        // companion) remaps with one tree + lean ~1× peak — not dual-tree Jetsam.
+        var effectiveSource = sourceApp
+        let srcStd = sourceApp.resolvingSymlinksInPath().standardizedFileURL
+        let dstStd = destApp.resolvingSymlinksInPath().standardizedFileURL
+        if !isLiveAppStoreInstall(sourceApp), srcStd != dstStd {
+            detail?("Collapsing FairPlay read root → export tree (single-tree remmap)…")
+            try ensureExportTreeHasBinaries(from: sourceApp, into: destApp, progress: detail)
+            effectiveSource = destApp
+            FairPlayJetsam.purgeTransientMemory()
+            detail?(FairPlayJetsam.memorySummary(prefix: "post-collapse"))
+        }
+
         // FairPlayed embed_ipa.sh: installd normally copies the main .sinf onto every
         // SinfReplicationPaths entry. Never write into a live App Store install container —
         // SC_Info reads/writes there hung decrypt on “Decrypting Mach-Os…”.
-        if isLiveAppStoreInstall(sourceApp) {
+        if isLiveAppStoreInstall(effectiveSource) {
             detail?("Using live install licenses (no SINF staging)…")
         } else {
-            let staged = replicateSinfs(in: sourceApp)
+            let staged = replicateSinfs(in: effectiveSource)
             report.sinfsReplicated = staged
             if staged > 0 { detail?("Staged \(staged) Manifest SINF license(s)…") }
         }
 
         // Tetherless-style: only fail-closed on every Mach-O when the user opts in
         // (`requireAllFrameworks`). Otherwise main is required; frameworks soft-fail → PARTIAL.
-        let liveSource = isLiveAppStoreInstall(sourceApp)
+        let liveSource = isLiveAppStoreInstall(effectiveSource)
         var fullIPACoverage = options.requireAllFrameworks
         report.fullIPACoverage = fullIPACoverage
         detail?(
@@ -475,12 +490,12 @@ enum FairPlayDecrypt {
                 : "Main-required decrypt (frameworks soft-fail → PARTIAL if needed)…"
         )
         let binaries = try collectMachOs(
-            under: sourceApp,
+            under: effectiveSource,
             fullIPACoverage: fullIPACoverage,
             progress: detail
         )
         guard !binaries.isEmpty else {
-            throw FairPlayDecryptError.failed("No Mach-O binaries found in \(sourceApp.lastPathComponent).")
+            throw FairPlayDecryptError.failed("No Mach-O binaries found in \(effectiveSource.lastPathComponent).")
         }
         report.scanned = binaries.count
 
@@ -537,14 +552,14 @@ enum FairPlayDecrypt {
         // (`…/SC_Info/<exe>.sinf`) so fairplayd can resolve licenses without a live install.
         if !liveSource {
             let stageTargets = encryptedBins.isEmpty ? binaries : encryptedBins
-            let perBinary = stageSinfsForEncryptedBinaries(stageTargets, in: sourceApp)
+            let perBinary = stageSinfsForEncryptedBinaries(stageTargets, in: effectiveSource)
             report.sinfsReplicated += perBinary
             if perBinary > 0 {
                 detail?("Staged \(perBinary) per-binary SINF license(s)…")
             }
         }
 
-        let ordered = prioritizeBinaries(binaries, app: sourceApp)
+        let ordered = prioritizeBinaries(binaries, app: effectiveSource)
         guard !ordered.isEmpty else {
             throw FairPlayDecryptError.failed("No Mach-O binaries found.")
         }
@@ -569,8 +584,8 @@ enum FairPlayDecrypt {
         #endif
 
         // Main first (serial), then frameworks/appex — ascending cryptsize, serial under Jetsam.
-        let mainFiles = ordered.filter { role(of: $0, under: sourceApp, app: sourceApp) == .main }
-        var otherFiles = ordered.filter { role(of: $0, under: sourceApp, app: sourceApp) != .main }
+        let mainFiles = ordered.filter { role(of: $0, under: effectiveSource, app: effectiveSource) == .main }
+        var otherFiles = ordered.filter { role(of: $0, under: effectiveSource, app: effectiveSource) != .main }
         otherFiles = sortAscendingCryptsize(otherFiles)
         let total = ordered.count
 
@@ -580,7 +595,7 @@ enum FairPlayDecrypt {
             outcome: DecryptOneOutcome,
             budget: TimeInterval
         ) throws {
-            let rel = relativePath(file, under: sourceApp)
+            let rel = relativePath(file, under: effectiveSource)
             let required = r.isRequired(fullIPACoverage: fullIPACoverage)
             switch outcome {
             case .timedOut:
@@ -635,7 +650,7 @@ enum FairPlayDecrypt {
             pauseIfMemoryPressure(progress: detail)
             let budget: TimeInterval = 180
             let outcome = decryptOneWithTimeout(
-                file: file, sourceApp: sourceApp, destApp: destApp,
+                file: file, sourceApp: effectiveSource, destApp: destApp,
                 index: index, total: total, role: .main, timeout: budget
             )
             try absorb(file: file, role: .main, outcome: outcome, budget: budget)
@@ -655,7 +670,7 @@ enum FairPlayDecrypt {
             )
             let parallelResults = decryptSecondaryMachOsParallel(
                 files: otherFiles,
-                sourceApp: sourceApp,
+                sourceApp: effectiveSource,
                 destApp: destApp,
                 total: total,
                 indexBase: mainFiles.count,
@@ -670,7 +685,7 @@ enum FairPlayDecrypt {
         // buddy3 `verify_with_targeted_retries`: re-probe dest cryptids and retry only
         // still-encrypted required binaries (backoff), instead of blind soft-fail retries.
         try verifyWithTargetedRetries(
-            sourceApp: sourceApp,
+            sourceApp: effectiveSource,
             destApp: destApp,
             report: &report,
             backoff: options.retryBackoffSeconds,
@@ -690,8 +705,8 @@ enum FairPlayDecrypt {
                     "Full IPA decrypt left \(report.failed.count) Mach-O(s) encrypted: \(names)\(suffix). \(AppStoreDecryptGuide.failureHint)"
                 )
             }
-            let mainClear = report.decrypted.contains { isMainExecutable($0, app: sourceApp) }
-                || report.plain.contains { isMainExecutable($0, app: sourceApp) }
+            let mainClear = report.decrypted.contains { isMainExecutable($0, app: effectiveSource) }
+                || report.plain.contains { isMainExecutable($0, app: effectiveSource) }
             if mainClear {
                 report.isPartial = true
                 detail?(
@@ -705,8 +720,8 @@ enum FairPlayDecrypt {
             }
         } else if !report.softFailed.isEmpty {
             // Main clear, only soft framework leftovers — still a usable PARTIAL.
-            let mainClear = report.decrypted.contains { isMainExecutable($0, app: sourceApp) }
-                || report.plain.contains { isMainExecutable($0, app: sourceApp) }
+            let mainClear = report.decrypted.contains { isMainExecutable($0, app: effectiveSource) }
+                || report.plain.contains { isMainExecutable($0, app: effectiveSource) }
             if mainClear {
                 report.isPartial = true
                 detail?("Main clear — packaging PARTIAL (\(report.softFailed.count) soft-fail framework(s))…")
@@ -856,6 +871,7 @@ enum FairPlayDecrypt {
             progress?("Retry \(round + 1)/\(schedule.count): \(stillEncrypted.count) file(s)…")
 
             var recovered: [String] = []
+            var skipOOM: [String] = []
             for (i, rel) in stillEncrypted.enumerated() {
                 let file = sourceApp.appendingPathComponent(rel)
                 guard FileManager.default.fileExists(atPath: file.path) else { continue }
@@ -864,6 +880,12 @@ enum FairPlayDecrypt {
                     file: file, sourceApp: sourceApp, destApp: destApp,
                     index: i, total: stillEncrypted.count, role: r, timeout: 60
                 )
+                if case .threw(let err) = outcome,
+                   FairPlayFailureClass.current(fromLogs: [err.localizedDescription]) == .outOfMemory {
+                    skipOOM.append(rel)
+                    progress?("[FAILED]    \(rel) (ENOMEM — skip further retries)")
+                    continue
+                }
                 if case .ok(let mini) = outcome {
                     report.decrypted.append(contentsOf: mini.decrypted)
                     report.plain.append(contentsOf: mini.plain)
@@ -877,6 +899,12 @@ enum FairPlayDecrypt {
                         report.failed.append(contentsOf: mini.failed.filter { !report.failed.contains($0) })
                         report.softFailed.append(contentsOf: mini.softFailed.filter { !report.softFailed.contains($0) })
                     }
+                }
+            }
+            if !skipOOM.isEmpty {
+                stillEncrypted.removeAll { skipOOM.contains($0) }
+                for rel in skipOOM where !report.failed.contains(rel) {
+                    report.failed.append(rel)
                 }
             }
 
@@ -1038,30 +1066,15 @@ enum FairPlayDecrypt {
                 fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
             }
         }
-        // Main + framework ENOMEM: one coordinated purge+retry (fpcore already
-        // short-circuits its mode storm). Extra Swift loops just re-Jetsam the window.
-        if rc != 0 && rc != 1 && (role == .main || role == .framework) {
-            var klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
-            let maxTries = role == .main ? 2 : 1
-            var oomTry = 0
-            while klass == .outOfMemory && oomTry < maxTries {
-                oomTry += 1
+        // fpcore already reclaim+retries once then bails on ENOMEM. A second Swift
+        // remmap storm Jetsams Host-class crypts on every path — fail closed here.
+        if rc != 0 && rc != 1 {
+            let klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
+            if klass == .outOfMemory {
                 progress?(
-                    "\(role == .main ? "Main executable" : "Framework") hit mremap ENOMEM — freeing memory and retrying "
-                        + "(\(oomTry)/\(maxTries)) · \(FairPlayJetsam.memorySummary())…"
+                    "\(role == .main ? "Main executable" : "Mach-O") mremap ENOMEM after lean reclaim — "
+                        + "\(FairPlayJetsam.memorySummary())"
                 )
-                try? fm.removeItem(at: tmp)
-                FairPlayJetsam.purgeTransientMemory()
-                Thread.sleep(forTimeInterval: 1.6 + Double(oomTry) * 1.5)
-                pauseIfMemoryPressure(progress: progress)
-                logBuf.clear()
-                rc = decryptInput.path.withCString { inPath in
-                    tmp.path.withCString { outPath in
-                        fp_decrypt_file(inPath, outPath, FairPlayLogBuffer.trampoline, Unmanaged.passUnretained(logBuf).toOpaque())
-                    }
-                }
-                if rc == 0 || rc == 1 { break }
-                klass = FairPlayFailureClass.current(fromLogs: logBuf.lines)
             }
         }
 
@@ -1691,10 +1704,15 @@ enum FairPlayDecrypt {
             var error: Error?
         }
         let job = Job()
+        let srcStd = sourceApp.resolvingSymlinksInPath().standardizedFileURL
+        let dstStd = destApp.resolvingSymlinksInPath().standardizedFileURL
+        // Same-tree (post-collapse / IPA-only): decrypt straight into dest — no Staging.app.
+        let inPlace = srcStd == dstStd
         let stagingRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
             "fpdec-job-\(UUID().uuidString)", isDirectory: true
         )
         let stagingApp = stagingRoot.appendingPathComponent("Staging.app", isDirectory: true)
+        let writeRoot = inPlace ? destApp : stagingApp
         let rel = relativePath(file, under: sourceApp)
         let finalURL = destApp.appendingPathComponent(rel)
         let sem = DispatchSemaphore(value: 0)
@@ -1703,14 +1721,16 @@ enum FairPlayDecrypt {
             // Use FileManager.default inside the worker — don't capture a non-Sendable instance.
             let fm = FileManager.default
             defer {
-                try? fm.removeItem(at: stagingRoot)
+                if !inPlace { try? fm.removeItem(at: stagingRoot) }
                 sem.signal()
             }
             do {
-                try fm.createDirectory(at: stagingApp, withIntermediateDirectories: true)
+                if !inPlace {
+                    try fm.createDirectory(at: stagingApp, withIntermediateDirectories: true)
+                }
                 var localReport = FairPlayDecryptReport()
                 try decryptOne(
-                    file: file, sourceApp: sourceApp, destApp: stagingApp,
+                    file: file, sourceApp: sourceApp, destApp: writeRoot,
                     index: index, total: total, progress: nil,
                     report: &localReport, role: role
                 )
@@ -1720,16 +1740,18 @@ enum FairPlayDecrypt {
                 job.lock.unlock()
                 if abandonedBeforePromote { return }
 
-                let staged = stagingApp.appendingPathComponent(rel)
                 var didPromote = false
-                if fm.fileExists(atPath: staged.path) {
-                    try fm.createDirectory(
-                        at: finalURL.deletingLastPathComponent(),
-                        withIntermediateDirectories: true
-                    )
-                    try? fm.removeItem(at: finalURL)
-                    try fm.moveItem(at: staged, to: finalURL)
-                    didPromote = true
+                if !inPlace {
+                    let staged = stagingApp.appendingPathComponent(rel)
+                    if fm.fileExists(atPath: staged.path) {
+                        try fm.createDirectory(
+                            at: finalURL.deletingLastPathComponent(),
+                            withIntermediateDirectories: true
+                        )
+                        try? fm.removeItem(at: finalURL)
+                        try fm.moveItem(at: staged, to: finalURL)
+                        didPromote = true
+                    }
                 }
 
                 job.lock.lock()
@@ -1895,6 +1917,45 @@ enum FairPlayDecrypt {
     private static func isMainExecutable(_ rel: String, app: URL) -> Bool {
         guard let main = mainExecutableURL(in: app) else { return false }
         return relativePath(main, under: app) == rel || rel == main.lastPathComponent
+    }
+
+    /// Copy Mach-Os + SC_Info (+ Info.plist) from a non-live read root into the export
+    /// tree so FairPlay can remmap in-place on every path (IPA / embed / companion).
+    private static func ensureExportTreeHasBinaries(
+        from sourceApp: URL,
+        into destApp: URL,
+        progress: ((String) -> Void)?
+    ) throws {
+        let fm = FileManager.default
+        try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
+        guard let en = fm.enumerator(
+            at: sourceApp,
+            includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            throw FairPlayDecryptError.failed("Couldn't enumerate FairPlay source tree for collapse.")
+        }
+        var copied = 0
+        for case let item as URL in en {
+            let vals = try? item.resourceValues(forKeys: [.isDirectoryKey])
+            let prefix = sourceApp.path.hasSuffix("/") ? sourceApp.path : sourceApp.path + "/"
+            let rel = item.path.hasPrefix(prefix)
+                ? String(item.path.dropFirst(prefix.count))
+                : item.lastPathComponent
+            let out = destApp.appendingPathComponent(rel)
+            if vals?.isDirectory == true {
+                try? fm.createDirectory(at: out, withIntermediateDirectories: true)
+                continue
+            }
+            try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.removeItem(at: out)
+            try fm.copyItem(at: item, to: out)
+            copied += 1
+        }
+        guard copied > 0 else {
+            throw FairPlayDecryptError.failed("FairPlay collapse copied no files into the export tree.")
+        }
+        progress?("Export tree ready (\(copied) file(s)) for single-tree remmap")
     }
 
     private static func relativePath(_ file: URL, under root: URL) -> String {

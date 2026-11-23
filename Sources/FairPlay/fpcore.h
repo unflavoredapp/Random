@@ -53,6 +53,9 @@ const char *fp_mode_name(int mode);
 int  fp_parse(const char *path, fp_slice_t *slices, int max, int *count, char *err, size_t errlen);
 // Runs one attempt. If out != NULL (size >= s->cryptsize) receives the bytes read from the remapped range.
 int  fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, uint8_t *out, fp_attempt_t *res);
+// Lean stream attempt: remmap once, capture page-by-page into `out_fd` (no full-crypt RSS buffer).
+// Peak ≈ remmap window only (~1× crypt) + page scratch. Path-agnostic Jetsam budget.
+int  fp_attempt_to_fd(const char *path, const fp_slice_t *s, int mode, bool addsigs, int out_fd, fp_attempt_t *res);
 void fp_attempt_describe(const fp_attempt_t *a, char *buf, size_t len);
 // Probe all modes on every encrypted slice of a file (no output written).
 int  fp_probe_file(const char *path, const int *modes, int nmodes, fp_log_t log, void *ctx);
