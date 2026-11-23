@@ -1,15 +1,20 @@
 //
-// Brand: Tetherless · https://tetherless.dev
+// Brand: AppAssassin · https://fastdecrypt.ai
 //  DecryptCompanionRuntime.swift
 //  When this process is the installed “FastDecryptBot” companion (lean
 //  DecryptHelper binary + EmbeddedPayload), run FairPlayed-style export and write the clear IPA
 //  into the shared Documents/Decrypted folder for the host app to pick up.
 //
+//  Helper contract (DECRYPT_HELPER): installed-companion subordinate process (not XPC),
+//  stream-only FairPlay + streaming zip, live Store path for keys (never key blobs).
+//
 
 import Foundation
-import SwiftUI
 import UIKit
 import ZIPFoundation
+#if !DECRYPT_HELPER
+import SwiftUI
+#endif
 
 @MainActor
 enum DecryptCompanionRuntime {
@@ -46,19 +51,26 @@ enum DecryptCompanionRuntime {
     /// Paint the console immediately on launch (name, icon, Starting…) before FairPlay work.
     static func bootstrapCompanionUI() {
         let ctrl = DecryptCompanionController.shared
+        let mode = (Bundle.main.object(forInfoDictionaryKey: DecryptCompanionIdentity.helperModeKey) as? String)
+            ?? ((Bundle.main.object(forInfoDictionaryKey: "TLDecryptHelper") as? Bool) == true
+                ? DecryptCompanionIdentity.helperModeLean
+                : DecryptCompanionIdentity.helperModeHostFallback)
+        ctrl.appendLog("shell=\(mode) · process=installed-companion (not XPC)")
         guard let name = embeddedAppName() else {
-            ctrl.present(name: DecryptCompanionIdentity.companionDisplayName, clearLog: true)
+            ctrl.present(name: DecryptCompanionIdentity.companionDisplayName, clearLog: false)
             ctrl.statusTitle = "Starting…"
             ctrl.appendLog("Looking for EmbeddedPayload…")
             return
         }
         let src = embeddedPayloadRoot.appendingPathComponent(name, isDirectory: true)
         let version = embeddedAppVersion(at: src) ?? ""
-        let icon = loadEmbeddedAppIcon(at: src)
-        ctrl.present(name: name, version: version, iconImage: icon, clearLog: true)
+        let icon = loadTargetIconFromCompanionBundle()
+            ?? loadEmbeddedAppIcon(at: src)
+        ctrl.present(name: name, version: version, iconImage: icon, clearLog: false)
         ctrl.statusTitle = "Starting…"
         ctrl.appendLog("FastDecryptBot · \(name)\(version.isEmpty ? "" : " · \(version)")")
         ctrl.appendLog("Preparing FairPlay…")
+        ctrl.appendLog(FairPlayJetsam.memorySummary(prefix: "boot"))
         let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
         let embedInfo = NSDictionary(
             contentsOf: src.appendingPathComponent("Info.plist")
@@ -69,6 +81,24 @@ enum DecryptCompanionRuntime {
         if !bid.isEmpty {
             ctrl.appendLog("Target · \(bid)")
         }
+        if let live = (man?["hostLiveInstallPath"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !live.isEmpty {
+            ctrl.appendLog("Preflight live · \(live)")
+        }
+        if let n = man?["encryptedMachOs"] as? Int ?? (man?["encryptedMachOs"] as? NSNumber)?.intValue {
+            ctrl.appendLog("Preflight · \(n) encrypted Mach-O(s)")
+        }
+        if let crypt = man?["largestCryptsize"] as? Int64
+            ?? (man?["largestCryptsize"] as? NSNumber)?.int64Value,
+           crypt > 0 {
+            ctrl.appendLog(String(format: "Preflight · largest crypt %.1f MB", Double(crypt) / (1024 * 1024)))
+        }
+    }
+
+    /// Identity pack: `TargetIcon.png` at companion `.app` root.
+    static func loadTargetIconFromCompanionBundle() -> UIImage? {
+        let url = Bundle.main.bundleURL.appendingPathComponent(DecryptCompanionIdentity.targetIconFileName)
+        return UIImage(contentsOfFile: url.path)
     }
 
     /// Expected encrypted Mach-O count from packager manifest (full IPA audit before slim).
@@ -149,11 +179,17 @@ enum DecryptCompanionRuntime {
         // FairPlayed / foulplay: fairplayd resolves SC_Info on the *input* path.
         // Advanced source mode (host-stamped) can force live / stamped IPA / embed.
         // Tetherless-style companion policy: serial, never auto-bounce, PARTIAL OK.
+        // Streaming page capture is forced in fpcore (FP_FORCE_LEAN) on device.
         var fpOpts = FairPlayAdvancedOptions.Resolved.from(snapshot: snap)
         fpOpts.forceSerialDecrypt = true
         fpOpts.bounceLargeCryptToServer = false
         fpOpts.preferPartialOnLowRAM = true
         fpOpts.requireAllFrameworks = false
+#if DECRYPT_HELPER
+        // Helper contract: stream-only, no key blobs, subordinate installed process.
+        log("policy=serial+partialOK+stream · keys=live-path-only (never exported)")
+#endif
+        log(FairPlayJetsam.memorySummary(prefix: "preflight"))
         let expectedBid = (embedBid
             ?? (man?["bundleID"] as? String)
             ?? "")
@@ -512,8 +548,10 @@ enum DecryptCompanionRuntime {
 
         let tmpZip = outIPA.appendingPathExtension("tmp")
         try? fm.removeItem(at: tmpZip)
-        try fm.zipItem(at: payload, to: tmpZip, shouldKeepParent: true, compressionMethod: .deflate)
+        log(FairPlayJetsam.memorySummary(prefix: "pre-zip"))
+        try zipClearIPA(payload: payload, to: tmpZip, progress: log)
         try fm.moveItem(at: tmpZip, to: outIPA)
+        log(FairPlayJetsam.memorySummary(prefix: "post-zip"))
 
         let ipaVerify = try FairPlayDecrypt.verifyIPA(at: outIPA)
         try assertDecryptAcceptable(ipaVerify, stage: "packaged IPA", partial: report.isPartial, app: destApp)
@@ -558,6 +596,7 @@ enum DecryptCompanionRuntime {
 
     /// Best-effort icon from EmbeddedPayload (PNGs copied at package time).
     private static func loadEmbeddedAppIcon(at app: URL) -> UIImage? {
+        if let stamped = loadTargetIconFromCompanionBundle() { return stamped }
         let fm = FileManager.default
         let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist"))
         var bases: [String] = []
@@ -590,6 +629,65 @@ enum DecryptCompanionRuntime {
                 < ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         }
         return largest.flatMap { UIImage(contentsOfFile: $0.path) }
+    }
+
+    /// Stream clear IPA into a zip (file-by-file). Helper prefers this over `zipItem` buffering.
+    private static func zipClearIPA(
+        payload: URL,
+        to dest: URL,
+        progress: (String) -> Void
+    ) throws {
+        let fm = FileManager.default
+#if DECRYPT_HELPER
+        progress("Streaming clear IPA zip (entry-by-entry)…")
+        guard let archive = Archive(url: dest, accessMode: .create) else {
+            throw DecryptError("Couldn't create clear IPA archive.")
+        }
+        let parent = payload.deletingLastPathComponent()
+        // Payload/ directory itself as zip root (matches `zipItem(shouldKeepParent: true)`).
+        try archive.addEntry(
+            with: payload.lastPathComponent + "/",
+            type: .directory,
+            uncompressedSize: Int64(0)
+        ) { _, _ in Data() }
+        guard let en = fm.enumerator(
+            at: payload,
+            includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            throw DecryptError("Couldn't enumerate Payload for packaging.")
+        }
+        var files = 0
+        for case let file as URL in en {
+            let full = file.resolvingSymlinksInPath().standardizedFileURL.path
+            let root = parent.resolvingSymlinksInPath().standardizedFileURL.path
+            let prefix = root.hasSuffix("/") ? root : root + "/"
+            guard full.hasPrefix(prefix) else { continue }
+            var rel = String(full.dropFirst(prefix.count))
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: file.path, isDirectory: &isDir)
+            if isDir.boolValue {
+                if !rel.hasSuffix("/") { rel += "/" }
+                try archive.addEntry(
+                    with: rel,
+                    type: .directory,
+                    uncompressedSize: Int64(0)
+                ) { _, _ in Data() }
+                continue
+            }
+            // Mach-Os / assets are often already compressed — store to cut CPU/RSS.
+            let method: CompressionMethod = file.pathExtension.lowercased() == "ipa" ? .deflate : .none
+            try archive.addEntry(with: rel, relativeTo: parent, compressionMethod: method)
+            files += 1
+            if files % 40 == 0 {
+                progress(FairPlayJetsam.memorySummary(prefix: "zip \(files)"))
+                FairPlayJetsam.purgeTransientMemory()
+            }
+        }
+        progress("Streamed \(files) file(s) into clear IPA")
+#else
+        try fm.zipItem(at: payload, to: dest, shouldKeepParent: true, compressionMethod: .deflate)
+#endif
     }
 
     // MARK: - Audit helpers
@@ -703,7 +801,9 @@ enum DecryptCompanionRuntime {
     }
 }
 
-/// Root scene when the cloned binary is running as the companion app.
+#if !DECRYPT_HELPER
+/// Root scene when the fat host-clone companion is running (SwiftUI).
+/// DecryptHelper uses `DecryptCompanionConsoleViewController` instead.
 struct DecryptCompanionRoot: View {
     @ObservedObject private var companion = DecryptCompanionController.shared
     @State private var errorText: String?
@@ -805,3 +905,4 @@ private struct ShareItem: Identifiable {
     let url: URL
     var id: String { url.path }
 }
+#endif

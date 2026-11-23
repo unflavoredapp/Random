@@ -15,4 +15,10 @@ enum DecryptCompanionIdentity {
     static let companionIconAsset = "FastDecryptBotAppIcon"
     /// Embedded lean helper product name (Resources/DecryptHelper.app).
     static let helperProductName = "DecryptHelper"
+    /// Target app icon dropped at companion `.app` root (not SpringBoard brand icons).
+    static let targetIconFileName = "TargetIcon.png"
+    /// Info.plist: lean DecryptHelper vs fat host-clone fallback.
+    static let helperModeKey = "TLDecryptHelperMode"
+    static let helperModeLean = "lean"
+    static let helperModeHostFallback = "host-fallback"
 }

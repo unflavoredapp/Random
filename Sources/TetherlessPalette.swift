@@ -4,6 +4,7 @@
 //  Shared accent palette for host chrome + FastDecryptBot console.
 //
 
+#if !DECRYPT_HELPER
 import SwiftUI
 
 enum TetherlessPalette {
@@ -14,3 +15,4 @@ enum TetherlessPalette {
     static let success = Color(red: 0.30, green: 0.80, blue: 0.40)
     static let accentHex = "458FF7"
 }
+#endif

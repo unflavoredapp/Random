@@ -28,6 +28,13 @@
 	<dict/>
 	<key>UIRequiresFullScreen</key>
 	<true/>
+	<!-- Lean FairPlay shell: installed companion subordinate (not XPC). -->
+	<key>TLDecryptHelper</key>
+	<true/>
+	<key>TLDecryptHelperMode</key>
+	<string>lean</string>
+	<key>TLDecryptHelperProcess</key>
+	<string>installed-companion</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
