@@ -576,7 +576,7 @@ private struct DecryptBackendsStatusRow: View {
 /// Advanced FairPlay decrypt controls — source path, verbose console, retries, IPA retention.
 private struct FairPlayAdvancedSettingsSection: View {
     @AppStorage(FairPlayAdvancedOptions.sourceModeKey) private var sourceModeRaw =
-        FairPlayAdvancedOptions.SourceMode.automatic.rawValue
+        FairPlayAdvancedOptions.SourceMode.liveInstall.rawValue
     @AppStorage(FairPlayAdvancedOptions.verboseKey) private var verboseConsole = false
     @AppStorage(FairPlayAdvancedOptions.keepEncryptedIPAKey) private var keepEncryptedIPA = true
     @AppStorage(FairPlayAdvancedOptions.retryRoundsKey) private var retryRounds =
@@ -587,10 +587,6 @@ private struct FairPlayAdvancedSettingsSection: View {
     @AppStorage(FairPlayAdvancedOptions.forceSerialKey) private var forceSerial = true
     @AppStorage(FairPlayAdvancedOptions.bounceLargeCryptKey) private var bounceLargeCrypt = false
     @AppStorage(FairPlayAdvancedOptions.partialOnLowRAMKey) private var partialOnLowRAM = true
-
-    private var sourceMode: FairPlayAdvancedOptions.SourceMode {
-        FairPlayAdvancedOptions.SourceMode(rawValue: sourceModeRaw) ?? .automatic
-    }
 
     @ObservedObject private var appleID = AppleIDStore.shared
 
@@ -640,17 +636,16 @@ private struct FairPlayAdvancedSettingsSection: View {
 
         Section {
             Picker("Decrypt source", selection: $sourceModeRaw) {
-                ForEach(FairPlayAdvancedOptions.SourceMode.allCases) { mode in
-                    Text(mode.title).tag(mode.rawValue)
-                }
+                Text(FairPlayAdvancedOptions.SourceMode.liveInstall.title)
+                    .tag(FairPlayAdvancedOptions.SourceMode.liveInstall.rawValue)
             }
-            Text(sourceMode.detail)
+            Text(FairPlayAdvancedOptions.SourceMode.liveInstall.detail)
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } header: {
             Text("Source")
         } footer: {
-            Text("Automatic is best for most apps. Live install only helps when EmbeddedPayload hits FairPlay EPERM (e.g. Roblox).")
+            Text("Live App Store install is the only FairPlay path. EncryptedSource and EmbeddedPayload are never used for mremap — install the target from the Store (same Apple ID) before Get.")
         }
 
         Section {
@@ -709,13 +704,13 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Temp paths")
         } footer: {
-            Text("Free Apple ID certs usually strip App Groups, so stamps under Documents stay host-only. Get always embeds EncryptedSource.ipa inside FastDecryptBot for FairPlay. Delete the old companion before Get. Turn Keep off to delete the stamped file after a successful clear export.")
+            Text("Live install path is required for FairPlay. Encrypted IPA stamps are kept for packaging / audit only — not as a decrypt source. Delete the old companion before Get. Turn Keep off to delete the stamped file after a successful clear export.")
         }
 
         Section {
             Button("Reset FairPlay advanced defaults") {
                 FairPlayAdvancedOptions.resetToDefaults()
-                sourceModeRaw = FairPlayAdvancedOptions.SourceMode.automatic.rawValue
+                sourceModeRaw = FairPlayAdvancedOptions.SourceMode.liveInstall.rawValue
                 verboseConsole = false
                 keepEncryptedIPA = true
                 retryRounds = FairPlayAdvancedOptions.defaultRetryRounds

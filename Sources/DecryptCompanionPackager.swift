@@ -369,7 +369,8 @@ enum DecryptCompanionPackager {
         return try stageEmbeddedPayload(from: srcApp, into: companionApp, sourceLabel: "full IPA", progress: progress)
     }
 
-    /// Copy the Store IPA into the companion `.app` as `EncryptedSource.ipa` (required when App Group is stripped).
+    /// Copy the Store IPA into the companion `.app` as `EncryptedSource.ipa` for packaging /
+    /// audit only — FairPlay mremap always uses the live App Store install path.
     private static func bundleEncryptedSourceIPA(
         _ ipa: URL,
         into companionApp: URL,
@@ -382,7 +383,7 @@ enum DecryptCompanionPackager {
             try fm.copyItem(at: ipa, to: bundled)
         } catch {
             throw DecryptError(
-                "Couldn't bundle EncryptedSource.ipa for FairPlay (\(error.localizedDescription)). Free certs can't use App Group stamps — re-run Get with enough free storage."
+                "Couldn't bundle EncryptedSource.ipa for packaging (\(error.localizedDescription)). Free storage and retry Get."
             )
         }
         let bytes = (try? fm.attributesOfItem(atPath: bundled.path)[.size] as? Int64) ?? 0
@@ -390,7 +391,7 @@ enum DecryptCompanionPackager {
             throw DecryptError("EncryptedSource.ipa is too small (\(bytes) bytes) — Store download looks incomplete. Retry Get.")
         }
         progress?(
-            "Bundled EncryptedSource.ipa for FairPlay (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))) — companion can unpack without App Group."
+            "Bundled EncryptedSource.ipa for packaging (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))) — FairPlay still requires the live App Store install."
         )
     }
 
@@ -406,8 +407,8 @@ enum DecryptCompanionPackager {
               isDir.boolValue else {
             throw DecryptError("Installed app path missing: \(installedApp.lastPathComponent).")
         }
-        // Live-install embed still needs EncryptedSource.ipa when App Group is stripped —
-        // only reuse a stamped IPA for the *same* target bundle ID.
+        // Optionally bundle EncryptedSource.ipa for packaging/audit (same bid only) —
+        // FairPlay still requires the live Store path.
         let installedInfo = NSDictionary(
             contentsOf: installedApp.appendingPathComponent("Info.plist")
         ) as? [String: Any]
@@ -513,45 +514,25 @@ enum DecryptCompanionPackager {
             && ((try? fm.attributesOfItem(atPath: bundledIPA.path)[.size] as? Int64) ?? 0) > 1_000_000
 
         if slimAudit.entries.isEmpty {
-            // EncryptedSource.ipa is the real FairPlay input when App Groups are stripped.
-            // Allow an empty slim tree only when that full IPA is already bundled — otherwise
-            // the companion can never recover (Cake Wallet / Flutter Runner.app sandbox misses).
-            if hasEncryptedSource {
+            // Live FairPlay reads the Store install — empty slim embed is OK when we have a
+            // live stamp (sandbox often hides foreign FairPlay Mach-Os during packaging).
+            if liveInstall || hasEncryptedSource {
                 progress?(
-                    "EmbeddedPayload has no Mach-Os — companion will unpack EncryptedSource.ipa for FairPlay."
+                    "EmbeddedPayload has no Mach-Os — FairPlay will mremap the live App Store install (not EncryptedSource)."
                 )
             } else {
                 throw DecryptError("No Mach-Os in \(name).app — cannot build companion EmbeddedPayload.")
             }
         }
         if let expected = sourceEncrypted, slimAudit.encrypted < expected {
-            if hasEncryptedSource {
-                progress?(
-                    "Slim embed has \(slimAudit.encrypted)/\(expected) encrypted Mach-Os — EncryptedSource.ipa covers the rest for FairPlay."
-                )
-            } else {
-                throw DecryptError(
-                    "Companion embed dropped FairPlay binaries (\(slimAudit.encrypted) encrypted vs \(expected) in \(sourceLabel)). Aborting."
-                )
-            }
+            progress?(
+                "Slim embed has \(slimAudit.encrypted)/\(expected) encrypted Mach-Os — FairPlay reads the live install for the rest."
+            )
         }
         if let expectedCount = sourceMachOCount, slimAudit.entries.count < expectedCount {
-            // Slim trees often drop Watch/App Clip / clear extras. With EncryptedSource.ipa
-            // bundled, FairPlay unpacks the full IPA — do NOT abort packaging (that blocked
-            // companion install: TestFlight 3/4, Flutter apps).
-            if hasEncryptedSource {
-                progress?(
-                    "Slim embed has \(slimAudit.entries.count)/\(expectedCount) Mach-Os from \(sourceLabel) — EncryptedSource.ipa is bundled for full FairPlay."
-                )
-            } else if !liveInstall, slimAudit.encrypted > 0 {
-                throw DecryptError(
-                    "Companion embed dropped Mach-Os (\(slimAudit.entries.count)/\(expectedCount) from \(sourceLabel)). Re-run Get so EncryptedSource.ipa is bundled."
-                )
-            } else {
-                progress?(
-                    "Note: slim embed has \(slimAudit.entries.count)/\(expectedCount) Mach-Os (extras were already clear / non-DRM)."
-                )
-            }
+            progress?(
+                "Note: slim embed has \(slimAudit.entries.count)/\(expectedCount) Mach-Os from \(sourceLabel) (live install is the FairPlay path)."
+            )
         }
 
         let embeddedBundleID: String? = {
@@ -586,10 +567,10 @@ enum DecryptCompanionPackager {
                 // LS/MI still can't see the app at decrypt time (Roblox mremap EPERM).
                 DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: embeddedBundleID)
             } else {
-                progress?(
-                    "No live App Store install for \(embeddedBundleID) — FairPlay will use stamped encrypted IPA / EmbeddedPayload."
-                )
                 DecryptCompanionHandoff.clearLiveInstallPath()
+                throw DecryptError(
+                    "No live App Store install for \(embeddedBundleID). Install it from the App Store (same Apple ID) before packaging FastDecryptBot — EncryptedSource / EmbeddedPayload are not FairPlay paths."
+                )
             }
         }
         // Preflight identity pack — helper paints instantly; never embeds FairPlay key blobs.
@@ -698,7 +679,7 @@ enum DecryptCompanionPackager {
         }
         if machos.isEmpty {
             progress?(
-                "No Mach-Os visible under \(src.lastPathComponent) for slim embed — will rely on EncryptedSource.ipa if bundled."
+                "No Mach-Os visible under \(src.lastPathComponent) for slim embed — FairPlay will use the live App Store install."
             )
         } else {
             progress?("Embedding \(machos.count) Mach-O file(s)…")
