@@ -43,6 +43,32 @@ enum DecryptCompanionRuntime {
         })?.lastPathComponent
     }
 
+    /// Paint the console immediately on launch (name, icon, Starting…) before FairPlay work.
+    static func bootstrapCompanionUI() {
+        let ctrl = DecryptCompanionController.shared
+        guard let name = embeddedAppName() else {
+            ctrl.present(name: DecryptCompanionIdentity.companionDisplayName, clearLog: true)
+            ctrl.statusTitle = "Starting…"
+            ctrl.appendLog("Looking for EmbeddedPayload…")
+            return
+        }
+        let src = embeddedPayloadRoot.appendingPathComponent(name, isDirectory: true)
+        let version = embeddedAppVersion(at: src) ?? ""
+        let icon = loadEmbeddedAppIcon(at: src)
+        ctrl.present(name: name, version: version, iconImage: icon, clearLog: true)
+        ctrl.statusTitle = "Starting…"
+        ctrl.appendLog("FastDecryptBot · \(name)\(version.isEmpty ? "" : " · \(version)")")
+        ctrl.appendLog("Preparing FairPlay…")
+        let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
+        let bid = ((NSDictionary(contentsOf: src.appendingPathComponent("Info.plist")) as? [String: Any])?
+            ["CFBundleIdentifier"] as? String)
+            ?? (man?["bundleID"] as? String)
+            ?? ""
+        if !bid.isEmpty {
+            ctrl.appendLog("Target · \(bid)")
+        }
+    }
+
     /// Expected encrypted Mach-O count from packager manifest (full IPA audit before slim).
     static func expectedEncryptedCount() -> Int? {
         let man = embeddedPayloadRoot.appendingPathComponent("manifest.plist")
@@ -99,11 +125,12 @@ enum DecryptCompanionRuntime {
         let version = Self.embeddedAppVersion(at: src) ?? ""
         let icon = Self.loadEmbeddedAppIcon(at: src)
             ?? TetherlessBrand.appIconImage()
+        // Refresh identity without wiping bootstrap logs (clearLog: false).
         DecryptCompanionController.shared.present(
             name: name,
             version: version,
             iconImage: icon,
-            clearLog: true
+            clearLog: false
         )
         DecryptCompanionController.shared.statusTitle = "Decrypting…"
         log("Found embedded app: \(name)")
@@ -111,6 +138,10 @@ enum DecryptCompanionRuntime {
         let snap = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
         if let hint = snap["hostEmailHint"] as? String, !hint.isEmpty {
             log("Host session \(hint)")
+        }
+        if let email = (snap["hostEmail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !email.isEmpty {
+            log("FairPlay Apple ID · \(email)")
         }
 
         // FairPlayed / foulplay: fairplayd resolves SC_Info on the *input* path.
@@ -125,10 +156,26 @@ enum DecryptCompanionRuntime {
             ?? (man?["bundleID"] as? String)
             ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(
+        var liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(
             manifest: man,
             expectedBundleID: expectedBid
         )
+        // Host stamp can be missing (App Group stripped / bid mismatch). Rediscover on-device —
+        // fairplayd needs the live Store path for keys; EmbeddedPayload alone often EPERMs.
+        if liveURL == nil, !expectedBid.isEmpty {
+            let known = (man?["hostLiveInstallPath"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if let found = FairPlayDecrypt.installedAppURL(
+                bundleID: expectedBid,
+                knownPath: (known?.isEmpty == false) ? known : nil
+            ), FairPlayDecrypt.isLiveAppStoreInstall(found) {
+                liveURL = found
+                log("Rediscovered live App Store install for \(expectedBid)")
+                DecryptCompanionHandoff.publishLiveInstallPath(found.path, bundleID: expectedBid)
+            } else {
+                log("No live App Store install for \(expectedBid) — FairPlay may EPERM without it.")
+            }
+        }
         let stampedIPAURL = DecryptCompanionHandoff.resolveEncryptedIPAURL(
             manifest: man,
             expectedBundleID: expectedBid
@@ -659,11 +706,18 @@ struct DecryptCompanionRoot: View {
     @ObservedObject private var companion = DecryptCompanionController.shared
     @State private var errorText: String?
     @State private var shareURL: URL?
+    @State private var didBootstrapUI = false
 
     var body: some View {
         DecryptCompanionConsole(showsDismiss: false, shareURL: $shareURL)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(Color(red: 0.05, green: 0.07, blue: 0.12).ignoresSafeArea())
+            .onAppear {
+                // Paint name / icon / “Starting…” before any FairPlay work — no empty Ready freeze.
+                guard !didBootstrapUI else { return }
+                didBootstrapUI = true
+                DecryptCompanionRuntime.bootstrapCompanionUI()
+            }
             .task {
                 do {
                     let url = try await DecryptCompanionRuntime.runEmbeddedDecrypt()
@@ -716,6 +770,9 @@ struct DecryptCompanionRoot: View {
             || t.contains("decryption keys")
             || t.contains("fairplay needs")
             || t.contains("license")
+            || t.contains("eperm")
+            || t.contains("live path")
+            || t.contains("confirm keys")
     }
 
     /// Memory / remap failures can't finish on-device — bounce to Decrypt site URL host.

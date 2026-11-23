@@ -10,6 +10,8 @@ enum OTABootstrap {
     private static let trustPromptKey = "uzd_ota_pack_ca_prompted"
 
     /// Force public mode and pull pack.json into the cache.
+    /// Does **not** auto-present the OTA trust share sheet — that hijacked first launch
+    /// (Tetherless-OTA-Trust.mobileconfig). Trust is offered only from Settings › OTA.
     @MainActor
     @discardableResult
     static func ensurePublicPack(force: Bool = false) async -> ZefvCert.Meta? {
@@ -18,14 +20,11 @@ enum OTABootstrap {
         }
         lastAttempt = Date()
         ServerConfig.setCertMode("public")
-        let meta = await ZefvCert.installPublicPack()
-        if meta != nil {
-            offerPackCATrustIfNeeded()
-        }
-        return meta
+        return await ZefvCert.installPublicPack()
     }
 
     /// Share sheet for the pack CA trust profile when it isn't trusted yet.
+    /// Call only from Settings (or an explicit user action) — never from launch.
     @MainActor
     static func offerPackCATrustIfNeeded(force: Bool = false) {
         guard !ZefvCert.isPackCATrusted() else { return }
