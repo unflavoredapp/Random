@@ -21,6 +21,7 @@ struct FairPlayKeysCaptureSheet: View {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                     sessionRow
+                    stampedLiveInstallCard
                     phaseCard
                     sessionLicensesCard
                     if !keys.verifyLines.isEmpty {
@@ -72,16 +73,8 @@ struct FairPlayKeysCaptureSheet: View {
             keys.refreshFromAck()
             keys.refreshSessionLicenses()
         }
-        .onChange(of: keys.phase) { phase in
-            if case .grabbed = phase {
-                // Auto-dismiss shortly after success so decrypt can continue.
-                Task { @MainActor in
-                    try? await Task.sleep(nanoseconds: 900_000_000)
-                    AppNav.shared.presentFairPlayKeysCapture = false
-                    dismiss()
-                }
-            }
-        }
+        // Keep the sheet open after Confirm so keys + live paths stay visible;
+        // user closes explicitly (Get / gate can continue underneath).
     }
 
     private var header: some View {
@@ -120,6 +113,34 @@ struct FairPlayKeysCaptureSheet: View {
             }
         }
         .padding(14)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+    }
+
+    private var stampedLiveInstallCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Live install path (FairPlay)", systemImage: "internaldrive")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+            if let live = DecryptCompanionHandoff.readLiveInstallPath() {
+                Text(live.path)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.white.opacity(0.7))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !live.bundleID.isEmpty {
+                    Text(live.bundleID)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.white.opacity(0.45))
+                }
+            } else {
+                Text("None stamped yet. After Get downloads a Store IPA, the live App Store path for that bid appears here.")
+                    .font(.caption)
+                    .foregroundStyle(.white.opacity(0.55))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 
@@ -204,7 +225,13 @@ struct FairPlayKeysCaptureSheet: View {
                     Text(entry.hasSCInfo ? "SC_Info" : "no SC_Info visible")
                         .font(.caption2.weight(.semibold))
                         .foregroundStyle(entry.hasSCInfo ? TetherlessPalette.success.opacity(0.9) : .white.opacity(0.35))
-                    if !entry.pathTail.isEmpty {
+                    if !entry.installPath.isEmpty {
+                        Text(entry.installPath)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.white.opacity(0.35))
+                            .textSelection(.enabled)
+                            .lineLimit(2)
+                    } else if !entry.pathTail.isEmpty {
                         Text(entry.pathTail)
                             .font(.caption2.monospaced())
                             .foregroundStyle(.white.opacity(0.28))
