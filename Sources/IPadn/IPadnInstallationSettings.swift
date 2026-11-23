@@ -305,10 +305,11 @@ struct IPadnInstallationSettingsView: View {
     private func ensureAppleIDCert(afterPortalCode: Bool) async {
         ensuringAppleIDCert = true
         defer { ensuringAppleIDCert = false }
+        // Create (no linked cert) builds fresh; Refresh remints. Never force-wipe a
+        // still-valid cert just because Create was tapped after a portal glitch.
+        let force = linkedAppleIDCert != nil || afterPortalCode
         do {
-            // Create (no linked cert) builds fresh; Refresh remints. Never force-wipe a
-            // still-valid cert just because Create was tapped after a portal glitch.
-            let force = linkedAppleIDCert != nil || afterPortalCode
+            certStatus = "Talking to Developer Portal…"
             let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate(forceRefresh: force)
             certStatus = "Ready: \(cert.name)"
             showPortalTwoFactor = false
@@ -324,14 +325,31 @@ struct IPadnInstallationSettingsView: View {
                 showPortalTwoFactor = true
                 return
             }
-            // Portal 1200 / free-tier blocks — point at custom import instead of a dead end.
-            if text.contains("1200") || text.localizedCaseInsensitiveContains("not allowed to perform") {
-                issue = text + "\n\nUse Import custom .p12 + mobileprovision below — companion signing will fall back to that cert."
-                certStatus = "Free Apple ID cert blocked — import a custom certificate."
-            } else {
-                issue = text
-                certStatus = nil
+            // One silent auto-retry on portal 1200 — revoke/recreate already ran inside
+            // FreeAppleIDSigning; a second pass often lands after Apple settles the slot.
+            if text.contains("1200")
+                || text.localizedCaseInsensitiveContains("not allowed to perform")
+                || text.localizedCaseInsensitiveContains("clearing the portal slot") {
+                certStatus = "Portal busy — clearing slot and retrying…"
+                do {
+                    try? await Task.sleep(nanoseconds: 2_500_000_000)
+                    let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate(forceRefresh: true)
+                    certStatus = "Ready: \(cert.name)"
+                    showPortalTwoFactor = false
+                    return
+                } catch AppleAuthError.needsTwoFactor {
+                    certStatus = "Allow the Developer Portal prompt, then enter the code."
+                    showPortalTwoFactor = true
+                    return
+                } catch {
+                    issue = error.localizedDescription
+                        + "\n\nIf Create keeps failing, import a custom .p12 + mobileprovision below — companion signing will fall back to that cert."
+                    certStatus = "Free Apple ID cert blocked — import a custom certificate."
+                    return
+                }
             }
+            issue = text
+            certStatus = nil
         }
     }
 

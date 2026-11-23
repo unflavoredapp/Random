@@ -34,21 +34,19 @@ enum FreeAppleIDSigning {
         }
 
         var auth = try await resolvePortalSession()
-        let teams = try await DeveloperPortalClient.shared.listTeams(auth: auth)
-        guard let team = preferredTeam(from: teams, session: auth) else {
-            throw AppleAuthError.message("No development teams for this Apple ID.")
-        }
+        // listTeams often 1200s on free accounts even with a valid GrandSlam session —
+        // never abort Create here; fall back to the remembered team id and keep going.
+        var team = try await resolveTeam(auth: auth)
 
         try await registerThisDeviceIfPossible(auth: auth, team: team)
 
         // SideSign: list portal certs; free accounts get one Development cert.
         // Match orphans by portal serial / portal id — never local Certificate UUIDs.
+        // Always clear every listed cert on free tier up front (SideStore replace).
         let portalCerts = (try? await DeveloperPortalClient.shared.listCertificates(auth: auth, team: team)) ?? []
-        let owned = ownedPortalKeys()
-        let orphans = portalCerts.filter { !ownsPortalCertificate($0, owned: owned) }
-        if !orphans.isEmpty {
-            try await revokePortalCertificates(orphans, auth: auth, team: team, requireSuccess: false)
-            try? await Task.sleep(nanoseconds: 800_000_000)
+        if !portalCerts.isEmpty {
+            try await revokePortalCertificates(portalCerts, auth: auth, team: team, requireSuccess: false)
+            try? await Task.sleep(nanoseconds: 1_200_000_000)
         }
 
         let created: (certPEM: Data, privateKeyPEM: Data, certificate: DevCertificate, csr: CSRBuilder.Result)
@@ -57,16 +55,15 @@ enum FreeAppleIDSigning {
                 return try await createDevelopmentCertificateSideSignStyle(auth: auth, team: team)
             } catch {
                 // Portal 1200 / session flakes: GrandSlam refresh, clear *all* Development
-                // slots (SideStore replace), wait, then create again — up to 2 recovery rounds.
+                // slots (SideStore replace), wait, then create again — up to 3 recovery rounds.
                 guard isPortalAuthBlocked(error) || isPortalSlotError(error) else { throw error }
                 var lastError: Error = error
                 var workingAuth = auth
                 var workingTeam = team
-                for round in 1...2 {
+                for round in 1...3 {
                     do {
                         workingAuth = try await AppleIDStore.shared.refreshPortalSession()
-                        let refreshedTeams = try await DeveloperPortalClient.shared.listTeams(auth: workingAuth)
-                        workingTeam = preferredTeam(from: refreshedTeams, session: workingAuth) ?? workingTeam
+                        workingTeam = (try? await resolveTeam(auth: workingAuth)) ?? workingTeam
                     } catch {
                         // Still try create with the previous portal session if refresh needs 2FA.
                         if case AppleAuthError.needsTwoFactor = error { throw error }
@@ -76,18 +73,28 @@ enum FreeAppleIDSigning {
                         auth: workingAuth, team: workingTeam
                     )) ?? []
                     // Free tier: clear every listed Development cert so CSR can take the slot.
-                    try await revokePortalCertificates(again, auth: workingAuth, team: workingTeam, requireSuccess: false)
-                    try? await Task.sleep(nanoseconds: UInt64(1_500_000_000 * round))
+                    if !again.isEmpty {
+                        try await revokePortalCertificates(
+                            again, auth: workingAuth, team: workingTeam, requireSuccess: false
+                        )
+                    }
+                    try? await Task.sleep(nanoseconds: UInt64(2_000_000_000 * round))
                     do {
-                        return try await createDevelopmentCertificateSideSignStyle(
+                        let made = try await createDevelopmentCertificateSideSignStyle(
                             auth: workingAuth, team: workingTeam
                         )
+                        auth = workingAuth
+                        team = workingTeam
+                        return made
                     } catch {
                         lastError = error
                     }
                 }
                 auth = workingAuth
-                throw lastError
+                team = workingTeam
+                throw AppleAuthError.message(
+                    "Couldn't create a free 7-day certificate after clearing the portal slot. Sign out and back in under Account, then tap Create again — or import a custom .p12 + mobileprovision under Certificate."
+                )
             }
         }()
 
@@ -174,6 +181,27 @@ enum FreeAppleIDSigning {
         }
         if let free = teams.first(where: \.isFree) { return free }
         return teams.first
+    }
+
+    /// Resolve a Team without dying on portal 1200 from listTeams.
+    private static func resolveTeam(auth: AppleAuthSession) async throws -> Team {
+        do {
+            let teams = try await DeveloperPortalClient.shared.listTeams(auth: auth)
+            if let team = preferredTeam(from: teams, session: auth) {
+                return team
+            }
+        } catch {
+            guard isPortalAuthBlocked(error) else { throw error }
+        }
+        // Remembered free-team id from a prior successful portal login.
+        let remembered = (auth.teamID ?? AppleIDStore.shared.activeAccount?.teamID)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !remembered.isEmpty else {
+            throw AppleAuthError.message(
+                "No development team for this Apple ID. Sign out and back in under Account, then tap Create again."
+            )
+        }
+        return Team(id: remembered, name: "Personal Team", isFree: true)
     }
 
     private static func isPortalAuthBlocked(_ error: Error) -> Bool {

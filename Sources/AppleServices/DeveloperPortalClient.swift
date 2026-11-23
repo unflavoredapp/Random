@@ -72,8 +72,16 @@ final class DeveloperPortalClient: ObservableObject {
     }
 
     func listCertificates(auth: AppleAuthSession, team: Team) async throws -> [DevCertificate] {
+        // Free / SideSign: prefer QH65B2 listAllDevelopmentCerts (serials for revoke).
+        // v1 JSON often 1200s or omits the single free Development slot.
         if team.isFree {
-            do { return try await listCertificatesV1(session: auth, team: team) } catch { /* fall through */ }
+            do {
+                let plist = try await listCertificatesPlist(session: auth, team: team)
+                if !plist.isEmpty { return plist }
+            } catch { /* try v1 */ }
+            do { return try await listCertificatesV1(session: auth, team: team) } catch {
+                return []
+            }
         }
         do {
             return try await listCertificatesV1(session: auth, team: team)
