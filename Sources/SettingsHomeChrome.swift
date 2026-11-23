@@ -21,7 +21,7 @@ struct SettingsAppleIDCard: View {
                         Text("Apple Account")
                             .font(.headline.weight(.semibold))
                             .foregroundStyle(.white)
-                        Text("Sign in and manage accounts on the Account tab.")
+                        Text("Apple ID login and Store login open separate sheets.")
                             .font(.subheadline)
                             .foregroundStyle(.white.opacity(0.55))
                             .fixedSize(horizontal: false, vertical: true)
@@ -60,9 +60,9 @@ struct SettingsAppleIDCard: View {
                     .buttonStyle(.plain)
                 } else {
                     Button {
-                        AppNav.shared.goStoreLogin()
+                        AppNav.shared.goAppleIDLogin()
                     } label: {
-                        Text("Open Account")
+                        Text("Apple ID login")
                             .font(.title3.weight(.semibold))
                             .foregroundStyle(.white)
                             .frame(maxWidth: .infinity)
@@ -71,6 +71,21 @@ struct SettingsAppleIDCard: View {
                     }
                     .buttonStyle(.plain)
                 }
+
+                Button {
+                    AppNav.shared.goStoreUnlock()
+                } label: {
+                    Text("Show Store login")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(.white.opacity(0.10), in: Capsule())
+                        .overlay(Capsule().strokeBorder(.white.opacity(0.18), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(!store.isSignedIn && store.authPhase != .awaitingTwoFactor)
+                .opacity((!store.isSignedIn && store.authPhase != .awaitingTwoFactor) ? 0.45 : 1)
             }
         }
     }
