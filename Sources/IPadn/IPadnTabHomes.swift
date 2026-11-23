@@ -417,45 +417,45 @@ struct AccountHomeView: View {
                     }
                 }
 
-                // Explicit two-step cards — never auto-popup over Account.
-                if !store.isSignedIn || store.authPhase == .awaitingTwoFactor {
-                    Section {
-                        Button {
-                            showIPadnLogin = true
-                        } label: {
-                            Label(
-                                store.authPhase == .awaitingTwoFactor
-                                    ? "Continue Apple ID verification…"
-                                    : "Sign in with Apple ID…",
-                                systemImage: "person.badge.key.fill"
-                            )
-                        }
-                        Text("Step 1 of 2 — Apple ID. One Allow, one code, then Verify. Step 2 opens after this finishes (or tap Unlock Store).")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    } header: {
-                        Text("Sign-in")
+                // Separate Apple ID vs Store — each opens its own sheet (Settings / Account).
+                Section {
+                    Button {
+                        showIPadnLogin = true
+                    } label: {
+                        Label(
+                            store.authPhase == .awaitingTwoFactor
+                                ? "Continue Apple ID verification…"
+                                : (store.isSignedIn ? "Apple ID login…" : "Sign in with Apple ID…"),
+                            systemImage: "person.badge.key.fill"
+                        )
                     }
-                }
+                    Text("Apple ID only — password, one Allow, one code. Does not open Store unlock.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
 
-                if store.isSignedIn, store.storeNeedsVerification {
-                    Section {
-                        Button {
-                            showStoreUnlock = true
-                        } label: {
-                            Label("Unlock Store downloads…", systemImage: "lock.open.fill")
-                        }
-                        Text("Step 2 of 2 — Store. Second Allow + code for purchases / silent downloads. Starts only after Step 1 is done.")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                        if let status = store.statusMessage, !status.isEmpty {
-                            Text(status)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                    } header: {
-                        Text("Store")
+                    Button {
+                        showStoreUnlock = true
+                    } label: {
+                        Label(
+                            store.storeNeedsVerification
+                                ? "Show Store login…"
+                                : "Store login…",
+                            systemImage: "lock.open.fill"
+                        )
                     }
+                    .disabled(!store.isSignedIn && store.authPhase != .awaitingTwoFactor)
+                    Text("Store only — second Allow + code for purchases / silent downloads. Separate from Apple ID login.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    if let status = store.statusMessage, !status.isEmpty {
+                        Text(status)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Sign-in")
+                } footer: {
+                    Text("FairPlay keys stay on this iPhone (Media & Purchases). AppAssassin cannot export or push key blobs into FastDecryptBot — enroll Store, install the app, then Confirm keys.")
                 }
 
                 // Settings root (was LIBRARY / DEVICE → Settings push).
@@ -503,7 +503,9 @@ struct AccountHomeView: View {
                     showIPadnLogin = false
                 }
             }
-            .sheet(isPresented: $showStoreUnlock) {
+            .sheet(isPresented: $showStoreUnlock, onDismiss: {
+                nav.presentStoreUnlock = false
+            }) {
                 IPadnStoreUnlockSheet {
                     showStoreUnlock = false
                 }
@@ -514,8 +516,18 @@ struct AccountHomeView: View {
             .onChange(of: nav.accountPush) { _ in consumePendingAccountNav() }
             .onChange(of: nav.openAccountScreen) { _ in consumePendingAccountNav() }
             .onChange(of: nav.presentIPadnLogin) { open in
-                // Explicit nav from Search / gates — still user-driven, not cold-start spam.
-                if open { showIPadnLogin = true }
+                // Explicit nav from Search / Settings — Apple ID sheet only.
+                if open {
+                    showStoreUnlock = false
+                    showIPadnLogin = true
+                }
+            }
+            .onChange(of: nav.presentStoreUnlock) { open in
+                // Settings “Store login” — never folds into Apple ID sheet.
+                if open {
+                    showIPadnLogin = false
+                    showStoreUnlock = true
+                }
             }
         }
     }
@@ -556,7 +568,12 @@ struct AccountHomeView: View {
             path = NavigationPath()
         }
         if nav.presentIPadnLogin {
+            showStoreUnlock = false
             showIPadnLogin = true
+        }
+        if nav.presentStoreUnlock {
+            showIPadnLogin = false
+            showStoreUnlock = true
         }
     }
 

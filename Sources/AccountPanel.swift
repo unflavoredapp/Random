@@ -12,8 +12,10 @@ final class AppNav: ObservableObject {
     @Published var openAccountScreen = false
     /// Push target inside Account’s NavigationStack (Pair / Files / Library / Settings).
     @Published var accountPush: AppAccountPush?
-    /// Present iPadn Store login sheet (Account / Settings / Search).
+    /// Present Apple ID login sheet (GSA / step 1). Settings + Account keep this separate from Store.
     @Published var presentIPadnLogin = false
+    /// Present Store unlock sheet (MZFinance / step 2). Never auto-bundled into Apple ID login.
+    @Published var presentStoreUnlock = false
     /// Present FairPlay keys capture sheet (Search / gate failures).
     @Published var presentFairPlayKeysCapture = false
     private init() {}
@@ -43,9 +45,23 @@ final class AppNav: ObservableObject {
     func goDownloads() { go(.downloads) }
     func goPurchased() { go(.purchased) }
 
-    /// Open Account and show iPadn Apple Account login (MZFinance).
+    /// Open Account and show Apple ID login (step 1). Kept for callers that historically
+    /// called this “Store login” — Store unlock is `goStoreUnlock()` now.
     func goStoreLogin() {
+        goAppleIDLogin()
+    }
+
+    /// Settings / Account: Apple ID login sheet only (password + Allow + code).
+    func goAppleIDLogin() {
+        presentStoreUnlock = false
         presentIPadnLogin = true
+        go(.account)
+    }
+
+    /// Settings / Account: Store downloads unlock sheet only (second Allow + code).
+    func goStoreUnlock() {
+        presentIPadnLogin = false
+        presentStoreUnlock = true
         go(.account)
     }
 
