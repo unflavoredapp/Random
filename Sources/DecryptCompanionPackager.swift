@@ -401,10 +401,11 @@ enum DecryptCompanionPackager {
         }
         // Live-install embed still needs EncryptedSource.ipa when App Group is stripped —
         // only reuse a stamped IPA for the *same* target bundle ID.
-        let installedBid = (
-            (NSDictionary(contentsOf: installedApp.appendingPathComponent("Info.plist")) as? [String: Any])?
-                ["CFBundleIdentifier"] as? String
-        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let installedInfo = NSDictionary(
+            contentsOf: installedApp.appendingPathComponent("Info.plist")
+        ) as? [String: Any]
+        let installedBid = (installedInfo?["CFBundleIdentifier"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath(matchingBundleID: installedBid) {
             let src = URL(fileURLWithPath: stamped.path)
             if FileManager.default.fileExists(atPath: src.path) {

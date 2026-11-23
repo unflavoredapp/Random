@@ -60,8 +60,10 @@ enum DecryptCompanionRuntime {
         ctrl.appendLog("FastDecryptBot · \(name)\(version.isEmpty ? "" : " · \(version)")")
         ctrl.appendLog("Preparing FairPlay…")
         let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
-        let bid = ((NSDictionary(contentsOf: src.appendingPathComponent("Info.plist")) as? [String: Any])?
-            ["CFBundleIdentifier"] as? String)
+        let embedInfo = NSDictionary(
+            contentsOf: src.appendingPathComponent("Info.plist")
+        ) as? [String: Any]
+        let bid = (embedInfo?["CFBundleIdentifier"] as? String)
             ?? (man?["bundleID"] as? String)
             ?? ""
         if !bid.isEmpty {
