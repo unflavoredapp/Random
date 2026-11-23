@@ -588,33 +588,23 @@ private struct FairPlayAdvancedSettingsSection: View {
     @AppStorage(FairPlayAdvancedOptions.bounceLargeCryptKey) private var bounceLargeCrypt = false
     @AppStorage(FairPlayAdvancedOptions.partialOnLowRAMKey) private var partialOnLowRAM = true
 
-    @ObservedObject private var appleID = AppleIDStore.shared
-
     var body: some View {
+        // Login lives once on Account › Sign-in — do not duplicate Apple ID / Store here.
         Section {
-            Button {
-                AppNav.shared.goAppleIDLogin()
-            } label: {
-                Label(
-                    appleID.isSignedIn ? "Apple ID login…" : "Sign in with Apple ID…",
-                    systemImage: "person.badge.key.fill"
-                )
-            }
-            Button {
-                AppNav.shared.goStoreUnlock()
-            } label: {
-                Label("Show Store login…", systemImage: "lock.open.fill")
-            }
-            .disabled(!appleID.isSignedIn && appleID.authPhase != .awaitingTwoFactor)
             Button {
                 FairPlayKeysFetcher.shared.presentCaptureSheet()
             } label: {
                 Label("FairPlay keys…", systemImage: "key.fill")
             }
+            Button {
+                AppNav.shared.goSettings()
+            } label: {
+                Label("Account › Sign-in for Apple ID / Store…", systemImage: "person.badge.key")
+            }
         } header: {
-            Text("Sign-in · keys")
+            Text("Keys")
         } footer: {
-            Text("Apple ID sheet and Store login sheet are separate. Keys stay on-device for fairplayd — AppAssassin never pushes SC_Info / key blobs into the companion.")
+            Text("Sign in under Account › Sign-in (Apple ID and Store are separate sheets there). Keys stay on-device for fairplayd — never pushed into the companion.")
         }
 
         Section {
@@ -728,7 +718,6 @@ private struct FairPlayAdvancedSettingsSection: View {
 /// Root Settings rows shared by Account (inline) and the pushed Settings page.
 struct IPadnSettingsRootSections: View {
     @Binding var statusMessage: String?
-    @ObservedObject private var store = AppleIDStore.shared
 
     @AppStorage("ipadn.settings.proMode") private var proMode = false
     @AppStorage("ipadn.settings.appUpdateCheck") private var appUpdateCheck = true
@@ -738,27 +727,8 @@ struct IPadnSettingsRootSections: View {
     }
 
     var body: some View {
-        // Separate sheets — Apple ID login vs Store login (never one combined popup).
-        Section {
-            Button {
-                AppNav.shared.goAppleIDLogin()
-            } label: {
-                Label(
-                    store.isSignedIn ? "Apple ID login…" : "Sign in with Apple ID…",
-                    systemImage: "person.badge.key.fill"
-                )
-            }
-            Button {
-                AppNav.shared.goStoreUnlock()
-            } label: {
-                Label("Show Store login…", systemImage: "lock.open.fill")
-            }
-            .disabled(!store.isSignedIn && store.authPhase != .awaitingTwoFactor)
-        } header: {
-            Text("Sign-in")
-        } footer: {
-            Text("Apple ID and Store each open their own sheet. FairPlay keys cannot be exported into FastDecryptBot — enroll Media & Purchases on this iPhone, then Confirm keys.")
-        }
+        // Apple ID / Store Sign-in lives only on AccountHomeView — not again here
+        // (Account embeds these root sections, which caused duplicate login rows).
 
         Section {
             pageLink(.downloads, "arrow.down.circle")
