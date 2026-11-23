@@ -425,36 +425,24 @@ struct AccountHomeView: View {
                     }
                 }
 
-                // Sole Sign-in UI on Account (Settings root no longer duplicates these rows).
+                // Sole Sign-in UI — Apple ID sheet + Store sheet only (nothing else).
                 Section {
                     Button {
-                        presentAuthSheet(.appleID)
+                        AppNav.shared.goAppleIDLogin()
                     } label: {
                         Label(
                             store.authPhase == .awaitingTwoFactor
                                 ? "Continue Apple ID verification…"
-                                : (store.isSignedIn ? "Apple ID login…" : "Sign in with Apple ID…"),
+                                : "Apple ID login…",
                             systemImage: "person.badge.key.fill"
                         )
                     }
-                    Text("Apple ID only — password, one Allow, one code. Does not open Store unlock.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-
                     Button {
-                        presentAuthSheet(.storeUnlock)
+                        AppNav.shared.goStoreUnlock()
                     } label: {
-                        Label(
-                            store.storeNeedsVerification
-                                ? "Show Store login…"
-                                : "Store login…",
-                            systemImage: "lock.open.fill"
-                        )
+                        Label("Show Store login…", systemImage: "lock.open.fill")
                     }
                     .disabled(!store.isSignedIn && store.authPhase != .awaitingTwoFactor)
-                    Text("Store only — second Allow + code for purchases / silent downloads. Separate from Apple ID login.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                     if let status = store.statusMessage, !status.isEmpty {
                         Text(status)
                             .font(.caption)
@@ -463,7 +451,7 @@ struct AccountHomeView: View {
                 } header: {
                     Text("Sign-in")
                 } footer: {
-                    Text("FairPlay keys stay on this iPhone (Media & Purchases). AppAssassin cannot export or push key blobs into FastDecryptBot — enroll Store, install the app, then Confirm keys.")
+                    Text("Apple ID and Store each open their own sheet. FairPlay keys cannot be exported into FastDecryptBot — enroll Media & Purchases on this iPhone, then Confirm keys.")
                 }
 
                 // Settings root (was LIBRARY / DEVICE → Settings push).
