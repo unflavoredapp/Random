@@ -381,6 +381,71 @@ private enum AccountAuthSheet: String, Identifiable {
     var id: String { rawValue }
 }
 
+/// Always-on FairPlay keys row for Account — status + live install path stamp.
+private struct AccountFairPlayKeysSection: View {
+    @ObservedObject private var store = AppleIDStore.shared
+    @ObservedObject private var keys = FairPlayKeysFetcher.shared
+
+    private var email: String {
+        store.email.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var statusLine: String {
+        if !store.isSignedIn { return "Sign in under Sign-in first" }
+        if case .grabbed(_, let at, let readiness) = keys.phase {
+            let when = at.formatted(date: .abbreviated, time: .shortened)
+            return "Keys ready · \(readiness.storeApps) app(s) · \(readiness.scInfoHits) SC_Info · \(when)"
+        }
+        if AppStoreDecryptGuide.isAcknowledged(email: email), !email.isEmpty {
+            return "Keys acknowledged for \(email)"
+        }
+        if case .confirmSignIn = keys.phase { return "Confirm keys after Media & Purchases…" }
+        if keys.isWaiting { return "Capturing FairPlay keys…" }
+        return "Capture FairPlay keys for companion decrypt"
+    }
+
+    var body: some View {
+        Section {
+            Button {
+                FairPlayKeysFetcher.shared.presentCaptureSheet()
+            } label: {
+                Label("FairPlay keys…", systemImage: "key.fill")
+            }
+            Text(statusLine)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let live = DecryptCompanionHandoff.readLiveInstallPath() {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Live install path")
+                        .font(.caption.weight(.semibold))
+                    Text(live.path)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    if !live.bundleID.isEmpty {
+                        Text(live.bundleID)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
+            } else {
+                Text("Live install path: (none stamped yet — shown after Get when the app is installed from the App Store)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        } header: {
+            Text("FairPlay keys")
+        } footer: {
+            Text("Keys stay on this iPhone. FairPlay always uses the live App Store install path after Get.")
+        }
+        .onAppear { keys.refreshFromAck() }
+        .onChange(of: store.email) { _ in keys.refreshFromAck() }
+    }
+}
+
 struct AccountHomeView: View {
     @ObservedObject private var store = AppleIDStore.shared
     @ObservedObject private var nav = AppNav.shared
@@ -453,6 +518,9 @@ struct AccountHomeView: View {
                 } footer: {
                     Text("Apple ID and Store each open their own sheet. FairPlay keys cannot be exported into FastDecryptBot — enroll Media & Purchases on this iPhone, then Confirm keys.")
                 }
+
+                // Always-visible FairPlay keys status (not buried under FairPlay advanced).
+                AccountFairPlayKeysSection()
 
                 // Settings root (was LIBRARY / DEVICE → Settings push).
                 IPadnSettingsRootSections(statusMessage: $settingsStatus)

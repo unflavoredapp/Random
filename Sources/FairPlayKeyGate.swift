@@ -137,10 +137,10 @@ enum FairPlayKeyGate {
             let live = FairPlayDecrypt.installedAppURL(bundleID: bid, knownPath: known)
             if let live, FairPlayDecrypt.isLiveAppStoreInstall(live) {
                 DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
-                progress?("Live install ready · \(live.lastPathComponent)")
+                progress?("Live install path: \(live.path)")
             } else {
                 let name = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                progress?("Install \(name.isEmpty ? bid : name) from the App Store, then retry Get…")
+                progress?("Live install path: (none) — install \(name.isEmpty ? bid : name) from the App Store, then retry Get…")
                 AppStoreDecryptGuide.openAppStore()
                 throw FairPlayKeyGateError.needsLiveInstall(bundleID: bid, name: name)
             }

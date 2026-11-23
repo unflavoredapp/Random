@@ -701,6 +701,9 @@ final class DeviceDecryptService: ObservableObject {
         // even when open(2) of the FairPlay binary EPERMs under the host sandbox.
         if !bid.isEmpty {
             DecryptCompanionHandoff.publishLiveInstallPath(installed.path, bundleID: bid)
+            publishDecryptProgress("Live install path: \(installed.path)")
+        } else {
+            publishDecryptProgress("Live install path: \(installed.path) (bundle ID unknown)")
         }
         let companionID = try await DecryptCompanionInstaller.installAndOpen(
             embeddingInstalledApp: installed,
@@ -1127,13 +1130,20 @@ final class DeviceDecryptService: ObservableObject {
         _ = await DeviceLibrary.shared.refreshAwaiting()
 
         // FairPlay mremap only from the live App Store install — EncryptedSource is packaging
-        // only. Gate already required live when bid is known; re-stamp here for the companion.
-        if !resolvedBid.isEmpty,
-           let live = await resolveInstalledAppURL(bundleID: resolvedBid) {
-            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: resolvedBid)
-            publishDecryptProgress("Live App Store install stamped for FairPlay: \(live.lastPathComponent)")
+        // only. Always surface the live path (or its absence) after a Store IPA fetch.
+        if !resolvedBid.isEmpty {
+            if let live = await resolveInstalledAppURL(bundleID: resolvedBid) {
+                DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: resolvedBid)
+                publishDecryptProgress("Live install path: \(live.path)")
+            } else {
+                DecryptCompanionHandoff.clearLiveInstallPath()
+                publishDecryptProgress(
+                    "Live install path: (none) for \(resolvedBid) — install \(displayName) from the App Store (same Apple ID) before FastDecryptBot."
+                )
+            }
         } else {
             DecryptCompanionHandoff.clearLiveInstallPath()
+            publishDecryptProgress("Live install path: (none) — missing bundle ID on Store IPA.")
         }
 
         do {

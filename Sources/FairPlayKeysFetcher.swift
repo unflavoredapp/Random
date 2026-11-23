@@ -43,6 +43,8 @@ final class FairPlayKeysFetcher: ObservableObject {
         var hasSCInfo: Bool
         /// Short path tail for debugging (last 2 components), empty when unknown.
         var pathTail: String
+        /// Full live install path when known (FairPlay mremap input).
+        var installPath: String
     }
 
     /// Open-source-style readiness snapshot (install + SC_Info), not a credential.
@@ -157,10 +159,10 @@ final class FairPlayKeysFetcher: ObservableObject {
         }
     }
 
-    /// Present the dedicated capture sheet (Search / gate failures).
+    /// Present the dedicated capture sheet (Account / Search / gate failures).
+    /// Does not switch tabs — keys stay visible wherever the user opened them.
     func presentCaptureSheet() {
         AppNav.shared.presentFairPlayKeysCapture = true
-        AppNav.shared.goSearch()
     }
 
     /// Open App Store account sheet or Media & Purchases for the active session.
@@ -417,7 +419,8 @@ final class FairPlayKeysFetcher: ObservableObject {
                 bundleID: item.bundleID,
                 version: item.version,
                 hasSCInfo: hasSC,
-                pathTail: pathTail(live)
+                pathTail: pathTail(live),
+                installPath: live?.path ?? ""
             ))
         }
 
