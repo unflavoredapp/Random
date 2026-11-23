@@ -715,21 +715,26 @@ enum DecryptCompanionPackager {
             }
         }
         if copied == 0 {
-            // Live-install sandbox often can't copy foreign FairPlay binaries. Info.plist
-            // + EncryptedSource.ipa (bundled by the IPA embed path) still let FairPlay run.
-            // dest = EmbeddedPayload/<Name>/ → companion .app is two levels up.
+            // Live-install sandbox often can't copy foreign FairPlay binaries (Flutter
+            // Runner.app → skipped Runner/App/Flutter). FairPlay mremaps the *live*
+            // Store path — empty EmbeddedPayload is OK when src is that live install
+            // or EncryptedSource.ipa is bundled for packaging identity.
             let companionApp = dest.deletingLastPathComponent().deletingLastPathComponent()
             let encryptedSource = companionApp.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
             let hasSource = fm.fileExists(atPath: encryptedSource.path)
-            if hasSource {
-                let sample = skipped.prefix(4).joined(separator: ", ")
+            let live = isLiveAppStoreInstall(src)
+            let sample = skipped.prefix(4).joined(separator: ", ")
+            if live {
                 progress?(
-                    "Slim embed copied 0 Mach-Os\(sample.isEmpty ? "" : " (skipped: \(sample))") — EncryptedSource.ipa will supply FairPlay binaries."
+                    "Slim embed copied 0 Mach-Os from \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))") — FairPlay will mremap the live App Store install."
+                )
+            } else if hasSource {
+                progress?(
+                    "Slim embed copied 0 Mach-Os\(sample.isEmpty ? "" : " (skipped: \(sample))") — packaging continues with EncryptedSource.ipa (FairPlay still needs live install)."
                 )
             } else {
-                let sample = skipped.prefix(4).joined(separator: ", ")
                 throw DecryptError(
-                    "Slim embed copied 0 Mach-Os from \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))"). Refusing empty EmbeddedPayload."
+                    "Slim embed copied 0 Mach-Os from \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))"). Install the app from the App Store (same Apple ID) so FairPlay has a live path, then retry Get."
                 )
             }
         }

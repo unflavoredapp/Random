@@ -25,7 +25,7 @@ enum FairPlayKeyGateError: LocalizedError {
             return "Before companion decrypt, capture FairPlay keys for \(who): open App Store Account Settings (or Media & Purchases), sign in once as that Apple ID, then tap Confirm keys in AppAssassin."
         case .needsLiveInstall(let bid, let name):
             let label = name.isEmpty ? bid : name
-            return "Install \(label) from the App Store on this iPhone (same Apple ID) before opening FastDecryptBot. fairplayd needs the live install path — EncryptedSource alone often EPERMs."
+            return "FairPlay keys ready is not enough — install \(label) from the App Store on this iPhone (same Apple ID) first. fairplayd needs that live install path; Get cannot open FastDecryptBot without it."
         }
     }
 }
