@@ -21,9 +21,14 @@ enum DecryptCompanionInstaller {
         displayName: String,
         progress: ((String) -> Void)? = nil
     ) async throws -> String {
+        // Resolve target bid *before* clearing foreign stamps.
+        let bid = DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID
+            ?? Self.bundleIDHint(fromEncryptedIPAFileName: encryptedIPA)
+            ?? ""
+        DecryptCompanionHandoff.beginTargetWorkflow(bundleID: bid)
         // Re-stamp the encrypted IPA temp URL so FairPlay / companion can capture it.
         if FileManager.default.fileExists(atPath: encryptedIPA.path) {
-            DecryptCompanionHandoff.publishEncryptedIPAPath(encryptedIPA.path, bundleID: "")
+            DecryptCompanionHandoff.publishEncryptedIPAPath(encryptedIPA.path, bundleID: bid)
             progress?("Stamped encrypted IPA for FairPlay: \(encryptedIPA.path)")
         }
         return try await installAndOpen(displayName: displayName, progress: progress) { bundleID, progress in
@@ -47,6 +52,7 @@ enum DecryptCompanionInstaller {
         let info = NSDictionary(contentsOf: installedApp.appendingPathComponent("Info.plist")) as? [String: Any]
         let bid = (info?["CFBundleIdentifier"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        DecryptCompanionHandoff.beginTargetWorkflow(bundleID: bid)
         if !bid.isEmpty {
             DecryptCompanionHandoff.publishLiveInstallPath(installedApp.path, bundleID: bid)
         }
@@ -57,6 +63,15 @@ enum DecryptCompanionInstaller {
                 progress: progress
             )
         }
+    }
+
+    /// `retainEncryptedIPA` names files `bundleID_display.ipa` — recover bid without unzipping.
+    private static func bundleIDHint(fromEncryptedIPAFileName ipa: URL) -> String? {
+        let base = ipa.deletingPathExtension().lastPathComponent
+        guard let under = base.firstIndex(of: "_") else { return nil }
+        let prefix = String(base[..<under]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard prefix.contains("."), prefix != "app" else { return nil }
+        return prefix
     }
 
     private static func installAndOpen(
@@ -74,11 +89,12 @@ enum DecryptCompanionInstaller {
         progress?("2/7 · Preparing signing certificate (Apple ID, then custom)…")
         let material = try await resolveCompanionSigningMaterial(progress: progress)
 
-        let bundleID = DecryptCompanionPackager.companionBundleID(forProvision: material.provision)
+        let bundleID = try DecryptCompanionPackager.companionBundleID(forProvision: material.provision)
         UserDefaults.standard.set(bundleID, forKey: companionBundleIDKey)
 
         progress?("3/7 · Embedding \(displayName) (slim Mach-Os + SC_Info)…")
         let package = try build(bundleID, progress)
+        defer { package.cleanupWorkDirectory() }
         let sizeMB = Double(package.approximateBytes) / 1_048_576.0
         progress?(String(format: "Companion package · %.0f MB", sizeMB))
 

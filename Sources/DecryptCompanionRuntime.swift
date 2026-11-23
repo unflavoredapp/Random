@@ -121,8 +121,18 @@ enum DecryptCompanionRuntime {
         fpOpts.bounceLargeCryptToServer = false
         fpOpts.preferPartialOnLowRAM = true
         fpOpts.requireAllFrameworks = false
-        let liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(manifest: man)
-        let stampedIPAURL = DecryptCompanionHandoff.resolveEncryptedIPAURL(manifest: man)
+        let expectedBid = (embedBid
+            ?? (man?["bundleID"] as? String)
+            ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(
+            manifest: man,
+            expectedBundleID: expectedBid
+        )
+        let stampedIPAURL = DecryptCompanionHandoff.resolveEncryptedIPAURL(
+            manifest: man,
+            expectedBundleID: expectedBid
+        )
         var ipaUnpackRoot: URL?
         defer {
             if let ipaUnpackRoot {

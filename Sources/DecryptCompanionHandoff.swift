@@ -70,6 +70,93 @@ enum DecryptCompanionHandoff {
     private static let liveInstallBundleKey = "companion.hostLiveInstallBundleID"
     private static let encryptedIPAPathKey = "companion.hostEncryptedIPAPath"
     private static let encryptedIPABundleKey = "companion.hostEncryptedIPABundleID"
+    private static let targetStampKey = "companion.targetStamp"
+
+    /// Single target-scoped handoff record (encrypted IPA + live install for one bundle ID).
+    struct CompanionTargetStamp: Codable, Equatable, Sendable {
+        var bundleID: String
+        var encryptedIPAPath: String?
+        var liveInstallPath: String?
+        var createdAt: TimeInterval
+
+        init(
+            bundleID: String,
+            encryptedIPAPath: String? = nil,
+            liveInstallPath: String? = nil,
+            createdAt: TimeInterval = Date().timeIntervalSince1970
+        ) {
+            self.bundleID = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+            self.encryptedIPAPath = encryptedIPAPath?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+            self.liveInstallPath = liveInstallPath?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .nilIfEmpty
+            self.createdAt = createdAt
+        }
+    }
+
+    /// Normalize / compare bundle IDs for stamp matching.
+    nonisolated static func bundleIDsMatch(_ a: String?, _ b: String?) -> Bool {
+        let x = (a ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let y = (b ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !x.isEmpty, !y.isEmpty else { return false }
+        return x == y
+    }
+
+    /// Clear stamps that don’t belong to `bundleID` before packaging a new companion target.
+    /// Keeps a matching encrypted-IPA or live-install stamp so EncryptedSource.ipa can still bundle.
+    static func beginTargetWorkflow(bundleID: String) {
+        let bid = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let live = readLiveInstallPath() {
+            if bid.isEmpty || live.bundleID.isEmpty || !bundleIDsMatch(live.bundleID, bid) {
+                clearLiveInstallPath()
+            }
+        }
+        if let enc = readEncryptedIPAPath() {
+            if bid.isEmpty || enc.bundleID.isEmpty || !bundleIDsMatch(enc.bundleID, bid) {
+                clearEncryptedIPAPath()
+            }
+        }
+        persistTargetStamp(fromCurrentKeys(preferredBundleID: bid))
+    }
+
+    private static func persistTargetStamp(_ stamp: CompanionTargetStamp?) {
+        guard let stamp, !stamp.bundleID.isEmpty else {
+            suite?.removeObject(forKey: targetStampKey)
+            local.removeObject(forKey: targetStampKey)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(stamp) else { return }
+        suite?.set(data, forKey: targetStampKey)
+        local.set(data, forKey: targetStampKey)
+    }
+
+    private static func fromCurrentKeys(preferredBundleID: String) -> CompanionTargetStamp? {
+        let bid = preferredBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        let enc = readEncryptedIPAPath()
+        let live = readLiveInstallPath()
+        let resolvedBid = bid.isEmpty
+            ? (enc?.bundleID).flatMap { $0.isEmpty ? nil : $0 } ?? (live?.bundleID).flatMap { $0.isEmpty ? nil : $0 } ?? ""
+            : bid
+        guard !resolvedBid.isEmpty else { return nil }
+        let encPath = enc.flatMap { bundleIDsMatch($0.bundleID, resolvedBid) || $0.bundleID.isEmpty ? $0.path : nil }
+        let livePath = live.flatMap { bundleIDsMatch($0.bundleID, resolvedBid) || $0.bundleID.isEmpty ? $0.path : nil }
+        return CompanionTargetStamp(
+            bundleID: resolvedBid,
+            encryptedIPAPath: encPath,
+            liveInstallPath: livePath
+        )
+    }
+
+    static func readTargetStamp() -> CompanionTargetStamp? {
+        let data = suite?.data(forKey: targetStampKey) ?? local.data(forKey: targetStampKey)
+        if let data, let stamp = try? JSONDecoder().decode(CompanionTargetStamp.self, from: data),
+           !stamp.bundleID.isEmpty {
+            return stamp
+        }
+        return fromCurrentKeys(preferredBundleID: "")
+    }
 
     /// Snapshot the host Apple ID / FairPlay gate state into a plist-safe dictionary.
     /// Calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
@@ -249,12 +336,18 @@ enum DecryptCompanionHandoff {
             clearLiveInstallPath()
             return
         }
+        // Drop a stale encrypted-IPA stamp from a different target.
+        if !bid.isEmpty, let enc = readEncryptedIPAPath(),
+           !enc.bundleID.isEmpty, !bundleIDsMatch(enc.bundleID, bid) {
+            clearEncryptedIPAPath()
+        }
         suite?.set(p, forKey: liveInstallPathKey)
         local.set(p, forKey: liveInstallPathKey)
         if !bid.isEmpty {
             suite?.set(bid, forKey: liveInstallBundleKey)
             local.set(bid, forKey: liveInstallBundleKey)
         }
+        persistTargetStamp(fromCurrentKeys(preferredBundleID: bid))
         publishHostSnapshot()
     }
 
@@ -263,6 +356,7 @@ enum DecryptCompanionHandoff {
         local.removeObject(forKey: liveInstallPathKey)
         suite?.removeObject(forKey: liveInstallBundleKey)
         local.removeObject(forKey: liveInstallBundleKey)
+        persistTargetStamp(fromCurrentKeys(preferredBundleID: readEncryptedIPAPath()?.bundleID ?? ""))
         publishHostSnapshot()
     }
 
@@ -341,12 +435,18 @@ enum DecryptCompanionHandoff {
             clearEncryptedIPAPath()
             return
         }
+        // Drop a stale live-install stamp from a different target.
+        if !bid.isEmpty, let live = readLiveInstallPath(),
+           !live.bundleID.isEmpty, !bundleIDsMatch(live.bundleID, bid) {
+            clearLiveInstallPath()
+        }
         suite?.set(p, forKey: encryptedIPAPathKey)
         local.set(p, forKey: encryptedIPAPathKey)
         if !bid.isEmpty {
             suite?.set(bid, forKey: encryptedIPABundleKey)
             local.set(bid, forKey: encryptedIPABundleKey)
         }
+        persistTargetStamp(fromCurrentKeys(preferredBundleID: bid))
         publishHostSnapshot()
     }
 
@@ -355,6 +455,7 @@ enum DecryptCompanionHandoff {
         local.removeObject(forKey: encryptedIPAPathKey)
         suite?.removeObject(forKey: encryptedIPABundleKey)
         local.removeObject(forKey: encryptedIPABundleKey)
+        persistTargetStamp(fromCurrentKeys(preferredBundleID: readLiveInstallPath()?.bundleID ?? ""))
         publishHostSnapshot()
     }
 
@@ -367,6 +468,11 @@ enum DecryptCompanionHandoff {
     }
 
     static func readEncryptedIPAPath() -> (path: String, bundleID: String)? {
+        readEncryptedIPAPath(matchingBundleID: nil)
+    }
+
+    /// Stamped encrypted IPA, optionally filtered to `matchingBundleID`.
+    static func readEncryptedIPAPath(matchingBundleID: String?) -> (path: String, bundleID: String)? {
         let path = (suite?.string(forKey: encryptedIPAPathKey)
             ?? local.string(forKey: encryptedIPAPathKey)
             ?? (suite?.dictionary(forKey: "companion.hostSnapshot")?["hostEncryptedIPAPath"] as? String)
@@ -378,32 +484,55 @@ enum DecryptCompanionHandoff {
             ?? (suite?.dictionary(forKey: "companion.hostSnapshot")?["bundleID"] as? String)
             ?? (local.dictionary(forKey: "companion.hostSnapshot")?["bundleID"] as? String))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let expected = (matchingBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !expected.isEmpty {
+            // Require an explicit matching stamp bid — refuse empty/foreign stamps.
+            guard bundleIDsMatch(bid, expected) else { return nil }
+        }
         return (path, bid)
     }
 
     /// Resolve stamped encrypted IPA URL (App Group / defaults / manifest / bundled).
     static func resolveEncryptedIPAURL(manifest: [String: Any]?) -> URL? {
-        if let stamped = readEncryptedIPAPath() {
-            return URL(fileURLWithPath: stamped.path)
+        let expected = ((manifest?["bundleID"] as? String)
+            ?? (readHostSnapshot(fromManifest: manifest)["bundleID"] as? String))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return resolveEncryptedIPAURL(manifest: manifest, expectedBundleID: expected)
+    }
+
+    static func resolveEncryptedIPAURL(manifest: [String: Any]?, expectedBundleID: String) -> URL? {
+        let expected = expectedBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let stamped = readEncryptedIPAPath(matchingBundleID: expected.isEmpty ? nil : expected) {
+            if expected.isEmpty || stamped.bundleID.isEmpty || bundleIDsMatch(stamped.bundleID, expected) {
+                return URL(fileURLWithPath: stamped.path)
+            }
         }
+        let snap = readHostSnapshot(fromManifest: manifest)
+        let snapBid = (snap["bundleID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let path = ((manifest?["hostEncryptedIPAPath"] as? String)
-            ?? (readHostSnapshot(fromManifest: nil)["hostEncryptedIPAPath"] as? String))?
+            ?? (snap["hostEncryptedIPAPath"] as? String))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !path.isEmpty, FileManager.default.fileExists(atPath: path) {
-            return URL(fileURLWithPath: path)
+            // Manifest path only when target matches (or no expected target yet).
+            if expected.isEmpty || snapBid.isEmpty || bundleIDsMatch(snapBid, expected) {
+                return URL(fileURLWithPath: path)
+            }
         }
         // Companion-bundled copy — works even when App Group / host Documents path is invisible.
+        // Bundled at package time for this companion install, so it is target-scoped by construction.
         let bundled = Bundle.main.bundleURL.appendingPathComponent(bundledEncryptedIPAName)
         if FileManager.default.fileExists(atPath: bundled.path) {
             return bundled
         }
-        // Last resort: any IPA left in the shared EncryptedIPAs folder.
+        // Shared EncryptedIPAs folder — only a filename that contains the expected bundle ID.
         if let root = sharedContainerURL {
             let dir = root.appendingPathComponent(encryptedIPADirName, isDirectory: true)
             if let items = try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) {
-                let bid = ((manifest?["bundleID"] as? String)
-                    ?? (readHostSnapshot(fromManifest: nil)["bundleID"] as? String))?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                let bid = expected.isEmpty
+                    ? ((manifest?["bundleID"] as? String)
+                        ?? (snap["bundleID"] as? String))?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    : expected
                 if !bid.isEmpty,
                    let match = items.first(where: {
                        $0.pathExtension.lowercased() == "ipa"
@@ -411,7 +540,9 @@ enum DecryptCompanionHandoff {
                    }) {
                     return match
                 }
-                if let any = items.first(where: { $0.pathExtension.lowercased() == "ipa" }) {
+                // Never return an arbitrary IPA when we know the intended target.
+                if bid.isEmpty,
+                   let any = items.first(where: { $0.pathExtension.lowercased() == "ipa" }) {
                     return any
                 }
             }
@@ -421,6 +552,10 @@ enum DecryptCompanionHandoff {
 
     /// Live Store path published by the host packager (App Group / local fallback).
     static func readLiveInstallPath() -> (path: String, bundleID: String)? {
+        readLiveInstallPath(matchingBundleID: nil)
+    }
+
+    static func readLiveInstallPath(matchingBundleID: String?) -> (path: String, bundleID: String)? {
         let path = (suite?.string(forKey: liveInstallPathKey)
             ?? local.string(forKey: liveInstallPathKey)
             ?? (suite?.dictionary(forKey: "companion.hostSnapshot")?["hostLiveInstallPath"] as? String)
@@ -432,6 +567,10 @@ enum DecryptCompanionHandoff {
             ?? (suite?.dictionary(forKey: "companion.hostSnapshot")?["bundleID"] as? String)
             ?? (local.dictionary(forKey: "companion.hostSnapshot")?["bundleID"] as? String))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let expected = (matchingBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !expected.isEmpty {
+            guard bundleIDsMatch(bid, expected) else { return nil }
+        }
         return (path, bid)
     }
 
@@ -461,19 +600,46 @@ enum DecryptCompanionHandoff {
     /// Resolve the live App Store `.app` the host stamped for FairPlay mremap.
     /// Prefer App Group / defaults, then companion EmbeddedPayload `manifest.plist`.
     static func resolveLiveInstallURL(manifest: [String: Any]?) -> URL? {
-        if let stamped = readLiveInstallPath() {
-            let url = URL(fileURLWithPath: stamped.path)
-            if FileManager.default.fileExists(atPath: url.path) {
-                return url.resolvingSymlinksInPath().standardizedFileURL
+        let expected = ((manifest?["bundleID"] as? String)
+            ?? (readHostSnapshot(fromManifest: manifest)["bundleID"] as? String))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return resolveLiveInstallURL(manifest: manifest, expectedBundleID: expected)
+    }
+
+    static func resolveLiveInstallURL(manifest: [String: Any]?, expectedBundleID: String) -> URL? {
+        let expected = expectedBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        func acceptLiveURL(_ url: URL, stampedBid: String) -> URL? {
+            guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+            let resolved = url.resolvingSymlinksInPath().standardizedFileURL
+            if !expected.isEmpty {
+                // Prefer stamped bid; also verify Info.plist when present.
+                if !stampedBid.isEmpty, !bundleIDsMatch(stampedBid, expected) {
+                    return nil
+                }
+                let info = NSDictionary(contentsOf: resolved.appendingPathComponent("Info.plist")) as? [String: Any]
+                if let liveBid = (info?["CFBundleIdentifier"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                   !liveBid.isEmpty,
+                   !bundleIDsMatch(liveBid, expected) {
+                    return nil
+                }
+            }
+            return resolved
+        }
+
+        if let stamped = readLiveInstallPath(matchingBundleID: expected.isEmpty ? nil : expected) {
+            if let url = acceptLiveURL(URL(fileURLWithPath: stamped.path), stampedBid: stamped.bundleID) {
+                return url
             }
         }
+        let snap = readHostSnapshot(fromManifest: manifest)
+        let snapBid = (snap["bundleID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let path = ((manifest?["hostLiveInstallPath"] as? String)
-            ?? (readHostSnapshot(fromManifest: nil)["hostLiveInstallPath"] as? String))?
+            ?? (snap["hostLiveInstallPath"] as? String))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !path.isEmpty else { return nil }
-        let url = URL(fileURLWithPath: path)
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return url.resolvingSymlinksInPath().standardizedFileURL
+        return acceptLiveURL(URL(fileURLWithPath: path), stampedBid: snapBid)
     }
 
     /// Remember a companion that installed but may still need Trust before it opens.
@@ -686,5 +852,12 @@ enum DecryptCompanionHandoff {
         return base
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "..", with: "_")
+    }
+}
+
+private extension String {
+    var nilIfEmpty: String? {
+        let t = trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
     }
 }
