@@ -167,8 +167,8 @@ struct DecryptCompanionConsole: View {
             // Center brand: FastDecryptBot icon + name.
             HStack(spacing: 8) {
                 Group {
-                    if UIImage(named: DecryptCompanionPackager.companionIconAsset) != nil {
-                        Image(DecryptCompanionPackager.companionIconAsset)
+                    if UIImage(named: DecryptCompanionIdentity.companionIconAsset) != nil {
+                        Image(DecryptCompanionIdentity.companionIconAsset)
                             .resizable()
                             .scaledToFill()
                     } else if let img = TetherlessBrand.appIconImage() {
@@ -186,7 +186,7 @@ struct DecryptCompanionConsole: View {
                 .frame(width: 28, height: 28)
                 .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
 
-                Text(DecryptCompanionPackager.companionDisplayName)
+                Text(DecryptCompanionIdentity.companionDisplayName)
                     .font(.headline.weight(.semibold))
                     .foregroundStyle(.white)
                     .lineLimit(1)

@@ -34,6 +34,7 @@ enum AppleSystemAppGate {
         return false
     }
 
+#if !DECRYPT_HELPER
     static func isBlocked(_ app: DecryptApp) -> Bool {
         let adamFromId: String? = {
             // ids look like "itunes-899247664-us" or "owned-899247664"
@@ -45,6 +46,7 @@ enum AppleSystemAppGate {
         }()
         return isBlocked(bundleID: app.bundle, storeURL: app.url, adamId: adamFromId)
     }
+#endif
 
     static var userMessage: String {
         "Apple system apps (TestFlight, App Store, …) can’t be decrypted. Pick a third-party App Store title."

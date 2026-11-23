@@ -25,6 +25,26 @@
 		AD5F00000000000000000003 /* AirShareLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = AD5F0000000000000000000E /* AirShareLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		AD5F00000000000000000004 /* AirShareActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = AD5F0000000000000000000B /* AirShareActivityAttributes.swift */; };
 		AD5F00000000000000000006 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AD5F0000000000000000000F /* Assets.xcassets */; };
+		DHLP00000000000000000051 /* DecryptHelper.app in Embed DecryptHelper */ = {isa = PBXBuildFile; fileRef = DHLP0000000000000000000E /* DecryptHelper.app */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		DHLP00000000000000000060 /* ZIPFoundation in Frameworks */ = {isa = PBXBuildFile; productRef = DHLP00000000000000000061 /* ZIPFoundation */; };
+		DHLPBUILD0000000000001 /* DecryptCompanionRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000001 /* DecryptCompanionRuntime.swift */; };
+		DHLPBUILD0000000000002 /* DecryptCompanionConsole.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000002 /* DecryptCompanionConsole.swift */; };
+		DHLPBUILD0000000000003 /* DecryptCompanionHandoff.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000003 /* DecryptCompanionHandoff.swift */; };
+		DHLPBUILD0000000000004 /* FairPlayDecrypt.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000004 /* FairPlayDecrypt.swift */; };
+		DHLPBUILD0000000000005 /* FairPlayAdvancedOptions.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000005 /* FairPlayAdvancedOptions.swift */; };
+		DHLPBUILD0000000000006 /* FairPlayJetsam.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000006 /* FairPlayJetsam.swift */; };
+		DHLPBUILD0000000000007 /* fpcore.c in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000007 /* fpcore.c */; };
+		DHLPBUILD0000000000008 /* FairPlayLSLookup.m in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000008 /* FairPlayLSLookup.m */; };
+		DHLPBUILD0000000000009 /* TetherlessBrand.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000009 /* TetherlessBrand.swift */; };
+		DHLPBUILD000000000000A /* AppIconCordBranding.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE0000000000000A /* AppIconCordBranding.swift */; };
+		DHLPBUILD000000000000B /* AppStoreDecryptGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE0000000000000B /* AppStoreDecryptGuide.swift */; };
+		DHLPBUILD000000000000C /* AppleSystemAppGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE0000000000000C /* AppleSystemAppGate.swift */; };
+		DHLPBUILD000000000000D /* DecryptMacRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE0000000000000D /* DecryptMacRouting.swift */; };
+		DHLPBUILD000000000000E /* DecryptError.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE0000000000000E /* DecryptError.swift */; };
+		DHLPBUILD000000000000F /* AppPaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE0000000000000F /* AppPaths.swift */; };
+		DHLPBUILD0000000000010 /* ShareSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000010 /* ShareSheet.swift */; };
+		DHLPBUILD0000000000011 /* DecryptCompanionIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000011 /* DecryptCompanionIdentity.swift */; };
+		DHLPBUILD0000000000012 /* TetherlessPalette.swift in Sources */ = {isa = PBXBuildFile; fileRef = DHLPFILE00000000000012 /* TetherlessPalette.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,6 +62,13 @@
 			remoteGlobalIDString = AD5F0000000000000000001E;
 			remoteInfo = AirShareLiveActivity;
 		};
+		DHLP00000000000000000028 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = D7C5B6E417CC3AE86EBD1F76 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = DHLP0000000000000000001E;
+			remoteInfo = DecryptHelper;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -55,6 +82,17 @@
 				AD5F00000000000000000003 /* AirShareLiveActivity.appex in Embed Foundation Extensions */,
 			);
 			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DHLP00000000000000000050 /* Embed DecryptHelper */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 7;
+			files = (
+				DHLP00000000000000000051 /* DecryptHelper.app in Embed DecryptHelper */,
+			);
+			name = "Embed DecryptHelper";
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXCopyFilesBuildPhase section */
@@ -76,6 +114,25 @@
 		AD5F0000000000000000000C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		AD5F0000000000000000000E /* AirShareLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = AirShareLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		AD5F0000000000000000000F /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		DHLP0000000000000000000E /* DecryptHelper.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DecryptHelper.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		DHLPFILE00000000000001 /* DecryptCompanionRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DecryptCompanionRuntime.swift; path = Sources/DecryptCompanionRuntime.swift; sourceTree = "<group>"; };
+		DHLPFILE00000000000002 /* DecryptCompanionConsole.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DecryptCompanionConsole.swift; path = Sources/DecryptCompanionConsole.swift; sourceTree = "<group>"; };
+		DHLPFILE00000000000003 /* DecryptCompanionHandoff.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DecryptCompanionHandoff.swift; path = Sources/DecryptCompanionHandoff.swift; sourceTree = "<group>"; };
+		DHLPFILE00000000000004 /* FairPlayDecrypt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FairPlayDecrypt.swift; path = Sources/FairPlay/FairPlayDecrypt.swift; sourceTree = "<group>"; };
+		DHLPFILE00000000000005 /* FairPlayAdvancedOptions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FairPlayAdvancedOptions.swift; path = Sources/FairPlay/FairPlayAdvancedOptions.swift; sourceTree = "<group>"; };
+		DHLPFILE00000000000006 /* FairPlayJetsam.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = FairPlayJetsam.swift; path = Sources/FairPlay/FairPlayJetsam.swift; sourceTree = "<group>"; };
+		DHLPFILE00000000000007 /* fpcore.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = fpcore.c; path = Sources/FairPlay/fpcore.c; sourceTree = "<group>"; };
+		DHLPFILE00000000000008 /* FairPlayLSLookup.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = FairPlayLSLookup.m; path = Sources/FairPlay/FairPlayLSLookup.m; sourceTree = "<group>"; };
+		DHLPFILE00000000000009 /* TetherlessBrand.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TetherlessBrand.swift; path = Sources/TetherlessBrand.swift; sourceTree = "<group>"; };
+		DHLPFILE0000000000000A /* AppIconCordBranding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppIconCordBranding.swift; path = Sources/AppIconCordBranding.swift; sourceTree = "<group>"; };
+		DHLPFILE0000000000000B /* AppStoreDecryptGuide.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppStoreDecryptGuide.swift; path = Sources/AppStoreDecryptGuide.swift; sourceTree = "<group>"; };
+		DHLPFILE0000000000000C /* AppleSystemAppGate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppleSystemAppGate.swift; path = Sources/AppleSystemAppGate.swift; sourceTree = "<group>"; };
+		DHLPFILE0000000000000D /* DecryptMacRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DecryptMacRouting.swift; path = Sources/DecryptMacRouting.swift; sourceTree = "<group>"; };
+		DHLPFILE0000000000000E /* DecryptError.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DecryptError.swift; path = Sources/DecryptError.swift; sourceTree = "<group>"; };
+		DHLPFILE0000000000000F /* AppPaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = AppPaths.swift; path = Sources/AppPaths.swift; sourceTree = "<group>"; };
+		DHLPFILE00000000000010 /* ShareSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = ShareSheet.swift; path = Sources/ShareSheet.swift; sourceTree = "<group>"; };
+		DHLPFILE00000000000011 /* DecryptCompanionIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = DecryptCompanionIdentity.swift; path = Sources/DecryptCompanionIdentity.swift; sourceTree = "<group>"; };
+		DHLPFILE00000000000012 /* TetherlessPalette.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TetherlessPalette.swift; path = Sources/TetherlessPalette.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -99,6 +156,14 @@
 			);
 			target = 7161E63E34B4EFFA56B6844D /* Tetherless */;
 		};
+		DHLP00000000000000000041 /* Exceptions for "DecryptHelper" folder in "DecryptHelper" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+				"DecryptHelper-Bridging-Header.h",
+			);
+			target = DHLP0000000000000000001E /* DecryptHelper */;
+		};
 /* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -108,6 +173,14 @@
 				B5A9C0DE0000000000000003 /* Exceptions for "Sources" folder in "Tetherless" target */,
 			);
 			path = Sources;
+			sourceTree = "<group>";
+		};
+		DHLP00000000000000000040 /* DecryptHelper */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				DHLP00000000000000000041 /* Exceptions for "DecryptHelper" folder in "DecryptHelper" target */,
+			);
+			path = DecryptHelper;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -141,6 +214,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		DHLP00000000000000000020 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DHLP00000000000000000060 /* ZIPFoundation in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -156,6 +237,8 @@
 				8C7D82082434432C835A5512 /* AVX512ObjcInternal.m */,
 				AD5E00000000000000000014 /* AirShareDeviceTunnel */,
 				AD5F00000000000000000014 /* AirShareLiveActivity */,
+				DHLP00000000000000000040 /* DecryptHelper */,
+				DHLPGROUP00000000000001 /* DecryptHelperShared */,
 			);
 			sourceTree = "<group>";
 		};
@@ -165,6 +248,7 @@
 				2456595988ACDF120DEEB9B4 /* Tetherless.app */,
 				AD5E0000000000000000000E /* AirShareDeviceTunnel.appex */,
 				AD5F0000000000000000000E /* AirShareLiveActivity.appex */,
+				DHLP0000000000000000000E /* DecryptHelper.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -191,6 +275,31 @@
 			path = AirShareLiveActivity;
 			sourceTree = "<group>";
 		};
+		DHLPGROUP00000000000001 /* DecryptHelperShared */ = {
+			isa = PBXGroup;
+			children = (
+				DHLPFILE00000000000001 /* DecryptCompanionRuntime.swift */,
+				DHLPFILE00000000000002 /* DecryptCompanionConsole.swift */,
+				DHLPFILE00000000000003 /* DecryptCompanionHandoff.swift */,
+				DHLPFILE00000000000004 /* FairPlayDecrypt.swift */,
+				DHLPFILE00000000000005 /* FairPlayAdvancedOptions.swift */,
+				DHLPFILE00000000000006 /* FairPlayJetsam.swift */,
+				DHLPFILE00000000000007 /* fpcore.c */,
+				DHLPFILE00000000000008 /* FairPlayLSLookup.m */,
+				DHLPFILE00000000000009 /* TetherlessBrand.swift */,
+				DHLPFILE0000000000000A /* AppIconCordBranding.swift */,
+				DHLPFILE0000000000000B /* AppStoreDecryptGuide.swift */,
+				DHLPFILE0000000000000C /* AppleSystemAppGate.swift */,
+				DHLPFILE0000000000000D /* DecryptMacRouting.swift */,
+				DHLPFILE0000000000000E /* DecryptError.swift */,
+				DHLPFILE0000000000000F /* AppPaths.swift */,
+				DHLPFILE00000000000010 /* ShareSheet.swift */,
+				DHLPFILE00000000000011 /* DecryptCompanionIdentity.swift */,
+				DHLPFILE00000000000012 /* TetherlessPalette.swift */,
+			);
+			name = DecryptHelperShared;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -202,12 +311,14 @@
 				ED251AC3D36756F87F68B295 /* Frameworks */,
 				F5CEC085741EEB2AA35E8EF3 /* Resources */,
 				AD5E00000000000000000021 /* Embed Foundation Extensions */,
+				DHLP00000000000000000050 /* Embed DecryptHelper */,
 			);
 			buildRules = (
 			);
 			dependencies = (
 				AD5E00000000000000000029 /* PBXTargetDependency */,
 				AD5F00000000000000000029 /* PBXTargetDependency */,
+				DHLP00000000000000000029 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				CF0E7EE12920CA355A866327 /* Sources */,
@@ -259,6 +370,29 @@
 			productReference = AD5F0000000000000000000E /* AirShareLiveActivity.appex */;
 			productType = "com.apple.product-type.app-extension";
 		};
+		DHLP0000000000000000001E /* DecryptHelper */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DHLP00000000000000000032 /* Build configuration list for PBXNativeTarget "DecryptHelper" */;
+			buildPhases = (
+				DHLP0000000000000000001F /* Sources */,
+				DHLP00000000000000000020 /* Frameworks */,
+				DHLP00000000000000000021 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				DHLP00000000000000000040 /* DecryptHelper */,
+			);
+			name = DecryptHelper;
+			packageProductDependencies = (
+				DHLP00000000000000000061 /* ZIPFoundation */,
+			);
+			productName = DecryptHelper;
+			productReference = DHLP0000000000000000000E /* DecryptHelper.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXTargetDependency section */
@@ -271,6 +405,11 @@
 			isa = PBXTargetDependency;
 			target = AD5F0000000000000000001E /* AirShareLiveActivity */;
 			targetProxy = AD5F00000000000000000028 /* PBXContainerItemProxy */;
+		};
+		DHLP00000000000000000029 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = DHLP0000000000000000001E /* DecryptHelper */;
+			targetProxy = DHLP00000000000000000028 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -289,6 +428,9 @@
 						CreatedOnToolsVersion = 26.0;
 					};
 					AD5F0000000000000000001E = {
+						CreatedOnToolsVersion = 26.0;
+					};
+					DHLP0000000000000000001E = {
 						CreatedOnToolsVersion = 26.0;
 					};
 				};
@@ -318,6 +460,7 @@
 				7161E63E34B4EFFA56B6844D /* Tetherless */,
 				AD5E0000000000000000001E /* AirShareDeviceTunnel */,
 				AD5F0000000000000000001E /* AirShareLiveActivity */,
+				DHLP0000000000000000001E /* DecryptHelper */,
 			);
 		};
 /* End PBXProject section */
@@ -337,6 +480,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				AD5F00000000000000000006 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DHLP00000000000000000021 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -367,6 +517,31 @@
 			files = (
 				AD5F00000000000000000001 /* AirShareLiveActivity.swift in Sources */,
 				AD5F00000000000000000002 /* AirShareActivityAttributes.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DHLP0000000000000000001F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				DHLPBUILD0000000000001 /* DecryptCompanionRuntime.swift in Sources */,
+				DHLPBUILD0000000000002 /* DecryptCompanionConsole.swift in Sources */,
+				DHLPBUILD0000000000003 /* DecryptCompanionHandoff.swift in Sources */,
+				DHLPBUILD0000000000004 /* FairPlayDecrypt.swift in Sources */,
+				DHLPBUILD0000000000005 /* FairPlayAdvancedOptions.swift in Sources */,
+				DHLPBUILD0000000000006 /* FairPlayJetsam.swift in Sources */,
+				DHLPBUILD0000000000007 /* fpcore.c in Sources */,
+				DHLPBUILD0000000000008 /* FairPlayLSLookup.m in Sources */,
+				DHLPBUILD0000000000009 /* TetherlessBrand.swift in Sources */,
+				DHLPBUILD000000000000A /* AppIconCordBranding.swift in Sources */,
+				DHLPBUILD000000000000B /* AppStoreDecryptGuide.swift in Sources */,
+				DHLPBUILD000000000000C /* AppleSystemAppGate.swift in Sources */,
+				DHLPBUILD000000000000D /* DecryptMacRouting.swift in Sources */,
+				DHLPBUILD000000000000E /* DecryptError.swift in Sources */,
+				DHLPBUILD000000000000F /* AppPaths.swift in Sources */,
+				DHLPBUILD0000000000010 /* ShareSheet.swift in Sources */,
+				DHLPBUILD0000000000011 /* DecryptCompanionIdentity.swift in Sources */,
+				DHLPBUILD0000000000012 /* TetherlessPalette.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -656,6 +831,79 @@
 			};
 			name = Release;
 		};
+		DHLP00000000000000000033 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = DecryptHelper/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 3.8;
+				PRODUCT_BUNDLE_IDENTIFIER = "bot.fastdecrypt.ai.decrypthelper";
+				PRODUCT_NAME = DecryptHelper;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources",
+				);
+				SWIFT_OBJC_BRIDGING_HEADER = "DecryptHelper/DecryptHelper-Bridging-Header.h";
+				SWIFT_OBJC_INTEROP_MODE = objc;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG DECRYPT_HELPER $(inherited)";
+				SWIFT_VERSION = 5.10;
+				TARGETED_DEVICE_FAMILY = "1,2";
+
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ONLY_ACTIVE_ARCH = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		DHLP00000000000000000034 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 2;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = DecryptHelper/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 3.8;
+				PRODUCT_BUNDLE_IDENTIFIER = "bot.fastdecrypt.ai.decrypthelper";
+				PRODUCT_NAME = DecryptHelper;
+				SDKROOT = iphoneos;
+				SKIP_INSTALL = YES;
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(SRCROOT)/Sources",
+				);
+				SWIFT_OBJC_BRIDGING_HEADER = "DecryptHelper/DecryptHelper-Bridging-Header.h";
+				SWIFT_OBJC_INTEROP_MODE = objc;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DECRYPT_HELPER $(inherited)";
+				SWIFT_VERSION = 5.10;
+				TARGETED_DEVICE_FAMILY = "1,2";
+
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ONLY_ACTIVE_ARCH = NO;
+				SWIFT_OPTIMIZATION_LEVEL = "-Osize";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -692,6 +940,15 @@
 			buildConfigurations = (
 				AD5F00000000000000000033 /* Debug */,
 				AD5F00000000000000000034 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DHLP00000000000000000032 /* Build configuration list for PBXNativeTarget "DecryptHelper" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DHLP00000000000000000033 /* Debug */,
+				DHLP00000000000000000034 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -783,6 +1040,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = AD5E0000000000000000003C /* XCLocalSwiftPackageReference "IDeviceKit" */;
 			productName = IDevice;
+		};
+		DHLP00000000000000000061 /* ZIPFoundation */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 61EDEC30A5F63ED366D136AF /* XCRemoteSwiftPackageReference "ZIPFoundation" */;
+			productName = ZIPFoundation;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -5,6 +5,15 @@
          <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
             <BuildableReference
                BuildableIdentifier = "primary"
+               BlueprintIdentifier = "DHLP0000000000000000001E"
+               BuildableName = "DecryptHelper.app"
+               BlueprintName = "DecryptHelper"
+               ReferencedContainer = "container:Tetherless.xcodeproj">
+            </BuildableReference>
+         </BuildActionEntry>
+         <BuildActionEntry buildForTesting = "YES" buildForRunning = "YES" buildForProfiling = "YES" buildForArchiving = "YES" buildForAnalyzing = "YES">
+            <BuildableReference
+               BuildableIdentifier = "primary"
                BlueprintIdentifier = "7161E63E34B4EFFA56B6844D"
                BuildableName = "Tetherless.app"
                BlueprintName = "Tetherless"
