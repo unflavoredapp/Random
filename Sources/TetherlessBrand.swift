@@ -5,8 +5,10 @@
 //
 
 import Foundation
-import SwiftUI
 import UIKit
+#if !DECRYPT_HELPER
+import SwiftUI
+#endif
 
 /// Canonical product brand for AppAssassin (site, ASCII mark, user-agent helpers).
 nonisolated enum TetherlessBrand {
@@ -55,6 +57,7 @@ nonisolated enum TetherlessBrand {
     }
 }
 
+#if !DECRYPT_HELPER
 /// Squircle App Icon used in Settings About and branded chrome.
 struct TetherlessAppIconView: View {
     var size: CGFloat = 52
@@ -92,3 +95,4 @@ struct TetherlessAppIconView: View {
         .accessibilityLabel(TetherlessBrand.name)
     }
 }
+#endif

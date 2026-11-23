@@ -143,12 +143,13 @@ HELPER_BIN="$HELPER_APP/$HELPER_EXE"
 HELPER_BYTES=$(stat -f%z "$HELPER_BIN" 2>/dev/null || stat -c%s "$HELPER_BIN")
 HELPER_MB=$(awk -v b="$HELPER_BYTES" 'BEGIN { printf "%.2f", b/1024/1024 }')
 echo "==> DecryptHelper: $HELPER_BIN (${HELPER_MB} MB)"
-# Soft ceiling — keep Jetsam headroom vs the ~45 MB host clone. Fail CI if we regressed hard.
-if [ "$HELPER_BYTES" -gt $((8 * 1024 * 1024)) ]; then
-  echo "ERROR: DecryptHelper is ${HELPER_MB} MB (> 8 MB). Lean FairPlay shell regressed."
+# Hard ceiling — Tetherless-class Jetsam budget (~2–3 MB). Fail CI on regression.
+if [ "$HELPER_BYTES" -gt $((3 * 1024 * 1024)) ]; then
+  echo "ERROR: DecryptHelper is ${HELPER_MB} MB (> 3 MB). Lean FairPlay shell regressed."
   dump_errors 1
   exit 1
 fi
+echo "==> DecryptHelper size OK (≤ 3 MB budget)"
 
 # Package: Payload/<App>.app → .ipa (no exportArchive — that needs a signing identity).
 rm -rf "$OUT"; mkdir -p "$OUT/Payload"

@@ -203,10 +203,13 @@ enum DecryptCompanionPackager {
         let resolved = try resolveHelperExecutable()
         let exeURL = resolved.url
         let exeName = resolved.name
+        let shellTier = resolved.isLeanHelper
+            ? DecryptCompanionIdentity.helperModeLean
+            : DecryptCompanionIdentity.helperModeHostFallback
         if resolved.isLeanHelper {
-            progress?("Embedding DecryptHelper binary…")
+            progress?("shell=lean DecryptHelper (subordinate FairPlay worker)")
         } else {
-            progress?("Building lean FastDecryptBot shell (host fallback)…")
+            progress?("shell=host-fallback (~45 MB) — DecryptHelper.app missing from host IPA")
         }
         try fm.copyItem(at: exeURL, to: destApp.appendingPathComponent(exeName))
 
@@ -259,6 +262,10 @@ enum DecryptCompanionPackager {
             "TLCompanionRole": true,
             "TLCompanionHostBundle": host.bundleIdentifier ?? TetherlessBrand.bundleID,
             "TLDecryptHelper": resolved.isLeanHelper,
+            DecryptCompanionIdentity.helperModeKey: shellTier,
+            "TLDecryptHelperSource": exeName,
+            // Companion is the subordinate FairPlay process (installed app, not XPC).
+            "TLDecryptHelperProcess": "installed-companion",
         ]
         let infoURL = destApp.appendingPathComponent("Info.plist")
         let data = try PropertyListSerialization.data(fromPropertyList: info, format: .binary, options: 0)
@@ -585,6 +592,20 @@ enum DecryptCompanionPackager {
                 DecryptCompanionHandoff.clearLiveInstallPath()
             }
         }
+        // Preflight identity pack — helper paints instantly; never embeds FairPlay key blobs.
+        let companionRoot = companionApp
+        if FileManager.default.fileExists(
+            atPath: companionRoot.appendingPathComponent(DecryptCompanionIdentity.targetIconFileName).path
+        ) {
+            meta["targetIconRelPath"] = DecryptCompanionIdentity.targetIconFileName
+        }
+        if let main = FairPlayDecrypt.mainExecutableForEmbed(in: dest) {
+            let crypt = FairPlayJetsam.largestCryptsize(of: main.path)
+            if crypt > 0 {
+                meta["largestCryptsize"] = crypt
+                progress?(String(format: "Preflight · largest crypt %.1f MB", Double(crypt) / (1024 * 1024)))
+            }
+        }
         // Prefer App Group stamp; always record bundled EncryptedSource.ipa when present.
         if hasEncryptedSource {
             meta["bundledEncryptedIPA"] = DecryptCompanionHandoff.bundledEncryptedIPAName
@@ -613,6 +634,9 @@ enum DecryptCompanionPackager {
             meta[k] = v
         }
         DecryptCompanionHandoff.publishHostSnapshot()
+        // Never serialize FairPlay key blobs / passwords into the companion.
+        DecryptCompanionHandoff.stripForbiddenSecrets(&meta)
+        meta["secrets"] = false
         if let data = try? PropertyListSerialization.data(fromPropertyList: meta, format: .xml, options: 0) {
             try? data.write(to: embedRoot.appendingPathComponent("manifest.plist"))
         }
@@ -774,6 +798,40 @@ enum DecryptCompanionPackager {
 
         // App icon PNGs so the companion console can show the target (not a placeholder).
         try copyAppIcons(from: src, to: dest)
+        // Also stamp TargetIcon.png at companion .app root for instant top-bar paint.
+        writeTargetIcon(from: dest, into: companionAppRoot(fromEmbeddedDest: dest), progress: progress)
+    }
+
+    /// `dest` is EmbeddedPayload/<Name>/ → companion .app is two levels up.
+    private static func companionAppRoot(fromEmbeddedDest dest: URL) -> URL {
+        dest.deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    /// Best target icon → `TargetIcon.png` on the companion shell (identity pack).
+    private static func writeTargetIcon(
+        from embeddedApp: URL,
+        into companionApp: URL,
+        progress: ((String) -> Void)?
+    ) {
+        let fm = FileManager.default
+        let out = companionApp.appendingPathComponent(DecryptCompanionIdentity.targetIconFileName)
+        try? fm.removeItem(at: out)
+        let pngs = (try? fm.contentsOfDirectory(at: embeddedApp, includingPropertiesForKeys: [.fileSizeKey]))?
+            .filter { $0.pathExtension.lowercased() == "png" } ?? []
+        let iconish = pngs.filter {
+            $0.lastPathComponent.localizedCaseInsensitiveContains("AppIcon")
+                || $0.lastPathComponent.localizedCaseInsensitiveContains("Icon")
+        }
+        let pool = iconish.isEmpty ? pngs : iconish
+        guard let best = pool.max(by: {
+            ((try? $0.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+                < ((try? $1.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }), let img = UIImage(contentsOfFile: best.path),
+              let data = resizedPNG(img, side: 120) else {
+            return
+        }
+        try? data.write(to: out, options: .atomic)
+        progress?("Identity pack · \(DecryptCompanionIdentity.targetIconFileName)")
     }
 
     /// Stamp FastDecryptBot home-screen / Settings icons into the companion `.app`.

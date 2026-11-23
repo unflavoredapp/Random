@@ -35,6 +35,39 @@ enum DecryptCompanionHandoff {
     private static var suite: UserDefaults? { UserDefaults(suiteName: suiteName) }
     private static var local: UserDefaults { .standard }
 
+    /// Manifest / snapshot keys the companion may read. Live path + SC_Info on disk —
+    /// never FairPlay key blobs, passwords, PETs, or store session JSON.
+    static let manifestAllowList: [String] = [
+        "hostSignedIn", "hostStoreReady", "hostFairPlayAck", "hostEmailHint", "hostEmail",
+        "hostSnapshotAt", "hostLiveInstallPath", "hostEncryptedIPAPath", "bundleID",
+        "fpSourceMode", "fpVerbose", "fpKeepEncryptedIPA", "fpRetryRounds",
+        "fpPathDiagnostics", "fpRequireAllFrameworks", "fpIncludeTestFlight",
+        "fpForceSerial", "fpBounceLargeCrypt", "fpPartialOnLowRAM",
+        "targetIconRelPath", "largestCryptsize", "machOs", "encryptedMachOs",
+        "clearMachOs", "plainMachOs", "embeddedMachOs", "embeddedEncryptedMachOs",
+        "hostStoreURL", "hostStoreVersion", "hostStoreDisplayName",
+        "name", "source", "slimEmbed", "bundledEncryptedIPA", "secrets",
+    ]
+
+    /// Keys that must never cross into the helper (substring match, case-insensitive).
+    private static let forbiddenSecretSubstrings: [String] = [
+        "password", "passwd", "pettoken", "gstoken", "adsid",
+        "storesession", "cookie", "sinfblob", "supf", "fairplaykey",
+        "privatekey", "keybag", "scinfoexport", "exportedkey",
+    ]
+
+    static func stripForbiddenSecrets(_ snap: inout [String: Any]) {
+        let keys = Array(snap.keys)
+        for key in keys {
+            let lower = key.lowercased()
+            if forbiddenSecretSubstrings.contains(where: { lower.contains($0.lowercased()) }) {
+                snap.removeValue(forKey: key)
+            }
+        }
+        // Always stamp the contract so logs / triage can confirm.
+        snap["secrets"] = false
+    }
+
     /// App Group container when the provision still includes the group entitlement.
     nonisolated static var sharedContainerURL: URL? {
         FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: suiteName)
@@ -323,7 +356,8 @@ enum DecryptCompanionHandoff {
 
     /// Publish snapshot to App Group when the free/paid provision still has the group.
     static func publishHostSnapshot() {
-        let snap = hostSnapshot()
+        var snap = hostSnapshot()
+        stripForbiddenSecrets(&snap)
         suite?.set(snap, forKey: "companion.hostSnapshot")
         local.set(snap, forKey: "companion.hostSnapshot")
     }
@@ -579,14 +613,12 @@ enum DecryptCompanionHandoff {
         if let snap = local.dictionary(forKey: "companion.hostSnapshot") { return snap }
         guard let manifest else { return [:] }
         var out: [String: Any] = [:]
-        for key in [
-            "hostSignedIn", "hostStoreReady", "hostFairPlayAck", "hostEmailHint", "hostEmail",
-            "hostSnapshotAt", "hostLiveInstallPath", "hostEncryptedIPAPath", "bundleID",
-            "fpSourceMode", "fpVerbose", "fpKeepEncryptedIPA", "fpRetryRounds",
-            "fpPathDiagnostics", "fpRequireAllFrameworks", "fpIncludeTestFlight",
-        ] {
+        for key in Self.manifestAllowList {
             if let v = manifest[key] { out[key] = v }
         }
+        // Strip anything that looks like FairPlay key / session material if a
+        // stale manifest ever carried it (helper must use live Store path only).
+        Self.stripForbiddenSecrets(&out)
         // Seed companion defaults so FairPlay failure copy names the owning Apple ID.
         if let email = (out["hostEmail"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines),

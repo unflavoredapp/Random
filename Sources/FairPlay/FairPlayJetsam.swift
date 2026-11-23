@@ -22,6 +22,47 @@ enum FairPlayJetsam {
 
     static var availableMemory: UInt64 { fp_available_memory() }
 
+    /// Current phys_footprint (preferred) / resident_size for Jetsam triage logs.
+    static var residentBytes: UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) { ptr -> kern_return_t in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), intPtr, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return 0 }
+        if info.phys_footprint > 0 { return UInt64(info.phys_footprint) }
+        return UInt64(info.resident_size)
+    }
+
+    /// Peak resident size reported by the kernel for this task.
+    static var peakResidentBytes: UInt64 {
+        var info = task_vm_info_data_t()
+        var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+        let kr = withUnsafeMutablePointer(to: &info) { ptr -> kern_return_t in
+            ptr.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { intPtr in
+                task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), intPtr, &count)
+            }
+        }
+        guard kr == KERN_SUCCESS else { return 0 }
+        return UInt64(info.resident_size_peak)
+    }
+
+    /// One-line Jetsam summary for companion / helper logs.
+    static func memorySummary(prefix: String = "mem") -> String {
+        let free = availableMemory
+        let rss = residentBytes
+        let peak = peakResidentBytes
+        return String(
+            format: "%@ · free %llu MB · rss %llu MB · peak %llu MB",
+            prefix,
+            free / (1024 * 1024),
+            rss / (1024 * 1024),
+            peak / (1024 * 1024)
+        )
+    }
+
     static func largestCryptsize(of path: String) -> Int64 {
         fp_largest_cryptsize(path)
     }
@@ -52,15 +93,15 @@ enum FairPlayJetsam {
     static func pauseIfMemoryPressure(progress: ((String) -> Void)?) {
         let avail = availableMemory
         if avail > 0 && avail < minAvailableBytes {
-            progress?("Low memory (\(avail / (1024 * 1024)) MB free) — reclaiming before next Mach-O…")
+            progress?("\(memorySummary(prefix: "Low memory")) — reclaiming before next Mach-O…")
             purgeTransientMemory()
             Thread.sleep(forTimeInterval: 1.6)
         } else if isTight(forCryptsize: 64 * 1024 * 1024) {
-            progress?("Low memory — pausing before next Mach-O…")
+            progress?("\(memorySummary(prefix: "Low memory")) — pausing before next Mach-O…")
             purgeTransientMemory()
             Thread.sleep(forTimeInterval: 1.2)
         } else if isTight(forCryptsize: 48 * 1024 * 1024) {
-            progress?("Low memory — pausing before next Mach-O…")
+            progress?("\(memorySummary(prefix: "Pressure")) — pausing before next Mach-O…")
             Thread.sleep(forTimeInterval: 0.6)
         }
     }

@@ -6,8 +6,11 @@
 //  host fullScreenCover.
 //
 
-import SwiftUI
+import Combine
 import UIKit
+#if !DECRYPT_HELPER
+import SwiftUI
+#endif
 
 @MainActor
 final class DecryptCompanionController: ObservableObject {
@@ -106,7 +109,9 @@ final class DecryptCompanionController: ObservableObject {
     }
 }
 
-/// Full-screen companion console for FastDecryptBot.
+#if !DECRYPT_HELPER
+/// Full-screen companion console for FastDecryptBot (host / fat-shell path).
+/// DecryptHelper uses UIKit `DecryptCompanionConsoleViewController` instead.
 struct DecryptCompanionConsole: View {
     @ObservedObject private var companion = DecryptCompanionController.shared
     @ObservedObject private var client = DecryptClient.shared
@@ -410,3 +415,4 @@ struct DecryptCompanionConsole: View {
         return TetherlessBrand.appIconImage()
     }
 }
+#endif
