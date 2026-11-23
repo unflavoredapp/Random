@@ -17,10 +17,12 @@
 //
 // Hardening:
 // - Map only [remap_off, +remap_len) (no leading unencrypted bytes before remmap).
-// - Lean buffers (no second full-cryptsize orig); per-page cipher verify.
-// - Streamed page capture: one-page WILLNEED → vm_read → DONTNEED (never fault full crypt).
+// - Lean path: fp_attempt_to_fd streams pages to out_fd (peak ≈ remmap window + page
+//   scratch — never MAP_SHARED full-crypt + remmap ≈ 2×). Path-agnostic.
+// - Streamed page capture: one-page WILLNEED → vm_read → DONTNEED / pwrite.
 // - Sample entropy/RET on first/mid/last pages only — no full-crypt RSS walks.
-// - iPhone always uses file-backed lean (even ~20 MB mains Jetsam on classic 3×).
+// - iPhone always leans (even ~20 MB mains Jetsam on classic 3×).
+// - ENOMEM short-circuits mode storms after one reclaim.
 // - Remmap-ok-but-unchanged classified as license/keys (FP_FAIL_PERM).
 #include "fpcore.h"
 #include "fp_page.h"
@@ -772,6 +774,223 @@ int fp_attempt(const char *path, const fp_slice_t *s, int mode, bool addsigs, ui
     return (res->mremap_ret == 0 && res->pages_ok == res->pages_total && res->changed) ? 0 : -1;
 }
 
+/// Stream remmap capture to `out_fd` with a single-page scratch — never holds a
+/// second full-crypt buffer beside the MAP_PRIVATE remmap window.
+int fp_attempt_to_fd(
+    const char *path,
+    const fp_slice_t *s,
+    int mode,
+    bool addsigs,
+    int out_fd,
+    fp_attempt_t *res
+) {
+    memset(res, 0, sizeof *res);
+    res->mode = mode; res->addsigs = addsigs; res->mremap_ret = -1;
+    double t0 = now_ms();
+    const uint64_t pg = fp_page_size();
+    if (!s->has_enc || s->cryptsize == 0 || out_fd < 0) return -1;
+    if (s->slice_off % pg) { res->mmap_errno = EINVAL; return -1; }
+
+    uint64_t remap_off = 0, remap_len = 0, map_file_off = 0, map_len = 0, read_bias = 0;
+    if (!fp_map_window_for_crypt(s->slice_off, s->cryptoff, s->cryptsize, s->slice_size, pg,
+                                 &map_file_off, &map_len, &read_bias, &remap_off, &remap_len)) {
+        res->mremap_errno = EINVAL;
+        res->ms = now_ms() - t0;
+        return -1;
+    }
+    res->remap_off = remap_off;
+    res->remap_len = remap_len;
+
+    uint32_t cid = 0;
+    int prot = PROT_READ;
+    mode_params(mode, s, &cid, &prot);
+    res->used_cryptid = cid;
+
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) { res->mmap_errno = errno; return -1; }
+
+    if (addsigs && s->cs_size) {
+        fsignatures_t fs = {
+            .fs_file_start = (off_t)s->slice_off,
+            .fs_blob_start = (void *)(uintptr_t)s->cs_off,
+            .fs_blob_size = s->cs_size
+        };
+        if (fcntl(fd, F_ADDFILESIGS_RETURN, &fs) == -1) res->sig_errno = errno;
+    }
+
+    uint8_t *base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE | MAP_NOCACHE, fd, (off_t)map_file_off);
+    if (base == MAP_FAILED) {
+        res->mmap_errno = errno;
+        fp_note_errno(errno);
+        close(fd);
+        res->ms = now_ms() - t0;
+        return -1;
+    }
+
+    uint8_t *page_plain = malloc((size_t)pg);
+    uint8_t *page_cipher = malloc((size_t)pg);
+    if (!page_plain || !page_cipher) {
+        free(page_plain); free(page_cipher);
+        munmap(base, (size_t)map_len); close(fd);
+        res->mmap_errno = ENOMEM; fp_set_fail(FP_FAIL_NOMEM); res->ms = now_ms() - t0; return -1;
+    }
+
+    uint64_t total = (s->cryptsize + pg - 1) / pg;
+    if (total == 0) total = 1;
+    res->pages_total = total;
+    uint8_t *okmask = calloc((size_t)total, 1);
+    if (!okmask) {
+        free(page_plain); free(page_cipher);
+        munmap(base, (size_t)map_len); close(fd);
+        res->mmap_errno = ENOMEM; fp_set_fail(FP_FAIL_NOMEM); res->ms = now_ms() - t0; return -1;
+    }
+
+    // Sample entropy from ciphertext pages only (no full-crypt seed).
+    {
+        uint64_t sample = s->cryptsize < pg ? s->cryptsize : pg;
+        uint64_t mid = (total / 2) * pg;
+        if (mid + sample > s->cryptsize) mid = s->cryptsize > sample ? s->cryptsize - sample : 0;
+        uint64_t last = s->cryptsize > sample ? s->cryptsize - sample : 0;
+        uint64_t offs[3] = { 0, mid, last };
+        uint32_t ret_b = 0; double ent_b = 0; int samples = 0;
+        for (int si = 0; si < 3; si++) {
+            if (!pread_full(fd, page_cipher, (size_t)sample,
+                            (off_t)(s->slice_off + s->cryptoff + offs[si]))) {
+                continue;
+            }
+            ret_b += code_words(page_cipher, sample);
+            ent_b += entropy(page_cipher, sample);
+            samples++;
+        }
+        if (samples > 0) {
+            res->ret_before = ret_b / (uint32_t)samples;
+            res->ent_before = ent_b / (double)samples;
+        }
+    }
+
+    // Fewer remount rounds than classic — ENOMEM storms Jetsam Host-class crypts.
+    uint64_t prev_ok = 0;
+    const int max_rounds = 3;
+    for (int round = 0; round < max_rounds; round++) {
+        if (round > 0) {
+            if (base != MAP_FAILED) munmap(base, (size_t)map_len);
+            usleep((useconds_t)(60 * 1000 * round));
+            malloc_zone_pressure_relief(NULL, 0);
+            base = mmap(NULL, (size_t)map_len, prot, MAP_PRIVATE | MAP_NOCACHE, fd, (off_t)map_file_off);
+            if (base == MAP_FAILED) { res->mmap_errno = errno; fp_note_errno(errno); break; }
+        }
+        errno = 0;
+        int mr = do_mremap_encrypted(base, (size_t)map_len, cid, s->cputype, s->cpusubtype);
+        res->mremap_ret = mr;
+        res->mremap_errno = mr == 0 ? 0 : errno;
+        if (mr != 0) {
+            fp_note_errno(errno);
+            if (errno == ENOMEM || errno == EPERM || errno == EACCES) break;
+            continue;
+        }
+
+        uint64_t pages_ok = 0;
+        int first_kr = 0;
+        uint64_t first_off = 0;
+        for (uint64_t i = 0; i < total; i++) {
+            if (okmask[i]) { pages_ok++; continue; }
+            uint64_t off = i * pg;
+            uint64_t n = (off + pg <= s->cryptsize) ? pg : (s->cryptsize - off);
+            if (!pread_full(fd, page_cipher, (size_t)n,
+                            (off_t)(s->slice_off + s->cryptoff + off))) {
+                continue;
+            }
+#ifdef MADV_WILLNEED
+            (void)madvise(base + read_bias + off, (size_t)pg, MADV_WILLNEED);
+#else
+            {
+                volatile uint8_t touch = base[read_bias + off];
+                (void)touch;
+            }
+#endif
+            // Capture into page scratch at offset 0 (not a full-crypt buffer).
+            bool got = false;
+            for (int try = 0; try < 3; try++) {
+                if (try) usleep((useconds_t)(1500 * try));
+                vm_size_t gotn = 0;
+                kern_return_t kr = vm_read_overwrite(
+                    mach_task_self(),
+                    (vm_address_t)(base + read_bias + off),
+                    (vm_size_t)n,
+                    (vm_address_t)page_plain,
+                    &gotn
+                );
+                if (kr == KERN_SUCCESS && gotn == n) { got = true; break; }
+                if (!first_kr) {
+                    first_kr = kr ? (int)kr : -1;
+                    first_off = (uint64_t)s->cryptoff + off;
+                }
+            }
+#ifdef MADV_DONTNEED
+            (void)madvise(base + read_bias + off, (size_t)pg, MADV_DONTNEED);
+#endif
+            if (!got) continue;
+            if (memcmp(page_plain, page_cipher, (size_t)n) == 0) {
+                if (!first_kr) { first_kr = -2; first_off = s->cryptoff + off; }
+                continue;
+            }
+            // Persist plaintext immediately — peak stays remmap + one page.
+            if (!pwrite_full(out_fd, page_plain, (size_t)n,
+                             (off_t)(s->slice_off + s->cryptoff + off))) {
+                fp_set_fail(FP_FAIL_IO);
+                continue;
+            }
+            okmask[i] = 1;
+            pages_ok++;
+        }
+        res->pages_ok = pages_ok;
+        if (first_kr && !res->first_fail_kr) {
+            res->first_fail_kr = first_kr;
+            res->first_fail_off = first_off;
+        }
+        if (pages_ok == total) break;
+        if (round > 0 && pages_ok <= prev_ok) break;
+        prev_ok = pages_ok;
+    }
+
+    if (res->mremap_ret == 0 && res->pages_ok > 0) {
+        res->changed = true;
+        if (res->pages_ok == total) {
+            // Sample plaintext entropy from out_fd (already written).
+            uint64_t sample = s->cryptsize < pg ? s->cryptsize : pg;
+            uint64_t mid = (total / 2) * pg;
+            if (mid + sample > s->cryptsize) mid = s->cryptsize > sample ? s->cryptsize - sample : 0;
+            uint64_t last = s->cryptsize > sample ? s->cryptsize - sample : 0;
+            uint64_t offs[3] = { 0, mid, last };
+            uint32_t ret_a = 0; double ent_a = 0; int samples = 0;
+            for (int si = 0; si < 3; si++) {
+                if (!pread_full(out_fd, page_plain, (size_t)sample,
+                                (off_t)(s->slice_off + s->cryptoff + offs[si]))) {
+                    continue;
+                }
+                ret_a += code_words(page_plain, sample);
+                ent_a += entropy(page_plain, sample);
+                samples++;
+            }
+            if (samples > 0) {
+                res->ret_after = ret_a / (uint32_t)samples;
+                res->ent_after = ent_a / (double)samples;
+            }
+        }
+    } else if (res->mremap_ret == 0 && res->pages_ok == 0) {
+        res->changed = false;
+        fp_set_fail(FP_FAIL_PERM);
+    }
+
+    free(okmask);
+    free(page_plain);
+    free(page_cipher);
+    if (base != MAP_FAILED) munmap(base, (size_t)map_len);
+    close(fd);
+    res->ms = now_ms() - t0;
+    return (res->mremap_ret == 0 && res->pages_ok == res->pages_total && res->changed) ? 0 : -1;
+}
+
 void fp_attempt_describe(const fp_attempt_t *a, char *buf, size_t len) {
     snprintf(buf, len,
              "%s%s cid=%u remap=0x%llx+0x%llx: sig=%s mmap=%s mremap=%d(errno %d %s) pages=%llu/%llu "
@@ -982,57 +1201,42 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         uint64_t page_total = (s->cryptsize + pg - 1) / pg;
         if (page_total == 0) page_total = 1;
 
-        // Classic: cipher + merged + dec (3×). Lean: file-backed mmap of the output
-        // crypt range (MAP_SHARED) so the anonymous Jetsam footprint stays near 0×;
-        // fall back to one malloc buffer + disk page compares when mmap fails.
-        // iPhone always leans — even ~20 MB mains Jetsam on the 3× classic path.
+        // Classic: cipher + merged + dec (3×). Lean: stream pages to out_fd only —
+        // peak ≈ remmap window (~1×) + page scratch. Path-agnostic (live / IPA / embed).
         uint8_t *cipher = NULL;
         uint8_t *merged = NULL;
         uint8_t *dec = NULL;
-        bool dec_mapped = false;
         uint8_t *merged_ok = calloc((size_t)page_total, 1);
         uint8_t *page_cipher = malloc((size_t)pg);
+        uint8_t *page_plain = malloc((size_t)pg);
         int cin = open(in_path, O_RDONLY);
         bool lean = FP_FORCE_LEAN || mem_tight || s->cryptsize >= (8ull << 20);
         if (!lean) {
             cipher = malloc(s->cryptsize);
             merged = malloc(s->cryptsize);
-            if (!cipher || !merged) {
-                free(cipher); free(merged);
-                cipher = merged = NULL;
+            dec = malloc(s->cryptsize);
+            if (!cipher || !merged || !dec) {
+                free(cipher); free(merged); free(dec);
+                cipher = merged = dec = NULL;
                 lean = true;
             }
-        }
-        if (lean) {
-            void *map = mmap(NULL, (size_t)s->cryptsize, PROT_READ | PROT_WRITE, MAP_SHARED,
-                             out, (off_t)(s->slice_off + s->cryptoff));
-            if (map != MAP_FAILED) {
-                dec = (uint8_t *)map;
-                dec_mapped = true;
-            } else {
-                dec = malloc(s->cryptsize);
-            }
-        } else {
-            dec = malloc(s->cryptsize);
         }
         bool cipher_ok = false;
         if (!lean && cin >= 0 && cipher) {
             cipher_ok = pread_full(cin, cipher, s->cryptsize,
                                    (off_t)(s->slice_off + s->cryptoff));
         }
-        if (!dec || !merged_ok || !page_cipher || cin < 0 || (!lean && !cipher_ok)) {
+        if (!merged_ok || !page_cipher || !page_plain || cin < 0 || (!lean && (!dec || !cipher_ok))) {
             logf_(log, ctx, "  slice[%d] buffer alloc/read failed (ENOMEM?)", i);
-            if (dec_mapped) munmap(dec, (size_t)s->cryptsize); else free(dec);
-            free(cipher); free(merged); free(merged_ok); free(page_cipher);
+            free(dec); free(cipher); free(merged); free(merged_ok); free(page_cipher); free(page_plain);
             if (cin >= 0) close(cin);
             fp_set_fail(FP_FAIL_NOMEM);
             rc = -1; break;
         }
         if (lean) {
             logf_(log, ctx,
-                  "  slice[%d] streamed lean for %.1f MB crypt — %s + per-page capture",
-                  i, (double)s->cryptsize / (1024.0 * 1024.0),
-                  dec_mapped ? "file-backed mmap dec" : "1× buffer");
+                  "  slice[%d] streamed lean for %.1f MB crypt — remmap-only + per-page pwrite",
+                  i, (double)s->cryptsize / (1024.0 * 1024.0));
         }
         if (!lean) memcpy(merged, cipher, s->cryptsize);
         logf_(log, ctx, "  slice[%d] map window pages≈%llu chunk_hint=%llu%s",
@@ -1043,39 +1247,25 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         bool done = false;
         fp_attempt_t best; memset(&best, 0, sizeof best); best.mremap_ret = -1;
         uint64_t merged_pages = 0;
-        // Lean: one retry per mode is enough — fp_attempt already remounts internally.
-        // Burning 3×8 full-window remmaps after ENOMEM is what Jetsams ~20 MB mains.
-        const int tries_per_mode = lean ? 2 : 2;
+        const int tries_per_mode = 2;
         bool enomem_bail = false;
 
         for (size_t k = 0; k < order_n && !done && !enomem_bail; k++) {
             fp_attempt_t a; char d[512];
             for (int attempt = 0; attempt < tries_per_mode && !done && !enomem_bail; attempt++) {
                 if (attempt) {
-                    // Longer backoff under lean / ENOMEM so Jetsam can reclaim.
                     unsigned usec = lean ? (180 * 1000 * (attempt + 1)) : (40 * 1000 * attempt);
                     usleep((useconds_t)usec);
-                    // Drop dirty lean pages before the next remmap so peak isn't
-                    // file-backed crypt RSS + MAP_PRIVATE remap window.
-                    if (lean && dec_mapped) {
-                        (void)msync(dec, (size_t)s->cryptsize, MS_SYNC);
-#ifdef MADV_DONTNEED
-                        (void)madvise(dec, (size_t)s->cryptsize, MADV_DONTNEED);
-#endif
-                    }
                     malloc_zone_pressure_relief(NULL, 0);
                 }
-                // Seed attempt buffer: classic copies full cipher. Lean must NOT
-                // pread the whole crypt into `dec` before mremap — that alone
-                // Jetsams Host-class ~20 MB mains. fp_attempt samples + per-page
-                // seeds during capture.
-                if (!lean) {
+                if (lean) {
+                    fp_attempt_to_fd(in_path, s, order[k][0], order[k][1], out, &a);
+                } else {
                     memcpy(dec, cipher, s->cryptsize);
+                    fp_attempt(in_path, s, order[k][0], order[k][1], dec, &a);
                 }
-                fp_attempt(in_path, s, order[k][0], order[k][1], dec, &a);
                 if (a.pages_ok > best.pages_ok || (a.pages_ok == best.pages_ok && a.changed && !best.changed))
                     best = a;
-                // First ENOMEM: one purge+retry on this mode, then stop the storm.
                 if (a.mremap_errno == ENOMEM || a.mmap_errno == ENOMEM) {
                     fp_set_fail(FP_FAIL_NOMEM);
                     if (attempt + 1 < tries_per_mode) {
@@ -1088,7 +1278,6 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                     enomem_bail = true;
                     break;
                 }
-                // Merge pages that transformed vs ciphertext.
                 if (a.mremap_ret == 0 && a.pages_ok > 0) {
                     for (uint64_t p = 0; p < page_total; p++) {
                         if (merged_ok[p]) continue;
@@ -1103,24 +1292,19 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                                             (off_t)(s->slice_off + s->cryptoff + off))) {
                                 continue;
                             }
-                            transformed = memcmp(dec + off, page_cipher, (size_t)nbytes) != 0;
-                            // Persist good pages immediately so we don't need a merged buffer.
-                            if (transformed) {
-                                if (!pwrite_full(out, dec + off, (size_t)nbytes,
-                                                 (off_t)(s->slice_off + s->cryptoff + off))) {
-                                    fp_set_fail(FP_FAIL_IO);
-                                }
+                            if (!pread_full(out, page_plain, (size_t)nbytes,
+                                            (off_t)(s->slice_off + s->cryptoff + off))) {
+                                continue;
                             }
+                            transformed = memcmp(page_plain, page_cipher, (size_t)nbytes) != 0;
                         }
                         if (transformed) merged_ok[p] = 1;
                     }
                     merged_pages = 0;
                     for (uint64_t p = 0; p < page_total; p++) if (merged_ok[p]) merged_pages++;
                 }
-                fp_attempt_describe(&a, d, sizeof d);
                 done = attempt_looks_decrypted(&a);
                 if (!done && merged_pages == page_total) {
-                    // All pages already persisted — do NOT pread the full crypt into RSS.
                     a.pages_ok = page_total;
                     a.pages_total = page_total;
                     a.changed = 1;
@@ -1131,7 +1315,6 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                         a.ret_before = code_words(cipher, s->cryptsize);
                         a.ent_before = entropy(cipher, s->cryptsize);
                     } else {
-                        // Stream heuristic: sample first / middle / last page only.
                         uint64_t sample = s->cryptsize < pg ? s->cryptsize : pg;
                         uint64_t mid = (page_total / 2) * pg;
                         if (mid + sample > s->cryptsize) mid = s->cryptsize > sample ? s->cryptsize - sample : 0;
@@ -1145,17 +1328,14 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                                             (off_t)(s->slice_off + s->cryptoff + offs[si]))) {
                                 continue;
                             }
-                            ret_b += code_words(page_cipher, sample);
-                            ent_b += entropy(page_cipher, sample);
-                            // Plaintext lives in out (and MAP_SHARED dec when mapped).
-                            uint8_t page_plain[16384];
-                            size_t take = sample > sizeof(page_plain) ? sizeof(page_plain) : (size_t)sample;
-                            if (!pread_full(out, page_plain, take,
+                            if (!pread_full(out, page_plain, (size_t)sample,
                                             (off_t)(s->slice_off + s->cryptoff + offs[si]))) {
                                 continue;
                             }
-                            ret_a += code_words(page_plain, take);
-                            ent_a += entropy(page_plain, take);
+                            ret_b += code_words(page_cipher, sample);
+                            ent_b += entropy(page_cipher, sample);
+                            ret_a += code_words(page_plain, sample);
+                            ent_a += entropy(page_plain, sample);
                             samples++;
                         }
                         if (samples > 0) {
@@ -1168,6 +1348,7 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                     done = attempt_looks_decrypted(&a);
                     if (done) best = a;
                 }
+                fp_attempt_describe(&a, d, sizeof d);
                 logf_(log, ctx, "  slice[%d] try%zu.%d %s %s (merged %llu/%llu%s%s)",
                       i, k, attempt, done ? "[DECRYPTED]" : "[--]", d,
                       (unsigned long long)merged_pages, (unsigned long long)page_total,
@@ -1175,7 +1356,6 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             }
         }
         if (!done && merged_pages == page_total) {
-            // Pages already on disk via lean pwrite / classic merged — no full reload.
             if (!lean) memcpy(dec, merged, s->cryptsize);
             done = true;
             logf_(log, ctx, "  slice[%d] recovered via merged pages across modes%s",
@@ -1192,29 +1372,25 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
             else if (best.mremap_ret == 0 && !best.changed) fp_set_fail(FP_FAIL_PERM);
             else if (g_fp_last_fail == FP_FAIL_NONE) fp_set_fail(FP_FAIL_STILL_ENC);
             rc = -1;
-            if (dec_mapped) munmap(dec, (size_t)s->cryptsize); else free(dec);
-            free(cipher); free(merged); free(merged_ok); free(page_cipher);
+            free(dec); free(cipher); free(merged); free(merged_ok); free(page_cipher); free(page_plain);
             close(cin);
             break;
         }
         if (!lean && merged_pages == page_total) memcpy(dec, merged, s->cryptsize);
         uint32_t zero = 0;
-        // File-backed lean already holds plaintext in the MAP_SHARED region; still
-        // rewrite cryptid. Non-mapped lean / classic rewrite the full crypt range.
-        if (!dec_mapped) {
+        // Lean already pwrite'd plaintext pages; classic still needs a full crypt write.
+        if (!lean) {
             if (!pwrite_full(out, dec, s->cryptsize, (off_t)(s->slice_off + s->cryptoff))) {
                 logf_(log, ctx, "  write failed: %s", strerror(errno)); rc = -1;
             }
         } else {
-            // Ensure dirty mmap pages hit disk before we clear cryptid.
-            (void)msync(dec, (size_t)s->cryptsize, MS_SYNC);
+            (void)fsync(out);
         }
         if (rc == 0 && !pwrite_full(out, &zero, 4,
                 (off_t)(s->enc_lc_off + offsetof(struct encryption_info_command, cryptid)))) {
             logf_(log, ctx, "  write failed: %s", strerror(errno)); rc = -1;
         }
-        if (dec_mapped) munmap(dec, (size_t)s->cryptsize); else free(dec);
-        free(cipher); free(merged); free(merged_ok); free(page_cipher);
+        free(dec); free(cipher); free(merged); free(merged_ok); free(page_cipher); free(page_plain);
         close(cin);
     }
     if (rc == 0) {
