@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # Brand: Tetherless · https://tetherless.dev
 #
-# Dopamine (jailbreak) Phone Worker using Cli/buddy3.
-# Runs ON the iPhone (NewTerm / SSH as mobile). Claims jobs from a Linux VPS
-# decrypt queue, decrypts with buddy3, uploads the clear IPA.
+# Telegram-bot decrypt worker for Dopamine + Cli/buddy3.
+#
+# Flow: user pastes an App Store link in your Telegram bot → Linux VPS queues
+# the job → this script (on the jailbroken iPhone) claims it, runs buddy3,
+# uploads the clear IPA → the bot delivers the file. No AppAssassin UI needed.
 #
 # Prerequisites (iPhone 11 · Dopamine · iOS 26.0.1):
-#   1) buddy3 installed somewhere executable, e.g.:
+#   1) VPS: TELEGRAM_BOT_TOKEN + DECRYPT_BACKENDS=phone + DECRYPT_WORKER_TOKEN
+#      (server/linux-host.env.example → linux-install.sh)
+#   2) buddy3 on the phone, e.g.:
 #        scp Cli/buddy3 mobile@iphone:/var/mobile/Documents/buddy3
 #        ssh mobile@iphone 'chmod +x /var/mobile/Documents/buddy3'
-#   2) Target apps installed from the App Store under the owning Apple ID
-#      (buddy3 reads live FairPlay from the install; EncryptedSource alone is not enough).
-#   3) VPS with DECRYPT_BACKENDS=phone and DECRYPT_WORKER_TOKEN set
-#      (see server/linux-host.env.example + bash server/linux-install.sh).
+#   3) Target apps installed from the App Store on this phone (same Apple ID).
 #
-# Usage on the iPhone:
+# On the iPhone (NewTerm / SSH as mobile):
 #   export DECRYPT_SITE_URL=https://your-vps.example/
 #   export DECRYPT_WORKER_TOKEN=…          # same as /etc/tetherless/linux-host.env
 #   export BUDDY3_BIN=/var/mobile/Documents/buddy3

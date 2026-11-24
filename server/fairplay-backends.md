@@ -67,56 +67,57 @@ Ops: `bash server/linux-ctl.sh status|token|logs api`.
 
 ---
 
-## Dopamine jailbreak — buddy3 Phone Worker (iPhone 11 · iOS 26.0.1)
+## Dopamine + buddy3 — Telegram bot only (iPhone 11 · iOS 26.0.1)
 
-Use when this device is **jailbroken with Dopamine** and you want the open `Cli/buddy3` decryptor to finish VPS / Telegram / web queue jobs (same claim/upload API as stock Phone Worker).
+For a **Telegram bot** on a Linux VPS whose FairPlay work is done by `Cli/buddy3` on a Dopamine jailbreak phone (not AppAssassin / FastDecryptBot companion).
 
-`buddy3` only accepts **ProductVersion 15.4, 16.2, or 26.0.1**. Confirm with:
-
-```bash
-sw_vers -productVersion   # on-device
+```
+Telegram user → App Store link → VPS bot queue → buddy3 on iPhone → clear IPA → bot reply
 ```
 
-### 1) VPS (same as stock Phone Worker)
+`buddy3` only accepts **ProductVersion 15.4, 16.2, or 26.0.1** (`sw_vers -productVersion`).
+
+### 1) VPS — bot + phone queue
 
 ```bash
 sudo bash server/linux-install.sh
-# /etc/tetherless/linux-host.env → DECRYPT_BACKENDS=phone + DECRYPT_WORKER_TOKEN
-sudo systemctl enable --now tetherless-api.service
 ```
 
-### 2) Copy buddy3 + worker onto the iPhone
+In `/etc/tetherless/linux-host.env`:
 
 ```bash
-# From a Mac/Linux with SSH to the phone (mobile user):
+FAIRPLAY_HOST=linux
+DECRYPT_BACKENDS=phone
+DECRYPT_WORKER_TOKEN=$(openssl rand -hex 24)   # paste into the phone worker env
+TELEGRAM_BOT_TOKEN=…                          # from @BotFather
+TELEGRAM_BOT_USERNAME=YourBot
+MAC_PUBLIC_BASE=https://your-vps-host
+```
+
+```bash
+sudo systemctl enable --now tetherless-api.service
+# bot is started by the API / linux-ctl — see: bash server/linux-ctl.sh status
+```
+
+### 2) iPhone — buddy3 worker (keep this running)
+
+```bash
 scp Cli/buddy3 server/buddy3-dopamine-worker.sh mobile@IPHONE_IP:/var/mobile/Documents/
 ssh mobile@IPHONE_IP 'chmod +x /var/mobile/Documents/buddy3 /var/mobile/Documents/buddy3-dopamine-worker.sh'
-```
 
-### 3) Run the worker on-device
-
-```bash
 export DECRYPT_SITE_URL=https://your-vps-host/
-export DECRYPT_WORKER_TOKEN=…    # same token as linux-host.env
+export DECRYPT_WORKER_TOKEN=…    # same as linux-host.env
 export BUDDY3_BIN=/var/mobile/Documents/buddy3
 bash /var/mobile/Documents/buddy3-dopamine-worker.sh
 ```
 
-Install each target app **from the App Store** on this Dopamine phone (same Apple ID that owns it) before queueing. The worker resolves the Store URL → bundle ID, runs `buddy3 <bid>`, then uploads `/var/mobile/Documents/<bid>.ipa` to the VPS.
-
-Manual one-off (no VPS):
-
-```bash
-/var/mobile/Documents/buddy3 list
-/var/mobile/Documents/buddy3 -v com.example.app
-# → /var/mobile/Documents/com.example.app.ipa
-```
+Install each requested app **from the App Store** on this Dopamine phone first (same Apple ID). The worker maps the Store URL → bundle ID, runs `buddy3`, uploads `/var/mobile/Documents/<bid>.ipa`; the Telegram bot sends that IPA back.
 
 | Step | Where |
 |------|--------|
-| Queue / bots / HTTPS | Linux VPS |
+| Telegram bot + HTTPS queue | Linux VPS |
 | FairPlay decrypt | Dopamine iPhone (`buddy3`) |
-| Stock companion / free cert? | Not required for this path |
+| AppAssassin / free cert companion | **Not used** |
 | Mac needed? | **No** |
 
 ---
