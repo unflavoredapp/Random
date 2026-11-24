@@ -67,9 +67,9 @@ Ops: `bash server/linux-ctl.sh status|token|logs api`.
 
 ---
 
-## Dopamine + buddy3 — Telegram bot only (iPhone 11 · iOS 26.0.1)
+## Dopamine + DELvEKBot — Telegram bot only (iPhone 11 · iOS 26.0.1)
 
-For a **Telegram bot** on a Linux VPS whose FairPlay work is done by `Cli/buddy3` on a Dopamine jailbreak phone (not AppAssassin / FastDecryptBot companion).
+For a **Telegram bot** on a Linux VPS whose FairPlay work is done by `Cli/DELvEKBot` on a Dopamine jailbreak phone (not AppAssassin / FastDecryptBot companion).
 
 ```
 Telegram user → App Store link → VPS bot queue → buddy3 on iPhone → clear IPA → bot reply
@@ -102,22 +102,22 @@ sudo systemctl enable --now tetherless-api.service
 ### 2) iPhone — buddy3 worker (keep this running)
 
 ```bash
-scp Cli/buddy3 server/buddy3-dopamine-worker.sh mobile@IPHONE_IP:/var/mobile/Documents/
-ssh mobile@IPHONE_IP 'chmod +x /var/mobile/Documents/buddy3 /var/mobile/Documents/buddy3-dopamine-worker.sh'
+scp Cli/DELvEKBot server/delvekbot-dopamine-worker.sh mobile@IPHONE_IP:/var/mobile/Documents/
+ssh mobile@IPHONE_IP 'chmod +x /var/mobile/Documents/buddy3 /var/mobile/Documents/delvekbot-dopamine-worker.sh'
 
 export DECRYPT_SITE_URL=https://your-vps-host/
 export DECRYPT_WORKER_TOKEN=…    # same as linux-host.env
-export BUDDY3_BIN=/var/mobile/Documents/buddy3
-bash /var/mobile/Documents/buddy3-dopamine-worker.sh
+export DELVEKBOT_BIN=/var/mobile/Documents/DELvEKBot
+bash /var/mobile/Documents/delvekbot-dopamine-worker.sh
 # Script always re-execs with sudo -E (buddy3 needs root on Dopamine).
 ```
 
-Install each requested app **from the App Store** on this Dopamine phone first (same Apple ID). The worker maps the Store URL → bundle ID, runs `buddy3`, uploads `/var/mobile/Documents/<bid>.ipa`; the Telegram bot sends that IPA back.
+Install each requested app **from the App Store** on this Dopamine phone first (same Apple ID). The worker maps the Store URL → bundle ID, runs `DELvEKBot`, uploads `/var/mobile/Documents/<bid>.ipa`; the Telegram bot sends that IPA back.
 
 | Step | Where |
 |------|--------|
 | Telegram bot + HTTPS queue | Linux VPS |
-| FairPlay decrypt | Dopamine iPhone (`buddy3`) |
+| FairPlay decrypt | Dopamine iPhone (`DELvEKBot`) |
 | AppAssassin / free cert companion | **Not used** |
 | Mac needed? | **No** |
 
