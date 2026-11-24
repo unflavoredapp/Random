@@ -52,15 +52,22 @@ normalize_base() {
   printf '%s/' "$u"
 }
 
-json_get() {
-  # json_get <json> <key> — tiny extractor (no jq / python required on-device).
+# Random/Tetherless claim: { "ok": true, "job": { "id", "url", "version" } | null }
+job_field() {
   local json="$1" key="$2"
-  printf '%s' "$json" | tr '\n' ' ' | sed -n "s/.*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" | head -1
+  printf '%s' "$json" | tr '\n' ' ' | sed -n \
+    "s/.*\"job\"[[:space:]]*:[[:space:]]*{[^}]*\"${key}\"[[:space:]]*:[[:space:]]*\"\\([^\"]*\\)\".*/\\1/p" \
+    | head -1
 }
 
 json_null_job() {
   local json="$1"
-  printf '%s' "$json" | tr '\n' ' ' | grep -q '"job"[[:space:]]*:[[:space:]]*null'
+  local flat
+  flat="$(printf '%s' "$json" | tr '\n' ' ')"
+  printf '%s' "$flat" | grep -q '"job"[[:space:]]*:[[:space:]]*null' && return 0
+  # No job object at all
+  printf '%s' "$flat" | grep -q '"job"[[:space:]]*:' && return 1
+  return 0
 }
 
 json_escape() {
@@ -211,9 +218,10 @@ main() {
       sleep "$POLL_SECONDS"
       continue
     fi
-    id="$(json_get "$resp" id)"
-    url="$(json_get "$resp" url)"
+    id="$(job_field "$resp" id)"
+    url="$(job_field "$resp" url)"
     if [[ -z "$id" || -z "$url" ]]; then
+      echo "buddy3-worker: claim missing job.id / job.url — retry in ${POLL_SECONDS}s"
       sleep "$POLL_SECONDS"
       continue
     fi
