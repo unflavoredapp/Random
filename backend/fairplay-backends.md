@@ -109,6 +109,7 @@ export DECRYPT_SITE_URL=https://your-vps-host/
 export DECRYPT_WORKER_TOKEN=…    # same as linux-host.env
 export BUDDY3_BIN=/var/mobile/Documents/buddy3
 bash /var/mobile/Documents/buddy3-dopamine-worker.sh
+# Script always re-execs with sudo -E (buddy3 needs root on Dopamine).
 ```
 
 Install each requested app **from the App Store** on this Dopamine phone first (same Apple ID). The worker maps the Store URL → bundle ID, runs `buddy3`, uploads `/var/mobile/Documents/<bid>.ipa`; the Telegram bot sends that IPA back.

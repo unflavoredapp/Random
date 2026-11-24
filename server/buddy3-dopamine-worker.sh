@@ -26,7 +26,17 @@
 #   POLL_SECONDS=3       # claim loop interval
 #   COUNTRY=us           # iTunes lookup country for App Store URLs
 #
+# Always elevates with sudo on Dopamine (buddy3 needs root for live installs).
+#
 set -euo pipefail
+
+if [[ "$(id -u)" -ne 0 ]]; then
+  command -v sudo >/dev/null 2>&1 || {
+    echo "buddy3-worker: sudo is required on Dopamine" >&2
+    exit 1
+  }
+  exec sudo -E bash "$0" "$@"
+fi
 
 SITE_URL="${DECRYPT_SITE_URL:-${MAC_PUBLIC_BASE:-}}"
 TOKEN="${DECRYPT_WORKER_TOKEN:-}"
@@ -200,7 +210,7 @@ main() {
   [[ -x "$BUDDY3_BIN" ]] || die "buddy3 not executable at BUDDY3_BIN=${BUDDY3_BIN}"
 
   BASE="$(normalize_base "$SITE_URL")" || die "bad DECRYPT_SITE_URL"
-  echo "buddy3-worker: site=${BASE} · bin=${BUDDY3_BIN} · poll=${POLL_SECONDS}s"
+  echo "buddy3-worker: uid=$(id -u) (root) · site=${BASE} · bin=${BUDDY3_BIN} · poll=${POLL_SECONDS}s"
   echo "buddy3-worker: install target apps from the App Store first; buddy3 supports iOS 15.4 / 16.2 / 26.0.1"
 
   while true; do
