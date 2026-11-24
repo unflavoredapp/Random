@@ -72,10 +72,10 @@ Ops: `bash server/linux-ctl.sh status|token|logs api`.
 For a **Telegram bot** on a Linux VPS whose FairPlay work is done by `Cli/DELvEKBot` on a Dopamine jailbreak phone (not AppAssassin / FastDecryptBot companion).
 
 ```
-Telegram user → App Store link → VPS bot queue → buddy3 on iPhone → clear IPA → bot reply
+Telegram user → App Store link → VPS bot queue → DELvEKBot on iPhone → clear IPA → bot reply
 ```
 
-`buddy3` only accepts **ProductVersion 15.4, 16.2, or 26.0.1** (`sw_vers -productVersion`).
+`DELvEKBot` only accepts **ProductVersion 15.4, 16.2, or 26.0.1** (`sw_vers -productVersion`).
 
 ### 1) VPS — bot + phone queue
 
@@ -99,17 +99,17 @@ sudo systemctl enable --now tetherless-api.service
 # bot is started by the API / linux-ctl — see: bash server/linux-ctl.sh status
 ```
 
-### 2) iPhone — buddy3 worker (keep this running)
+### 2) iPhone — DELvEKBot worker (keep this running)
 
 ```bash
 scp Cli/DELvEKBot server/delvekbot-dopamine-worker.sh mobile@IPHONE_IP:/var/mobile/Documents/
-ssh mobile@IPHONE_IP 'chmod +x /var/mobile/Documents/buddy3 /var/mobile/Documents/delvekbot-dopamine-worker.sh'
+ssh mobile@IPHONE_IP 'chmod +x /var/mobile/Documents/DELvEKBot /var/mobile/Documents/delvekbot-dopamine-worker.sh'
 
 export DECRYPT_SITE_URL=https://your-vps-host/
 export DECRYPT_WORKER_TOKEN=…    # same as linux-host.env
 export DELVEKBOT_BIN=/var/mobile/Documents/DELvEKBot
 bash /var/mobile/Documents/delvekbot-dopamine-worker.sh
-# Script always re-execs with sudo -E (buddy3 needs root on Dopamine).
+# Script always re-execs with sudo -E (DELvEKBot needs root on Dopamine).
 ```
 
 Install each requested app **from the App Store** on this Dopamine phone first (same Apple ID). The worker maps the Store URL → bundle ID, runs `DELvEKBot`, uploads `/var/mobile/Documents/<bid>.ipa`; the Telegram bot sends that IPA back.
