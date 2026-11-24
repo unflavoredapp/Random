@@ -67,6 +67,60 @@ Ops: `bash server/linux-ctl.sh status|token|logs api`.
 
 ---
 
+## Dopamine jailbreak — buddy3 Phone Worker (iPhone 11 · iOS 26.0.1)
+
+Use when this device is **jailbroken with Dopamine** and you want the open `Cli/buddy3` decryptor to finish VPS / Telegram / web queue jobs (same claim/upload API as stock Phone Worker).
+
+`buddy3` only accepts **ProductVersion 15.4, 16.2, or 26.0.1**. Confirm with:
+
+```bash
+sw_vers -productVersion   # on-device
+```
+
+### 1) VPS (same as stock Phone Worker)
+
+```bash
+sudo bash server/linux-install.sh
+# /etc/tetherless/linux-host.env → DECRYPT_BACKENDS=phone + DECRYPT_WORKER_TOKEN
+sudo systemctl enable --now tetherless-api.service
+```
+
+### 2) Copy buddy3 + worker onto the iPhone
+
+```bash
+# From a Mac/Linux with SSH to the phone (mobile user):
+scp Cli/buddy3 server/buddy3-dopamine-worker.sh mobile@IPHONE_IP:/var/mobile/Documents/
+ssh mobile@IPHONE_IP 'chmod +x /var/mobile/Documents/buddy3 /var/mobile/Documents/buddy3-dopamine-worker.sh'
+```
+
+### 3) Run the worker on-device
+
+```bash
+export DECRYPT_SITE_URL=https://your-vps-host/
+export DECRYPT_WORKER_TOKEN=…    # same token as linux-host.env
+export BUDDY3_BIN=/var/mobile/Documents/buddy3
+bash /var/mobile/Documents/buddy3-dopamine-worker.sh
+```
+
+Install each target app **from the App Store** on this Dopamine phone (same Apple ID that owns it) before queueing. The worker resolves the Store URL → bundle ID, runs `buddy3 <bid>`, then uploads `/var/mobile/Documents/<bid>.ipa` to the VPS.
+
+Manual one-off (no VPS):
+
+```bash
+/var/mobile/Documents/buddy3 list
+/var/mobile/Documents/buddy3 -v com.example.app
+# → /var/mobile/Documents/com.example.app.ipa
+```
+
+| Step | Where |
+|------|--------|
+| Queue / bots / HTTPS | Linux VPS |
+| FairPlay decrypt | Dopamine iPhone (`buddy3`) |
+| Stock companion / free cert? | Not required for this path |
+| Mac needed? | **No** |
+
+---
+
 ## Optional — offline CLI on the VPS (Mac-minted unfairplay model)
 
 Only if you want decrypt **without** an iPhone online. UnfairPlay enrollment still has to be minted on a Mac once:
