@@ -690,7 +690,7 @@ final class DeviceDecryptService: ObservableObject {
         let info = NSDictionary(contentsOf: installed.appendingPathComponent("Info.plist")) as? [String: Any]
         let bid = (info?["CFBundleIdentifier"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        _ = try FairPlayKeyGate.confirmReadyForCompanion(
+        _ = try await FairPlayKeyGate.confirmReadyForCompanion(
             bundleID: bid.isEmpty ? nil : bid,
             displayName: displayName
         ) { [weak self] msg in
@@ -831,7 +831,7 @@ final class DeviceDecryptService: ObservableObject {
             }
             // Gate Media & Purchases *before* any Store purchase/download so a missing
             // FairPlay ack never looks like an App Store outage.
-            _ = try FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
+            _ = try await FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
                 self?.publishDecryptProgress(msg)
             }
             let link: String
@@ -1105,7 +1105,7 @@ final class DeviceDecryptService: ObservableObject {
         } ?? Self.bundleIDFromStoreIPA(ipa) ?? ""
 
         // Host gate with bid so live App Store install is required before FastDecryptBot.
-        _ = try FairPlayKeyGate.confirmReadyForCompanion(
+        _ = try await FairPlayKeyGate.confirmReadyForCompanion(
             bundleID: resolvedBid.isEmpty ? nil : resolvedBid,
             displayName: displayName
         ) { [weak self] msg in

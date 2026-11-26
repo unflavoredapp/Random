@@ -694,7 +694,9 @@ enum DecryptCompanionPackager {
            Self.liveMainExecutableStampable(at: preferred) {
             return preferred.resolvingSymlinksInPath().standardizedFileURL
         }
-        let known = DeviceLibrary.shared.apps.first(where: { $0.bundleID == bundleID })?.installPath
+        let known = DeviceLibrary.shared.apps.first {
+            $0.bundleID.caseInsensitiveCompare(bundleID) == .orderedSame
+        }?.installPath
         guard let live = FairPlayDecrypt.installedAppURL(bundleID: bundleID, knownPath: known),
               isLiveAppStoreInstall(live),
               Self.liveMainExecutableStampable(at: live) else {

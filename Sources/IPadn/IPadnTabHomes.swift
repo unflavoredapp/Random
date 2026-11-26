@@ -385,6 +385,10 @@ private enum AccountAuthSheet: String, Identifiable {
 private struct AccountFairPlayKeysSection: View {
     @ObservedObject private var store = AppleIDStore.shared
     @ObservedObject private var keys = FairPlayKeysFetcher.shared
+    @State private var probedLivePath: (path: String, bundleID: String)?
+    @State private var probingLive = false
+    @State private var livePathHint =
+        "Live install path: (none yet — stamp appears after Get, or tap Probe)"
 
     private var email: String {
         store.email.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -417,7 +421,7 @@ private struct AccountFairPlayKeysSection: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let live = DecryptCompanionHandoff.readLiveInstallPath() {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Live install path")
+                    Text("Live install path (stamped)")
                         .font(.caption.weight(.semibold))
                     Text(live.path)
                         .font(.caption2.monospaced())
@@ -430,19 +434,75 @@ private struct AccountFairPlayKeysSection: View {
                     }
                 }
                 .padding(.vertical, 2)
+            } else if let probed = probedLivePath {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Live install path (probed)")
+                        .font(.caption.weight(.semibold))
+                    Text(probed.path)
+                        .font(.caption2.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                    if !probed.bundleID.isEmpty {
+                        Text(probed.bundleID)
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.vertical, 2)
             } else {
-                Text("Live install path: (none stamped yet — shown after Get when the app is installed from the App Store)")
+                Text(livePathHint)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            Button("Probe live install path…") {
+                Task { await probeLiveInstallPath() }
+            }
+            .font(.caption.weight(.semibold))
+            .disabled(probingLive)
         } header: {
             Text("FairPlay keys")
         } footer: {
-            Text("Keys stay on this iPhone. FairPlay always uses the live App Store install path after Get.")
+            Text("Keys stay on this iPhone. The stamp appears after a successful Get. If the app is installed but path stays empty, Pair Native and refresh Installed — LaunchServices alone often can’t see Store containers on free/dev certs.")
         }
-        .onAppear { keys.refreshFromAck() }
+        .onAppear {
+            keys.refreshFromAck()
+            Task { await probeLiveInstallPath() }
+        }
         .onChange(of: store.email) { _ in keys.refreshFromAck() }
+    }
+
+    private func probeLiveInstallPath() async {
+        probingLive = true
+        defer { probingLive = false }
+        // Prefer selected Search/Downloads target, then last stamped bid, then first library DRM app.
+        let selectedBid = (DecryptClient.shared.selected?.bundle ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let stampedBid = (DecryptCompanionHandoff.readLiveInstallPath()?.bundleID
+            ?? DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID
+            ?? DecryptCompanionHandoff.readTargetStamp()?.bundleID
+            ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let libraryBid = DeviceLibrary.shared.apps.first {
+            $0.isDecryptTarget(includeTestFlight: FairPlayAdvancedOptions.includeTestFlightApps)
+        }?.bundleID ?? ""
+        let bid = [selectedBid, stampedBid, libraryBid].first { !$0.isEmpty } ?? ""
+        guard !bid.isEmpty else {
+            probedLivePath = nil
+            livePathHint = "Live install path: (none — pick an app on Search/Get, or Pair + refresh Installed)"
+            return
+        }
+        if let live = await FairPlayKeyGate.resolveLiveInstallURL(bundleID: bid) {
+            probedLivePath = (live.path, bid)
+            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
+            livePathHint = "Live install path found for \(bid)"
+        } else {
+            probedLivePath = nil
+            let paired = DevicePairingStore.hasSavedPairing
+            livePathHint = paired
+                ? "Live install path: (none for \(bid) — install from App Store if missing, then refresh Installed)"
+                : "Live install path: (none for \(bid) — Pair Native so installd Path is visible)"
+        }
     }
 }
 

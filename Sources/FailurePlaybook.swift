@@ -79,7 +79,6 @@ enum FailurePlaybook {
             matches: [
                 "keys ready is not enough",
                 "before opening fastdecryptbot",
-                "live install path",
                 "needs the live install",
                 "install it from the app store",
                 "install splash",
@@ -87,6 +86,21 @@ enum FailurePlaybook {
             ],
             actionTitle: "Open App Store",
             action: .openAppStore
+        ),
+        FailurePlay(
+            id: "fairplay-live-invisible",
+            title: "Can't see live install path (Pair Native)",
+            summary: "The app may already be installed, but this sideloaded build can’t see `/var/containers/Bundle/Application/…` until Native pairing exposes installd Path. Open Pair, connect, refresh Installed, then retry Get.",
+            matches: [
+                "can't see its live app store path",
+                "cannot see its live",
+                "pair native",
+                "refresh installed",
+                "none visible",
+                "launchservices alone often returns no path",
+            ],
+            actionTitle: "Open Pair",
+            action: .openPair
         ),
         FailurePlay(
             id: "fairplay-eperm",

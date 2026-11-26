@@ -199,6 +199,7 @@ enum FairPlayDecrypt {
         if let url = lsWorkspaceURL(bundleID: id) { return url }
         if let url = lsRecordURL(bundleID: id) { return url }
         if let url = lsProxyURL(bundleID: id) { return url }
+        if let url = lsWorkspaceEnumerateURL(bundleID: id) { return url }
         if let url = mobileInstallationLookupURL(bundleID: id) { return url }
         if let url = pathFallbackURL(bundleID: id) { return url }
         return nil
@@ -276,8 +277,48 @@ enum FairPlayDecrypt {
         return nil
     }
 
+    /// Enumerate workspace proxies when direct identifier lookup is sandboxed/denied.
+    private static func lsWorkspaceEnumerateURL(bundleID: String) -> URL? {
+        let want = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !want.isEmpty,
+              let workspaceClass = NSClassFromString("LSApplicationWorkspace") as? NSObject.Type else {
+            return nil
+        }
+        let selDefault = NSSelectorFromString("defaultWorkspace")
+        guard workspaceClass.responds(to: selDefault),
+              let workspace = workspaceClass.perform(selDefault)?.takeUnretainedValue() as? NSObject else {
+            return nil
+        }
+        let bidSel = NSSelectorFromString("bundleIdentifier")
+        for listSelName in ["allApplications", "installedApplications", "allInstalledApplications"] {
+            let listSel = NSSelectorFromString(listSelName)
+            guard workspace.responds(to: listSel),
+                  let apps = workspace.perform(listSel)?.takeUnretainedValue() as? [Any] else {
+                continue
+            }
+            for item in apps {
+                guard let proxy = item as? NSObject, proxy.responds(to: bidSel),
+                      let bid = proxy.perform(bidSel)?.takeUnretainedValue() as? String,
+                      bid.caseInsensitiveCompare(want) == .orderedSame else {
+                    continue
+                }
+                for key in ["bundleURL", "bundleContainerURL"] {
+                    let s = NSSelectorFromString(key)
+                    if proxy.responds(to: s),
+                       let url = proxy.perform(s)?.takeUnretainedValue() as? URL,
+                       let app = existingAppDirectory(url) {
+                        return app
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
     /// Last-ditch scan of common install roots when LaunchServices APIs refuse the query.
     private static func pathFallbackURL(bundleID: String) -> URL? {
+        let want = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !want.isEmpty else { return nil }
         let fm = FileManager.default
         let roots = [
             "/var/containers/Bundle/Application",
@@ -289,8 +330,21 @@ enum FairPlayDecrypt {
                 let dir = URL(fileURLWithPath: root).appendingPathComponent(container)
                 guard let kids = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil) else { continue }
                 for app in kids where app.pathExtension == "app" {
-                    if let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist")) as? [String: Any],
-                       (info["CFBundleIdentifier"] as? String) == bundleID {
+                    let infoURL = app.appendingPathComponent("Info.plist")
+                    let bid: String? = {
+                        if let info = NSDictionary(contentsOf: infoURL) as? [String: Any],
+                           let b = info["CFBundleIdentifier"] as? String {
+                            return b
+                        }
+                        // Some sandboxes allow Data reads when NSDictionary(contentsOf:) fails.
+                        guard let data = try? Data(contentsOf: infoURL),
+                              let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                              let b = plist["CFBundleIdentifier"] as? String else {
+                            return nil
+                        }
+                        return b
+                    }()
+                    if let bid, bid.caseInsensitiveCompare(want) == .orderedSame {
                         return app
                     }
                 }

@@ -12,6 +12,8 @@ enum FairPlayKeyGateError: LocalizedError {
     case needsStoreLogin(String)
     case notAcknowledged(String)
     case needsLiveInstall(bundleID: String, name: String)
+    /// App may be installed, but LaunchServices/installd path is invisible without Native.
+    case cannotSeeLiveInstall(bundleID: String, name: String)
 
     var errorDescription: String? {
         switch self {
@@ -26,6 +28,9 @@ enum FairPlayKeyGateError: LocalizedError {
         case .needsLiveInstall(let bid, let name):
             let label = name.isEmpty ? bid : name
             return "FairPlay keys ready is not enough — install \(label) from the App Store on this iPhone (same Apple ID) first. fairplayd needs that live install path; Get cannot open FastDecryptBot without it."
+        case .cannotSeeLiveInstall(let bid, let name):
+            let label = name.isEmpty ? bid : name
+            return "\(label) may already be installed, but this sideloaded build can’t see its live App Store path yet. Open Pair → connect Native, pull-to-refresh Installed, then retry Get — LaunchServices alone often returns no path on free/dev certs."
         }
     }
 }
@@ -101,6 +106,33 @@ enum FairPlayKeyGate {
         return AppStoreDecryptGuide.isAcknowledged(email: store.email)
     }
 
+    /// Resolve a live Store `.app` path for `bundleID`, refreshing Native DeviceLibrary first.
+    /// Sideloaded hosts often get nil from LaunchServices until installd Path is known.
+    static func resolveLiveInstallURL(bundleID: String, progress: ((String) -> Void)? = nil) async -> URL? {
+        let bid = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bid.isEmpty else { return nil }
+
+        func lookup() -> URL? {
+            let known = DeviceLibrary.shared.apps.first {
+                $0.bundleID.caseInsensitiveCompare(bid) == .orderedSame
+            }?.installPath
+            let live = FairPlayDecrypt.installedAppURL(bundleID: bid, knownPath: known)
+            guard let live, FairPlayDecrypt.isLiveAppStoreInstall(live) else { return nil }
+            return live
+        }
+
+        if let hit = lookup() { return hit }
+
+        progress?("Refreshing Installed apps for live path…")
+        _ = await DeviceLibrary.shared.refreshAwaiting()
+        if let hit = lookup() { return hit }
+
+        // One more LS/MI pass after library refresh — pathFallback / workspace enum.
+        return FairPlayDecrypt.installedAppURL(bundleID: bid).flatMap {
+            FairPlayDecrypt.isLiveAppStoreInstall($0) ? $0 : nil
+        }
+    }
+
     /// Visible host step before packaging/opening the companion: confirm Apple ID,
     /// Store unlock, Media & Purchases ack, optional live install — then publish snapshot.
     @discardableResult
@@ -108,7 +140,7 @@ enum FairPlayKeyGate {
         bundleID: String? = nil,
         displayName: String? = nil,
         progress: ((String) -> Void)? = nil
-    ) throws -> String {
+    ) async throws -> String {
         let store = AppleIDStore.shared
         let email = store.email.trimmingCharacters(in: .whitespacesAndNewlines)
         let who = email.isEmpty ? "your Apple Account" : email
@@ -133,13 +165,22 @@ enum FairPlayKeyGate {
         let bid = (bundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if requireLiveInstallForCompanion, !bid.isEmpty {
             progress?("Checking live App Store install for \(bid)…")
-            let known = DeviceLibrary.shared.apps.first(where: { $0.bundleID == bid })?.installPath
-            let live = FairPlayDecrypt.installedAppURL(bundleID: bid, knownPath: known)
-            if let live, FairPlayDecrypt.isLiveAppStoreInstall(live) {
+            if let live = await resolveLiveInstallURL(bundleID: bid, progress: progress) {
                 DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
                 progress?("Live install path: \(live.path)")
             } else {
                 let name = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                let libraryCount = DeviceLibrary.shared.apps.count
+                let paired = DevicePairingStore.hasSavedPairing
+                let native = NativeInstaller.isSelected
+                // Installed-but-invisible is the common free-cert failure mode (Grok/Tubi).
+                if !paired || !native || libraryCount == 0 {
+                    progress?(
+                        "Live install path: (none visible) — Pair Native + refresh Installed, then retry Get…"
+                    )
+                    AppNav.shared.goPair()
+                    throw FairPlayKeyGateError.cannotSeeLiveInstall(bundleID: bid, name: name)
+                }
                 progress?("Live install path: (none) — install \(name.isEmpty ? bid : name) from the App Store, then retry Get…")
                 AppStoreDecryptGuide.openAppStore()
                 throw FairPlayKeyGateError.needsLiveInstall(bundleID: bid, name: name)
