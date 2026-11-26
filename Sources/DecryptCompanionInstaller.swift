@@ -41,8 +41,7 @@ enum DecryptCompanionInstaller {
         }
         // fairplayd needs the live Store install — always report the path (or absence).
         if !bid.isEmpty {
-            if let live = FairPlayDecrypt.installedAppURL(bundleID: bid),
-               FairPlayDecrypt.isLiveAppStoreInstall(live) {
+            if let live = await FairPlayKeyGate.resolveLiveInstallURL(bundleID: bid, progress: progress) {
                 DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
                 progress?("Live install path: \(live.path)")
             } else {
@@ -109,7 +108,7 @@ enum DecryptCompanionInstaller {
         // Never package/open FastDecryptBot until Apple ID + Store + keys
         // (+ live install when bid is known) are ready on the *host*.
         progress?("1/7 · Host FairPlay readiness (before FastDecryptBot)…")
-        _ = try FairPlayKeyGate.confirmReadyForCompanion(
+        _ = try await FairPlayKeyGate.confirmReadyForCompanion(
             bundleID: targetBundleID,
             displayName: displayName
         ) { msg in
