@@ -139,15 +139,28 @@ enum DecryptCompanionHandoff {
 
     /// Clear stamps that don’t belong to `bundleID` before packaging a new companion target.
     /// Keeps a matching encrypted-IPA or live-install stamp so EncryptedSource.ipa can still bundle.
+    ///
+    /// When `bundleID` is still empty (Search stub / thin IPA), do **not** wipe stamps —
+    /// packaging recovers CFBundleIdentifier from EncryptedSource / live Info.plist /
+    /// iTunesMetadata. Clearing here caused Tubi-style “Couldn't determine bundle ID”.
     static func beginTargetWorkflow(bundleID: String) {
         let bid = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+        if bid.isEmpty {
+            persistTargetStamp(fromCurrentKeys(preferredBundleID: ""))
+            return
+        }
         if let live = readLiveInstallPath() {
-            if bid.isEmpty || live.bundleID.isEmpty || !bundleIDsMatch(live.bundleID, bid) {
+            if live.bundleID.isEmpty {
+                // Keep path; attach the now-known bid.
+                publishLiveInstallPath(live.path, bundleID: bid)
+            } else if !bundleIDsMatch(live.bundleID, bid) {
                 clearLiveInstallPath()
             }
         }
         if let enc = readEncryptedIPAPath() {
-            if bid.isEmpty || enc.bundleID.isEmpty || !bundleIDsMatch(enc.bundleID, bid) {
+            if enc.bundleID.isEmpty {
+                publishEncryptedIPAPath(enc.path, bundleID: bid)
+            } else if !bundleIDsMatch(enc.bundleID, bid) {
                 clearEncryptedIPAPath()
             }
         }

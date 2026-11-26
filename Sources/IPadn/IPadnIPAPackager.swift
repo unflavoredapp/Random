@@ -8,6 +8,58 @@ import Foundation
 import ZIPFoundation
 
 enum IPadnIPAPackager {
+    /// Peek target CFBundleIdentifier from a Store IPA without a full unzip.
+    /// Prefers `Payload/*.app/Info.plist`, then `iTunesMetadata.plist` ticket fields.
+    static func bundleID(fromIPA ipa: URL) -> String? {
+        guard let archive = try? Archive(url: ipa, accessMode: .read) else { return nil }
+        for entry in archive {
+            let path = normalizeIPAEntryPath(entry.path)
+            guard path.hasPrefix("Payload/"),
+                  path.hasSuffix(".app/Info.plist"),
+                  !path.contains("/Watch/"),
+                  !path.contains(".appex/") else { continue }
+            var data = Data()
+            do {
+                _ = try archive.extract(entry) { data.append($0) }
+            } catch {
+                continue
+            }
+            guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let bid = (plist["CFBundleIdentifier"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !bid.isEmpty else { continue }
+            return bid
+        }
+        for entry in archive {
+            guard normalizeIPAEntryPath(entry.path) == "iTunesMetadata.plist" else { continue }
+            var data = Data()
+            do {
+                _ = try archive.extract(entry) { data.append($0) }
+            } catch {
+                break
+            }
+            guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+                break
+            }
+            for key in ["softwareVersionBundleId", "bundleId", "software-version-bundle-id"] {
+                if let bid = (plist[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !bid.isEmpty {
+                    return bid
+                }
+            }
+            break
+        }
+        return nil
+    }
+
+    /// Strip leading `./` so `./Payload/Foo.app/Info.plist` still matches.
+    static func normalizeIPAEntryPath(_ path: String) -> String {
+        var p = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        while p.hasPrefix("./") { p = String(p.dropFirst(2)) }
+        while p.hasPrefix("/") { p = String(p.dropFirst()) }
+        return p
+    }
+
     static func writeMetadata(_ meta: [String: Any], email: String, intoIPA ipa: URL) throws {
         var m = meta
         m["apple-id"] = email
@@ -56,7 +108,7 @@ enum IPadnIPAPackager {
 
     private static func payloadAppBundleName(in archive: Archive) throws -> String {
         for entry in archive {
-            let path = entry.path
+            let path = normalizeIPAEntryPath(entry.path)
             guard path.contains(".app/Info.plist"), !path.contains("/Watch/") else { continue }
             let parts = path.split(separator: "/")
             guard parts.count >= 2 else { continue }

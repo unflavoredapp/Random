@@ -947,17 +947,27 @@ final class DeviceDecryptService: ObservableObject {
             // Cookie jar may have refreshed during download — keep it for the next Get.
             AppleIDStore.shared.mergeStoreCookies(from: account)
             AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
+            // Prefer Search bid; fall back to DownloadDispatch ticket / IPA peek so
+            // companion packaging never loses CFBundleIdentifier (Tubi Info.plist miss).
+            let ticketBid = result.item.bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
+            let resolvedBid = bundleID.isEmpty ? ticketBid : bundleID
+            let finalBid = resolvedBid.isEmpty
+                ? (IPadnIPAPackager.bundleID(fromIPA: result.url) ?? "")
+                : resolvedBid
+            if bundleID.isEmpty, !finalBid.isEmpty {
+                publishDecryptProgress("Recovered bundle ID \(finalBid) from Store ticket / IPA")
+            }
             DecryptCompanionHandoff.publishStoreDecryptTarget(
                 url: storeURL,
                 version: result.item.displayVersion.isEmpty ? version : result.item.displayVersion,
                 displayName: displayName,
-                bundleID: bundleID
+                bundleID: finalBid
             )
             try await handoffStoreIPAToCompanion(
                 ipa: result.url,
                 displayName: displayName,
                 downloadedVersion: result.item.displayVersion,
-                bundleID: bundleID
+                bundleID: finalBid
             )
             AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
         } catch {
@@ -1184,26 +1194,7 @@ final class DeviceDecryptService: ObservableObject {
 
     /// Peek CFBundleIdentifier from a Store IPA zip without extracting the whole archive.
     private static func bundleIDFromStoreIPA(_ ipa: URL) -> String? {
-        guard let archive = Archive(url: ipa, accessMode: .read) else { return nil }
-        for entry in archive {
-            let path = entry.path
-            guard path.hasPrefix("Payload/"),
-                  path.hasSuffix(".app/Info.plist"),
-                  !path.contains("/Watch/"),
-                  !path.contains(".appex/") else { continue }
-            var data = Data()
-            do {
-                _ = try archive.extract(entry) { data.append($0) }
-            } catch {
-                continue
-            }
-            guard let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-                  let bid = (plist["CFBundleIdentifier"] as? String)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                  !bid.isEmpty else { continue }
-            return bid
-        }
-        return nil
+        IPadnIPAPackager.bundleID(fromIPA: ipa)
     }
 
     private func resolveAdamId(bundleID: String, storeURL: String) async throws -> Int? {
