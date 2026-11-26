@@ -343,6 +343,19 @@ extension InstallationProxy {
         }
     }
 
+    /// Prefer installd `Path` / `BundlePath` for FairPlay. Ignore Data `Container`
+    /// (`/var/mobile/Containers/Data/…`) — that is not a Store `.app` mremap root.
+    private static func fairPlayInstallPath(from info: plist_t) -> String? {
+        for key in ["Path", "BundlePath"] {
+            if let p = string(info, key)?.trimmingCharacters(in: .whitespacesAndNewlines), !p.isEmpty {
+                // Reject obvious data-container paths even if mislabeled.
+                if p.contains("/Containers/Data/") { continue }
+                return p
+            }
+        }
+        return nil
+    }
+
     private static func string(_ dict: plist_t, _ key: String) -> String? {
         guard let node = plist_dict_get_item(dict, key), plist_get_node_type(node) == PLIST_STRING else { return nil }
         var raw: UnsafeMutablePointer<CChar>?
@@ -382,7 +395,9 @@ extension InstallationProxy {
         let version = string(info, "CFBundleShortVersionString") ?? string(info, "CFBundleVersion") ?? ""
         let fixed = uint(info, "StaticDiskUsage"), dynamic = uint(info, "DynamicDiskUsage")
         let size: Int64? = (fixed == nil && dynamic == nil) ? nil : (fixed ?? 0) + (dynamic ?? 0)
-        let path = string(info, "Path") ?? string(info, "BundlePath") ?? string(info, "Container")
+        // FairPlay needs the bundle `.app` / BundlePath — never the Data Container
+        // (`/var/mobile/Containers/Data/…`), which is not a live Store mremap path.
+        let path = Self.fairPlayInstallPath(from: info)
         return DeviceApp(
             bundleID: bundleID,
             name: name,

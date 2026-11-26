@@ -829,9 +829,12 @@ final class DeviceDecryptService: ObservableObject {
             guard AppleIDStore.shared.isSignedIn else {
                 throw DecryptError("Sign in under Account with the Apple ID that owns this app.")
             }
-            // Gate Media & Purchases *before* any Store purchase/download so a missing
-            // FairPlay ack never looks like an App Store outage.
-            _ = try await FairPlayKeyGate.confirmReadyForCompanion { [weak self] msg in
+            // Gate Media & Purchases (+ live install when bid known) *before* Store
+            // purchase/download so missing ack / invisible path never looks like a CDN outage.
+            _ = try await FairPlayKeyGate.confirmReadyForCompanion(
+                bundleID: bid.isEmpty ? nil : bid,
+                displayName: app.name
+            ) { [weak self] msg in
                 self?.publishDecryptProgress(msg)
             }
             let link: String
@@ -878,7 +881,8 @@ final class DeviceDecryptService: ObservableObject {
             DecryptClient.shared.error = text
             DecryptClient.shared.message = text
             status = ""
-            if error is FairPlayKeyGateError {
+            // Only resume after Confirm keys — live-install / Pair failures are not key-ack waits.
+            if case .notAcknowledged(_) = error as? FairPlayKeyGateError {
                 FairPlayKeyGate.rememberPendingSearchRetry()
             }
         }
@@ -1140,19 +1144,21 @@ final class DeviceDecryptService: ObservableObject {
         _ = await DeviceLibrary.shared.refreshAwaiting()
 
         // FairPlay mremap only from the live App Store install — EncryptedSource is packaging
-        // only. Always surface the live path (or its absence) after a Store IPA fetch.
+        // only. Prefer re-stamp; never wipe a matching gate stamp on a transient nil resolve.
         if !resolvedBid.isEmpty {
-            if let live = await resolveInstalledAppURL(bundleID: resolvedBid) {
+            if let live = await resolveInstalledAppURL(bundleID: resolvedBid),
+               FairPlayDecrypt.isLiveAppStoreInstall(live) {
                 DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: resolvedBid)
                 publishDecryptProgress("Live install path: \(live.path)")
+            } else if let stamped = DecryptCompanionHandoff.readLiveInstallPath(matchingBundleID: resolvedBid),
+                      FairPlayDecrypt.isLiveAppStoreInstall(URL(fileURLWithPath: stamped.path)) {
+                publishDecryptProgress("Live install path (kept stamp): \(stamped.path)")
             } else {
-                DecryptCompanionHandoff.clearLiveInstallPath()
                 publishDecryptProgress(
-                    "Live install path: (none) for \(resolvedBid) — install \(displayName) from the App Store (same Apple ID) before FastDecryptBot."
+                    "Live install path: (none) for \(resolvedBid) — install \(displayName) from the App Store (same Apple ID) and Pair Native if Get still can't see it."
                 )
             }
         } else {
-            DecryptCompanionHandoff.clearLiveInstallPath()
             publishDecryptProgress("Live install path: (none) — missing bundle ID on Store IPA.")
         }
 

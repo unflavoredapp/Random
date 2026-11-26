@@ -180,20 +180,32 @@ enum FairPlayDecrypt {
 
         if let known = knownPath?.trimmingCharacters(in: .whitespacesAndNewlines), !known.isEmpty {
             let knownURL = URL(fileURLWithPath: known)
-            // Companion sandbox often reports fileExists=false for other apps' Store
-            // containers. Trust a host-stamped live path shape even when probes fail —
-            // fairplayd can still mremap from that path.
-            if let url = existingAppDirectory(knownURL) {
-                return url
-            }
-            if isLiveAppStoreInstall(knownURL) {
+            // Never treat Data containers as FairPlay roots.
+            if known.contains("/Containers/Data/") {
+                // Fall through to LS / MI / pathFallback.
+            } else if let url = existingAppDirectory(knownURL) {
+                // Prefer a real *.app; verify bid when Info.plist is readable.
+                if url.pathExtension == "app",
+                   bundleIDMatchesApp(url, expected: id) != false {
+                    return url
+                }
+                if let nested = existingAppDirectory(url),
+                   nested.pathExtension == "app",
+                   bundleIDMatchesApp(nested, expected: id) != false {
+                    return nested
+                }
+            } else if isLiveAppStoreInstall(knownURL) {
+                // Companion/host sandbox often reports fileExists=false for other apps'
+                // Store containers. Trust a live-shaped stamp when it ends in .app or
+                // we can walk up to one — fairplayd can still mremap.
                 var candidate = knownURL.resolvingSymlinksInPath().standardizedFileURL
                 if candidate.pathExtension == "app" { return candidate }
                 while candidate.path != "/" {
                     if candidate.pathExtension == "app" { return candidate }
                     candidate = candidate.deletingLastPathComponent()
                 }
-                return knownURL
+                // Bare UUID Bundle/Application/<uuid> without a visible *.app — don't
+                // stamp as live; fall through so LS/MI/fallback can find the .app.
             }
         }
         if let url = lsWorkspaceURL(bundleID: id) { return url }
@@ -374,6 +386,31 @@ enum FairPlayDecrypt {
             candidate = candidate.deletingLastPathComponent()
         }
         return nil
+    }
+
+    /// `true` match, `false` mismatch, `nil` when Info.plist unreadable (sandbox).
+    private static func bundleIDMatchesApp(_ app: URL, expected: String) -> Bool? {
+        let want = expected.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !want.isEmpty else { return nil }
+        let infoURL = app.appendingPathComponent("Info.plist")
+        let bid: String? = {
+            if let info = NSDictionary(contentsOf: infoURL) as? [String: Any],
+               let b = (info["CFBundleIdentifier"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+               !b.isEmpty {
+                return b
+            }
+            guard let data = try? Data(contentsOf: infoURL),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
+                  let b = (plist["CFBundleIdentifier"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !b.isEmpty else {
+                return nil
+            }
+            return b
+        }()
+        guard let bid else { return nil }
+        return bid.caseInsensitiveCompare(want) == .orderedSame
     }
 
     // MARK: - Public entry points

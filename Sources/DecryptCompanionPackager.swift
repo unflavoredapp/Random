@@ -631,10 +631,19 @@ enum DecryptCompanionPackager {
             meta["hostLiveInstallPath"] = live.path
             progress?("Live install path: \(live.path)")
             DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: embeddedBundleID)
+        } else if let stamped = DecryptCompanionHandoff.readLiveInstallPath(matchingBundleID: embeddedBundleID),
+                  FairPlayDecrypt.isLiveAppStoreInstall(URL(fileURLWithPath: stamped.path)) {
+            // Keep a matching gate stamp — don't wipe when a transient re-resolve misses.
+            meta["hostLiveInstallPath"] = stamped.path
+            progress?("Live install path (kept stamp): \(stamped.path)")
         } else {
-            DecryptCompanionHandoff.clearLiveInstallPath()
+            // Only clear when we truly have nothing usable for this bid.
+            if let stale = DecryptCompanionHandoff.readLiveInstallPath(),
+               !DecryptCompanionHandoff.bundleIDsMatch(stale.bundleID, embeddedBundleID) {
+                DecryptCompanionHandoff.clearLiveInstallPath()
+            }
             throw DecryptError(
-                "No live App Store install for \(embeddedBundleID) (\(name)). Install it from the App Store (same Apple ID) before packaging FastDecryptBot — EncryptedSource / EmbeddedPayload are not FairPlay paths."
+                "No live App Store install for \(embeddedBundleID) (\(name)). Install it from the App Store (same Apple ID), Pair Native + refresh Installed if Get still can't see the path, then retry — EncryptedSource / EmbeddedPayload are not FairPlay paths."
             )
         }
         // Preflight identity pack — helper paints instantly; never embeds FairPlay key blobs.
@@ -689,32 +698,22 @@ enum DecryptCompanionPackager {
     }
 
     /// Host-side live install resolution (DeviceLibrary + FairPlayDecrypt lookup).
+    ///
+    /// Do **not** require `fileExists` on the FairPlay main binary — sideloaded hosts
+    /// often lie / EPERM while fairplayd can still mremap (Roblox). Match KeyGate /
+    /// companion stamp trust: live-shaped path is enough.
     private static func resolveLiveInstallURL(bundleID: String, preferring preferred: URL?) -> URL? {
-        if let preferred, isLiveAppStoreInstall(preferred),
-           Self.liveMainExecutableStampable(at: preferred) {
+        if let preferred, isLiveAppStoreInstall(preferred) {
             return preferred.resolvingSymlinksInPath().standardizedFileURL
         }
         let known = DeviceLibrary.shared.apps.first {
             $0.bundleID.caseInsensitiveCompare(bundleID) == .orderedSame
         }?.installPath
         guard let live = FairPlayDecrypt.installedAppURL(bundleID: bundleID, knownPath: known),
-              isLiveAppStoreInstall(live),
-              Self.liveMainExecutableStampable(at: live) else {
+              isLiveAppStoreInstall(live) else {
             return nil
         }
         return live.resolvingSymlinksInPath().standardizedFileURL
-    }
-
-    /// True when a live Store `.app` has a main executable on disk worth stamping for
-    /// companion FairPlay. Do **not** require `isReadableFile` / `FileHandle` open —
-    /// FairPlay binaries often EPERM on open(2) under a sideloaded host even when
-    /// fairplayd can still mremap them (Roblox). The companion already treats existence
-    /// as enough and falls back to EmbeddedPayload if mremap fails.
-    private static func liveMainExecutableStampable(at app: URL) -> Bool {
-        guard let main = FairPlayDecrypt.mainExecutableForEmbed(in: app) else { return false }
-        var isDir: ObjCBool = false
-        return FileManager.default.fileExists(atPath: main.path, isDirectory: &isDir)
-            && !isDir.boolValue
     }
 
     /// True when `app` is still under the system App Store container (not a temp Payload
