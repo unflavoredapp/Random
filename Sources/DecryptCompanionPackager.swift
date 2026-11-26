@@ -42,14 +42,22 @@ enum DecryptCompanionPackager {
     /// - Parameters:
     ///   - encryptedIPA: App Store IPA (or any FairPlay-encrypted IPA) to embed.
     ///   - bundleID: Must match the signing profile (wildcard-friendly).
+    ///   - targetBundleID: Known Store target bid (Search / ticket / IPA peek) when
+    ///     EmbeddedPayload Info.plist is missing or unreadable under sandbox.
     static func buildCompanionIPA(
         embedding encryptedIPA: URL,
         bundleID: String,
+        targetBundleID: String? = nil,
         progress: ((String) -> Void)? = nil
     ) throws -> Package {
         try buildCompanionIPA(bundleID: bundleID, progress: progress) { app, progress in
             progress?("Extracting bundle…")
-            return try embedEncryptedApp(from: encryptedIPA, into: app, progress: progress)
+            return try embedEncryptedApp(
+                from: encryptedIPA,
+                into: app,
+                knownBundleID: targetBundleID,
+                progress: progress
+            )
         }
     }
 
@@ -58,11 +66,17 @@ enum DecryptCompanionPackager {
     static func buildCompanionIPA(
         embeddingInstalledApp installedApp: URL,
         bundleID: String,
+        targetBundleID: String? = nil,
         progress: ((String) -> Void)? = nil
     ) throws -> Package {
         try buildCompanionIPA(bundleID: bundleID, progress: progress) { app, progress in
             progress?("Embedding installed app…")
-            return try embedInstalledApp(from: installedApp, into: app, progress: progress)
+            return try embedInstalledApp(
+                from: installedApp,
+                into: app,
+                knownBundleID: targetBundleID,
+                progress: progress
+            )
         }
     }
 
@@ -349,6 +363,7 @@ enum DecryptCompanionPackager {
     private static func embedEncryptedApp(
         from ipa: URL,
         into companionApp: URL,
+        knownBundleID: String? = nil,
         progress: ((String) -> Void)?
     ) throws -> String {
         let fm = FileManager.default
@@ -366,7 +381,15 @@ enum DecryptCompanionPackager {
         // Free Apple ID certs strip App Groups — host Documents stamps are invisible to the
         // companion (Roblox/CARROT/TestFlight EPERM screenshots). Always embed the IPA.
         try Self.bundleEncryptedSourceIPA(ipa, into: companionApp, progress: progress)
-        return try stageEmbeddedPayload(from: srcApp, into: companionApp, sourceLabel: "full IPA", progress: progress)
+        let hinted = (knownBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let peeked = hinted.isEmpty ? IPadnIPAPackager.bundleID(fromIPA: ipa) : hinted
+        return try stageEmbeddedPayload(
+            from: srcApp,
+            into: companionApp,
+            sourceLabel: "full IPA",
+            knownBundleID: peeked,
+            progress: progress
+        )
     }
 
     /// Copy the Store IPA into the companion `.app` as `EncryptedSource.ipa` for packaging /
@@ -400,6 +423,7 @@ enum DecryptCompanionPackager {
     private static func embedInstalledApp(
         from installedApp: URL,
         into companionApp: URL,
+        knownBundleID: String? = nil,
         progress: ((String) -> Void)?
     ) throws -> String {
         var isDir: ObjCBool = false
@@ -413,8 +437,11 @@ enum DecryptCompanionPackager {
             contentsOf: installedApp.appendingPathComponent("Info.plist")
         ) as? [String: Any]
         let installedBid = (installedInfo?["CFBundleIdentifier"] as? String)?
-            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath(matchingBundleID: installedBid) {
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            ?? (knownBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath(
+            matchingBundleID: installedBid.isEmpty ? nil : installedBid
+        ) {
             let src = URL(fileURLWithPath: stamped.path)
             if FileManager.default.fileExists(atPath: src.path) {
                 do {
@@ -430,6 +457,7 @@ enum DecryptCompanionPackager {
             from: installedApp,
             into: companionApp,
             sourceLabel: "install path",
+            knownBundleID: installedBid.isEmpty ? knownBundleID : installedBid,
             progress: progress
         )
     }
@@ -444,6 +472,7 @@ enum DecryptCompanionPackager {
         from srcApp: URL,
         into companionApp: URL,
         sourceLabel: String,
+        knownBundleID: String? = nil,
         progress: ((String) -> Void)?
     ) throws -> String {
         let fm = FileManager.default
@@ -535,7 +564,7 @@ enum DecryptCompanionPackager {
             )
         }
 
-        // Prefer dest Info.plist, then source tree, then handoff stamp — never omit bid.
+        // Prefer dest Info.plist, then source tree, then known/handoff stamps / IPA peek.
         let embeddedBundleID: String = {
             if let info = NSDictionary(contentsOf: dest.appendingPathComponent("Info.plist")) as? [String: Any],
                let b = (info["CFBundleIdentifier"] as? String)?
@@ -549,11 +578,20 @@ enum DecryptCompanionPackager {
                !b.isEmpty {
                 return b
             }
+            let known = (knownBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if !known.isEmpty { return known }
             if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID, !stamped.isEmpty {
                 return stamped
             }
             if let stamped = DecryptCompanionHandoff.readLiveInstallPath()?.bundleID, !stamped.isEmpty {
                 return stamped
+            }
+            if let stamp = DecryptCompanionHandoff.readTargetStamp(), !stamp.bundleID.isEmpty {
+                return stamp.bundleID
+            }
+            // Last resort: peek bundled EncryptedSource.ipa (Info.plist / iTunesMetadata).
+            if hasEncryptedSource, let fromIPA = IPadnIPAPackager.bundleID(fromIPA: bundledIPA) {
+                return fromIPA
             }
             return ""
         }()
@@ -576,6 +614,15 @@ enum DecryptCompanionPackager {
                 "Couldn't determine bundle ID for \(name). Re-run Get so EmbeddedPayload / Store IPA include Info.plist."
             )
         }
+        // Sandbox often hides live-install Info.plist — seed a minimal one so companion
+        // console / manifest always have CFBundleIdentifier.
+        ensureEmbeddedInfoPlist(
+            at: dest,
+            bundleID: embeddedBundleID,
+            displayName: name,
+            srcApp: srcApp,
+            progress: progress
+        )
         meta["bundleID"] = embeddedBundleID
         // Companion sandbox often cannot LS/MI-lookup other apps. Host resolves the
         // live Store path (Pair / LaunchServices) and stamps it into the manifest so
@@ -609,7 +656,7 @@ enum DecryptCompanionPackager {
             meta["bundledEncryptedIPA"] = DecryptCompanionHandoff.bundledEncryptedIPAName
             progress?("Companion carries \(DecryptCompanionHandoff.bundledEncryptedIPAName) for FairPlay unpack")
         }
-        if let enc = DecryptCompanionHandoff.readEncryptedIPAPath(matchingBundleID: embeddedBundleID ?? "") {
+        if let enc = DecryptCompanionHandoff.readEncryptedIPAPath(matchingBundleID: embeddedBundleID) {
             meta["hostEncryptedIPAPath"] = enc.path
             progress?("Stamped encrypted IPA for FairPlay: \(enc.path)")
             if !DecryptCompanionHandoff.encryptedIPADirectoryIsShared {
@@ -674,12 +721,65 @@ enum DecryptCompanionPackager {
         FairPlayDecrypt.isLiveAppStoreInstall(app)
     }
 
+    /// Write a minimal Info.plist into EmbeddedPayload when the live/Store source
+    /// hid CFBundleIdentifier (sandbox) but host already resolved the bid.
+    private static func ensureEmbeddedInfoPlist(
+        at dest: URL,
+        bundleID: String,
+        displayName: String,
+        srcApp: URL,
+        progress: ((String) -> Void)?
+    ) {
+        let fm = FileManager.default
+        let destInfo = dest.appendingPathComponent("Info.plist")
+        if let existing = NSDictionary(contentsOf: destInfo) as? [String: Any],
+           let bid = (existing["CFBundleIdentifier"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !bid.isEmpty {
+            return
+        }
+        var dict: [String: Any] = [:]
+        if let src = NSDictionary(contentsOf: srcApp.appendingPathComponent("Info.plist")) as? [String: Any] {
+            dict = src
+        } else if let data = try? Data(contentsOf: destInfo),
+                  let parsed = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] {
+            dict = parsed
+        }
+        dict["CFBundleIdentifier"] = bundleID
+        let existingDisplay = (dict["CFBundleDisplayName"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if existingDisplay.isEmpty, !displayName.isEmpty {
+            dict["CFBundleDisplayName"] = displayName
+        }
+        let existingName = (dict["CFBundleName"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if existingName.isEmpty, !displayName.isEmpty {
+            dict["CFBundleName"] = displayName
+        }
+        if dict["CFBundleExecutable"] == nil,
+           let main = FairPlayDecrypt.mainExecutableForEmbed(in: dest)
+            ?? FairPlayDecrypt.mainExecutableForEmbed(in: srcApp) {
+            dict["CFBundleExecutable"] = main.lastPathComponent
+        }
+        guard let data = try? PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0) else {
+            return
+        }
+        try? data.write(to: destInfo, options: .atomic)
+        progress?("Seeded EmbeddedPayload Info.plist with \(bundleID)")
+    }
+
     private static func copySlimAppTree(from src: URL, to dest: URL, progress: ((String) -> Void)?) throws {
         let fm = FileManager.default
         // Always Info.plist
         let info = src.appendingPathComponent("Info.plist")
         if fm.fileExists(atPath: info.path) {
-            try fm.copyItem(at: info, to: dest.appendingPathComponent("Info.plist"))
+            do {
+                try fm.copyItem(at: info, to: dest.appendingPathComponent("Info.plist"))
+            } catch {
+                progress?("Info.plist copy failed: \(error.localizedDescription)")
+            }
+        } else {
+            progress?("Info.plist missing under \(src.lastPathComponent) — will seed from known bundle ID if available")
         }
 
         // Timeout-safe Mach-O discovery only — never verifyApp on live installs

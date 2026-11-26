@@ -22,9 +22,17 @@ enum DecryptCompanionInstaller {
         progress: ((String) -> Void)? = nil
     ) async throws -> String {
         // Resolve target bid *before* clearing foreign stamps / packaging.
-        let bid = DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID
+        // Prefer stamped bid → filename hint → Payload Info.plist / iTunesMetadata peek.
+        var bid = (DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID
             ?? Self.bundleIDHint(fromEncryptedIPAFileName: encryptedIPA)
-            ?? ""
+            ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if bid.isEmpty {
+            bid = IPadnIPAPackager.bundleID(fromIPA: encryptedIPA) ?? ""
+            if !bid.isEmpty {
+                progress?("Recovered bundle ID from Store IPA: \(bid)")
+            }
+        }
         DecryptCompanionHandoff.beginTargetWorkflow(bundleID: bid)
         // Re-stamp the encrypted IPA temp URL so FairPlay / companion can capture it.
         if FileManager.default.fileExists(atPath: encryptedIPA.path) {
@@ -49,6 +57,7 @@ enum DecryptCompanionInstaller {
             try DecryptCompanionPackager.buildCompanionIPA(
                 embedding: encryptedIPA,
                 bundleID: bundleID,
+                targetBundleID: bid.isEmpty ? nil : bid,
                 progress: progress
             )
         }
@@ -76,6 +85,7 @@ enum DecryptCompanionInstaller {
             try DecryptCompanionPackager.buildCompanionIPA(
                 embeddingInstalledApp: installedApp,
                 bundleID: bundleID,
+                targetBundleID: bid.isEmpty ? nil : bid,
                 progress: progress
             )
         }

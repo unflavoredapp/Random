@@ -118,6 +118,19 @@ enum FailurePlaybook {
             action: .openAppStore
         ),
         FailurePlay(
+            id: "fairplay-bundle-id",
+            title: "Missing bundle ID / Info.plist",
+            summary: "Companion packaging couldn’t read CFBundleIdentifier from the Store IPA or live install. Install the app from the App Store (same Apple ID), then retry Get so the ticket / IPA stamp the bundle ID.",
+            matches: [
+                "couldn't determine bundle id",
+                "couldn’t determine bundle id",
+                "include info.plist",
+                "missing bundle id on store ipa",
+            ],
+            actionTitle: "Open App Store",
+            action: .openAppStore
+        ),
+        FailurePlay(
             id: "fairplay-gate",
             title: "App Store Media & Purchases sign-in needed",
             summary: "Capture FairPlay keys once: open App Store / Media & Purchases with the same Apple ID, return here, confirm, then retry the download.",
