@@ -526,7 +526,7 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
                 // Fail before purchase when Apple ID / Store / Media & Purchases aren't ready —
                 // do not require live install yet (bid may not be on disk until after download).
                 // Companion packaging re-checks with bid + live path via DecryptCompanionInstaller.
-                _ = try FairPlayKeyGate.confirmReadyForCompanion(
+                _ = try await FairPlayKeyGate.confirmReadyForCompanion(
                     bundleID: nil,
                     displayName: job.name
                 )
