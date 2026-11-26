@@ -249,6 +249,14 @@ final class FairPlayKeysFetcher: ObservableObject {
             phase = .needsAccount
             return
         }
+        // Don't ack FairPlay while Store unlock / download session is still incomplete —
+        // Account would show Keys ready while Get fails needsStoreLogin.
+        let store = AppleIDStore.shared
+        if store.storeNeedsVerification || !store.storeReady || !store.hasStoreDownloadSession {
+            banner = "Finish Store login (second Allow + code) under Account before confirming FairPlay keys."
+            AppNav.shared.goStoreUnlock()
+            return
+        }
         finishGrab(email: email, readiness: readiness, source: "confirm")
     }
 
@@ -386,20 +394,10 @@ final class FairPlayKeysFetcher: ObservableObject {
             var version: String
             var path: String?
         }
-        var candidates: [Candidate] = storeApps.map {
+        // Only real DeviceLibrary decrypt targets — never Search history (that inflated
+        // "N App Store installs" when nothing was actually on disk).
+        let candidates: [Candidate] = storeApps.map {
             Candidate(bundleID: $0.bundleID, name: $0.name, version: $0.version, path: $0.installPath)
-        }
-        if candidates.isEmpty {
-            candidates = DecryptClient.shared.history.compactMap { app in
-                let b = app.bundle.trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !b.isEmpty else { return nil }
-                return Candidate(
-                    bundleID: b,
-                    name: app.name.isEmpty ? b : app.name,
-                    version: app.version,
-                    path: nil
-                )
-            }
         }
 
         var seen = Set<String>()
@@ -407,27 +405,27 @@ final class FairPlayKeysFetcher: ObservableObject {
         for item in candidates where seen.insert(item.bundleID).inserted {
             guard licenses.count < 40 else { break }
             let live: URL?
-            if let path = item.path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty {
+            if let path = item.path?.trimmingCharacters(in: .whitespacesAndNewlines), !path.isEmpty,
+               !path.contains("/Containers/Data/") {
                 live = FairPlayDecrypt.installedAppURL(bundleID: item.bundleID, knownPath: path)
-                    ?? URL(fileURLWithPath: path)
             } else {
                 live = FairPlayDecrypt.installedAppURL(bundleID: item.bundleID)
             }
-            let hasSC = live.map { scInfoExists(beside: $0) } ?? false
+            let liveOK = live.map { FairPlayDecrypt.isLiveAppStoreInstall($0) } ?? false
+            let hasSC = liveOK ? (live.map { scInfoExists(beside: $0) } ?? false) : false
             licenses.append(LicenseEntry(
                 name: item.name,
                 bundleID: item.bundleID,
                 version: item.version,
                 hasSCInfo: hasSC,
-                pathTail: pathTail(live),
-                installPath: live?.path ?? ""
+                pathTail: pathTail(liveOK ? live : nil),
+                installPath: liveOK ? (live?.path ?? "") : ""
             ))
         }
 
-        // Also include library apps we skipped if candidate list came from history only.
-        let storeCount = max(storeApps.count, licenses.count)
+        let withPath = licenses.filter { !$0.installPath.isEmpty }.count
         let hits = licenses.filter(\.hasSCInfo).count
-        let readiness = Readiness(storeApps: storeCount, scInfoHits: hits, licenses: licenses)
+        let readiness = Readiness(storeApps: withPath, scInfoHits: hits, licenses: licenses)
         lastReadiness = readiness
         sessionLicenses = licenses
         return readiness

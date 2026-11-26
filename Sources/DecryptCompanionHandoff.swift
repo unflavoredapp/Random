@@ -207,9 +207,14 @@ enum DecryptCompanionHandoff {
     /// Snapshot the host Apple ID / FairPlay gate state into a plist-safe dictionary.
     /// Calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
     static func hostSnapshot() -> [String: Any] {
-        let email = (UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache") ?? "")
+        // Prefer live AppleIDStore over sticky UserDefaults cache (avoids empty/stale email).
+        let storeEmail = AppleIDStore.shared.email
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
+        let cachedEmail = (UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache") ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+        let email = storeEmail.isEmpty ? cachedEmail : storeEmail
         let hint: String = {
             guard !email.isEmpty else { return "" }
             if let at = email.firstIndex(of: "@") {
@@ -220,9 +225,12 @@ enum DecryptCompanionHandoff {
             }
             return String(email.prefix(2)) + "•••"
         }()
-        let storeReady = UserDefaults.standard.bool(forKey: "tetherless.appleid.storeReady")
+        let storeReady = AppleIDStore.shared.isSignedIn
+            ? (AppleIDStore.shared.storeReady && AppleIDStore.shared.hasStoreDownloadSession
+                && !AppleIDStore.shared.storeNeedsVerification)
+            : UserDefaults.standard.bool(forKey: "tetherless.appleid.storeReady")
         var snap: [String: Any] = [
-            "hostSignedIn": !email.isEmpty,
+            "hostSignedIn": AppleIDStore.shared.isSignedIn || !email.isEmpty,
             "hostStoreReady": storeReady,
             "hostFairPlayAck": AppStoreDecryptGuide.isAcknowledged(email: email),
             "hostEmailHint": hint,
@@ -393,6 +401,10 @@ enum DecryptCompanionHandoff {
         if !bid.isEmpty {
             suite?.set(bid, forKey: liveInstallBundleKey)
             local.set(bid, forKey: liveInstallBundleKey)
+        } else {
+            // Never leave a previous target's bid paired with a new path.
+            suite?.removeObject(forKey: liveInstallBundleKey)
+            local.removeObject(forKey: liveInstallBundleKey)
         }
         persistTargetStamp(fromCurrentKeys(preferredBundleID: bid))
         publishHostSnapshot()

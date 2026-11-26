@@ -396,16 +396,22 @@ private struct AccountFairPlayKeysSection: View {
 
     private var statusLine: String {
         if !store.isSignedIn { return "Sign in under Sign-in first" }
+        if store.storeNeedsVerification || !store.hasStoreDownloadSession {
+            return "Finish Store login before FairPlay keys"
+        }
+        if !FairPlayKeyGate.isReady {
+            if case .confirmSignIn = keys.phase { return "Confirm keys after Media & Purchases…" }
+            if keys.isWaiting { return "Capturing FairPlay keys…" }
+            if AppStoreDecryptGuide.isAcknowledged(email: email), !email.isEmpty {
+                return "Keys acknowledged — finish Store login to match Get gate"
+            }
+            return "Capture FairPlay keys for companion decrypt"
+        }
         if case .grabbed(_, let at, let readiness) = keys.phase {
             let when = at.formatted(date: .abbreviated, time: .shortened)
             return "Keys ready · \(readiness.storeApps) app(s) · \(readiness.scInfoHits) SC_Info · \(when)"
         }
-        if AppStoreDecryptGuide.isAcknowledged(email: email), !email.isEmpty {
-            return "Keys acknowledged for \(email)"
-        }
-        if case .confirmSignIn = keys.phase { return "Confirm keys after Media & Purchases…" }
-        if keys.isWaiting { return "Capturing FairPlay keys…" }
-        return "Capture FairPlay keys for companion decrypt"
+        return "Keys ready for Get (Store + Media & Purchases)"
     }
 
     var body: some View {
@@ -475,7 +481,8 @@ private struct AccountFairPlayKeysSection: View {
     private func probeLiveInstallPath() async {
         probingLive = true
         defer { probingLive = false }
-        // Prefer selected Search/Downloads target, then last stamped bid, then first library DRM app.
+        // Only probe selected Search target or an existing stamp bid — never first-library
+        // fallback (that polluted handoff stamps with an unrelated app).
         let selectedBid = (DecryptClient.shared.selected?.bundle ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let stampedBid = (DecryptCompanionHandoff.readLiveInstallPath()?.bundleID
@@ -483,18 +490,20 @@ private struct AccountFairPlayKeysSection: View {
             ?? DecryptCompanionHandoff.readTargetStamp()?.bundleID
             ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let libraryBid = DeviceLibrary.shared.apps.first {
-            $0.isDecryptTarget(includeTestFlight: FairPlayAdvancedOptions.includeTestFlightApps)
-        }?.bundleID ?? ""
-        let bid = [selectedBid, stampedBid, libraryBid].first { !$0.isEmpty } ?? ""
+        let bid = [selectedBid, stampedBid].first { !$0.isEmpty } ?? ""
         guard !bid.isEmpty else {
             probedLivePath = nil
-            livePathHint = "Live install path: (none — pick an app on Search/Get, or Pair + refresh Installed)"
+            livePathHint = "Live install path: (none — pick an app on Search/Get, then Probe)"
             return
         }
         if let live = await FairPlayKeyGate.resolveLiveInstallURL(bundleID: bid) {
             probedLivePath = (live.path, bid)
-            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
+            // Only stamp when probing the selected Get target (or matching existing stamp).
+            if !selectedBid.isEmpty, selectedBid.caseInsensitiveCompare(bid) == .orderedSame {
+                DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
+            } else if DecryptCompanionHandoff.bundleIDsMatch(stampedBid, bid) {
+                DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
+            }
             livePathHint = "Live install path found for \(bid)"
         } else {
             probedLivePath = nil

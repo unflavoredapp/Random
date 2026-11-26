@@ -87,7 +87,9 @@ enum FairPlayKeyGate {
 
         let email = (email ?? store.email).trimmingCharacters(in: .whitespacesAndNewlines)
         // Store step 2 must finish before keys / companion (separate sheet from Apple ID).
-        if store.storeNeedsVerification || (!store.storeReady && store.isSignedIn) {
+        if store.storeNeedsVerification
+            || (!store.storeReady && store.isSignedIn)
+            || (store.isSignedIn && !store.hasStoreDownloadSession) {
             AppNav.shared.goStoreUnlock()
             throw FairPlayKeyGateError.needsStoreLogin(email)
         }
@@ -103,6 +105,7 @@ enum FairPlayKeyGate {
         guard store.isSignedIn else { return false }
         if store.storeNeedsVerification { return false }
         if !store.storeReady { return false }
+        if !store.hasStoreDownloadSession { return false }
         return AppStoreDecryptGuide.isAcknowledged(email: store.email)
     }
 
@@ -153,7 +156,8 @@ enum FairPlayKeyGate {
         }
 
         progress?("Checking Store login…")
-        if store.storeNeedsVerification || !store.storeReady {
+        // Match the green Store seal — sticky storeReady alone can be true with a dead session.
+        if store.storeNeedsVerification || !store.storeReady || !store.hasStoreDownloadSession {
             progress?("Open Settings → Show Store login…")
             AppNav.shared.goStoreUnlock()
             throw FairPlayKeyGateError.needsStoreLogin(email)
@@ -170,11 +174,13 @@ enum FairPlayKeyGate {
                 progress?("Live install path: \(live.path)")
             } else {
                 let name = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                let libraryCount = DeviceLibrary.shared.apps.count
+                let inLibrary = DeviceLibrary.shared.apps.contains {
+                    $0.bundleID.caseInsensitiveCompare(bid) == .orderedSame
+                }
                 let paired = DevicePairingStore.hasSavedPairing
                 let native = NativeInstaller.isSelected
-                // Installed-but-invisible is the common free-cert failure mode (Grok/Tubi).
-                if !paired || !native || libraryCount == 0 {
+                // Installed-but-invisible (free cert / no Path) — don't claim "not installed".
+                if inLibrary || !paired || !native || DeviceLibrary.shared.apps.isEmpty {
                     progress?(
                         "Live install path: (none visible) — Pair Native + refresh Installed, then retry Get…"
                     )
