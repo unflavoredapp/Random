@@ -1220,14 +1220,7 @@ final class DeviceDecryptService: ObservableObject {
 
     /// LaunchServices is often sandboxed for other apps — also ask installd (Pair) + MobileInstallation.
     private func resolveInstalledAppURL(bundleID: String) async -> URL? {
-        let fromLibrary = DeviceLibrary.shared.apps.first(where: { $0.bundleID == bundleID })?.installPath
-        if let url = FairPlayDecrypt.installedAppURL(bundleID: bundleID, knownPath: fromLibrary) {
-            return url
-        }
-        // Ask installd via Pair tunnel for Path — LaunchServices is often sandboxed for other apps.
-        _ = await DeviceLibrary.shared.refreshAwaiting()
-        let refreshed = DeviceLibrary.shared.apps.first(where: { $0.bundleID == bundleID })?.installPath
-        if let url = FairPlayDecrypt.installedAppURL(bundleID: bundleID, knownPath: refreshed) {
+        if let url = await FairPlayKeyGate.resolveLiveInstallURL(bundleID: bundleID) {
             return url
         }
         return FairPlayDecrypt.installedAppURL(bundleID: bundleID)
