@@ -61,11 +61,12 @@ enum DecryptCompanionRuntime {
             ?? ((Bundle.main.object(forInfoDictionaryKey: "TLDecryptHelper") as? Bool) == true
                 ? DecryptCompanionIdentity.helperModeLean
                 : DecryptCompanionIdentity.helperModeHostFallback)
-        ctrl.appendLog("shell=\(mode) · process=installed-companion (not XPC)")
         guard let name = embeddedAppName() else {
             ctrl.present(name: DecryptCompanionIdentity.companionDisplayName, clearLog: false)
             ctrl.statusTitle = "Starting…"
-            ctrl.appendLog("Looking for EmbeddedPayload…")
+            ctrl.appendLog("## Boot")
+            ctrl.appendLog("- shell: \(mode)")
+            ctrl.appendLog("- looking for EmbeddedPayload…")
             return
         }
         let src = embeddedPayloadRoot.appendingPathComponent(name, isDirectory: true)
@@ -74,9 +75,6 @@ enum DecryptCompanionRuntime {
             ?? loadEmbeddedAppIcon(at: src)
         ctrl.present(name: name, version: version, iconImage: icon, clearLog: false)
         ctrl.statusTitle = "Starting…"
-        ctrl.appendLog("FastDecryptBot · \(name)\(version.isEmpty ? "" : " · \(version)")")
-        ctrl.appendLog("Preparing FairPlay…")
-        ctrl.appendLog(FairPlayJetsam.memorySummary(prefix: "boot"))
         let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
         let snap = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
         let embedInfo = NSDictionary(
@@ -90,22 +88,34 @@ enum DecryptCompanionRuntime {
         let live = ((man?["hostLiveInstallPath"] as? String)
             ?? (snap["hostLiveInstallPath"] as? String))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let encN = man?["encryptedMachOs"] as? Int ?? (man?["encryptedMachOs"] as? NSNumber)?.intValue
+        let crypt = man?["largestCryptsize"] as? Int64
+            ?? (man?["largestCryptsize"] as? NSNumber)?.int64Value
+            ?? 0
+
+        ctrl.appendLog("## Boot")
+        ctrl.appendLog("- shell: \(mode) · companion")
+        ctrl.appendLog("- target: \(name)\(version.isEmpty ? "" : " · \(version)")")
         if !bid.isEmpty {
-            ctrl.appendLog("Target bid · \(bid)")
+            ctrl.appendLog("- bid: \(bid)")
         }
         if live.isEmpty {
-            ctrl.appendLog("Preflight live · (not stamped — re-Get after App Store install)")
+            ctrl.appendLog("- live: _(none — re-Get after App Store install)_")
         } else {
-            ctrl.appendLog("Preflight live · \(live)")
+            ctrl.appendLog("- live: \(live)")
         }
-        if let n = man?["encryptedMachOs"] as? Int ?? (man?["encryptedMachOs"] as? NSNumber)?.intValue {
-            ctrl.appendLog("Preflight · \(n) encrypted Mach-O(s)")
+        if let encN, encN > 0 {
+            if crypt > 0 {
+                ctrl.appendLog(String(
+                    format: "- crypt: %d encrypted · largest %.1f MB",
+                    encN,
+                    Double(crypt) / (1024 * 1024)
+                ))
+            } else {
+                ctrl.appendLog("- crypt: \(encN) encrypted")
+            }
         }
-        if let crypt = man?["largestCryptsize"] as? Int64
-            ?? (man?["largestCryptsize"] as? NSNumber)?.int64Value,
-           crypt > 0 {
-            ctrl.appendLog(String(format: "Preflight · largest crypt %.1f MB", Double(crypt) / (1024 * 1024)))
-        }
+        ctrl.appendLog("- \(FairPlayJetsam.memorySummary(prefix: "mem"))")
     }
 
     /// Identity pack: `TargetIcon.png` at companion `.app` root.
@@ -187,15 +197,15 @@ enum DecryptCompanionRuntime {
             )
             DecryptCompanionController.shared.statusTitle = "Decrypting…"
         }
-        log("Found embedded app: \(name)")
         let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
         let snap = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
+        log("## Decrypt")
         if let hint = snap["hostEmailHint"] as? String, !hint.isEmpty {
-            log("Host session \(hint)")
+            log("- host: \(hint)")
         }
         if let email = (snap["hostEmail"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
            !email.isEmpty {
-            log("FairPlay Apple ID · \(email)")
+            log("- apple id: \(email)")
         }
 
         // EmbeddedPayload remmap (iOS 16+ native-first / FairPlayed cid2-first on 27+):
@@ -218,33 +228,29 @@ enum DecryptCompanionRuntime {
 #if DECRYPT_HELPER
         fpOpts.bounceLargeCryptToServer = false
         // Helper contract: stream-only, no key blobs, subordinate installed process.
-        log("policy=\(fpOpts.forceSerialDecrypt ? "serial" : "parallel2")+partialOK+stream · FairPlay=EmbeddedPayload · remmap=\(remmapPolicy)")
+        log("- policy: \(fpOpts.forceSerialDecrypt ? "serial" : "parallel2") · partialOK · stream · remmap=\(remmapPolicy)")
 #else
         // Fat host-shell companion may honor Advanced “bounce large crypt to server”.
-        log("policy=\(fpOpts.forceSerialDecrypt ? "serial" : "parallel2")+partialOK · bounceLargeCrypt=\(fpOpts.bounceLargeCryptToServer) · remmap=\(remmapPolicy)")
+        log("- policy: \(fpOpts.forceSerialDecrypt ? "serial" : "parallel2") · partialOK · bounce=\(fpOpts.bounceLargeCryptToServer) · remmap=\(remmapPolicy)")
 #endif
-        log(FairPlayJetsam.memorySummary(prefix: "preflight"))
+        log("- \(FairPlayJetsam.memorySummary(prefix: "mem"))")
         let snapBid = (snap["bundleID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let expectedBid = (embedBid
             ?? (man?["bundleID"] as? String)
             ?? (snapBid.isEmpty ? nil : snapBid)
             ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if !expectedBid.isEmpty {
-            log("Target bid · \(expectedBid)")
+        if expectedBid.isEmpty {
+            log("- bid: _(missing)_")
         } else {
-            log("Target bid · (missing from EmbeddedPayload / manifest)")
+            // Bootstrap already printed bid — only note when still unknown there.
+            log("- bid: \(expectedBid)")
         }
         // Live path is diagnostic / ownership hint only — not the FairPlay read root.
         var liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(
             manifest: man,
             expectedBundleID: expectedBid
         )
-        if let liveURL {
-            log("Stamped live install path (hint): \(liveURL.path)")
-        } else {
-            log("Stamped live install path: (none — OK; FairPlay reads EmbeddedPayload)")
-        }
         if liveURL == nil, !expectedBid.isEmpty {
             let known = ((man?["hostLiveInstallPath"] as? String)
                 ?? (snap["hostLiveInstallPath"] as? String))?
@@ -253,7 +259,7 @@ enum DecryptCompanionRuntime {
                 let knownURL = URL(fileURLWithPath: known)
                 if let accepted = Self.acceptRediscoveredLiveURL(knownURL, expectedBid: expectedBid) {
                     liveURL = accepted
-                    log("Host-stamped live path (hint): \(accepted.path)")
+                    log("- live: \(accepted.path) _(host stamp)_")
                 }
             }
             if liveURL == nil,
@@ -263,7 +269,7 @@ enum DecryptCompanionRuntime {
                ),
                let accepted = Self.acceptRediscoveredLiveURL(found, expectedBid: expectedBid) {
                 liveURL = accepted
-                log("Rediscovered live App Store install (hint): \(accepted.path)")
+                log("- live: \(accepted.path) _(rediscovered)_")
                 DecryptCompanionHandoff.publishLiveInstallPath(accepted.path, bundleID: expectedBid)
             }
         }
@@ -272,21 +278,20 @@ enum DecryptCompanionRuntime {
         let readRoot: URL
         if preferLive, let liveURL {
             readRoot = liveURL
-            log("Advanced FairPlay · source=Live install (experimental) · retries=\(fpOpts.retryRounds)")
-            log("FairPlay read root · live install: \(liveURL.path)")
+            log("- source: live install · retries=\(fpOpts.retryRounds)")
         } else {
             if preferLive {
-                log("Advanced live-install selected but no live path — falling back to EmbeddedPayload.")
+                log("- source: EmbeddedPayload _(live missing)_ · retries=\(fpOpts.retryRounds)")
+            } else {
+                log("- source: EmbeddedPayload · retries=\(fpOpts.retryRounds)")
             }
             readRoot = src
-            log("Advanced FairPlay · source=EmbeddedPayload (FairPlayed) · retries=\(fpOpts.retryRounds)")
-            log("FairPlay read root · EmbeddedPayload: \(src.path)")
         }
 
         // FairPlayed: fairplayd opens <dir>/SC_Info/<exe>.sinf next to the remmap input.
         // Missing licenses here surface as mremap EPERM and used to look like “keys”.
         let sinfN = Self.countEmbeddedSinfs(under: src)
-        log("EmbeddedPayload SC_Info · \(sinfN) .sinf")
+        log("- SC_Info: \(sinfN) .sinf")
         if sinfN == 0, readRoot == src {
             throw DecryptError(
                 "EmbeddedPayload has no SC_Info/.sinf for \(name). Delete FastDecryptBot, re-run Get from a Store IPA download so licenses are packaged beside the Mach-Os, then open the companion again."
@@ -312,7 +317,7 @@ enum DecryptCompanionRuntime {
         let destApp = payload.appendingPathComponent("\(name).app", isDirectory: true)
         try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
 
-        log("Copying app bundle…")
+        log("## Copy")
         // Seed export resources from EmbeddedPayload; FairPlay overwrites clear Mach-Os into dest.
         try copyTree(from: src, to: destApp, progress: log)
 
@@ -359,8 +364,9 @@ enum DecryptCompanionRuntime {
         }
         func runDecrypt(from root: URL) throws -> FairPlayDecryptReport {
             FairPlayJetsam.purgeTransientMemory()
-            log(FairPlayJetsam.memorySummary(prefix: "pre-mremap"))
-            log("Streaming FairPlay page capture from \(root == src ? "EmbeddedPayload" : "live install")…")
+            log("## FairPlay")
+            log("- \(FairPlayJetsam.memorySummary(prefix: "mem"))")
+            log("- capture: \(root == src ? "EmbeddedPayload" : "live install")")
             // Keep discovery / per-file heartbeats visible even when verbose is off.
             return try FairPlayDecrypt.decryptMachOs(
                 readingFrom: root,
@@ -429,7 +435,8 @@ enum DecryptCompanionRuntime {
         }
         let decN = report.decrypted.count
         let plainN = report.plain.count
-        log("Done: \(decN) decrypted, \(plainN) already plain.")
+        log("## Result")
+        log("- decrypted: \(decN) · plain: \(plainN)")
 
         if !report.failed.isEmpty, !report.isPartial {
             let names = report.failed.prefix(6).joined(separator: ", ")
@@ -460,10 +467,10 @@ enum DecryptCompanionRuntime {
             )
         }
         if report.isPartial {
-            log("PARTIAL OK — main clear, \(report.softFailed.count) soft-fail / \(report.failed.count) leftover (Tetherless-style).")
+            log("- partial: main clear · soft-fail \(report.softFailed.count) · leftover \(report.failed.count)")
         }
 
-        ui { DecryptCompanionController.shared.statusTitle = "Done — saving automatically…" }
+        ui { DecryptCompanionController.shared.statusTitle = "Packaging…" }
         let afterCopy = try FairPlayDecrypt.verifyApp(at: destApp)
         // Tetherless-style: main clear + leftover frameworks → PARTIAL, never Media & Purchases red herring.
         var partialOK = report.isPartial
@@ -490,13 +497,14 @@ enum DecryptCompanionRuntime {
             if exeClear || mainClear {
                 partialOK = true
                 report.isPartial = true
-                log("Main clear — packaging PARTIAL (\(afterCopy.encrypted) leftover Mach-O(s) still encrypted).")
+                log("- packaging PARTIAL (\(afterCopy.encrypted) leftover Mach-O(s) still encrypted)")
             }
         }
         try assertDecryptAcceptable(afterCopy, stage: "copied Payload", partial: partialOK, app: destApp)
 
         let tag = partialOK ? "-PARTIAL" : "-decrypted"
-        log("Packaging \(name)\(tag).ipa…")
+        log("## Package")
+        log("- building \(name)\(tag).ipa")
         try stripLicenseArtifacts(in: destApp)
         // PARTIAL that ships any .appex (encrypted or incomplete) fails installd with
         // IXErrorDomain Code=2 “Failed to create app extension placeholder…”. Wipe
@@ -504,14 +512,14 @@ enum DecryptCompanionRuntime {
         if partialOK {
             let stripped = stripStillEncryptedBundles(in: destApp, log: log)
             if stripped > 0 {
-                log("PARTIAL install hygiene · removed \(stripped) PlugIns/Extensions/encrypted framework item(s).")
+                log("- stripped \(stripped) PlugIns/Extensions/encrypted framework item(s)")
             }
         }
 
         // Brand decrypted app icons with the Mach-O cord (lower-left watermark).
         let branded = AppIconCordBranding.brandAppBundle(at: destApp)
         if branded > 0 {
-            log("Branded app icon with Mach-O cord (\(branded) file(s)).")
+            log("- branded icon (\(branded) file(s))")
             // Refresh console tile so the finished state shows the stamped icon.
             if let stamped = UIImage(contentsOfFile: destApp.appendingPathComponent("AppIcon60x60@3x.png").path)
                 ?? UIImage(contentsOfFile: destApp.appendingPathComponent("AppIcon.png").path) {
@@ -529,10 +537,10 @@ enum DecryptCompanionRuntime {
 
         let tmpZip = outIPA.appendingPathExtension("tmp")
         try? fm.removeItem(at: tmpZip)
-        log(FairPlayJetsam.memorySummary(prefix: "pre-zip"))
+        log("- \(FairPlayJetsam.memorySummary(prefix: "pre-zip"))")
         try zipClearIPA(payload: payload, to: tmpZip, progress: log)
         try fm.moveItem(at: tmpZip, to: outIPA)
-        log(FairPlayJetsam.memorySummary(prefix: "post-zip"))
+        log("- \(FairPlayJetsam.memorySummary(prefix: "post-zip"))")
 
         let ipaVerify = try FairPlayDecrypt.verifyIPA(at: outIPA)
         try assertDecryptAcceptable(ipaVerify, stage: "packaged IPA", partial: partialOK, app: destApp)
@@ -544,7 +552,9 @@ enum DecryptCompanionRuntime {
             DecryptCompanionController.shared.markFinished(url: outIPA, name: name)
             DecryptCompanionController.shared.statusTitle = finishedPartial ? "Done (PARTIAL)" : "Done"
         }
-        log("Wrote \(safeName)\(tag).ipa.")
+        log("## Done")
+        log("- wrote \(safeName)\(tag).ipa")
+        log("- verify: \(ipaVerify.summary)")
 
         let info = NSDictionary(contentsOf: src.appendingPathComponent("Info.plist")) as? [String: Any]
         let bundleID = (info?["CFBundleIdentifier"] as? String)?
@@ -558,15 +568,15 @@ enum DecryptCompanionRuntime {
         )
         ui { DecryptCompanionController.shared.exportSentToHost = published }
         if published {
-            log("Export · App Group → host (appassassin://decrypt-export)")
+            log("- export: App Group → host")
             DecryptCompanionHandoff.openHostForClearIPAImport()
         } else {
-            log("Export · App Group unavailable — use Share sheet (Open in AppAssassin)")
+            log("- export: Share sheet _(App Group unavailable)_")
         }
         // Advanced: optionally drop the durable encrypted IPA after a clear export.
         if !fpOpts.keepEncryptedIPA {
             DecryptCompanionHandoff.purgeRetainedEncryptedIPA()
-            log("Dropped stamped encrypted IPA (Keep encrypted IPA is off).")
+            log("- dropped stamped encrypted IPA")
         }
         return outIPA
     }
@@ -857,7 +867,7 @@ enum DecryptCompanionRuntime {
                     try fm.copyItem(at: item, to: out)
                     copied += 1
                     if copied == 1 || copied % 250 == 0 {
-                        progress?("Copying app bundle… \(copied) file(s)")
+                        progress?("- copied \(copied) file(s)…")
                     }
                 } catch {
                     // Fallback when copyItem EPERMs on readable files.
@@ -866,7 +876,7 @@ enum DecryptCompanionRuntime {
                         try data.write(to: out, options: .atomic)
                         copied += 1
                         if copied == 1 || copied % 250 == 0 {
-                            progress?("Copying app bundle… \(copied) file(s)")
+                            progress?("- copied \(copied) file(s)…")
                         }
                     } catch {
                         failures.append(rel)
@@ -875,9 +885,9 @@ enum DecryptCompanionRuntime {
             }
         }
         if skippedLicenses > 0 {
-            progress?("Skipped \(skippedLicenses) FairPlay license path(s) during export copy (cleared IPA).")
+            progress?("- skipped \(skippedLicenses) FairPlay license path(s)")
         }
-        progress?("Copied \(copied) file(s) into export Payload.")
+        progress?("- copied \(copied) file(s) into Payload")
         if copied == 0 {
             throw DecryptError("Companion copy produced no files from EmbeddedPayload.")
         }
@@ -924,9 +934,9 @@ enum DecryptCompanionRuntime {
                 do {
                     try fm.removeItem(at: url)
                     removed += 1
-                    log("PARTIAL strip · \(folder)/ (entire folder)")
+                    log("- strip \(folder)/")
                 } catch {
-                    log("PARTIAL strip failed · \(folder)/: \(error.localizedDescription)")
+                    log("- strip failed \(folder)/: \(error.localizedDescription)")
                 }
             }
         }
@@ -960,9 +970,9 @@ enum DecryptCompanionRuntime {
             do {
                 try fm.removeItem(at: url)
                 removed += 1
-                log("PARTIAL strip · \(rel)")
+                log("- strip \(rel)")
             } catch {
-                log("PARTIAL strip failed · \(rel): \(error.localizedDescription)")
+                log("- strip failed \(rel): \(error.localizedDescription)")
             }
         }
         return removed

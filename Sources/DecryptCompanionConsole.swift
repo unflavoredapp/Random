@@ -12,6 +12,80 @@ import UIKit
 import SwiftUI
 #endif
 
+/// Compact markdown-ish companion log helpers (headers, bullets, dedupe).
+enum DecryptCompanionLog {
+    static func normalize(_ line: String) -> String {
+        line
+            .replacingOccurrences(of: "\t", with: " ")
+            .split(whereSeparator: { $0.isNewline })
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Key used to detect semantic duplicates across bootstrap ↔ decrypt.
+    static func dedupeKey(_ line: String) -> String {
+        var s = normalize(line).lowercased()
+        if s.hasPrefix("## ") { s = String(s.dropFirst(3)) }
+        if s.hasPrefix("- ") { s = String(s.dropFirst(2)) }
+        // Collapse common label aliases that used to double-print.
+        let aliases: [(String, String)] = [
+            ("target bid ·", "bid:"),
+            ("bid ·", "bid:"),
+            ("preflight live ·", "live:"),
+            ("stamped live install path (hint):", "live:"),
+            ("stamped live install path:", "live:"),
+            ("host-stamped live path (hint):", "live:"),
+            ("fairplay read root · embeddedpayload:", "source: embeddedpayload"),
+            ("fairplay read root · live install:", "source: live"),
+            ("found embedded app:", "target:"),
+            ("fastdecryptbot ·", "target:"),
+        ]
+        for (from, to) in aliases {
+            if s.hasPrefix(from) {
+                s = to + s.dropFirst(from.count)
+                break
+            }
+        }
+        while s.contains("  ") { s = s.replacingOccurrences(of: "  ", with: " ") }
+        if s.hasSuffix(".") { s = String(s.dropLast()) }
+        return s
+    }
+
+    static func isDuplicate(_ a: String, _ b: String) -> Bool {
+        dedupeKey(a) == dedupeKey(b)
+    }
+
+    static func isRecentDuplicate(_ line: String, in lines: [String], window: Int = 24) -> Bool {
+        let key = dedupeKey(line)
+        guard !key.isEmpty else { return false }
+        // Always allow progress / per-file / mem heartbeats through.
+        if line.hasPrefix("[") || line.hasPrefix("Decrypting ") || line.contains(" · free ") {
+            return false
+        }
+        if line.hasPrefix("## ") { return false }
+        for prev in lines.suffix(window) where dedupeKey(prev) == key {
+            return true
+        }
+        return false
+    }
+
+    /// Plain display text (strip light markdown markers for status / UIKit fallback).
+    static func plain(_ line: String) -> String {
+        var s = line
+        if s.hasPrefix("## ") { s = String(s.dropFirst(3)) }
+        s = s.replacingOccurrences(of: "**", with: "")
+        // Italic markers used for soft notes: _(none)_
+        while let open = s.range(of: "_("),
+              let close = s.range(of: ")_", range: open.upperBound..<s.endIndex) {
+            let inner = s[open.upperBound..<close.lowerBound]
+            s.replaceSubrange(open.lowerBound..<close.upperBound, with: "(\(inner))")
+        }
+        return s
+    }
+}
+
 @MainActor
 final class DecryptCompanionController: ObservableObject {
     static let shared = DecryptCompanionController()
@@ -55,8 +129,16 @@ final class DecryptCompanionController: ObservableObject {
     }
 
     func appendLog(_ line: String) {
-        let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = DecryptCompanionLog.normalize(line)
         guard !trimmed.isEmpty else { return }
+        // Drop exact / near-duplicate consecutive lines (bootstrap ↔ decrypt overlap).
+        if let last = logLines.last, DecryptCompanionLog.isDuplicate(last, trimmed) {
+            return
+        }
+        // Also skip if the same bullet already appears in the recent window.
+        if DecryptCompanionLog.isRecentDuplicate(trimmed, in: logLines) {
+            return
+        }
         logLines.append(trimmed)
         // Keep memory bounded on huge framework trees.
         if logLines.count > 400 {
@@ -71,13 +153,17 @@ final class DecryptCompanionController: ObservableObject {
                     || trimmed.hasPrefix("[AFTER")
                     || trimmed.hasPrefix("[IPA") {
             statusTitle = "Verifying DRM…"
-        } else if trimmed.localizedCaseInsensitiveContains("packaging") {
+        } else if trimmed.localizedCaseInsensitiveContains("packaging")
+                    || trimmed.hasPrefix("## Package") {
             statusTitle = "Packaging…"
         } else if trimmed.hasPrefix("VERIFY OK") {
             statusTitle = "Verified clear"
         } else if trimmed.localizedCaseInsensitiveContains("wrote") || trimmed.hasPrefix("Done:") {
             statusTitle = "Done"
-        } else if trimmed.count < 80 {
+        } else if trimmed.hasPrefix("## ") {
+            let title = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+            if !title.isEmpty { statusTitle = title }
+        } else if trimmed.count < 80, !trimmed.hasPrefix("- ") {
             statusTitle = trimmed
         }
     }
@@ -92,16 +178,14 @@ final class DecryptCompanionController: ObservableObject {
         } else {
             statusTitle = url == nil ? "Failed" : "Done"
         }
-        if let url {
-            appendLog("Wrote \(url.lastPathComponent).")
-        }
+        // Runtime already logs the IPA name — don't append a second "Wrote …" line.
     }
 
     func markFailed(_ message: String) {
         busy = false
         done = false
         statusTitle = "Failed"
-        appendLog("ERROR: \(message)")
+        appendLog("**ERROR:** \(message)")
     }
 
     func dismiss() {
@@ -350,11 +434,9 @@ struct DecryptCompanionConsole: View {
     private var console: some View {
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 4) {
+                LazyVStack(alignment: .leading, spacing: 5) {
                     ForEach(Array(companion.logLines.enumerated()), id: \.offset) { i, line in
-                        Text(line)
-                            .font(.system(size: 12, weight: .regular, design: .monospaced))
-                            .foregroundStyle(color(for: line))
+                        logRow(line)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .id(i)
                     }
@@ -372,6 +454,28 @@ struct DecryptCompanionConsole: View {
         }
     }
 
+    @ViewBuilder
+    private func logRow(_ line: String) -> some View {
+        if line.hasPrefix("## ") {
+            Text(DecryptCompanionLog.plain(line))
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.cyan.opacity(0.95))
+                .padding(.top, 4)
+        } else if line.hasPrefix("- ") {
+            Text(DecryptCompanionLog.plain(line))
+                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                .foregroundStyle(Color.white.opacity(0.72))
+        } else if line.hasPrefix("**ERROR:**") || line.hasPrefix("ERROR:") {
+            Text(DecryptCompanionLog.plain(line))
+                .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Color.orange)
+        } else {
+            Text(DecryptCompanionLog.plain(line))
+                .font(.system(size: 12, weight: .regular, design: .monospaced))
+                .foregroundStyle(color(for: line))
+        }
+    }
+
     private func color(for line: String) -> Color {
         if line.hasPrefix("[DECRYPTED]") || line.hasPrefix("[AFTER CLEAR]") || line.hasPrefix("[IPA CLEAR]") {
             return Color.green.opacity(0.95)
@@ -381,7 +485,9 @@ struct DecryptCompanionConsole: View {
         }
         if line.hasPrefix("VERIFY OK") { return Color.green }
         if line.hasPrefix("[plain]") { return Color.white.opacity(0.55) }
-        if line.hasPrefix("[FAILED]") || line.hasPrefix("ERROR:") { return Color.orange }
+        if line.hasPrefix("[FAILED]") || line.hasPrefix("ERROR:") || line.hasPrefix("**ERROR:**") {
+            return Color.orange
+        }
         if line.hasPrefix("Done:") || line.hasPrefix("Wrote ") || line.hasPrefix("[BEFORE]")
             || line.hasPrefix("[AFTER]") || line.hasPrefix("[IPA]") {
             return Color.cyan.opacity(0.9)

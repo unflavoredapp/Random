@@ -208,9 +208,9 @@ final class DecryptCompanionConsoleViewController: UIViewController {
         appIcon.image = companion.iconImage
             ?? Self.loadTargetIcon()
             ?? Self.loadBrandIcon()
-        logView.text = companion.logLines.joined(separator: "\n")
+        logView.attributedText = Self.attributedLog(companion.logLines)
         if !companion.logLines.isEmpty {
-            let end = NSRange(location: max(0, logView.text.count - 1), length: 1)
+            let end = NSRange(location: max(0, logView.attributedText.length - 1), length: 1)
             logView.scrollRangeToVisible(end)
         }
         shareButton.isHidden = !(companion.done && companion.finishedURL != nil)
@@ -265,6 +265,47 @@ final class DecryptCompanionConsoleViewController: UIViewController {
             || t.contains("phone worker")
             || t.contains("unfairplay")
             || t.contains("bounce to")
+    }
+
+    private static func attributedLog(_ lines: [String]) -> NSAttributedString {
+        let out = NSMutableAttributedString()
+        let mono = UIFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        let monoBold = UIFont.monospacedSystemFont(ofSize: 12, weight: .semibold)
+        let base = UIColor.white.withAlphaComponent(0.78)
+        let dim = UIColor.white.withAlphaComponent(0.62)
+        let cyan = UIColor(red: 0.35, green: 0.85, blue: 0.95, alpha: 1)
+        let green = UIColor(red: 0.35, green: 0.85, blue: 0.45, alpha: 1)
+        let orange = UIColor(red: 1.0, green: 0.62, blue: 0.25, alpha: 1)
+        for (i, raw) in lines.enumerated() {
+            if i > 0 { out.append(NSAttributedString(string: "\n")) }
+            let plain = DecryptCompanionLog.plain(raw)
+            let font: UIFont
+            let color: UIColor
+            if raw.hasPrefix("## ") {
+                font = monoBold
+                color = cyan
+            } else if raw.hasPrefix("- ") {
+                font = mono
+                color = dim
+            } else if raw.hasPrefix("[DECRYPTED]") || raw.hasPrefix("VERIFY OK") {
+                font = mono
+                color = green
+            } else if raw.hasPrefix("[FAILED]") || raw.hasPrefix("ERROR:") || raw.hasPrefix("**ERROR:**") {
+                font = monoBold
+                color = orange
+            } else if raw.hasPrefix("[plain]") {
+                font = mono
+                color = UIColor.white.withAlphaComponent(0.45)
+            } else {
+                font = mono
+                color = base
+            }
+            out.append(NSAttributedString(string: plain, attributes: [
+                .font: font,
+                .foregroundColor: color,
+            ]))
+        }
+        return out
     }
 
     private static func loadTargetIcon() -> UIImage? {
