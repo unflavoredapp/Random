@@ -11,18 +11,18 @@ import Foundation
 /// Advanced FairPlay decrypt preferences (UserDefaults + companion hostSnapshot).
 enum FairPlayAdvancedOptions {
     enum SourceMode: String, CaseIterable, Identifiable, Sendable {
-        /// FairPlayed default: EmbeddedPayload in the companion bundle (iOS 27 / Developer Mode).
+        /// Default: EmbeddedPayload in the companion bundle (iOS 17.4+ · Developer Mode).
         case automatic
         /// Experiment — mremap from a live App Store install (often open EPERM from sideloaded helpers).
         case liveInstall
         /// Legacy — EncryptedSource / tmp unpack; fairplayd usually cannot read SC_Info in data containers.
         case stampedIPA
-        /// FairPlayed export path: decrypt Mach-Os under companion EmbeddedPayload (SC_Info beside them).
+        /// Export path: decrypt Mach-Os under companion EmbeddedPayload (SC_Info beside them).
         case embeddedPayload
 
         var id: String { rawValue }
 
-        /// Companion FairPlay always remaps from EmbeddedPayload (FairPlayed iOS 27 path).
+        /// Companion FairPlay always remaps from EmbeddedPayload (17.4+; cid2-first on 27+).
         /// Live / stamped IPA remain selectable in Settings for diagnostics only.
         var effective: SourceMode {
             switch self {
@@ -37,14 +37,14 @@ enum FairPlayAdvancedOptions {
             case .automatic: return "Automatic (EmbeddedPayload)"
             case .liveInstall: return "Live install (experimental)"
             case .stampedIPA: return "Stamped IPA (legacy)"
-            case .embeddedPayload: return "EmbeddedPayload (FairPlayed)"
+            case .embeddedPayload: return "EmbeddedPayload"
             }
         }
 
         var detail: String {
             switch self {
             case .automatic, .embeddedPayload:
-                return "FairPlayed on iOS 27 + Developer Mode: mremap from EmbeddedPayload inside FastDecryptBot (SC_Info next to each binary). Live Store opens often EPERM from a sideloaded helper."
+                return "iOS 17.4+ · Developer Mode: mremap from EmbeddedPayload inside FastDecryptBot (SC_Info next to each binary). iOS 27 prefers cid2; 17.4–26 try native/foulplay first. Live Store opens often EPERM from a sideloaded helper."
             case .liveInstall:
                 return "mremap from the on-device App Store install. Requires the helper can open that Mach-O — usually fails with open EPERM on free/dev certs."
             case .stampedIPA:

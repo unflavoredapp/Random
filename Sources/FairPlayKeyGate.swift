@@ -29,7 +29,7 @@ enum FairPlayKeyGateError: LocalizedError {
             return "Before companion decrypt, capture FairPlay keys for \(who): open App Store Account Settings (or Media & Purchases), sign in once as that Apple ID, then tap Confirm keys in AppAssassin."
         case .needsLiveInstall(let bid, let name):
             let label = name.isEmpty ? bid : name
-            return "Optional check: install \(label) from the App Store on this iPhone (same Apple ID) so you know the license works. FairPlay decrypt itself uses EmbeddedPayload inside FastDecryptBot (iOS 27 + Developer Mode)."
+            return "Optional check: install \(label) from the App Store on this iPhone (same Apple ID) so you know the license works. FairPlay decrypt itself uses EmbeddedPayload inside FastDecryptBot (iOS 17.4+ · Developer Mode)."
         case .cannotSeeLiveInstall(let bid, let name):
             let label = name.isEmpty ? bid : name
             return "\(label) may already be installed, but this sideloaded build can’t see its live App Store path yet. That path is optional for FairPlay — continue Get to embed Mach-Os + SC_Info, or Pair Native if you want the live-path hint stamped."
@@ -201,7 +201,7 @@ enum FairPlayKeyGate {
             throw FairPlayKeyGateError.needsLiveInstall(bundleID: bid, name: name)
         } else {
             progress?(
-                "No live path for \(bid) — OK. FairPlay uses EmbeddedPayload (Developer Mode / iOS 27)."
+                "No live path for \(bid) — OK. FairPlay uses EmbeddedPayload (Developer Mode · iOS 17.4+)."
             )
         }
 

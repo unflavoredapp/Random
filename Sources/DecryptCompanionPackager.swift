@@ -752,7 +752,7 @@ enum DecryptCompanionPackager {
                 DecryptCompanionHandoff.clearLiveInstallPath()
             }
             progress?(
-                "No live App Store path for \(embeddedBundleID) — OK. FairPlay uses EmbeddedPayload (enable Developer Mode on iOS 27)."
+                "No live App Store path for \(embeddedBundleID) — OK. FairPlay uses EmbeddedPayload (Developer Mode · iOS 17.4+)."
             )
         }
         // Preflight identity pack — helper paints instantly; never embeds FairPlay key blobs.

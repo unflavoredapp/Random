@@ -32,20 +32,30 @@ static void expect(int cond, const char *msg) {
     }
 }
 
-/* Mirrors fp_decrypt_file() order — keep in sync with Sources/FairPlay/fpcore.c */
-static const int kExpectedDecryptOrder[][2] = {
+/* Mirrors fp_decrypt_file() orders — keep in sync with Sources/FairPlay/fpcore.c */
+static const int kExpectedFairplayed27Order[][2] = {
     {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
     {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
     {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
     {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1},
 };
+static const int kExpectedLegacy174Order[][2] = {
+    {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
+    {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
+    {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1},
+    {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
+};
 
 static void test_decrypt_order_starts_with_cid2(void) {
-    expect(kExpectedDecryptOrder[0][0] == FP_MODE_R_CID2, "order[0] is FP_MODE_R_CID2 (FairPlayed iOS 27)");
-    expect(kExpectedDecryptOrder[1][0] == FP_MODE_R_CID2, "order[1] is FP_MODE_R_CID2 (+sigs)");
-    expect(kExpectedDecryptOrder[2][0] == FP_MODE_NATIVE, "order[2] is FP_MODE_NATIVE");
-    size_t n = sizeof kExpectedDecryptOrder / sizeof kExpectedDecryptOrder[0];
-    expect(n == 8, "decrypt order has 8 mode×sigs attempts");
+    expect(kExpectedFairplayed27Order[0][0] == FP_MODE_R_CID2, "27 order[0] is FP_MODE_R_CID2");
+    expect(kExpectedFairplayed27Order[2][0] == FP_MODE_NATIVE, "27 order[2] is FP_MODE_NATIVE");
+    expect(kExpectedLegacy174Order[0][0] == FP_MODE_NATIVE, "17.4 order[0] is FP_MODE_NATIVE");
+    expect(kExpectedLegacy174Order[6][0] == FP_MODE_R_CID2, "17.4 order ends with FP_MODE_R_CID2");
+    expect(FP_DECRYPT_POLICY_FAIRPLAYED_27 == 0, "fairplayed-27 policy id is 0");
+    expect(FP_DECRYPT_POLICY_LEGACY_174 == 1, "legacy-17.4 policy id is 1");
+    size_t n27 = sizeof kExpectedFairplayed27Order / sizeof kExpectedFairplayed27Order[0];
+    size_t n17 = sizeof kExpectedLegacy174Order / sizeof kExpectedLegacy174Order[0];
+    expect(n27 == 8 && n17 == 8, "both decrypt orders have 8 mode×sigs attempts");
 }
 
 static void test_4k_crypt_on_16k_page(void) {

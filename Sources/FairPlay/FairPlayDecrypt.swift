@@ -82,7 +82,7 @@ enum FairPlayFailureClass: String {
         case .io:
             return "Couldn't read or write the encrypted binary. Re-download the IPA and retry."
         case .sandboxOpen:
-            return "Couldn't open the Mach-O for FairPlay (sandbox open EPERM). Use EmbeddedPayload inside FastDecryptBot (FairPlayed / iOS 27 + Developer Mode) — live Store binaries usually aren't openable from a sideloaded helper. Delete FastDecryptBot, re-run Get, enable Developer Mode, then open the companion again."
+            return "Couldn't open the Mach-O for FairPlay (sandbox open EPERM). Use EmbeddedPayload inside FastDecryptBot (iOS 17.4+ · Developer Mode) — live Store binaries usually aren't openable from a sideloaded helper. Delete FastDecryptBot, re-run Get, enable Developer Mode, then open the companion again."
         case .other, .none:
             return AppStoreDecryptGuide.failureHint
         }
@@ -179,6 +179,25 @@ private enum FairPlayBinaryRole {
 }
 
 enum FairPlayDecrypt {
+
+    // MARK: - OS remmap policy (Tetherless-style 17.4+)
+
+    /// Apply remmap attempt order for this device.
+    /// iOS 27+: FairPlayed cid2-first. iOS 17.4–26: native/foulplay-first, cid2 last.
+    @discardableResult
+    static func applyDecryptPolicyForCurrentOS() -> String {
+        let policy: Int32
+        if #available(iOS 27.0, *) {
+            policy = Int32(FP_DECRYPT_POLICY_FAIRPLAYED_27)
+        } else {
+            policy = Int32(FP_DECRYPT_POLICY_LEGACY_174)
+        }
+        fp_set_decrypt_policy(policy)
+        if let cName = fp_decrypt_policy_name(policy) {
+            return String(cString: cName)
+        }
+        return policy == FP_DECRYPT_POLICY_LEGACY_174 ? "legacy-17.4" : "fairplayed-27"
+    }
 
     // MARK: - Path resolution
 
@@ -559,6 +578,8 @@ enum FairPlayDecrypt {
         var report = FairPlayDecryptReport()
         // Verbose advanced mode keeps detail lines even when quietConsole is set for lean UI.
         let detail: ((String) -> Void)? = (quietConsole && !options.verboseConsole) ? nil : progress
+        let policyName = applyDecryptPolicyForCurrentOS()
+        progress?("FairPlay remmap policy · \(policyName)")
         if options.pathDiagnostics {
             detail?("FairPlay source=\(options.sourceMode.rawValue) · retries=\(options.retryRounds)")
         }
@@ -1185,8 +1206,8 @@ enum FairPlayDecrypt {
     /// Configuration locked to GitHub references:
     /// - FairPlayed export: `fp_decrypt_file(EmbeddedPayload/rel, Documents/…/rel)` —
     ///   fairplayd resolves `<dir of binary>/SC_Info/<exe>.sinf` on the **input** path
-    ///   inside the helper’s own bundle (iOS 27 + Developer Mode / cryptid=2).
-    /// - foulplay `main.c`: remaps with the slice’s native `cryptid`; we try R/cid2 first.
+    ///   inside the helper’s own bundle (Developer Mode; cid2-first on iOS 27+).
+    /// - foulplay `main.c`: remaps with the slice’s native `cryptid` — used first on iOS 17.4–26.
     /// Companion default feeds **EmbeddedPayload** as `in_path` (live Store opens often EPERM).
     private static func decryptOne(
         file: URL,

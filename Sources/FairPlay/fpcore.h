@@ -59,6 +59,17 @@ int  fp_attempt_to_fd(const char *path, const fp_slice_t *s, int mode, bool adds
 void fp_attempt_describe(const fp_attempt_t *a, char *buf, size_t len);
 // Probe all modes on every encrypted slice of a file (no output written).
 int  fp_probe_file(const char *path, const int *modes, int nmodes, fp_log_t log, void *ctx);
+// Decrypt attempt-order policy (Tetherless-style 17.4+ vs FairPlayed iOS 27).
+enum {
+    // FairPlayed confirmed path: R/cryptid=2 first, then native / RX.
+    FP_DECRYPT_POLICY_FAIRPLAYED_27 = 0,
+    // iOS 17.4–26 Legacy: foulplay-style native LC cryptid first, cid2 last.
+    FP_DECRYPT_POLICY_LEGACY_174 = 1,
+};
+void fp_set_decrypt_policy(int policy);
+int  fp_decrypt_policy(void);
+const char *fp_decrypt_policy_name(int policy);
+
 // Decrypt in_path -> out_path. Returns 0 on success, 1 if file was not encrypted (copied as-is), -1 on failure.
 int  fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, void *ctx);
 bool fp_is_macho(const char *path);
