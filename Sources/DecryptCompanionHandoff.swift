@@ -210,15 +210,34 @@ enum DecryptCompanionHandoff {
 
     /// Snapshot the host Apple ID / FairPlay gate state into a plist-safe dictionary.
     /// Calls `AppStoreDecryptGuide.isAcknowledged` (never passwords / tokens).
+    ///
+    /// DecryptHelper does **not** link `AppleIDStore` — lean companion reads stamped
+    /// App Group / UserDefaults only (host writes this snapshot before packaging).
     static func hostSnapshot() -> [String: Any] {
+        let cachedEmail = (UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache")
+            ?? suite?.string(forKey: "tetherless.appleid.activeEmailCache")
+            ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .lowercased()
+#if !DECRYPT_HELPER
         // Prefer live AppleIDStore over sticky UserDefaults cache (avoids empty/stale email).
         let storeEmail = AppleIDStore.shared.email
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
-        let cachedEmail = (UserDefaults.standard.string(forKey: "tetherless.appleid.activeEmailCache") ?? "")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .lowercased()
         let email = storeEmail.isEmpty ? cachedEmail : storeEmail
+        let signedIn = AppleIDStore.shared.isSignedIn || !email.isEmpty
+        let storeReady = AppleIDStore.shared.isSignedIn
+            ? (AppleIDStore.shared.storeReady && AppleIDStore.shared.hasStoreDownloadSession
+                && !AppleIDStore.shared.storeNeedsVerification)
+            : UserDefaults.standard.bool(forKey: "tetherless.appleid.storeReady")
+#else
+        let email = cachedEmail
+        let signedIn = !email.isEmpty
+            || UserDefaults.standard.bool(forKey: "tetherless.appleid.signedIn")
+            || (suite?.bool(forKey: "hostSignedIn") ?? false)
+        let storeReady = UserDefaults.standard.bool(forKey: "tetherless.appleid.storeReady")
+            || (suite?.dictionary(forKey: "companion.hostSnapshot")?["hostStoreReady"] as? Bool ?? false)
+#endif
         let hint: String = {
             guard !email.isEmpty else { return "" }
             if let at = email.firstIndex(of: "@") {
@@ -229,12 +248,8 @@ enum DecryptCompanionHandoff {
             }
             return String(email.prefix(2)) + "•••"
         }()
-        let storeReady = AppleIDStore.shared.isSignedIn
-            ? (AppleIDStore.shared.storeReady && AppleIDStore.shared.hasStoreDownloadSession
-                && !AppleIDStore.shared.storeNeedsVerification)
-            : UserDefaults.standard.bool(forKey: "tetherless.appleid.storeReady")
         var snap: [String: Any] = [
-            "hostSignedIn": AppleIDStore.shared.isSignedIn || !email.isEmpty,
+            "hostSignedIn": signedIn,
             "hostStoreReady": storeReady,
             "hostFairPlayAck": AppStoreDecryptGuide.isAcknowledged(email: email),
             "hostEmailHint": hint,
