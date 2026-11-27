@@ -73,21 +73,6 @@ enum FailurePlaybook {
             action: .reauthStore
         ),
         FailurePlay(
-            id: "fairplay-live-install",
-            title: "Install this app from the App Store",
-            summary: "FairPlay keys alone are not enough. Install the target from the App Store (same Apple ID), then retry Get — fairplayd needs the live install path before FastDecryptBot.",
-            matches: [
-                "keys ready is not enough",
-                "before opening fastdecryptbot",
-                "needs the live install",
-                "install it from the app store",
-                "install splash",
-                "no live app store install",
-            ],
-            actionTitle: "Open App Store",
-            action: .openAppStore
-        ),
-        FailurePlay(
             id: "fairplay-live-invisible",
             title: "Can't see live install path (Pair Native)",
             summary: "The app may already be installed, but this sideloaded build can’t see `/var/containers/Bundle/Application/…` until Native pairing exposes installd Path. Open Pair, connect, refresh Installed, then retry Get.",
@@ -98,9 +83,26 @@ enum FailurePlaybook {
                 "refresh installed",
                 "none visible",
                 "launchservices alone often returns no path",
+                "no live app store install",
+                "if get still can't see",
+                "re-run get so the live path is stamped",
             ],
             actionTitle: "Open Pair",
             action: .openPair
+        ),
+        FailurePlay(
+            id: "fairplay-live-install",
+            title: "Install this app from the App Store",
+            summary: "FairPlay keys alone are not enough. Install the target from the App Store (same Apple ID), then retry Get — fairplayd needs the live install path before FastDecryptBot.",
+            matches: [
+                "keys ready is not enough",
+                "before opening fastdecryptbot",
+                "needs the live install",
+                "install it from the app store",
+                "install splash",
+            ],
+            actionTitle: "Open App Store",
+            action: .openAppStore
         ),
         FailurePlay(
             id: "fairplay-eperm",

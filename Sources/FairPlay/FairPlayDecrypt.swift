@@ -248,10 +248,10 @@ enum FairPlayDecrypt {
         let entry = (raw[bundleID] as? [String: Any])
             ?? ((raw["LookupResult"] as? [String: Any])?[bundleID] as? [String: Any])
         guard let entry else { return nil }
+        // Never use Data Container — same rule as Native fairPlayInstallPath.
         let path = (entry["Path"] as? String)
             ?? (entry["BundlePath"] as? String)
-            ?? (entry["Container"] as? String)
-        guard let path, !path.isEmpty else { return nil }
+        guard let path, !path.isEmpty, !path.contains("/Containers/Data/") else { return nil }
         return existingAppDirectory(URL(fileURLWithPath: path))
     }
 
@@ -1994,6 +1994,10 @@ enum FairPlayDecrypt {
     /// Resolve `CFBundleExecutable` for an `.app` / `.appex` / `.framework` (FairPlayed uses
     /// the same Info.plist field when probing installed apps). Bound on live installs —
     /// plist I/O can stall the same way SC_Info did.
+    ///
+    /// When sandbox `fileExists` lies on live Store installs, still return the synthesized
+    /// path so role classification treats the main binary as `.main` (hard-fail on EPERM)
+    /// instead of soft-failing it as `.other`.
     private static func bundleExecutableURL(in bundle: URL) -> URL? {
         let infoURL = bundle.appendingPathComponent("Info.plist")
         let info: [String: Any]? = withTimeout(seconds: 5) {
@@ -2011,6 +2015,10 @@ enum FairPlayDecrypt {
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue {
                 return url
             }
+        }
+        // Live Store path: trust CFBundleExecutable even when fileExists is false.
+        if isLiveAppStoreInstall(bundle), !name.isEmpty {
+            return bundle.appendingPathComponent(name)
         }
         return nil
     }
