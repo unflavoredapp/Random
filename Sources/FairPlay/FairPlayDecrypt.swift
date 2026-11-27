@@ -33,7 +33,7 @@ enum FairPlayDecryptError: LocalizedError {
 
 /// Map fpcore failure class + log text into a user-facing message (keys vs OOM vs still encrypted).
 enum FairPlayFailureClass: String {
-    case none, outOfMemory, licenseOrKeys, stillEncrypted, io, other
+    case none, outOfMemory, licenseOrKeys, stillEncrypted, io, sandboxOpen, other
 
     static func current(fromLogs lines: [String] = []) -> FairPlayFailureClass {
         let kind = Int(fp_last_fail_kind())
@@ -42,6 +42,7 @@ enum FairPlayFailureClass: String {
         case Int(FP_FAIL_PERM): return .licenseOrKeys
         case Int(FP_FAIL_STILL_ENC): return .stillEncrypted
         case Int(FP_FAIL_IO): return .io
+        case Int(FP_FAIL_SANDBOX_OPEN): return .sandboxOpen
         case Int(FP_FAIL_OTHER): break
         default: break
         }
@@ -49,6 +50,13 @@ enum FairPlayFailureClass: String {
         if blob.contains("errno 12") || blob.contains("cannot allocate") || blob.contains("enomem")
             || blob.contains("low memory") || blob.contains("out-of-memory") {
             return .outOfMemory
+        }
+        // open(2) EPERM before mremap — distinct from fairplayd license EPERM after open.
+        if blob.contains("parse failed: open:")
+            || blob.contains("sandbox-open")
+            || (blob.contains("open:") && blob.contains("operation not permitted")
+                && !blob.contains("mremap")) {
+            return .sandboxOpen
         }
         if blob.contains("eperm")
             || blob.contains("operation not permitted")
@@ -73,6 +81,8 @@ enum FairPlayFailureClass: String {
             return "FairPlay still reports encryption after remap. \(AppStoreDecryptGuide.failureHint)"
         case .io:
             return "Couldn't read or write the encrypted binary. Re-download the IPA and retry."
+        case .sandboxOpen:
+            return "Couldn't open the Mach-O for FairPlay (sandbox open EPERM). Use EmbeddedPayload inside FastDecryptBot (FairPlayed / iOS 27 + Developer Mode) — live Store binaries usually aren't openable from a sideloaded helper. Delete FastDecryptBot, re-run Get, enable Developer Mode, then open the companion again."
         case .other, .none:
             return AppStoreDecryptGuide.failureHint
         }
@@ -559,18 +569,27 @@ enum FairPlayDecrypt {
             )
         }
 
-        // Path-agnostic single-tree contract: when the read root is NOT a live Store
-        // install, collapse into destApp before remmap so every entry (IPA / embed /
-        // companion) remaps with one tree + lean ~1× peak — not dual-tree Jetsam.
+        // FairPlayed: fairplayd opens `<dir>/SC_Info/<exe>.sinf` next to the *input*
+        // binary. System Policy blocks fairplayd from app data containers — never
+        // remmap from Documents/tmp. Keep in_path under companion EmbeddedPayload
+        // (own installed bundle) or a live Store install. Dual-tree is intentional.
         var effectiveSource = sourceApp
         let srcStd = sourceApp.resolvingSymlinksInPath().standardizedFileURL
         let dstStd = destApp.resolvingSymlinksInPath().standardizedFileURL
         if !isLiveAppStoreInstall(sourceApp), srcStd != dstStd {
-            detail?("Collapsing FairPlay read root → export tree (single-tree remmap)…")
-            try ensureExportTreeHasBinaries(from: sourceApp, into: destApp, progress: detail)
-            effectiveSource = destApp
-            FairPlayJetsam.purgeTransientMemory()
-            detail?(FairPlayJetsam.memorySummary(prefix: "post-collapse"))
+            let bundleRoot = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+            let underOwnBundle = srcStd.path == bundleRoot
+                || srcStd.path.hasPrefix(bundleRoot.hasSuffix("/") ? bundleRoot : bundleRoot + "/")
+            if underOwnBundle {
+                detail?("Keeping FairPlay read root in companion EmbeddedPayload (fairplayd SC_Info)…")
+                // Seed export tree for resources; Mach-Os still remapped from embed in_path.
+                try? ensureExportTreeHasBinaries(from: sourceApp, into: destApp, progress: detail)
+                FairPlayJetsam.purgeTransientMemory()
+            } else {
+                detail?(
+                    "Warning: FairPlay read root is outside the companion bundle — fairplayd may EPERM on SC_Info in data containers. Prefer EmbeddedPayload."
+                )
+            }
         }
 
         // FairPlayed embed_ipa.sh: installd normally copies the main .sinf onto every
@@ -1133,11 +1152,11 @@ enum FairPlayDecrypt {
     /// Decrypt a single Mach-O from `sourceApp` into `destApp`.
     ///
     /// Configuration locked to GitHub references:
-    /// - FairPlayed `exportInstalledApp`: `fp_decrypt_file(install/rel, payload/rel)` —
-    ///   fairplayd resolves `<dir of binary>/SC_Info/<exe>.sinf` on the **input** path.
-    /// - foulplay `main.c`: remaps with the slice’s native `cryptid` (our `FP_MODE_NATIVE` first).
-    /// Companion FairPlayed path feeds the **live Store install** as `in_path`
-    /// (EmbeddedPayload / EncryptedSource are export seed only — never FairPlay read roots).
+    /// - FairPlayed export: `fp_decrypt_file(EmbeddedPayload/rel, Documents/…/rel)` —
+    ///   fairplayd resolves `<dir of binary>/SC_Info/<exe>.sinf` on the **input** path
+    ///   inside the helper’s own bundle (iOS 27 + Developer Mode / cryptid=2).
+    /// - foulplay `main.c`: remaps with the slice’s native `cryptid`; we try R/cid2 first.
+    /// Companion default feeds **EmbeddedPayload** as `in_path` (live Store opens often EPERM).
     private static func decryptOne(
         file: URL,
         sourceApp: URL,

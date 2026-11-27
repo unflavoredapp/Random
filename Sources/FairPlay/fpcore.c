@@ -3,13 +3,13 @@
 // Revised mremap_encrypted: page-aligned remap window, native cryptid mode,
 // libsystem_kernel dlsym fallback, guarded page-in retries.
 //
-// GitHub configuration parity (install-path decrypt):
+// GitHub configuration parity (FairPlayed / iOS 27 Developer Mode):
+// - FairPlayed (morzelowski/FairPlayed): embed IPA in helper bundle; mremap with
+//   cryptid=2 (CRYPTID_MODEL_ENCRYPTION skips PROT_EXEC). Caller passes the
+//   EmbeddedPayload binary as in_path (SC_Info beside it) and a writable
+//   Documents/Payload path as out_path — never a data-container unpack.
 // - foulplay (meme/apple-tools foulplay/main.c): pass LC cryptid to mremap_encrypted
-//   → FP_MODE_NATIVE is first in fp_decrypt_file()'s attempt order.
-// - FairPlayed (morzelowski/FairPlayed fpcore.c + exportInstalledApp): map from
-//   slice_off, vm_read_overwrite page-in, then R/cid2 + RX/cid1 fallbacks; caller
-//   must pass the live install binary as in_path (SC_Info beside it) and a writable
-//   Payload path as out_path.
+//   → kept as fallback after R/cid2 in fp_decrypt_file()'s attempt order.
 //
 // Regression (stock iOS / 16 KB pages):
 // - cryptoff that is only 4 KB-aligned is NOT rejected; fp_compute_remap_window()
@@ -74,6 +74,7 @@ const char *fp_fail_kind_name(int kind) {
         case FP_FAIL_PERM: return "license-or-keys";
         case FP_FAIL_STILL_ENC: return "still-encrypted";
         case FP_FAIL_IO: return "io";
+        case FP_FAIL_SANDBOX_OPEN: return "sandbox-open";
         default: return "other";
     }
 }
@@ -454,7 +455,15 @@ int fp_parse(const char *path, fp_slice_t *slices, int max, int *count, char *er
         return -1;
     }
     int fd = open(path, O_RDONLY);
-    if (fd < 0) { snprintf(err, errlen, "open: %s", strerror(errno)); return -1; }
+    if (fd < 0) {
+        int errn = errno;
+        snprintf(err, errlen, "open: %s", strerror(errn));
+        // Companion / sideloaded host often cannot open other apps' Store Mach-Os.
+        // Distinct from mremap EPERM (license/keys) which happens after a successful open.
+        if (errn == EPERM || errn == EACCES) fp_set_fail(FP_FAIL_SANDBOX_OPEN);
+        else fp_note_errno(errn);
+        return -1;
+    }
     struct stat st;
     if (fstat(fd, &st) != 0 || st.st_size < 4) {
         close(fd);
@@ -1121,7 +1130,8 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
     fp_slice_t sl[FP_MAX_SLICES]; int n = 0; char err[256] = {0};
     if (fp_parse(in_path, sl, FP_MAX_SLICES, &n, err, sizeof err) != 0) {
         logf_(log, ctx, "  parse failed: %s", err);
-        fp_set_fail(FP_FAIL_IO);
+        // Keep FP_FAIL_SANDBOX_OPEN from fp_parse; only default blank fails to IO.
+        if (g_fp_last_fail == FP_FAIL_NONE) fp_set_fail(FP_FAIL_IO);
         return -1;
     }
     bool any = false;
@@ -1149,13 +1159,13 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         else logf_(log, ctx, "  mremap backend=%s", mremap_backend_name(backend));
     }
 
-    // Default order: native LC cryptid first, then R/cryptid=2 (no PROT_EXEC), then dyld RX/cid1.
-    // Exact-geometry slices prefer R/cid2 first (buddy3 [M] exact dispatch).
+    // Default order (FairPlayed iOS 27): R/cryptid=2 first (no PROT_EXEC / AMFI),
+    // then native LC cryptid, then dyld RX/cid1. Exact-geometry uses the same.
     // Each mode is tried with and without F_ADDFILESIGS_RETURN.
     // Kept in sync with tests/fpcore/test_fp_page.c (kExpectedDecryptOrder).
     const int order_default[][2] = {
-        {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
         {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
+        {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
         {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
         {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1}
     };

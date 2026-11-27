@@ -64,13 +64,13 @@ enum FairPlayDecryptReadiness {
 
 // MARK: - Search: compact pre-Get strip
 
-/// One-line readiness before Get: Apple ID · Store · Keys · live path for selected bid.
+/// One-line readiness before Get: Apple ID · Store · Keys (live path is optional hint).
 struct FairPlayPreGetReadinessStrip: View {
     @ObservedObject private var store = AppleIDStore.shared
     @ObservedObject private var keys = FairPlayKeysFetcher.shared
     @ObservedObject private var client = DecryptClient.shared
     @State private var liveOK: Bool?
-    @State private var liveLabel = "Live path"
+    @State private var liveLabel = "Live (opt)"
     @State private var probing = false
 
     private var bid: String {
@@ -80,10 +80,10 @@ struct FairPlayPreGetReadinessStrip: View {
     }
 
     private var allGreen: Bool {
+        // Live path is optional — FairPlayed remaps from EmbeddedPayload.
         FairPlayDecryptReadiness.appleIDReady
             && FairPlayDecryptReadiness.storeSessionReady
             && FairPlayDecryptReadiness.keysReady
-            && (liveOK == true)
     }
 
     var body: some View {
@@ -179,10 +179,10 @@ struct FairPlayPreGetReadinessStrip: View {
             return "Confirm FairPlay keys after Media & Purchases."
         }
         if bid.isEmpty {
-            return "Select an app (or Probe on Account) so the live Store path can be checked."
+            return "Select an app (or Probe on Account) so Get knows which bid to embed."
         }
         if liveOK != true {
-            return "Install \(bid) from the App Store, Pair Native, refresh Installed, then Refresh."
+            return "Ready — live path optional. Enable Developer Mode; Get embeds Mach-Os + SC_Info for FairPlay."
         }
         return ""
     }
@@ -208,8 +208,8 @@ struct FairPlayPreGetReadinessStrip: View {
     private func refreshLive(force: Bool) async {
         let want = bid
         if want.isEmpty {
-            liveOK = false
-            liveLabel = "Live path"
+            liveOK = nil
+            liveLabel = "Live (opt)"
             return
         }
         if !force, let stamped = FairPlayDecryptReadiness.stampedLivePath(matching: want) {
@@ -224,14 +224,14 @@ struct FairPlayPreGetReadinessStrip: View {
             liveLabel = shortPath(live.path)
         } else {
             liveOK = false
-            liveLabel = "Live path"
+            liveLabel = "Live (opt)"
         }
     }
 
     private func shortPath(_ path: String) -> String {
         let name = URL(fileURLWithPath: path).lastPathComponent
         if name.hasSuffix(".app") { return name }
-        return "Live path ✓"
+        return "Live ✓"
     }
 }
 
@@ -306,7 +306,7 @@ struct FairPlaySmokeChecklistSection: View {
             }
             checklistRow(
                 done: liveOK,
-                title: "5. Probe live path",
+                title: "5. Probe live path (optional)",
                 detail: liveDetail,
                 actionTitle: probing ? nil : "Probe"
             ) {
@@ -319,7 +319,7 @@ struct FairPlaySmokeChecklistSection: View {
                     ? "Companion pending open / Trust"
                     : (DecryptClient.shared.phase == .running
                         ? "Get in progress…"
-                        : "Search → Get packages FastDecryptBot for FairPlay"),
+                        : "Search → Get embeds Mach-Os + SC_Info; FairPlay remaps EmbeddedPayload"),
                 actionTitle: "Open Search"
             ) {
                 AppNav.shared.goSearch()
@@ -338,7 +338,7 @@ struct FairPlaySmokeChecklistSection: View {
         } header: {
             Text("FairPlay smoke checklist")
         } footer: {
-            Text("Run these in order on device before filing a decrypt failure. Live path needs the target installed from the App Store (same Apple ID) plus Pair Native on free/dev certs.")
+            Text("FairPlayed on iOS 27 + Developer Mode remaps from EmbeddedPayload inside FastDecryptBot. Live path is optional. Enable Developer Mode, confirm keys, then Get.")
         }
         .onAppear {
             keys.refreshFromAck()
@@ -360,7 +360,7 @@ struct FairPlaySmokeChecklistSection: View {
             liveDetail = "Pick an app on Search or Probe a Store install"
         } else {
             liveOK = false
-            liveDetail = "No live path for \(bid) yet"
+            liveDetail = "No live path for \(bid) (optional — EmbeddedPayload is enough)"
         }
     }
 

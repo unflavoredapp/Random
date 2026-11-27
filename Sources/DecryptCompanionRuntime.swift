@@ -187,20 +187,25 @@ enum DecryptCompanionRuntime {
             log("FairPlay Apple ID · \(email)")
         }
 
-        // FairPlayed / foulplay: fairplayd resolves SC_Info on the *live Store* path.
-        // Live install is the only FairPlay read path — never EncryptedSource / EmbeddedPayload.
+        // FairPlayed (iOS 27 + Developer Mode): mremap from EmbeddedPayload inside THIS
+        // companion bundle — fairplayd reads SC_Info next to those binaries. Live Store
+        // Mach-Os often open(2) EPERM from a sideloaded helper; tmp EncryptedSource unpacks
+        // sit in data containers fairplayd cannot read. Never use those as FairPlay in_path.
         // Tetherless-style companion policy: serial, PARTIAL OK. Lean helper never auto-bounces
         // mid-decrypt (UIKit / fat shell offer backup server after ENOMEM instead).
         // Streaming page capture is forced in fpcore (FP_FORCE_LEAN) on device.
         var fpOpts = FairPlayAdvancedOptions.Resolved.from(snapshot: snap)
-        fpOpts.sourceMode = .liveInstall
+        // Honor Advanced “live install” only when explicitly selected; default = embed.
+        if fpOpts.sourceMode != .liveInstall {
+            fpOpts.sourceMode = .embeddedPayload
+        }
         fpOpts.forceSerialDecrypt = true
         fpOpts.preferPartialOnLowRAM = true
         fpOpts.requireAllFrameworks = false
 #if DECRYPT_HELPER
         fpOpts.bounceLargeCryptToServer = false
         // Helper contract: stream-only, no key blobs, subordinate installed process.
-        log("policy=serial+partialOK+stream · FairPlay=live-install-only (never EncryptedSource)")
+        log("policy=serial+partialOK+stream · FairPlay=EmbeddedPayload (FairPlayed / cryptid=2)")
 #else
         // Fat host-shell companion may honor Advanced “bounce large crypt to server”.
         log("policy=serial+partialOK · bounceLargeCrypt=\(fpOpts.bounceLargeCryptToServer)")
@@ -218,18 +223,17 @@ enum DecryptCompanionRuntime {
         } else {
             log("Target bid · (missing from EmbeddedPayload / manifest)")
         }
+        // Live path is diagnostic / ownership hint only — not the FairPlay read root.
         var liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(
             manifest: man,
             expectedBundleID: expectedBid
         )
         if let liveURL {
-            log("Stamped live install path: \(liveURL.path)")
+            log("Stamped live install path (hint): \(liveURL.path)")
             DecryptCompanionController.shared.setBreadcrumb(livePath: liveURL.path)
         } else {
-            log("Stamped live install path: (none readable yet)")
+            log("Stamped live install path: (none — OK; FairPlay reads EmbeddedPayload)")
         }
-        // Host stamp can be missing (App Group stripped / bid mismatch). Rediscover on-device.
-        // Never accept a foreign/stale path — bid (stamp or Info.plist) must match expectedBid.
         if liveURL == nil, !expectedBid.isEmpty {
             let known = ((man?["hostLiveInstallPath"] as? String)
                 ?? (snap["hostLiveInstallPath"] as? String))?
@@ -238,10 +242,8 @@ enum DecryptCompanionRuntime {
                 let knownURL = URL(fileURLWithPath: known)
                 if let accepted = Self.acceptRediscoveredLiveURL(knownURL, expectedBid: expectedBid) {
                     liveURL = accepted
-                    log("Using host-stamped live path (sandbox may hide fileExists): \(accepted.path)")
+                    log("Host-stamped live path (hint): \(accepted.path)")
                     DecryptCompanionController.shared.setBreadcrumb(livePath: accepted.path)
-                } else {
-                    log("Ignoring host-stamped path (bid mismatch or not a .app): \(known)")
                 }
             }
             if liveURL == nil,
@@ -251,42 +253,44 @@ enum DecryptCompanionRuntime {
                ),
                let accepted = Self.acceptRediscoveredLiveURL(found, expectedBid: expectedBid) {
                 liveURL = accepted
-                log("Rediscovered live App Store install for \(expectedBid): \(accepted.path)")
+                log("Rediscovered live App Store install (hint): \(accepted.path)")
                 DecryptCompanionHandoff.publishLiveInstallPath(accepted.path, bundleID: expectedBid)
                 DecryptCompanionController.shared.setBreadcrumb(livePath: accepted.path)
             }
         }
 
-        log("Advanced FairPlay · source=Live install only · retries=\(fpOpts.retryRounds)")
-        log("EmbeddedPayload (export seed only): \(src.path)")
-
-        guard let liveURL else {
-            throw DecryptError(
-                "No live App Store install for \(expectedBid.isEmpty ? name : expectedBid). Install \(name) from the App Store on this iPhone (same Apple ID), delete FastDecryptBot, re-run Get so the live path is stamped into the companion, then open it again. EncryptedSource / EmbeddedPayload are not FairPlay paths."
-            )
+        let preferLive = fpOpts.sourceMode == .liveInstall
+        let readRoot: URL
+        if preferLive, let liveURL {
+            readRoot = liveURL
+            log("Advanced FairPlay · source=Live install (experimental) · retries=\(fpOpts.retryRounds)")
+            log("FairPlay read root · live install: \(liveURL.path)")
+        } else {
+            if preferLive {
+                log("Advanced live-install selected but no live path — falling back to EmbeddedPayload.")
+            }
+            readRoot = src
+            log("Advanced FairPlay · source=EmbeddedPayload (FairPlayed) · retries=\(fpOpts.retryRounds)")
+            log("FairPlay read root · EmbeddedPayload: \(src.path)")
         }
-        let readRoot = liveURL
-        log("Live install path: \(liveURL.path)")
         DecryptCompanionController.shared.setBreadcrumb(
             bid: expectedBid.isEmpty ? nil : expectedBid,
-            livePath: liveURL.path,
+            livePath: liveURL?.path,
             appGroup: DecryptCompanionHandoff.appGroupAvailable,
             logMirror: true
         )
 
-        // Live installs often refuse cryptid probes — still proceed; fairplayd mremaps.
         var before = try FairPlayDecrypt.verifyApp(at: readRoot)
-        if before.entries.isEmpty {
-            // Audit counts from EmbeddedPayload for console only — do not switch readRoot.
+        if before.entries.isEmpty, readRoot != src {
             let embedAudit = try FairPlayDecrypt.verifyApp(at: src)
             if !embedAudit.entries.isEmpty {
                 before = embedAudit
-                log("Live path cryptid probe empty — using EmbeddedPayload counts for console (\(before.encrypted) encrypted). FairPlay still reads the live install.")
+                log("Live path cryptid probe empty — using EmbeddedPayload counts (\(before.encrypted) encrypted).")
             }
         }
         if before.entries.isEmpty {
             throw DecryptError(
-                "No Mach-Os found under the live App Store install for \(name). Reinstall from the App Store, refresh Installed, re-run Get, then open FastDecryptBot again."
+                "No Mach-Os found under EmbeddedPayload for \(name). Delete FastDecryptBot, re-run Get so Mach-Os + SC_Info are embedded, then open FastDecryptBot again (Developer Mode on)."
             )
         }
         let work = fm.temporaryDirectory.appendingPathComponent("tl-export-\(UUID().uuidString)", isDirectory: true)
@@ -296,7 +300,7 @@ enum DecryptCompanionRuntime {
         try fm.createDirectory(at: destApp, withIntermediateDirectories: true)
 
         log("Copying app bundle…")
-        // Seed export resources from EmbeddedPayload; FairPlay overwrites Mach-Os from live.
+        // Seed export resources from EmbeddedPayload; FairPlay overwrites clear Mach-Os into dest.
         try copyTree(from: src, to: destApp)
 
         let verbose = fpOpts.verboseConsole
@@ -322,6 +326,8 @@ enum DecryptCompanionRuntime {
                 || msg.localizedCaseInsensitiveContains("partial")
                 || msg.localizedCaseInsensitiveContains("rss")
                 || msg.localizedCaseInsensitiveContains("freed")
+                || msg.localizedCaseInsensitiveContains("embeddedpayload")
+                || msg.localizedCaseInsensitiveContains("fairplay read root")
             if keep {
                 progress?(msg)
                 Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
@@ -330,7 +336,7 @@ enum DecryptCompanionRuntime {
         func runDecrypt(from root: URL) throws -> FairPlayDecryptReport {
             FairPlayJetsam.purgeTransientMemory()
             log(FairPlayJetsam.memorySummary(prefix: "pre-mremap"))
-            log("Streaming FairPlay page capture from live install…")
+            log("Streaming FairPlay page capture from \(root == src ? "EmbeddedPayload" : "live install")…")
             return try FairPlayDecrypt.decryptMachOs(
                 readingFrom: root,
                 writingTo: destApp,
@@ -343,9 +349,14 @@ enum DecryptCompanionRuntime {
         func isLicenseEPERM(_ error: Error) -> Bool {
             FairPlayFailureClass.current(fromLogs: [error.localizedDescription]) == .licenseOrKeys
         }
+        func isSandboxOpen(_ error: Error) -> Bool {
+            FairPlayFailureClass.current(fromLogs: [error.localizedDescription]) == .sandboxOpen
+        }
 
-        let liveEPERMHint =
-            "FairPlay EPERM on the live App Store install for \(name). Confirm Store login + Media & Purchases for the owning Apple ID, delete/reinstall \(name) from the App Store, re-run Get, then open FastDecryptBot again. \(AppStoreDecryptGuide.failureHint)"
+        let licenseHint =
+            "FairPlay license/keys EPERM for \(name). Confirm Store login + Media & Purchases for the owning Apple ID, enable Developer Mode, delete FastDecryptBot, re-run Get, then open it again. \(AppStoreDecryptGuide.failureHint)"
+        let sandboxHint =
+            "FairPlay could not open the Mach-O (sandbox). FastDecryptBot must remmap from its own EmbeddedPayload — delete it, re-run Get so Mach-Os + SC_Info are embedded, enable Developer Mode, then open the companion again."
 
         var report: FairPlayDecryptReport
         do {
@@ -360,17 +371,33 @@ enum DecryptCompanionRuntime {
                 throw fp
             case .missingLicense:
                 throw fp
-            case .mainExecutableFailed(let detail)
-                where FairPlayFailureClass.current(fromLogs: [detail]) == .licenseOrKeys:
-                // No EncryptedSource fallback — live install is the only FairPlay path.
+            case .mainExecutableFailed(let detail):
+                let klass = FairPlayFailureClass.current(fromLogs: [detail])
                 log(detail)
-                throw FairPlayDecryptError.missingLicense(liveEPERMHint)
+                if klass == .sandboxOpen {
+                    // Live-path open EPERM → retry once from EmbeddedPayload.
+                    if readRoot != src {
+                        log("Live install open EPERM — retrying FairPlay from EmbeddedPayload…")
+                        report = try runDecrypt(from: src)
+                    } else {
+                        throw FairPlayDecryptError.failed(sandboxHint)
+                    }
+                } else if klass == .licenseOrKeys {
+                    throw FairPlayDecryptError.missingLicense(licenseHint)
+                } else {
+                    throw fp
+                }
             default:
                 throw fp
             }
         } catch {
-            if isLicenseEPERM(error) {
-                throw FairPlayDecryptError.missingLicense(liveEPERMHint)
+            if isSandboxOpen(error), readRoot != src {
+                log("Live install open EPERM — retrying FairPlay from EmbeddedPayload…")
+                report = try runDecrypt(from: src)
+            } else if isLicenseEPERM(error) {
+                throw FairPlayDecryptError.missingLicense(licenseHint)
+            } else if isSandboxOpen(error) {
+                throw FairPlayDecryptError.failed(sandboxHint)
             } else {
                 throw error
             }

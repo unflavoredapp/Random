@@ -1158,7 +1158,7 @@ final class DeviceDecryptService: ObservableObject {
         }
         if fpOpts.pathDiagnostics {
             publishDecryptProgress(
-                "Advanced FairPlay · Live install only · retries \(fpOpts.retryRounds)"
+                "Advanced FairPlay · \(fpOpts.sourceMode.title) · retries \(fpOpts.retryRounds)"
                 + (fpOpts.verboseConsole ? " · verbose" : "")
             )
         }

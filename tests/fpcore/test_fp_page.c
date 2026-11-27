@@ -4,7 +4,7 @@
  *
  * These do NOT exercise the real mremap_encrypted syscall (device-only).
  * They lock the engineering claims from the 16 KB stock-iOS revision:
- *   1. Native mode is first in the decrypt attempt order.
+ *   1. R/cryptid=2 is first in the decrypt attempt order (FairPlayed iOS 27).
  *   2. 4 KB-aligned cryptoff is accepted on a 16 KB page via aligned remap.
  *   3. Malformed / overflowing crypt ranges are rejected.
  *   4. Output integrity helper: cryptid-clear offset math stays consistent.
@@ -34,16 +34,16 @@ static void expect(int cond, const char *msg) {
 
 /* Mirrors fp_decrypt_file() order — keep in sync with Sources/FairPlay/fpcore.c */
 static const int kExpectedDecryptOrder[][2] = {
-    {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
     {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
+    {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
     {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
     {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1},
 };
 
-static void test_decrypt_order_starts_with_native(void) {
-    expect(kExpectedDecryptOrder[0][0] == FP_MODE_NATIVE, "order[0] is FP_MODE_NATIVE");
-    expect(kExpectedDecryptOrder[1][0] == FP_MODE_NATIVE, "order[1] is FP_MODE_NATIVE (+sigs)");
-    expect(kExpectedDecryptOrder[2][0] == FP_MODE_R_CID2, "order[2] is FP_MODE_R_CID2");
+static void test_decrypt_order_starts_with_cid2(void) {
+    expect(kExpectedDecryptOrder[0][0] == FP_MODE_R_CID2, "order[0] is FP_MODE_R_CID2 (FairPlayed iOS 27)");
+    expect(kExpectedDecryptOrder[1][0] == FP_MODE_R_CID2, "order[1] is FP_MODE_R_CID2 (+sigs)");
+    expect(kExpectedDecryptOrder[2][0] == FP_MODE_NATIVE, "order[2] is FP_MODE_NATIVE");
     size_t n = sizeof kExpectedDecryptOrder / sizeof kExpectedDecryptOrder[0];
     expect(n == 8, "decrypt order has 8 mode×sigs attempts");
 }
@@ -154,7 +154,7 @@ static void test_chunk_pages_hint(void) {
 
 int main(void) {
     printf("fpcore page/order regression tests\n");
-    test_decrypt_order_starts_with_native();
+    test_decrypt_order_starts_with_cid2();
     test_4k_crypt_on_16k_page();
     test_16k_aligned_passthrough();
     test_4k_page_env();
