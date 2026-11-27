@@ -483,13 +483,13 @@ enum DecryptCompanionRuntime {
         let tag = partialOK ? "-PARTIAL" : "-decrypted"
         log("Packaging \(name)\(tag).ipa…")
         try stripLicenseArtifacts(in: destApp)
-        // PARTIAL that ships encrypted .appex/.framework binaries fails installd with
-        // IXErrorDomain Code=2 “Failed to create app extension placeholder…”. Drop those
-        // bundles so the clear main app can install; full decrypt (#350 direct-write) is preferred.
+        // PARTIAL that ships any .appex (encrypted or incomplete) fails installd with
+        // IXErrorDomain Code=2 “Failed to create app extension placeholder…”. Wipe
+        // PlugIns/Extensions/AppClips + encrypted frameworks so the clear main installs.
         if partialOK {
             let stripped = stripStillEncryptedBundles(in: destApp, log: log)
             if stripped > 0 {
-                log("PARTIAL install hygiene · removed \(stripped) still-encrypted appex/framework bundle(s).")
+                log("PARTIAL install hygiene · removed \(stripped) PlugIns/Extensions/encrypted framework item(s).")
             }
         }
 
@@ -888,49 +888,55 @@ enum DecryptCompanionRuntime {
         }
     }
 
-    /// Remove `.appex` / `.framework` bundles whose executable is still FairPlay-encrypted.
-    /// Keeps the clear main app installable (installd rejects encrypted appex placeholders).
+    /// Make a PARTIAL Payload installable: drop extension folders and any still-encrypted
+    /// frameworks. installd fails with IXErrorDomain Code=2 when any appex placeholder is bad.
     @discardableResult
     private static func stripStillEncryptedBundles(
         in app: URL,
         log: (String) -> Void
     ) -> Int {
         let fm = FileManager.default
-        // Always drop Watch — not decryptable on iPhone and breaks some installers.
-        try? fm.removeItem(at: app.appendingPathComponent("Watch"))
+        var removed = 0
+
+        // Watch + every extension container — PARTIAL must not hand installd any appex.
+        for folder in ["Watch", "PlugIns", "Extensions", "AppClips", "App Clip"] {
+            let url = app.appendingPathComponent(folder, isDirectory: true)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                do {
+                    try fm.removeItem(at: url)
+                    removed += 1
+                    log("PARTIAL strip · \(folder)/ (entire folder)")
+                } catch {
+                    log("PARTIAL strip failed · \(folder)/: \(error.localizedDescription)")
+                }
+            }
+        }
 
         var victims: [URL] = []
         guard let en = fm.enumerator(
             at: app,
             includingPropertiesForKeys: [.isDirectoryKey],
             options: [.skipsHiddenFiles]
-        ) else { return 0 }
+        ) else { return removed }
 
         for case let item as URL in en {
             let ext = item.pathExtension.lowercased()
+            // Appexes under odd paths + frameworks still encrypted after incomplete decrypt.
             guard ext == "appex" || ext == "framework" else { continue }
             en.skipDescendants()
+            if ext == "appex" {
+                victims.append(item)
+                continue
+            }
             let exe = FairPlayDecrypt.mainExecutableURL(in: item)
                 ?? item.appendingPathComponent(item.deletingPathExtension().lastPathComponent)
-            let still: Int = {
-                let probed = exe.path.withCString { fp_has_encrypted_slice($0) }
-                if probed == 1 { return 1 }
-                // Missing / unreadable executable inside an appex also breaks installd.
-                if ext == "appex" {
-                    var isDir: ObjCBool = false
-                    if !fm.fileExists(atPath: exe.path, isDirectory: &isDir) || isDir.boolValue {
-                        return 1
-                    }
-                    if probed != 0 { return 1 }
-                }
-                return probed == 1 ? 1 : 0
-            }()
-            if still == 1 {
+            let probed = exe.path.withCString { fp_has_encrypted_slice($0) }
+            if probed == 1 || probed < 0 {
                 victims.append(item)
             }
         }
 
-        var removed = 0
         for url in victims {
             let rel = url.path.replacingOccurrences(of: app.path + "/", with: "")
             do {
