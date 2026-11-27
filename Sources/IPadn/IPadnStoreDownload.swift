@@ -73,10 +73,19 @@ enum IPadnStoreDownload {
         } catch {
             onProgress?("iTunesMetadata write failed (\(error.localizedDescription)) — continuing.")
         }
-        if !asset.sinfs.isEmpty {
-            try IPadnIPAPackager.injectSinfs(asset.sinfs, intoIPA: destination)
-            onProgress?("Embedded \(asset.sinfs.count) FairPlay license(s)…")
+        if asset.sinfs.isEmpty {
+            throw IPadnToolError.message(
+                "App Store returned no FairPlay licenses (empty songList sinfs). Sign in again under Account and retry Get."
+            )
         }
+        try IPadnIPAPackager.injectSinfs(asset.sinfs, intoIPA: destination)
+        let sinfN = IPadnIPAPackager.countSinfs(inIPA: destination)
+        guard sinfN > 0 else {
+            throw IPadnToolError.message(
+                "FairPlay licenses did not land in the Store IPA (0 .sinf). Retry Get."
+            )
+        }
+        onProgress?("Embedded \(asset.sinfs.count) FairPlay license(s) · IPA has \(sinfN) .sinf…")
         // Persist any cookies absorbed during fetch/buy so the next cold start stays warm.
         if let cookie = liveCookies[session.dsid] ?? session.cookieHeader {
             cookiesSavedAt = Date()

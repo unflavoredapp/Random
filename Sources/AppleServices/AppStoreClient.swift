@@ -964,15 +964,26 @@ final class AppStoreClient: ObservableObject {
         }
         // CDN package has no SC_Info — inject songList sinfs so companion FairPlay can run
         // without a live App Store install (ApplePackage SignatureInjector).
-        if !item.sinfs.isEmpty {
-            do {
-                try injectSinfs(item.sinfs, intoIPA: destination)
-                onProgress?("Embedded \(item.sinfs.count) FairPlay license(s)…")
-            } catch {
+        if item.sinfs.isEmpty {
+            throw AppStoreClientError.message(
+                "App Store returned no FairPlay licenses (empty songList sinfs). Sign in again under Account and retry Get."
+            )
+        }
+        do {
+            try IPadnIPAPackager.injectSinfs(item.sinfs.map(\.data), intoIPA: destination)
+            let sinfN = IPadnIPAPackager.countSinfs(inIPA: destination)
+            guard sinfN > 0 else {
                 throw AppStoreClientError.message(
-                    "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Sign in again under Account and retry."
+                    "FairPlay licenses did not land in the Store IPA (0 .sinf). Retry Get."
                 )
             }
+            onProgress?("Embedded \(item.sinfs.count) FairPlay license(s) · IPA has \(sinfN) .sinf…")
+        } catch let err as AppStoreClientError {
+            throw err
+        } catch {
+            throw AppStoreClientError.message(
+                "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Sign in again under Account and retry."
+            )
         }
         // Fold commerce Set-Cookie into the persisted Store jar for the next cold start.
         if let live = liveCookieHeader {
@@ -1091,15 +1102,26 @@ final class AppStoreClient: ObservableObject {
         } catch {
             onProgress?("iTunesMetadata write failed (\(error.localizedDescription)) — continuing.")
         }
-        if !item.sinfs.isEmpty {
-            do {
-                try injectSinfs(item.sinfs, intoIPA: destination)
-                onProgress?("Embedded \(item.sinfs.count) FairPlay license(s)…")
-            } catch {
+        if item.sinfs.isEmpty {
+            throw AppStoreClientError.message(
+                "App Store returned no FairPlay licenses (empty songList sinfs). Sign in again under Account and retry Get."
+            )
+        }
+        do {
+            try IPadnIPAPackager.injectSinfs(item.sinfs.map(\.data), intoIPA: destination)
+            let sinfN = IPadnIPAPackager.countSinfs(inIPA: destination)
+            guard sinfN > 0 else {
                 throw AppStoreClientError.message(
-                    "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Sign in again under Account and retry."
+                    "FairPlay licenses did not land in the Store IPA (0 .sinf). Retry Get."
                 )
             }
+            onProgress?("Embedded \(item.sinfs.count) FairPlay license(s) · IPA has \(sinfN) .sinf…")
+        } catch let err as AppStoreClientError {
+            throw err
+        } catch {
+            throw AppStoreClientError.message(
+                "Couldn't embed FairPlay licenses into the IPA (\(error.localizedDescription)). Sign in again under Account and retry."
+            )
         }
         return (destination, item)
     }
@@ -2000,73 +2022,6 @@ final class AppStoreClient: ObservableObject {
         try archive.addEntry(with: "iTunesMetadata.plist", type: .file, uncompressedSize: Int64(data.count)) { position, size in
             data.subdata(in: Int(position) ..< Int(position) + size)
         }
-    }
-
-    /// Inject `songList` sinfs into `Payload/<App>.app/SC_Info/…` (ApplePackage SignatureInjector).
-    private func injectSinfs(_ sinfs: [StoreSinf], intoIPA ipa: URL) throws {
-        guard !sinfs.isEmpty else { return }
-        let archive = try Archive(url: ipa, accessMode: .update)
-        let bundleName = try Self.payloadAppBundleName(in: archive)
-        let appPrefix = "Payload/\(bundleName).app/"
-
-        if let paths = try Self.readSinfPathsFromManifest(in: archive, appPrefix: appPrefix), !paths.isEmpty {
-            for (index, rel) in paths.enumerated() where index < sinfs.count {
-                let path = appPrefix + rel.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-                try Self.addOrReplaceZipEntry(archive, path: path, data: sinfs[index].data)
-            }
-            return
-        }
-
-        // No Manifest.plist — place the first sinf next to CFBundleExecutable.
-        guard let exe = try Self.readBundleExecutable(in: archive, appPrefix: appPrefix) else {
-            throw AppStoreClientError.message("Could not locate app executable for SINF inject.")
-        }
-        let path = "\(appPrefix)SC_Info/\(exe).sinf"
-        try Self.addOrReplaceZipEntry(archive, path: path, data: sinfs[0].data)
-    }
-
-    private static func addOrReplaceZipEntry(_ archive: Archive, path: String, data: Data) throws {
-        if let existing = archive[path] {
-            try archive.remove(existing)
-        }
-        try archive.addEntry(with: path, type: .file, uncompressedSize: Int64(data.count)) { position, size in
-            data.subdata(in: Int(position) ..< Int(position) + size)
-        }
-    }
-
-    private static func payloadAppBundleName(in archive: Archive) throws -> String {
-        for entry in archive {
-            let path = entry.path
-            guard path.contains(".app/Info.plist"), !path.contains("/Watch/") else { continue }
-            let parts = path.split(separator: "/")
-            guard parts.count >= 2 else { continue }
-            let app = parts[parts.count - 2]
-            if app.hasSuffix(".app") {
-                return String(app.dropLast(4))
-            }
-        }
-        throw AppStoreClientError.message("Could not find Payload/*.app in downloaded IPA.")
-    }
-
-    private static func readSinfPathsFromManifest(in archive: Archive, appPrefix: String) throws -> [String]? {
-        let path = appPrefix + "SC_Info/Manifest.plist"
-        guard let entry = archive[path] else { return nil }
-        var data = Data()
-        _ = try archive.extract(entry) { data.append($0) }
-        guard let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any],
-              let paths = plist["SinfPaths"] as? [String], !paths.isEmpty else {
-            return nil
-        }
-        return paths
-    }
-
-    private static func readBundleExecutable(in archive: Archive, appPrefix: String) throws -> String? {
-        let path = appPrefix + "Info.plist"
-        guard let entry = archive[path] else { return nil }
-        var data = Data()
-        _ = try archive.extract(entry) { data.append($0) }
-        let plist = try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-        return plist?["CFBundleExecutable"] as? String
     }
 
     // MARK: - GUID
