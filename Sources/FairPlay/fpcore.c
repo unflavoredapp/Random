@@ -64,8 +64,27 @@
 #pragma mark - Failure class (for Swift UX)
 
 static int g_fp_last_fail = FP_FAIL_NONE;
+static int g_fp_decrypt_policy = FP_DECRYPT_POLICY_FAIRPLAYED_27;
 
 int fp_last_fail_kind(void) { return g_fp_last_fail; }
+
+void fp_set_decrypt_policy(int policy) {
+    if (policy == FP_DECRYPT_POLICY_LEGACY_174) {
+        g_fp_decrypt_policy = FP_DECRYPT_POLICY_LEGACY_174;
+    } else {
+        g_fp_decrypt_policy = FP_DECRYPT_POLICY_FAIRPLAYED_27;
+    }
+}
+
+int fp_decrypt_policy(void) { return g_fp_decrypt_policy; }
+
+const char *fp_decrypt_policy_name(int policy) {
+    switch (policy) {
+        case FP_DECRYPT_POLICY_LEGACY_174: return "legacy-17.4 (native-first)";
+        case FP_DECRYPT_POLICY_FAIRPLAYED_27:
+        default: return "fairplayed-27 (cid2-first)";
+    }
+}
 
 const char *fp_fail_kind_name(int kind) {
     switch (kind) {
@@ -1159,22 +1178,30 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
         else logf_(log, ctx, "  mremap backend=%s", mremap_backend_name(backend));
     }
 
-    // Default order (FairPlayed iOS 27): R/cryptid=2 first (no PROT_EXEC / AMFI),
-    // then native LC cryptid, then dyld RX/cid1. Exact-geometry uses the same.
+    // Attempt order by policy (set from Swift via fp_set_decrypt_policy):
+    // - FAIRPLAYED_27: R/cryptid=2 first (FairPlayed confirmed on iOS 27).
+    // - LEGACY_174: native LC cryptid / foulplay-style first for iOS 17.4–26.
     // Each mode is tried with and without F_ADDFILESIGS_RETURN.
-    // Kept in sync with tests/fpcore/test_fp_page.c (kExpectedDecryptOrder).
-    const int order_default[][2] = {
+    // Kept in sync with tests/fpcore/test_fp_page.c.
+    static const int order_fairplayed_27[][2] = {
         {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
         {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
         {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
         {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1}
     };
-    const int order_exact[][2] = {
-        {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1},
+    static const int order_legacy_174[][2] = {
         {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
         {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
-        {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1}
+        {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1},
+        {FP_MODE_R_CID2, 0}, {FP_MODE_R_CID2, 1}
     };
+    const int policy = fp_decrypt_policy();
+    const int (*order_default)[2] = (policy == FP_DECRYPT_POLICY_LEGACY_174)
+        ? order_legacy_174 : order_fairplayed_27;
+    const size_t order_default_n = (policy == FP_DECRYPT_POLICY_LEGACY_174)
+        ? (sizeof order_legacy_174 / sizeof order_legacy_174[0])
+        : (sizeof order_fairplayed_27 / sizeof order_fairplayed_27[0]);
+    logf_(log, ctx, "  decrypt policy=%s", fp_decrypt_policy_name(policy));
     const uint64_t pg = fp_page_size();
     int rc = 0;
     for (int i = 0; i < n && rc == 0; i++) {
@@ -1202,10 +1229,8 @@ int fp_decrypt_file(const char *in_path, const char *out_path, fp_log_t log, voi
                   (unsigned long long)remap_off, (unsigned long long)remap_len);
         }
 
-        const int (*order)[2] = exact ? order_exact : order_default;
-        const size_t order_n = exact
-            ? (sizeof order_exact / sizeof order_exact[0])
-            : (sizeof order_default / sizeof order_default[0]);
+        const int (*order)[2] = order_default;
+        const size_t order_n = order_default_n;
 
         const bool mem_tight = fp_memory_tight_for(s->cryptsize);
         uint64_t page_total = (s->cryptsize + pg - 1) / pg;

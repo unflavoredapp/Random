@@ -93,7 +93,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-live-install",
             title: "Install this app from the App Store",
-            summary: "Optional ownership check: install the target from the App Store (same Apple ID). FairPlay decrypt itself remaps from EmbeddedPayload inside FastDecryptBot (iOS 27 + Developer Mode).",
+            summary: "Optional ownership check: install the target from the App Store (same Apple ID). FairPlay decrypt itself remaps from EmbeddedPayload inside FastDecryptBot (iOS 17.4+ · Developer Mode).",
             matches: [
                 "keys ready is not enough",
                 "before opening fastdecryptbot",

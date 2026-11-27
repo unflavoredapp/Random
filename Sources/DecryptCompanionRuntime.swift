@@ -187,12 +187,11 @@ enum DecryptCompanionRuntime {
             log("FairPlay Apple ID · \(email)")
         }
 
-        // FairPlayed (iOS 27 + Developer Mode): mremap from EmbeddedPayload inside THIS
-        // companion bundle — fairplayd reads SC_Info next to those binaries. Live Store
-        // Mach-Os often open(2) EPERM from a sideloaded helper; tmp EncryptedSource unpacks
-        // sit in data containers fairplayd cannot read. Never use those as FairPlay in_path.
-        // Tetherless-style companion policy: serial, PARTIAL OK. Lean helper never auto-bounces
-        // mid-decrypt (UIKit / fat shell offer backup server after ENOMEM instead).
+        // EmbeddedPayload remmap (Tetherless-style iOS 17.4+ / FairPlayed on 27+):
+        // fairplayd reads SC_Info next to those binaries. Live Store Mach-Os often
+        // open(2) EPERM from a sideloaded helper; tmp EncryptedSource unpacks sit in
+        // data containers fairplayd cannot read. Never use those as FairPlay in_path.
+        // Serial + PARTIAL OK. Lean helper never auto-bounces mid-decrypt.
         // Streaming page capture is forced in fpcore (FP_FORCE_LEAN) on device.
         var fpOpts = FairPlayAdvancedOptions.Resolved.from(snapshot: snap)
         // Honor Advanced “live install” only when explicitly selected; default = embed.
@@ -202,13 +201,14 @@ enum DecryptCompanionRuntime {
         fpOpts.forceSerialDecrypt = true
         fpOpts.preferPartialOnLowRAM = true
         fpOpts.requireAllFrameworks = false
+        let remmapPolicy = FairPlayDecrypt.applyDecryptPolicyForCurrentOS()
 #if DECRYPT_HELPER
         fpOpts.bounceLargeCryptToServer = false
         // Helper contract: stream-only, no key blobs, subordinate installed process.
-        log("policy=serial+partialOK+stream · FairPlay=EmbeddedPayload (FairPlayed / cryptid=2)")
+        log("policy=serial+partialOK+stream · FairPlay=EmbeddedPayload · remmap=\(remmapPolicy)")
 #else
         // Fat host-shell companion may honor Advanced “bounce large crypt to server”.
-        log("policy=serial+partialOK · bounceLargeCrypt=\(fpOpts.bounceLargeCryptToServer)")
+        log("policy=serial+partialOK · bounceLargeCrypt=\(fpOpts.bounceLargeCryptToServer) · remmap=\(remmapPolicy)")
 #endif
         log(FairPlayJetsam.memorySummary(prefix: "preflight"))
         let snapBid = (snap["bundleID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

@@ -652,7 +652,7 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Source")
         } footer: {
-            Text("FairPlayed on iOS 27 + Developer Mode remaps from EmbeddedPayload inside FastDecryptBot (SC_Info beside each binary). Live Store opens often EPERM from a sideloaded helper.")
+            Text("On-device FairPlay (iOS 17.4+) remaps from EmbeddedPayload inside FastDecryptBot with Developer Mode (SC_Info beside each binary). iOS 27 uses cid2-first; 17.4–26 try native/foulplay first. Live Store opens often EPERM from a sideloaded helper.")
         }
 
         Section {
