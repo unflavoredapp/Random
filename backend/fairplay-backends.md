@@ -67,6 +67,62 @@ Ops: `bash server/linux-ctl.sh status|token|logs api`.
 
 ---
 
+## Dopamine + DELvEKBot — Telegram bot only (iPhone 11 · iOS 26.0.1)
+
+For a **Telegram bot** on a Linux VPS whose FairPlay work is done by `Cli/DELvEKBot` on a Dopamine jailbreak phone (not AppAssassin / FastDecryptBot companion).
+
+```
+Telegram user → App Store link → VPS bot queue → DELvEKBot on iPhone → clear IPA → bot reply
+```
+
+`DELvEKBot` only accepts **ProductVersion 15.4, 16.2, or 26.0.1** (`sw_vers -productVersion`).
+
+### 1) VPS — bot + phone queue
+
+```bash
+sudo bash server/linux-install.sh
+```
+
+In `/etc/tetherless/linux-host.env`:
+
+```bash
+FAIRPLAY_HOST=linux
+DECRYPT_BACKENDS=phone
+DECRYPT_WORKER_TOKEN=$(openssl rand -hex 24)   # paste into the phone worker env
+TELEGRAM_BOT_TOKEN=…                          # from @BotFather
+TELEGRAM_BOT_USERNAME=YourBot
+MAC_PUBLIC_BASE=https://your-vps-host
+```
+
+```bash
+sudo systemctl enable --now tetherless-api.service
+# bot is started by the API / linux-ctl — see: bash server/linux-ctl.sh status
+```
+
+### 2) iPhone — DELvEKBot worker (keep this running)
+
+```bash
+scp Cli/DELvEKBot server/delvekbot-dopamine-worker.sh mobile@IPHONE_IP:/var/mobile/Documents/
+ssh mobile@IPHONE_IP 'chmod +x /var/mobile/Documents/DELvEKBot /var/mobile/Documents/delvekbot-dopamine-worker.sh'
+
+export DECRYPT_SITE_URL=https://your-vps-host/
+export DECRYPT_WORKER_TOKEN=…    # same as linux-host.env
+export DELVEKBOT_BIN=/var/mobile/Documents/DELvEKBot
+bash /var/mobile/Documents/delvekbot-dopamine-worker.sh
+# Script always re-execs with sudo -E (DELvEKBot needs root on Dopamine).
+```
+
+Install each requested app **from the App Store** on this Dopamine phone first (same Apple ID). The worker maps the Store URL → bundle ID, runs `DELvEKBot`, uploads `/var/mobile/Documents/<bid>.ipa`; the Telegram bot sends that IPA back.
+
+| Step | Where |
+|------|--------|
+| Telegram bot + HTTPS queue | Linux VPS |
+| FairPlay decrypt | Dopamine iPhone (`DELvEKBot`) |
+| AppAssassin / free cert companion | **Not used** |
+| Mac needed? | **No** |
+
+---
+
 ## Optional — offline CLI on the VPS (Mac-minted unfairplay model)
 
 Only if you want decrypt **without** an iPhone online. UnfairPlay enrollment still has to be minted on a Mac once:

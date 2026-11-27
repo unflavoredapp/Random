@@ -195,6 +195,21 @@ function create({ db /*, secret */ }) {
       w.say(text);
       if (w.job) w.job.msg = text;
     }
+    // Renew the one-shot job timer so phone workers (buddy3 / AppAssassin)
+    // can keep a long decrypt alive via /progress heartbeats.
+    if (w.timer) {
+      clearTimeout(w.timer);
+      w.timer = setTimeout(() => {
+        const cur = waiters.get(w.id);
+        if (!cur || cur !== w) return;
+        waiters.delete(w.id);
+        w.reject(
+          new Error(
+            "iPhone worker timed out after claim (no complete/fail). Keep the buddy3 / Phone Worker process running."
+          )
+        );
+      }, REQUEST_MS);
+    }
     return true;
   }
 
