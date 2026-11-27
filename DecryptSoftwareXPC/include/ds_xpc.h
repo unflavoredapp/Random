@@ -18,9 +18,9 @@ extern "C" {
 /** Launchd / XPC service name (macOS Contents/XPCServices). */
 #define DS_XPC_SERVICE_NAME "software.decrypt.xpc"
 
-/** Public brand + domain. Keep docs/README.md Brand/Version in sync. */
+/** XPC brand. Public Decrypt site/API remains fastdecrypt.bot — keep docs in sync. */
 #define DS_XPC_BRAND "decrypt.software"
-#define DS_XPC_SITE "https://decrypt.software"
+#define DS_XPC_SITE "https://fastdecrypt.bot"
 #define DS_XPC_VERSION "1.0.0"
 #define DS_XPC_STAMP "Brand: decrypt.software · XPC software.decrypt.xpc"
 

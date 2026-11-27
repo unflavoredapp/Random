@@ -15,13 +15,14 @@
 | **Brand** | **`decrypt.software`** |
 | **Version** | **`1.0.0`** |
 | **XPC service** | **`software.decrypt.xpc`** |
-| **Site** | **https://decrypt.software** |
+| **Public site / API** | **https://fastdecrypt.bot** |
 | **Wire** | hand-rolled C `<xpc/xpc.h>` · not NSXPC |
 
 ```text
 Brand:   decrypt.software
 Version: 1.0.0
 Service: software.decrypt.xpc
+Site:    https://fastdecrypt.bot
 Stamp:   Brand: decrypt.software · XPC software.decrypt.xpc
 ```
 

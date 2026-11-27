@@ -779,7 +779,7 @@ struct IPadnSettingsRootSections: View {
                             Text(TetherlessBrand.name).font(.headline)
                             Text(appVersion).font(.subheadline).foregroundStyle(.secondary)
                         }
-                        Text("Search, download, sign, and install — branded at decrypt.software.")
+                        Text("Search, download, sign, and install — branded at fastdecrypt.bot.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -803,7 +803,7 @@ struct IPadnSettingsRootSections: View {
 
             Toggle("Check for updates automatically", isOn: $appUpdateCheck)
 
-            Link("decrypt.software", destination: TetherlessBrand.siteURL)
+            Link("fastdecrypt.bot", destination: TetherlessBrand.siteURL)
             if let url = URL(string: "https://github.com/mengangs/ipadn") {
                 Link("Open-source Store login (GPL-2.0)", destination: url)
             }

@@ -1,5 +1,5 @@
 //
-// Brand: decrypt.software · https://decrypt.software
+// Brand: decrypt.software XPC · public site https://fastdecrypt.bot
 //  DecryptSoftwareXPCClient.swift
 //  Swift façade for the hand-rolled XPC product (software.decrypt.xpc).
 //  The C service lives under DecryptSoftwareXPC/ and builds on macOS via Make.
@@ -12,7 +12,8 @@ import Foundation
 /// Brand + service identity for the decrypt.software XPC product.
 enum DecryptSoftwareXPC {
     static let brand = "decrypt.software"
-    static let site = "https://decrypt.software"
+    /// Public Decrypt site / API edge (not the XPC product name).
+    static let site = "https://fastdecrypt.bot"
     static let siteURL = URL(string: site)!
     static let serviceName = "software.decrypt.xpc"
     static let version = "1.0.0"
