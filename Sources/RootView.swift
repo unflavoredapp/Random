@@ -172,10 +172,14 @@ struct RootView: View {
 
     private func handleAirShareDeepLink(_ url: URL) {
         let scheme = url.scheme?.lowercased() ?? ""
-        // Companion console is a separate IPA (`fastdecryptbot://`). Host only owns
-        // `tetherless://` — bounce decrypt-companion deep links to Search, or Account
-        // when unsigned so they can sign in for FairPlay / Purchases.
-        if scheme == "tetherless"
+        // Companion → host clear-IPA / server-fallback (`appassassin://` + `tetherless://`).
+        if DecryptCompanionHandoff.handleIncomingHostDeepLink(url) {
+            nav.goSearch()
+            return
+        }
+        // Companion console is a separate IPA (`fastdecryptbot://`). Host bounce for
+        // decrypt-companion deep links → Search, or Account when unsigned.
+        if (scheme == "tetherless" || scheme == "appassassin")
             && (url.host?.lowercased() == "decrypt-companion" || url.host?.lowercased() == "companion") {
             if AppleIDStore.shared.isSignedIn {
                 nav.goSearch()
@@ -184,21 +188,7 @@ struct RootView: View {
             }
             return
         }
-        // Companion finished FairPlay — import clear IPA from App Group into inbox / DecryptClient.
-        if scheme == "tetherless",
-           ["decrypt-export", "decrypt-import", "export"].contains(url.host?.lowercased() ?? "") {
-            _ = DecryptCompanionHandoff.consumePendingClearIPAExport()
-            nav.goSearch()
-            return
-        }
-        // Companion hit ENOMEM / hard FairPlay fail — finish via Decrypt site URL (Mac / tetherless.dev).
-        if scheme == "tetherless",
-           ["decrypt-server", "server-decrypt", "server"].contains(url.host?.lowercased() ?? "") {
-            _ = DecryptCompanionHandoff.consumePendingServerFallback()
-            nav.goSearch()
-            return
-        }
-        guard ["airshare", "msign", "tetherless", "sideloader"].contains(scheme) else { return }
+        guard ["airshare", "msign", "tetherless", "appassassin", "sideloader"].contains(scheme) else { return }
         switch url.host?.lowercased() {
         case "activity", "signed":
             nav.goDownloads()

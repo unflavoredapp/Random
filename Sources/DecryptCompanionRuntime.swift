@@ -184,17 +184,21 @@ enum DecryptCompanionRuntime {
 
         // FairPlayed / foulplay: fairplayd resolves SC_Info on the *live Store* path.
         // Live install is the only FairPlay read path — never EncryptedSource / EmbeddedPayload.
-        // Tetherless-style companion policy: serial, never auto-bounce, PARTIAL OK.
+        // Tetherless-style companion policy: serial, PARTIAL OK. Lean helper never auto-bounces
+        // mid-decrypt (UIKit / fat shell offer backup server after ENOMEM instead).
         // Streaming page capture is forced in fpcore (FP_FORCE_LEAN) on device.
         var fpOpts = FairPlayAdvancedOptions.Resolved.from(snapshot: snap)
         fpOpts.sourceMode = .liveInstall
         fpOpts.forceSerialDecrypt = true
-        fpOpts.bounceLargeCryptToServer = false
         fpOpts.preferPartialOnLowRAM = true
         fpOpts.requireAllFrameworks = false
 #if DECRYPT_HELPER
+        fpOpts.bounceLargeCryptToServer = false
         // Helper contract: stream-only, no key blobs, subordinate installed process.
         log("policy=serial+partialOK+stream · FairPlay=live-install-only (never EncryptedSource)")
+#else
+        // Fat host-shell companion may honor Advanced “bounce large crypt to server”.
+        log("policy=serial+partialOK · bounceLargeCrypt=\(fpOpts.bounceLargeCryptToServer)")
 #endif
         log(FairPlayJetsam.memorySummary(prefix: "preflight"))
         let snapBid = (snap["bundleID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""

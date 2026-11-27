@@ -26,6 +26,10 @@ enum DecryptCompanionHandoff {
     /// Host deep link — companion opens this after on-device ENOMEM / hard FairPlay fail
     /// so the host can finish via Decrypt site URL (Mac HTTPS API / tetherless.dev).
     static let hostServerFallbackURLString = "appassassin://decrypt-server"
+    /// Schemes the host registers for companion → host handoff (`Info.plist` CFBundleURLTypes).
+    static let hostURLSchemes: Set<String> = ["appassassin", "tetherless"]
+    private static let clearIPAImportHosts: Set<String> = ["decrypt-export", "decrypt-import", "export"]
+    private static let serverFallbackHosts: Set<String> = ["decrypt-server", "server-decrypt", "server"]
     nonisolated static let encryptedIPADirName = "EncryptedIPAs"
     private static let serverFallbackMetaKey = "companion.serverFallback"
     private static let storeURLKey = "companion.hostStoreURL"
@@ -357,6 +361,35 @@ enum DecryptCompanionHandoff {
     }
 
 #if !DECRYPT_HELPER
+    /// True when `url` is a companion → host clear-IPA import deep link.
+    static func isClearIPAImportDeepLink(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased() ?? ""
+        guard hostURLSchemes.contains(scheme) else { return false }
+        return clearIPAImportHosts.contains(url.host?.lowercased() ?? "")
+    }
+
+    /// True when `url` is a companion → host backup-server deep link.
+    static func isServerFallbackDeepLink(_ url: URL) -> Bool {
+        let scheme = url.scheme?.lowercased() ?? ""
+        guard hostURLSchemes.contains(scheme) else { return false }
+        return serverFallbackHosts.contains(url.host?.lowercased() ?? "")
+    }
+
+    /// Handle companion → host handoff deep links for both `appassassin://` and `tetherless://`.
+    /// Returns `true` when the URL was a known host decrypt handoff (even if consume no-ops).
+    @discardableResult
+    static func handleIncomingHostDeepLink(_ url: URL) -> Bool {
+        if isClearIPAImportDeepLink(url) {
+            _ = consumePendingClearIPAExport()
+            return true
+        }
+        if isServerFallbackDeepLink(url) {
+            _ = consumePendingServerFallback()
+            return true
+        }
+        return false
+    }
+
     /// Host: start `DecryptClient` against Decrypt site URL (Mac HTTPS / tetherless.dev).
     @discardableResult
     static func consumePendingServerFallback() -> Bool {
