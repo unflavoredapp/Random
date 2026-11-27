@@ -39,7 +39,7 @@ static const int kExpectedFairplayed27Order[][2] = {
     {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
     {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1},
 };
-static const int kExpectedLegacy174Order[][2] = {
+static const int kExpectedLegacy16Order[][2] = {
     {FP_MODE_NATIVE, 0}, {FP_MODE_NATIVE, 1},
     {FP_MODE_RX_CID1, 0}, {FP_MODE_RX_CID1, 1},
     {FP_MODE_R_CID1, 0}, {FP_MODE_R_CID1, 1},
@@ -49,13 +49,14 @@ static const int kExpectedLegacy174Order[][2] = {
 static void test_decrypt_order_starts_with_cid2(void) {
     expect(kExpectedFairplayed27Order[0][0] == FP_MODE_R_CID2, "27 order[0] is FP_MODE_R_CID2");
     expect(kExpectedFairplayed27Order[2][0] == FP_MODE_NATIVE, "27 order[2] is FP_MODE_NATIVE");
-    expect(kExpectedLegacy174Order[0][0] == FP_MODE_NATIVE, "17.4 order[0] is FP_MODE_NATIVE");
-    expect(kExpectedLegacy174Order[6][0] == FP_MODE_R_CID2, "17.4 order ends with FP_MODE_R_CID2");
+    expect(kExpectedLegacy16Order[0][0] == FP_MODE_NATIVE, "16 order[0] is FP_MODE_NATIVE");
+    expect(kExpectedLegacy16Order[6][0] == FP_MODE_R_CID2, "16 order ends with FP_MODE_R_CID2");
     expect(FP_DECRYPT_POLICY_FAIRPLAYED_27 == 0, "fairplayed-27 policy id is 0");
-    expect(FP_DECRYPT_POLICY_LEGACY_174 == 1, "legacy-17.4 policy id is 1");
+    expect(FP_DECRYPT_POLICY_LEGACY_16 == 1, "legacy-16 policy id is 1");
+    expect(FP_DECRYPT_POLICY_LEGACY_174 == FP_DECRYPT_POLICY_LEGACY_16, "legacy-174 alias matches legacy-16");
     size_t n27 = sizeof kExpectedFairplayed27Order / sizeof kExpectedFairplayed27Order[0];
-    size_t n17 = sizeof kExpectedLegacy174Order / sizeof kExpectedLegacy174Order[0];
-    expect(n27 == 8 && n17 == 8, "both decrypt orders have 8 mode×sigs attempts");
+    size_t n16 = sizeof kExpectedLegacy16Order / sizeof kExpectedLegacy16Order[0];
+    expect(n27 == 8 && n16 == 8, "both decrypt orders have 8 mode×sigs attempts");
 }
 
 static void test_4k_crypt_on_16k_page(void) {

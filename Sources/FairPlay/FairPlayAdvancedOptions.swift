@@ -11,7 +11,7 @@ import Foundation
 /// Advanced FairPlay decrypt preferences (UserDefaults + companion hostSnapshot).
 enum FairPlayAdvancedOptions {
     enum SourceMode: String, CaseIterable, Identifiable, Sendable {
-        /// Default: EmbeddedPayload in the companion bundle (iOS 17.4+ · Developer Mode).
+        /// Default: EmbeddedPayload in the companion bundle (iOS 16+ · Developer Mode).
         case automatic
         /// Experiment — mremap from a live App Store install (often open EPERM from sideloaded helpers).
         case liveInstall
@@ -22,7 +22,7 @@ enum FairPlayAdvancedOptions {
 
         var id: String { rawValue }
 
-        /// Companion FairPlay always remaps from EmbeddedPayload (17.4+; cid2-first on 27+).
+        /// Companion FairPlay always remaps from EmbeddedPayload (iOS 16+; cid2-first on 27+).
         /// Live / stamped IPA remain selectable in Settings for diagnostics only.
         var effective: SourceMode {
             switch self {
@@ -44,7 +44,7 @@ enum FairPlayAdvancedOptions {
         var detail: String {
             switch self {
             case .automatic, .embeddedPayload:
-                return "iOS 17.4+ · Developer Mode: mremap from EmbeddedPayload inside FastDecryptBot (SC_Info next to each binary). iOS 27 prefers cid2; 17.4–26 try native/foulplay first. Live Store opens often EPERM from a sideloaded helper."
+                return "iOS 16+ · Developer Mode: mremap from EmbeddedPayload inside FastDecryptBot (SC_Info next to each binary). iOS 27 prefers cid2; iOS 16–26 try native/foulplay first. Live Store opens often EPERM from a sideloaded helper."
             case .liveInstall:
                 return "mremap from the on-device App Store install. Requires the helper can open that Mach-O — usually fails with open EPERM on free/dev certs."
             case .stampedIPA:
