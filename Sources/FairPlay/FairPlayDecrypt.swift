@@ -1207,7 +1207,7 @@ enum FairPlayDecrypt {
     /// - FairPlayed export: `fp_decrypt_file(EmbeddedPayload/rel, Documents/…/rel)` —
     ///   fairplayd resolves `<dir of binary>/SC_Info/<exe>.sinf` on the **input** path
     ///   inside the helper’s own bundle (Developer Mode; cid2-first on iOS 27+).
-    /// - foulplay `main.c`: remaps with the slice’s native `cryptid` — used first on iOS 17.4–26.
+    /// - foulplay `main.c`: remaps with the slice’s native `cryptid` — used first on iOS 16–26.
     /// Companion default feeds **EmbeddedPayload** as `in_path` (live Store opens often EPERM).
     private static func decryptOne(
         file: URL,
@@ -1858,10 +1858,12 @@ enum FairPlayDecrypt {
         }
     }
 
-    /// Runs `decryptOne` against an isolated staging `.app` so a timed-out worker cannot
-    /// keep writing into `destApp` (or leave a half-moved `.fpdec`) after the caller moves on.
-    /// Pragmatic Jetsam isolation (instead of a true XPC helper): one Mach-O per staging
-    /// tree, serial by default, abandoned workers never promote into `destApp`.
+    /// Runs `decryptOne` **directly into `destApp`** (no Staging.app promote hop).
+    ///
+    /// The old staging→promote path marked frameworks `[DECRYPTED]` while leaving the
+    /// encrypted seed in Payload (DuckDuckGo: Done:41 then 40 still encrypted). Writing
+    /// the clear `.fpdec` straight onto the export tree fixes that. On timeout the worker
+    /// is abandoned and any half-written `.fpdec` / dest file for this rel is removed.
     private static func decryptOneWithTimeout(
         file: URL,
         sourceApp: URL,
@@ -1873,83 +1875,52 @@ enum FairPlayDecrypt {
     ) -> DecryptOneOutcome {
         final class Job: @unchecked Sendable {
             let lock = NSLock()
-            /// Caller gave up — worker must not promote into `destApp`.
             var abandoned = false
-            /// Worker finished promote / error publish under the lock.
             var finished = false
             var report = FairPlayDecryptReport()
             var error: Error?
         }
         let job = Job()
-        let srcStd = sourceApp.resolvingSymlinksInPath().standardizedFileURL
-        let dstStd = destApp.resolvingSymlinksInPath().standardizedFileURL
-        // Same-tree (post-collapse / IPA-only): decrypt straight into dest — no Staging.app.
-        let inPlace = srcStd == dstStd
-        let stagingRoot = FileManager.default.temporaryDirectory.appendingPathComponent(
-            "fpdec-job-\(UUID().uuidString)", isDirectory: true
-        )
-        let stagingApp = stagingRoot.appendingPathComponent("Staging.app", isDirectory: true)
-        let writeRoot = inPlace ? destApp : stagingApp
         let rel = relativePath(file, under: sourceApp)
-        // Must split on `/` — `appendingPathComponent("Frameworks/Foo.framework/Foo")` treats
-        // the whole string as one component, so promote never finds nested staging outputs and
-        // destApp keeps the encrypted copyTree seed (main works only because rel has no `/`).
         let finalURL = appendingRelativePath(root: destApp, relative: rel)
+        let tmpURL = finalURL.appendingPathExtension("fpdec")
         let sem = DispatchSemaphore(value: 0)
 
         DispatchQueue.global(qos: .userInitiated).async {
-            // Use FileManager.default inside the worker — don't capture a non-Sendable instance.
             let fm = FileManager.default
-            defer {
-                if !inPlace { try? fm.removeItem(at: stagingRoot) }
-                sem.signal()
-            }
+            defer { sem.signal() }
             do {
-                if !inPlace {
-                    try fm.createDirectory(at: stagingApp, withIntermediateDirectories: true)
-                }
                 var localReport = FairPlayDecryptReport()
                 try decryptOne(
-                    file: file, sourceApp: sourceApp, destApp: writeRoot,
+                    file: file, sourceApp: sourceApp, destApp: destApp,
                     index: index, total: total, progress: nil,
                     report: &localReport, role: role
                 )
 
-                job.lock.lock()
-                let abandonedBeforePromote = job.abandoned
-                job.lock.unlock()
-                if abandonedBeforePromote { return }
-
-                var didPromote = false
-                if !inPlace {
-                    let staged = appendingRelativePath(root: stagingApp, relative: rel)
-                    if fm.fileExists(atPath: staged.path) {
-                        try fm.createDirectory(
-                            at: finalURL.deletingLastPathComponent(),
-                            withIntermediateDirectories: true
-                        )
-                        try? fm.removeItem(at: finalURL)
-                        try fm.moveItem(at: staged, to: finalURL)
-                        didPromote = true
-                    } else if localReport.decrypted.contains(rel) || localReport.plain.contains(rel) {
-                        // Decrypt claimed success but staging path was wrong — don't green-wash.
+                // Fail closed: never green-wash a dest file that still has cryptid ≠ 0.
+                if localReport.decrypted.contains(rel) {
+                    let still = finalURL.path.withCString { fp_has_encrypted_slice($0) }
+                    if still != 0 {
                         localReport.decrypted.removeAll { $0 == rel }
-                        localReport.plain.removeAll { $0 == rel }
                         if role == .main {
                             throw FairPlayDecryptError.mainExecutableFailed(
-                                "Decrypted main binary missing from staging promote path (\(rel))."
+                                "Main executable still encrypted after write to export Payload (\(rel))."
                             )
                         }
                         if !localReport.softFailed.contains(rel) {
                             localReport.softFailed.append(rel)
+                        }
+                        // Keep a complete tree for packaging.
+                        if sourceApp.resolvingSymlinksInPath() != destApp.resolvingSymlinksInPath() {
+                            try? fm.removeItem(at: finalURL)
+                            _ = copyFileChunked(from: file, to: finalURL, timeout: 60)
                         }
                     }
                 }
 
                 job.lock.lock()
                 if job.abandoned {
-                    // Timed out during promote — roll back so the caller’s dest stays untouched.
-                    if didPromote { try? fm.removeItem(at: finalURL) }
+                    try? fm.removeItem(at: tmpURL)
                     job.lock.unlock()
                     return
                 }
@@ -1977,6 +1948,9 @@ enum FairPlayDecrypt {
             }
             job.abandoned = true
             job.lock.unlock()
+            // Best-effort cleanup of a timed-out in-flight write.
+            let fm = FileManager.default
+            try? fm.removeItem(at: tmpURL)
             return .timedOut
         }
         job.lock.lock()
