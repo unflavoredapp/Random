@@ -29,10 +29,10 @@ enum FairPlayKeyGateError: LocalizedError {
             return "Before companion decrypt, capture FairPlay keys for \(who): open App Store Account Settings (or Media & Purchases), sign in once as that Apple ID, then tap Confirm keys in AppAssassin."
         case .needsLiveInstall(let bid, let name):
             let label = name.isEmpty ? bid : name
-            return "FairPlay keys ready is not enough — install \(label) from the App Store on this iPhone (same Apple ID) first. fairplayd needs that live install path; Get cannot open FastDecryptBot without it."
+            return "Optional check: install \(label) from the App Store on this iPhone (same Apple ID) so you know the license works. FairPlay decrypt itself uses EmbeddedPayload inside FastDecryptBot (iOS 27 + Developer Mode)."
         case .cannotSeeLiveInstall(let bid, let name):
             let label = name.isEmpty ? bid : name
-            return "\(label) may already be installed, but this sideloaded build can’t see its live App Store path yet. Open Pair → connect Native, pull-to-refresh Installed, then retry Get — LaunchServices alone often returns no path on free/dev certs."
+            return "\(label) may already be installed, but this sideloaded build can’t see its live App Store path yet. That path is optional for FairPlay — continue Get to embed Mach-Os + SC_Info, or Pair Native if you want the live-path hint stamped."
         case .missingBundleID(let name):
             let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
             let who = label.isEmpty ? "this app" : label
@@ -50,11 +50,11 @@ enum FairPlayKeyGate {
         set { UserDefaults.standard.set(newValue, forKey: "tetherless.fairplay.gate") }
     }
 
-    /// Always require a live App Store install before FastDecryptBot — EncryptedSource
-    /// alone is not a FairPlay path (fairplayd / EPERM).
+    /// Soft live-install check before Get. FairPlayed remaps from EmbeddedPayload;
+    /// live path is optional ownership/diagnostics. Default off.
     static var requireLiveInstallForCompanion: Bool {
-        get { true }
-        set { /* live-install-only policy — ignore overrides */ }
+        get { UserDefaults.standard.bool(forKey: "tetherless.fairplay.requireLiveInstall") }
+        set { UserDefaults.standard.set(newValue, forKey: "tetherless.fairplay.requireLiveInstall") }
     }
 
     /// Remember that Search Get failed only for missing FairPlay ack — resume after Confirm.
@@ -174,35 +174,35 @@ enum FairPlayKeyGate {
 
         let bid = (bundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let name = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if requireLiveInstallForCompanion {
-            // Never skip the live-install gate — empty bid would package/FairPlay the wrong app.
-            guard !bid.isEmpty else {
-                progress?("Missing bundle ID — cannot verify live App Store install…")
-                throw FairPlayKeyGateError.missingBundleID(name: name)
+        // Bundle ID is still required so packaging stamps the correct target.
+        if bid.isEmpty {
+            progress?("Missing bundle ID — cannot package FastDecryptBot for the right app…")
+            throw FairPlayKeyGateError.missingBundleID(name: name)
+        }
+        progress?("Checking live App Store install for \(bid) (optional hint)…")
+        if let live = await resolveLiveInstallURL(bundleID: bid, progress: progress) {
+            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
+            progress?("Live install path (hint): \(live.path)")
+        } else if requireLiveInstallForCompanion {
+            let inLibrary = DeviceLibrary.shared.apps.contains {
+                $0.bundleID.caseInsensitiveCompare(bid) == .orderedSame
             }
-            progress?("Checking live App Store install for \(bid)…")
-            if let live = await resolveLiveInstallURL(bundleID: bid, progress: progress) {
-                DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
-                progress?("Live install path: \(live.path)")
-            } else {
-                let inLibrary = DeviceLibrary.shared.apps.contains {
-                    $0.bundleID.caseInsensitiveCompare(bid) == .orderedSame
-                }
-                let paired = DevicePairingStore.hasSavedPairing
-                let native = NativeInstaller.isSelected
-                // Prefer Pair when Native/pairing is available — DeviceLibrary browse can miss
-                // Path even when the Store app is installed (false "not installed").
-                if inLibrary || paired || native || DeviceLibrary.shared.apps.isEmpty {
-                    progress?(
-                        "Live install path: (none visible) — Pair Native + refresh Installed, then retry Get…"
-                    )
-                    AppNav.shared.goPair()
-                    throw FairPlayKeyGateError.cannotSeeLiveInstall(bundleID: bid, name: name)
-                }
-                progress?("Live install path: (none) — install \(name.isEmpty ? bid : name) from the App Store, then retry Get…")
-                AppStoreDecryptGuide.openAppStore()
-                throw FairPlayKeyGateError.needsLiveInstall(bundleID: bid, name: name)
+            let paired = DevicePairingStore.hasSavedPairing
+            let native = NativeInstaller.isSelected
+            if inLibrary || paired || native || DeviceLibrary.shared.apps.isEmpty {
+                progress?(
+                    "Live install path: (none visible) — Pair Native + refresh Installed, then retry Get…"
+                )
+                AppNav.shared.goPair()
+                throw FairPlayKeyGateError.cannotSeeLiveInstall(bundleID: bid, name: name)
             }
+            progress?("Live install path: (none) — install \(name.isEmpty ? bid : name) from the App Store, then retry Get…")
+            AppStoreDecryptGuide.openAppStore()
+            throw FairPlayKeyGateError.needsLiveInstall(bundleID: bid, name: name)
+        } else {
+            progress?(
+                "No live path for \(bid) — OK. FairPlay uses EmbeddedPayload (Developer Mode / iOS 27)."
+            )
         }
 
         // Companion reads email / ack / live path via App Group — publish before packaging.

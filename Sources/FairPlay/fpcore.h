@@ -75,10 +75,11 @@ int  fp_describe_cryptids(const char *path, char *buf, size_t buflen);
 enum {
     FP_FAIL_NONE = 0,
     FP_FAIL_NOMEM = 1,      // ENOMEM / Jetsam — close apps & retry
-    FP_FAIL_PERM = 2,       // EPERM / license / Media & Purchases keys
+    FP_FAIL_PERM = 2,       // EPERM / license / Media & Purchases keys (after open succeeds)
     FP_FAIL_STILL_ENC = 3,  // remapped but cryptid still set / bytes unchanged
     FP_FAIL_IO = 4,
     FP_FAIL_OTHER = 5,
+    FP_FAIL_SANDBOX_OPEN = 6, // open(2) EPERM/EACCES on live Store Mach-O (companion sandbox)
 };
 int  fp_last_fail_kind(void);
 const char *fp_fail_kind_name(int kind);

@@ -576,7 +576,7 @@ private struct DecryptBackendsStatusRow: View {
 /// Advanced FairPlay decrypt controls — source path, verbose console, retries, IPA retention.
 private struct FairPlayAdvancedSettingsSection: View {
     @AppStorage(FairPlayAdvancedOptions.sourceModeKey) private var sourceModeRaw =
-        FairPlayAdvancedOptions.SourceMode.liveInstall.rawValue
+        FairPlayAdvancedOptions.SourceMode.embeddedPayload.rawValue
     @AppStorage(FairPlayAdvancedOptions.verboseKey) private var verboseConsole = false
     @AppStorage(FairPlayAdvancedOptions.keepEncryptedIPAKey) private var keepEncryptedIPA = true
     @AppStorage(FairPlayAdvancedOptions.retryRoundsKey) private var retryRounds =
@@ -621,16 +621,23 @@ private struct FairPlayAdvancedSettingsSection: View {
 
         Section {
             Picker("Decrypt source", selection: $sourceModeRaw) {
+                Text(FairPlayAdvancedOptions.SourceMode.embeddedPayload.title)
+                    .tag(FairPlayAdvancedOptions.SourceMode.embeddedPayload.rawValue)
+                Text(FairPlayAdvancedOptions.SourceMode.automatic.title)
+                    .tag(FairPlayAdvancedOptions.SourceMode.automatic.rawValue)
                 Text(FairPlayAdvancedOptions.SourceMode.liveInstall.title)
                     .tag(FairPlayAdvancedOptions.SourceMode.liveInstall.rawValue)
             }
-            Text(FairPlayAdvancedOptions.SourceMode.liveInstall.detail)
+            Text(
+                (FairPlayAdvancedOptions.SourceMode(rawValue: sourceModeRaw)
+                    ?? .embeddedPayload).detail
+            )
                 .font(.footnote)
                 .foregroundStyle(.secondary)
         } header: {
             Text("Source")
         } footer: {
-            Text("Live App Store install is the only FairPlay path. EncryptedSource and EmbeddedPayload are never used for mremap — install the target from the Store (same Apple ID) before Get.")
+            Text("FairPlayed on iOS 27 + Developer Mode remaps from EmbeddedPayload inside FastDecryptBot (SC_Info beside each binary). Live Store opens often EPERM from a sideloaded helper.")
         }
 
         Section {
@@ -689,13 +696,13 @@ private struct FairPlayAdvancedSettingsSection: View {
         } header: {
             Text("Temp paths")
         } footer: {
-            Text("Live install path is required for FairPlay. Encrypted IPA stamps are kept for packaging / audit only — not as a decrypt source. Delete the old companion before Get. Turn Keep off to delete the stamped file after a successful clear export.")
+            Text("EmbeddedPayload is the FairPlay read root. Live install stamps are optional hints. Encrypted IPA stamps are packaging / audit only. Delete the old companion before Get. Turn Keep off to delete the stamped file after a successful clear export.")
         }
 
         Section {
             Button("Reset FairPlay advanced defaults") {
                 FairPlayAdvancedOptions.resetToDefaults()
-                sourceModeRaw = FairPlayAdvancedOptions.SourceMode.liveInstall.rawValue
+                sourceModeRaw = FairPlayAdvancedOptions.SourceMode.embeddedPayload.rawValue
                 verboseConsole = false
                 keepEncryptedIPA = true
                 retryRounds = FairPlayAdvancedOptions.defaultRetryRounds

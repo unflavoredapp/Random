@@ -93,7 +93,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-live-install",
             title: "Install this app from the App Store",
-            summary: "FairPlay keys alone are not enough. Install the target from the App Store (same Apple ID), then retry Get — fairplayd needs the live install path before FastDecryptBot.",
+            summary: "Optional ownership check: install the target from the App Store (same Apple ID). FairPlay decrypt itself remaps from EmbeddedPayload inside FastDecryptBot (iOS 27 + Developer Mode).",
             matches: [
                 "keys ready is not enough",
                 "before opening fastdecryptbot",
@@ -105,23 +105,39 @@ enum FailurePlaybook {
             action: .openAppStore
         ),
         FailurePlay(
+            id: "fairplay-sandbox-open",
+            title: "FairPlay sandbox open — use EmbeddedPayload",
+            summary: "open(2) EPERM on a live Store Mach-O. FairPlayed remaps from EmbeddedPayload inside FastDecryptBot (Developer Mode on). Delete the companion, re-run Get so Mach-Os + SC_Info are embedded, then open it again.",
+            matches: [
+                "sandbox-open",
+                "parse failed: open:",
+                "could not open the mach-o",
+                "sandbox open eperm",
+                "must remmap from its own embeddedpayload",
+            ],
+            actionTitle: "Retry Get",
+            action: .openPair
+        ),
+        FailurePlay(
             id: "fairplay-eperm",
-            title: "FairPlay needs the live App Store install",
-            summary: "Companion hit EPERM without a usable live Store path. Install this app from the App Store (same Apple ID), re-run Get, then open FastDecryptBot again.",
+            title: "FairPlay license / Media & Purchases",
+            summary: "fairplayd returned license EPERM after open. Confirm Store login + Media & Purchases for the owning Apple ID, enable Developer Mode, re-run Get, then open FastDecryptBot again.",
             matches: [
                 "eperm",
                 "operation not permitted",
                 "stamped ipa",
                 "live path is stamped",
                 "never encryptedsource",
+                "-42004",
+                "-42110",
             ],
-            actionTitle: "Open App Store",
-            action: .openAppStore
+            actionTitle: "Capture FairPlay keys",
+            action: .acknowledgeFairPlay
         ),
         FailurePlay(
             id: "fairplay-macho",
             title: "No Mach-O binaries found",
-            summary: "Couldn’t copy executables from the live install (common for Flutter apps like Cake Wallet). Keep the app installed from the App Store, retry Get — FairPlay mremaps the live path even when EmbeddedPayload is sparse.",
+            summary: "EmbeddedPayload is missing executables (common when slim embed failed). Delete FastDecryptBot, re-run Get so Mach-Os + SC_Info are copied into the companion, then open it again.",
             matches: [
                 "no mach-o binaries found",
                 "no mach-o",
@@ -129,8 +145,8 @@ enum FailurePlaybook {
                 "refusing empty embeddedpayload",
                 "slim embed copied 0",
             ],
-            actionTitle: "Open App Store",
-            action: .openAppStore
+            actionTitle: "Retry Get",
+            action: .openPair
         ),
         FailurePlay(
             id: "fairplay-bundle-id",

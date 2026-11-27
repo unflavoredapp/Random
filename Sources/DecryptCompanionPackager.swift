@@ -415,7 +415,7 @@ enum DecryptCompanionPackager {
             throw DecryptError("EncryptedSource.ipa is too small (\(bytes) bytes) — Store download looks incomplete. Retry Get.")
         }
         progress?(
-            "Bundled EncryptedSource.ipa for packaging (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))) — FairPlay still requires the live App Store install."
+            "Bundled EncryptedSource.ipa for packaging (\(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))) — FairPlay remaps from EmbeddedPayload (FairPlayed)."
         )
     }
 
@@ -433,7 +433,7 @@ enum DecryptCompanionPackager {
             throw DecryptError("Installed app path missing: \(installedApp.lastPathComponent).")
         }
         // Optionally bundle EncryptedSource.ipa for packaging/audit (same bid only) —
-        // FairPlay still requires the live Store path.
+        // FairPlay remaps from EmbeddedPayload; EncryptedSource is packaging/audit only.
         let installedInfo = NSDictionary(
             contentsOf: installedApp.appendingPathComponent("Info.plist")
         ) as? [String: Any]
@@ -625,26 +625,24 @@ enum DecryptCompanionPackager {
             progress: progress
         )
         meta["bundleID"] = embeddedBundleID
-        // Companion sandbox often cannot LS/MI-lookup other apps. Host resolves the
-        // live Store path (Pair / LaunchServices) and stamps it into the manifest so
-        // FairPlay mremap can read from a path fairplayd accepts (Roblox EPERM).
+        // FairPlayed: companion remaps from EmbeddedPayload (own bundle + SC_Info).
+        // Live Store path is an optional ownership/diagnostics stamp — never required
+        // for packaging (sideloaded helpers often cannot open live Mach-Os anyway).
         if let live = Self.resolveLiveInstallURL(bundleID: embeddedBundleID, preferring: liveInstall ? srcApp : nil) {
             meta["hostLiveInstallPath"] = live.path
-            progress?("Live install path: \(live.path)")
+            progress?("Live install path (hint): \(live.path)")
             DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: embeddedBundleID)
         } else if let stamped = DecryptCompanionHandoff.readLiveInstallPath(matchingBundleID: embeddedBundleID),
                   FairPlayDecrypt.isLiveAppStoreInstall(URL(fileURLWithPath: stamped.path)) {
-            // Keep a matching gate stamp — don't wipe when a transient re-resolve misses.
             meta["hostLiveInstallPath"] = stamped.path
             progress?("Live install path (kept stamp): \(stamped.path)")
         } else {
-            // Only clear when we truly have nothing usable for this bid.
             if let stale = DecryptCompanionHandoff.readLiveInstallPath(),
                !DecryptCompanionHandoff.bundleIDsMatch(stale.bundleID, embeddedBundleID) {
                 DecryptCompanionHandoff.clearLiveInstallPath()
             }
-            throw DecryptError(
-                "No live App Store install for \(embeddedBundleID) (\(name)). Install it from the App Store (same Apple ID), Pair Native + refresh Installed if Get still can't see the path, then retry — EncryptedSource / EmbeddedPayload are not FairPlay paths."
+            progress?(
+                "No live App Store path for \(embeddedBundleID) — OK. FairPlay uses EmbeddedPayload (enable Developer Mode on iOS 27)."
             )
         }
         // Preflight identity pack — helper paints instantly; never embeds FairPlay key blobs.

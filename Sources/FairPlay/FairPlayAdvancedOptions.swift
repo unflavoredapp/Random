@@ -11,30 +11,45 @@ import Foundation
 /// Advanced FairPlay decrypt preferences (UserDefaults + companion hostSnapshot).
 enum FairPlayAdvancedOptions {
     enum SourceMode: String, CaseIterable, Identifiable, Sendable {
-        /// Alias for live install (legacy snapshot value).
+        /// FairPlayed default: EmbeddedPayload in the companion bundle (iOS 27 / Developer Mode).
         case automatic
-        /// Only read from a live App Store install (fail if missing) — the only supported path.
+        /// Experiment — mremap from a live App Store install (often open EPERM from sideloaded helpers).
         case liveInstall
-        /// Legacy — remapped to live install (EncryptedSource / stamped IPA EPERM without fairplayd).
+        /// Legacy — EncryptedSource / tmp unpack; fairplayd usually cannot read SC_Info in data containers.
         case stampedIPA
-        /// Legacy — remapped to live install (EmbeddedPayload alone usually EPERMs).
+        /// FairPlayed export path: decrypt Mach-Os under companion EmbeddedPayload (SC_Info beside them).
         case embeddedPayload
 
         var id: String { rawValue }
 
-        /// FairPlay mremap always uses the live App Store install.
-        var effective: SourceMode { .liveInstall }
+        /// Companion FairPlay always remaps from EmbeddedPayload (FairPlayed iOS 27 path).
+        /// Live / stamped IPA remain selectable in Settings for diagnostics only.
+        var effective: SourceMode {
+            switch self {
+            case .liveInstall: return .liveInstall
+            case .stampedIPA: return .stampedIPA
+            case .automatic, .embeddedPayload: return .embeddedPayload
+            }
+        }
 
         var title: String {
             switch self {
-            case .automatic, .liveInstall: return "Live install only"
-            case .stampedIPA: return "Stamped IPA (legacy → live)"
-            case .embeddedPayload: return "EmbeddedPayload (legacy → live)"
+            case .automatic: return "Automatic (EmbeddedPayload)"
+            case .liveInstall: return "Live install (experimental)"
+            case .stampedIPA: return "Stamped IPA (legacy)"
+            case .embeddedPayload: return "EmbeddedPayload (FairPlayed)"
             }
         }
 
         var detail: String {
-            "FairPlay mremap only from the on-device App Store install. EncryptedSource / EmbeddedPayload are never used as the FairPlay read path — install the app from the Store (same Apple ID) before Get."
+            switch self {
+            case .automatic, .embeddedPayload:
+                return "FairPlayed on iOS 27 + Developer Mode: mremap from EmbeddedPayload inside FastDecryptBot (SC_Info next to each binary). Live Store opens often EPERM from a sideloaded helper."
+            case .liveInstall:
+                return "mremap from the on-device App Store install. Requires the helper can open that Mach-O — usually fails with open EPERM on free/dev certs."
+            case .stampedIPA:
+                return "Unpack EncryptedSource / stamped IPA under tmp. fairplayd typically cannot read SC_Info in app data containers."
+            }
         }
     }
 
@@ -54,10 +69,10 @@ enum FairPlayAdvancedOptions {
 
     static var sourceMode: SourceMode {
         get {
-            let raw = UserDefaults.standard.string(forKey: sourceModeKey) ?? SourceMode.liveInstall.rawValue
-            return (SourceMode(rawValue: raw) ?? .liveInstall).effective
+            let raw = UserDefaults.standard.string(forKey: sourceModeKey) ?? SourceMode.embeddedPayload.rawValue
+            return (SourceMode(rawValue: raw) ?? .embeddedPayload).effective
         }
-        set { UserDefaults.standard.set(SourceMode.liveInstall.rawValue, forKey: sourceModeKey) }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: sourceModeKey) }
     }
 
     static var verboseConsole: Bool {
@@ -148,7 +163,7 @@ enum FairPlayAdvancedOptions {
 
         static var current: Resolved {
             Resolved(
-                sourceMode: .liveInstall,
+                sourceMode: FairPlayAdvancedOptions.sourceMode,
                 verboseConsole: FairPlayAdvancedOptions.verboseConsole,
                 keepEncryptedIPA: FairPlayAdvancedOptions.keepEncryptedIPA,
                 retryRounds: FairPlayAdvancedOptions.retryRounds,
@@ -163,8 +178,11 @@ enum FairPlayAdvancedOptions {
 
         static func from(snapshot: [String: Any]?) -> Resolved {
             var r = Resolved.current
-            r.sourceMode = .liveInstall
             guard let snapshot else { return r }
+            if let raw = snapshot["fpSourceMode"] as? String,
+               let mode = SourceMode(rawValue: raw) {
+                r.sourceMode = mode.effective
+            }
             if let v = snapshot["fpVerbose"] as? Bool { r.verboseConsole = v }
             if let v = snapshot["fpKeepEncryptedIPA"] as? Bool { r.keepEncryptedIPA = v }
             if let n = snapshot["fpRetryRounds"] as? Int {
@@ -183,7 +201,7 @@ enum FairPlayAdvancedOptions {
 
         func snapshotFields() -> [String: Any] {
             [
-                "fpSourceMode": SourceMode.liveInstall.rawValue,
+                "fpSourceMode": sourceMode.effective.rawValue,
                 "fpVerbose": verboseConsole,
                 "fpKeepEncryptedIPA": keepEncryptedIPA,
                 "fpRetryRounds": retryRounds,
@@ -204,7 +222,7 @@ enum FairPlayAdvancedOptions {
     }
 
     static func resetToDefaults() {
-        sourceMode = .liveInstall
+        sourceMode = .embeddedPayload
         verboseConsole = false
         keepEncryptedIPA = true
         retryRounds = defaultRetryRounds
