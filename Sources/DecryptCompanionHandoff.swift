@@ -535,8 +535,9 @@ enum DecryptCompanionHandoff {
             return dest
         }
         try? fm.removeItem(at: dest)
-        let srcSidecar = IPadnIPAPackager.sinfSidecarURL(forIPA: source)
-        let destSidecar = IPadnIPAPackager.sinfSidecarURL(forIPA: dest)
+        // Sidecar path helper lives here so DecryptHelper can compile without IPadn.
+        let srcSidecar = sinfSidecarURL(forIPA: source)
+        let destSidecar = sinfSidecarURL(forIPA: dest)
         try? fm.removeItem(at: destSidecar)
         do {
             try fm.copyItem(at: source, to: dest)
@@ -550,6 +551,11 @@ enum DecryptCompanionHandoff {
         }
         publishEncryptedIPAPath(dest.path, bundleID: bid)
         return dest
+    }
+
+    /// `foo.ipa` → `foo.ipa.sinfs` (songList license sidecar). Shared with host IPadn inject.
+    static func sinfSidecarURL(forIPA ipa: URL) -> URL {
+        URL(fileURLWithPath: ipa.path + ".sinfs")
     }
 
     static func publishEncryptedIPAPath(_ path: String, bundleID: String) {

@@ -75,7 +75,7 @@ enum IPadnIPAPackager {
 
     /// Sidecar next to the IPA so embed can re-apply songList licenses if the zip drops them.
     static func sinfSidecarURL(forIPA ipa: URL) -> URL {
-        URL(fileURLWithPath: ipa.path + ".sinfs")
+        DecryptCompanionHandoff.sinfSidecarURL(forIPA: ipa)
     }
 
     static func writeSinfSidecar(_ sinfs: [Data], nextTo ipa: URL) {
