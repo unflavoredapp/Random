@@ -77,9 +77,10 @@ enum DecryptCompanionLog {
         if s.hasPrefix("## ") { s = String(s.dropFirst(3)) }
         s = s.replacingOccurrences(of: "**", with: "")
         // Italic markers used for soft notes: _(none)_
+        // Copy the inner Substring before mutating `s` (exclusive access).
         while let open = s.range(of: "_("),
               let close = s.range(of: ")_", range: open.upperBound..<s.endIndex) {
-            let inner = s[open.upperBound..<close.lowerBound]
+            let inner = String(s[open.upperBound..<close.lowerBound])
             s.replaceSubrange(open.lowerBound..<close.upperBound, with: "(\(inner))")
         }
         return s

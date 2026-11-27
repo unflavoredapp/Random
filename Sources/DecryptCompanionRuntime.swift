@@ -17,10 +17,25 @@ import SwiftUI
 #endif
 
 enum DecryptCompanionRuntime {
-    /// Hop UI updates onto the main actor. FairPlay / copyTree must stay off MainActor
-    /// or the console freezes on the last bootstrap line (e.g. "Preflight · largest crypt").
+    /// Hop MainActor work (UI + `@MainActor` Handoff) from the background decrypt worker.
+    /// FairPlay / copyTree stay off MainActor so the console keeps painting.
+    private static func mainSync<T>(_ work: @MainActor () throws -> T) rethrows -> T {
+        if Thread.isMainThread {
+            return try MainActor.assumeIsolated(work)
+        }
+        return try DispatchQueue.main.sync {
+            try MainActor.assumeIsolated(work)
+        }
+    }
+
     private static func ui(_ work: @MainActor @escaping () -> Void) {
-        Task { @MainActor in work() }
+        if Thread.isMainThread {
+            MainActor.assumeIsolated(work)
+        } else {
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated(work)
+            }
+        }
     }
 
     /// True when Info.plist says we're the companion role, or EmbeddedPayload exists.
@@ -153,7 +168,7 @@ enum DecryptCompanionRuntime {
         if DecryptMacRouting.macOnly {
             log("Server-only decrypt — skipping on-device companion FairPlay, opening Decrypt site URL…")
             ui { DecryptCompanionController.shared.statusTitle = "Decrypting on server…" }
-            DecryptCompanionHandoff.requestServerFallback(reason: "mac-only")
+            mainSync { DecryptCompanionHandoff.requestServerFallback(reason: "mac-only") }
             throw DecryptError("Finishing decrypt on Decrypt site URL (Linux VPS / server).")
         }
 
@@ -198,7 +213,7 @@ enum DecryptCompanionRuntime {
             DecryptCompanionController.shared.statusTitle = "Decrypting…"
         }
         let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
-        let snap = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
+        let snap = mainSync { DecryptCompanionHandoff.readHostSnapshot(fromManifest: man) }
         log("## Decrypt")
         if let hint = snap["hostEmailHint"] as? String, !hint.isEmpty {
             log("- host: \(hint)")
@@ -247,10 +262,12 @@ enum DecryptCompanionRuntime {
             log("- bid: \(expectedBid)")
         }
         // Live path is diagnostic / ownership hint only — not the FairPlay read root.
-        var liveURL = DecryptCompanionHandoff.resolveLiveInstallURL(
-            manifest: man,
-            expectedBundleID: expectedBid
-        )
+        var liveURL = mainSync {
+            DecryptCompanionHandoff.resolveLiveInstallURL(
+                manifest: man,
+                expectedBundleID: expectedBid
+            )
+        }
         if liveURL == nil, !expectedBid.isEmpty {
             let known = ((man?["hostLiveInstallPath"] as? String)
                 ?? (snap["hostLiveInstallPath"] as? String))?
@@ -270,7 +287,9 @@ enum DecryptCompanionRuntime {
                let accepted = Self.acceptRediscoveredLiveURL(found, expectedBid: expectedBid) {
                 liveURL = accepted
                 log("- live: \(accepted.path) _(rediscovered)_")
-                DecryptCompanionHandoff.publishLiveInstallPath(accepted.path, bundleID: expectedBid)
+                mainSync {
+                    DecryptCompanionHandoff.publishLiveInstallPath(accepted.path, bundleID: expectedBid)
+                }
             }
         }
 
@@ -559,23 +578,25 @@ enum DecryptCompanionRuntime {
         let info = NSDictionary(contentsOf: src.appendingPathComponent("Info.plist")) as? [String: Any]
         let bundleID = (info?["CFBundleIdentifier"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let published = DecryptCompanionHandoff.publishClearIPAExport(
-            ipa: outIPA,
-            displayName: name,
-            bundleID: bundleID,
-            version: version,
-            verifySummary: ipaVerify.summary
-        )
+        let published = mainSync {
+            DecryptCompanionHandoff.publishClearIPAExport(
+                ipa: outIPA,
+                displayName: name,
+                bundleID: bundleID,
+                version: version,
+                verifySummary: ipaVerify.summary
+            )
+        }
         ui { DecryptCompanionController.shared.exportSentToHost = published }
         if published {
             log("- export: App Group → host")
-            DecryptCompanionHandoff.openHostForClearIPAImport()
+            mainSync { DecryptCompanionHandoff.openHostForClearIPAImport() }
         } else {
             log("- export: Share sheet _(App Group unavailable)_")
         }
         // Advanced: optionally drop the durable encrypted IPA after a clear export.
         if !fpOpts.keepEncryptedIPA {
-            DecryptCompanionHandoff.purgeRetainedEncryptedIPA()
+            mainSync { DecryptCompanionHandoff.purgeRetainedEncryptedIPA() }
             log("- dropped stamped encrypted IPA")
         }
         return outIPA
