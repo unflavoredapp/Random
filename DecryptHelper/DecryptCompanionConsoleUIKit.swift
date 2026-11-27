@@ -21,7 +21,6 @@ final class DecryptCompanionConsoleViewController: UIViewController {
     private let appVersion = UILabel()
     private let statusLabel = UILabel()
     private let spinner = UIActivityIndicatorView(style: .medium)
-    private let breadcrumbLabel = UILabel()
     private let logView = UITextView()
     private let shareButton = UIButton(type: .system)
 
@@ -61,11 +60,6 @@ final class DecryptCompanionConsoleViewController: UIViewController {
         spinner.color = UIColor(red: 0.27, green: 0.56, blue: 0.97, alpha: 1)
         spinner.translatesAutoresizingMaskIntoConstraints = false
 
-        breadcrumbLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        breadcrumbLabel.textColor = UIColor.white.withAlphaComponent(0.78)
-        breadcrumbLabel.numberOfLines = 0
-        breadcrumbLabel.translatesAutoresizingMaskIntoConstraints = false
-
         logView.isEditable = false
         logView.backgroundColor = UIColor.black.withAlphaComponent(0.45)
         logView.textColor = UIColor.white.withAlphaComponent(0.85)
@@ -93,12 +87,6 @@ final class DecryptCompanionConsoleViewController: UIViewController {
         statusCard.translatesAutoresizingMaskIntoConstraints = false
         statusCard.tag = 42
 
-        let breadcrumbCard = UIView()
-        breadcrumbCard.backgroundColor = UIColor.white.withAlphaComponent(0.05)
-        breadcrumbCard.layer.cornerRadius = 14
-        breadcrumbCard.translatesAutoresizingMaskIntoConstraints = false
-        breadcrumbCard.tag = 43
-
         // Top bar: always FastDecryptBot brand (never the target app name/icon).
         headerTitle.text = DecryptCompanionIdentity.companionDisplayName
         headerIcon.image = Self.loadBrandIcon()
@@ -114,8 +102,6 @@ final class DecryptCompanionConsoleViewController: UIViewController {
         appCard.addSubview(appIcon)
         appCard.addSubview(appName)
         appCard.addSubview(appVersion)
-        view.addSubview(breadcrumbCard)
-        breadcrumbCard.addSubview(breadcrumbLabel)
         view.addSubview(statusCard)
         statusCard.addSubview(spinner)
         statusCard.addSubview(statusLabel)
@@ -149,16 +135,7 @@ final class DecryptCompanionConsoleViewController: UIViewController {
             appVersion.trailingAnchor.constraint(equalTo: appName.trailingAnchor),
             appVersion.topAnchor.constraint(equalTo: appName.bottomAnchor, constant: 4),
 
-            breadcrumbCard.topAnchor.constraint(equalTo: appCard.bottomAnchor, constant: 10),
-            breadcrumbCard.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
-            breadcrumbCard.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
-
-            breadcrumbLabel.leadingAnchor.constraint(equalTo: breadcrumbCard.leadingAnchor, constant: 12),
-            breadcrumbLabel.trailingAnchor.constraint(equalTo: breadcrumbCard.trailingAnchor, constant: -12),
-            breadcrumbLabel.topAnchor.constraint(equalTo: breadcrumbCard.topAnchor, constant: 10),
-            breadcrumbLabel.bottomAnchor.constraint(equalTo: breadcrumbCard.bottomAnchor, constant: -10),
-
-            statusCard.topAnchor.constraint(equalTo: breadcrumbCard.bottomAnchor, constant: 12),
+            statusCard.topAnchor.constraint(equalTo: appCard.bottomAnchor, constant: 12),
             statusCard.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
             statusCard.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
 
@@ -223,7 +200,6 @@ final class DecryptCompanionConsoleViewController: UIViewController {
         appName.text = companion.displayName.isEmpty ? "App" : companion.displayName
         appVersion.text = companion.version.isEmpty ? "" : "Version \(companion.version)"
         statusLabel.text = companion.statusTitle
-        breadcrumbLabel.text = companion.breadcrumbText
         if companion.busy {
             spinner.startAnimating()
         } else {
