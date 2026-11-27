@@ -755,9 +755,15 @@ enum DecryptCompanionRuntime {
         }
     }
 
+    /// FairPlay license sidecars — remmap reads them from EmbeddedPayload; clear IPA must not ship them.
+    private static let fairPlayLicenseExtensions: Set<String> = [
+        "sinf", "supf", "supp", "supx", "sisv",
+    ]
+
     private static func copyTree(from src: URL, to destApp: URL) throws {
         let fm = FileManager.default
         var failures: [String] = []
+        var skippedLicenses = 0
         var copied = 0
         guard let en = fm.enumerator(
             at: src,
@@ -770,6 +776,22 @@ enum DecryptCompanionRuntime {
             let vals = try? item.resourceValues(forKeys: [.isDirectoryKey])
             let prefix = src.path.hasSuffix("/") ? src.path : src.path + "/"
             let rel = item.path.hasPrefix(prefix) ? String(item.path.dropFirst(prefix.count)) : item.lastPathComponent
+            // Skip SC_Info trees + loose license blobs (OpenAction.sinf/.supf/…). They often
+            // EPERM on copy and are stripped before zip anyway — remmap already used EmbeddedPayload.
+            if item.lastPathComponent == "SC_Info" {
+                en.skipDescendants()
+                skippedLicenses += 1
+                continue
+            }
+            if rel == "SC_Info" || rel.hasPrefix("SC_Info/") || rel.contains("/SC_Info/") {
+                skippedLicenses += 1
+                continue
+            }
+            let ext = item.pathExtension.lowercased()
+            if fairPlayLicenseExtensions.contains(ext) {
+                skippedLicenses += 1
+                continue
+            }
             let out = destApp.appendingPathComponent(rel)
             if vals?.isDirectory == true {
                 do {
@@ -784,9 +806,21 @@ enum DecryptCompanionRuntime {
                     try fm.copyItem(at: item, to: out)
                     copied += 1
                 } catch {
-                    failures.append(rel)
+                    // Fallback when copyItem EPERMs on readable files.
+                    do {
+                        let data = try Data(contentsOf: item, options: [.mappedIfSafe])
+                        try data.write(to: out, options: .atomic)
+                        copied += 1
+                    } catch {
+                        failures.append(rel)
+                    }
                 }
             }
+        }
+        if skippedLicenses > 0 {
+            DecryptCompanionController.shared.appendLog(
+                "Skipped \(skippedLicenses) FairPlay license path(s) during export copy (cleared IPA)."
+            )
         }
         if copied == 0 {
             throw DecryptError("Companion copy produced no files from EmbeddedPayload.")
@@ -802,9 +836,16 @@ enum DecryptCompanionRuntime {
     private static func stripLicenseArtifacts(in app: URL) throws {
         let fm = FileManager.default
         try? fm.removeItem(at: app.appendingPathComponent("SC_Info"))
-        if let en = fm.enumerator(at: app, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) {
-            for case let item as URL in en where item.lastPathComponent == "SC_Info" {
-                try? fm.removeItem(at: item)
+        if let en = fm.enumerator(at: app, includingPropertiesForKeys: [.isDirectoryKey, .isRegularFileKey], options: [.skipsHiddenFiles]) {
+            for case let item as URL in en {
+                if item.lastPathComponent == "SC_Info" {
+                    try? fm.removeItem(at: item)
+                    en.skipDescendants()
+                    continue
+                }
+                if fairPlayLicenseExtensions.contains(item.pathExtension.lowercased()) {
+                    try? fm.removeItem(at: item)
+                }
             }
         }
     }

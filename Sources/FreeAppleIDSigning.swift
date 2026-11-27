@@ -42,7 +42,8 @@ enum FreeAppleIDSigning {
 
         // SideSign CertificateProvisioningFlow.fetchCertificate:
         // list → reuse owned → empty? request : replace → request.
-        var portalCerts = (try? await DeveloperPortalClient.shared.listCertificates(auth: auth, team: team)) ?? []
+        // Free tier: list via listAllDevelopmentCerts only (serials for revoke).
+        var portalCerts = try await listPortalCertificatesSideSign(auth: auth, team: team)
 
         if !forceRefresh,
            let reused = tryReuseOwnedCertificate(matchingPortal: portalCerts) {
@@ -64,7 +65,8 @@ enum FreeAppleIDSigning {
                 )
             } catch {
                 guard isPortalAuthBlocked(error) || isPortalSlotError(error) else { throw error }
-                // SideSign handler `.retry` — refresh GrandSlam, clear slot, CSR again.
+                // SideSign handler `.retry` — GrandSlam portal refresh only (Store MZFinance untouched),
+                // then listAllDevelopmentCerts → revoke → CSR.
                 var lastError: Error = error
                 var workingAuth = auth
                 var workingTeam = team
@@ -76,9 +78,9 @@ enum FreeAppleIDSigning {
                         if case AppleAuthError.needsTwoFactor = error { throw error }
                         lastError = error
                     }
-                    let again = (try? await DeveloperPortalClient.shared.listCertificates(
+                    let again = try await listPortalCertificatesSideSign(
                         auth: workingAuth, team: workingTeam
-                    )) ?? []
+                    )
                     if !again.isEmpty {
                         try await revokePortalCertificates(
                             iosDevelopmentCertificates(in: again),
@@ -100,13 +102,13 @@ enum FreeAppleIDSigning {
                     }
                 }
                 throw AppleAuthError.message(
-                    "Couldn't capture a SideSign-style development certificate after clearing the portal slot (\(lastError.localizedDescription)). Sign out and back in under Account, then tap Create again — or import a custom .p12 + mobileprovision under Certificate."
+                    "Couldn't capture a SideSign-style development certificate after clearing the portal slot (\(lastError.localizedDescription)). Store login is unchanged — tap Create again after Allow, or import a custom .p12 + mobileprovision under Certificate."
                 )
             }
         }()
 
         // Re-fetch so we pair the private key with the full portal X.509 (SideSign).
-        let listed = (try? await DeveloperPortalClient.shared.listCertificates(auth: auth, team: team)) ?? []
+        let listed = (try? await listPortalCertificatesSideSign(auth: auth, team: team)) ?? []
         let portalMatch = listed.first {
             !$0.serialNumber.isEmpty
                 && $0.serialNumber.caseInsensitiveCompare(created.certificate.serialNumber) == .orderedSame
@@ -198,7 +200,7 @@ enum FreeAppleIDSigning {
         } catch {
             guard isPortalSlotError(error) else { throw error }
             // Slot still occupied — revoke again (SideSign retry) then CSR once more.
-            let again = (try? await DeveloperPortalClient.shared.listCertificates(auth: auth, team: team)) ?? []
+            let again = try await listPortalCertificatesSideSign(auth: auth, team: team)
             let retryRevoke = iosDevelopmentCertificates(in: again)
             try await revokePortalCertificates(
                 retryRevoke.isEmpty ? again : retryRevoke,
@@ -209,6 +211,28 @@ enum FreeAppleIDSigning {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             return try await requestCertificateSideSign(auth: auth, team: team)
         }
+    }
+
+    /// SideSign free-tier list — QH65B2 listAllDevelopmentCerts first (never soft-`[]` on 1200).
+    private static func listPortalCertificatesSideSign(
+        auth: AppleAuthSession,
+        team: Team
+    ) async throws -> [DevCertificate] {
+        if team.isFree {
+            do {
+                return try await DeveloperPortalClient.shared.listAllDevelopmentCertificatesPlist(
+                    auth: auth, team: team
+                )
+            } catch {
+                // Auth blocked: bubble up so caller refreshes GrandSlam portal (not Store).
+                if isPortalAuthBlocked(error) { throw error }
+                // Empty / soft network: fall through to combined list helper.
+                return (try? await DeveloperPortalClient.shared.listCertificates(
+                    auth: auth, team: team
+                )) ?? []
+            }
+        }
+        return (try? await DeveloperPortalClient.shared.listCertificates(auth: auth, team: team)) ?? []
     }
 
     /// SideSign filter: `ios development` / `iphone developer` names.

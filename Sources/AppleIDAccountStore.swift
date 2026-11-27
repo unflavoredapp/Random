@@ -451,7 +451,7 @@ final class AppleIDStore: ObservableObject {
             save()
         }
         authPhase = .idle
-        statusMessage = "Developer Portal ready for 7-day certificates"
+        statusMessage = "Developer Portal ready for 7-day certificates (Store login unchanged)"
     }
 
     private func preferredPortalTeam(from teams: [Team], session: AppleAuthSession) -> Team? {
@@ -1163,8 +1163,9 @@ final class AppleIDStore: ObservableObject {
         return try? JSONDecoder().decode(AppleAuthSession.self, from: data)
     }
 
-    /// Re-run GrandSlam with the saved password so Developer Portal tokens work for 7-day certs.
-    /// Does **not** remint Store (that remint was breaking Certificate create after a good Store login).
+    /// SideSign-style Apple ID login for Developer Portal only (`com.apple.gs.xcode.auth`).
+    /// Re-runs GrandSlam with the saved password so 7-day cert create works.
+    /// Never touches `storeSessionJSON` / MZFinance — Store login stays as-is when it already works.
     @discardableResult
     func refreshPortalSession() async throws -> AppleAuthSession {
         guard let account = activeAccount else {
@@ -1173,9 +1174,11 @@ final class AppleIDStore: ObservableObject {
         guard let password = passwordForAccount(id: account.id), !password.isEmpty else {
             throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Account.")
         }
+        // Snapshot Store session so a portal Allow cannot wipe a working downloads login.
+        let preservedStoreJSON = account.storeSessionJSON
         authPhase = .authenticating
         lastError = nil
-        statusMessage = "Refreshing Developer Portal session…"
+        statusMessage = "Refreshing Developer Portal (Store login unchanged)…"
         do {
             let session = try await GSAAuthClient.shared.authenticate(
                 email: account.email,
@@ -1183,15 +1186,17 @@ final class AppleIDStore: ObservableObject {
                 requestTrustedDevicePush: true
             )
             await persistPortalSession(session)
+            restoreStoreSessionJSONIfNeeded(preservedStoreJSON, forEmail: account.email)
             return session
         } catch AppleAuthError.needsTwoFactor {
             withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
             refreshTwoFactorChannelFromGSA()
-            statusMessage = "Allow this Developer Portal sign-in, then enter the 6-digit code to create your 7-day certificate."
+            statusMessage = "Allow Developer Portal (signing only). Store downloads stay signed in — then enter the 6-digit code."
             throw AppleAuthError.needsTwoFactor
         } catch {
             authPhase = .idle
             lastError = error.localizedDescription
+            restoreStoreSessionJSONIfNeeded(preservedStoreJSON, forEmail: account.email)
             throw error
         }
     }
@@ -1209,9 +1214,10 @@ final class AppleIDStore: ObservableObject {
         guard let password = passwordForAccount(id: account.id), !password.isEmpty else {
             throw AppleAuthError.message("Missing Apple ID password — sign out and sign in again under Account.")
         }
+        let preservedStoreJSON = account.storeSessionJSON
         lastError = nil
         authPhase = .verifying
-        statusMessage = "Finishing Developer Portal trust…"
+        statusMessage = "Finishing Developer Portal trust (Store login unchanged)…"
         do {
             guard GSAAuthClient.shared.hasPendingTwoFactor else {
                 // Challenge expired — start a fresh portal Allow, then ask for the new code.
@@ -1222,17 +1228,19 @@ final class AppleIDStore: ObservableObject {
                         requestTrustedDevicePush: true
                     )
                     await persistPortalSession(session)
+                    restoreStoreSessionJSONIfNeeded(preservedStoreJSON, forEmail: account.email)
                     _ = Keychain.setSessionSecret(Self.passwordPrefix + account.id, password)
                     return session
                 } catch AppleAuthError.needsTwoFactor {
                     withAnimation(.snappy) { authPhase = .awaitingTwoFactor }
                     refreshTwoFactorChannelFromGSA()
-                    statusMessage = "Allow the new Developer Portal prompt, then enter that code."
+                    statusMessage = "Allow the new Developer Portal prompt, then enter that code. Store stays signed in."
                     throw AppleAuthError.needsTwoFactor
                 }
             }
             let session = try await GSAAuthClient.shared.submitTwoFactor(code: digits)
             await persistPortalSession(session)
+            restoreStoreSessionJSONIfNeeded(preservedStoreJSON, forEmail: account.email)
             _ = Keychain.setSessionSecret(Self.passwordPrefix + account.id, password)
             return session
         } catch AppleAuthError.needsTwoFactor {
@@ -1240,8 +1248,23 @@ final class AppleIDStore: ObservableObject {
         } catch {
             authPhase = .awaitingTwoFactor
             lastError = error.localizedDescription
-            statusMessage = "Couldn't finish Developer Portal — check the code and retry."
+            statusMessage = "Couldn't finish Developer Portal — check the code and retry. Store login is unchanged."
+            restoreStoreSessionJSONIfNeeded(preservedStoreJSON, forEmail: account.email)
             throw error
+        }
+    }
+
+    /// Guard: portal GrandSlam must never clear a working MZFinance Store session.
+    private func restoreStoreSessionJSONIfNeeded(_ preserved: Data?, forEmail email: String) {
+        guard let preserved, !preserved.isEmpty else { return }
+        let key = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard let idx = accounts.firstIndex(where: {
+            $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == key
+                || $0.email.caseInsensitiveCompare(email) == .orderedSame
+        }) else { return }
+        if accounts[idx].storeSessionJSON == nil || accounts[idx].storeSessionJSON?.isEmpty == true {
+            accounts[idx].storeSessionJSON = preserved
+            save()
         }
     }
 

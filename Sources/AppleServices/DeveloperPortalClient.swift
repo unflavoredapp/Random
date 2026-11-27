@@ -76,11 +76,17 @@ final class DeveloperPortalClient: ObservableObject {
         // v1 JSON often 1200s or omits the single free Development slot.
         if team.isFree {
             do {
-                let plist = try await listCertificatesPlist(session: auth, team: team)
-                if !plist.isEmpty { return plist }
-            } catch { /* try v1 */ }
-            do { return try await listCertificatesV1(session: auth, team: team) } catch {
-                return []
+                return try await listCertificatesPlist(session: auth, team: team)
+            } catch let plistError {
+                // Soft-fallback to v1 only when plist is empty/network — never hide a portal 1200
+                // behind `[]` or the free slot cannot be revoked before CSR.
+                if case AppleAuthError.portal = plistError { throw plistError }
+                do {
+                    return try await listCertificatesV1(session: auth, team: team)
+                } catch {
+                    if case AppleAuthError.portal = error { throw error }
+                    throw plistError
+                }
             }
         }
         do {
@@ -88,6 +94,11 @@ final class DeveloperPortalClient: ObservableObject {
         } catch {
             return try await listCertificatesPlist(session: auth, team: team)
         }
+    }
+
+    /// SideSign free-tier: always hit listAllDevelopmentCerts so revoke can clear the single slot.
+    func listAllDevelopmentCertificatesPlist(auth: AppleAuthSession, team: Team) async throws -> [DevCertificate] {
+        try await listCertificatesPlist(session: auth, team: team)
     }
 
     func revokeCertificate(_ certificate: DevCertificate, session auth: AppleAuthSession, team: Team) async throws {
