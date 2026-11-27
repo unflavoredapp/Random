@@ -555,7 +555,8 @@ final class DeveloperPortalClient: ObservableObject {
         req.setValue(a.timeZone, forHTTPHeaderField: "X-Apple-I-TimeZone")
     }
 
-    private static func certificatePEM(from data: Data) -> Data {
+    /// Wrap DER / bare base64 portal cert bytes as PEM for PKCS#12 import.
+    static func certificatePEM(from data: Data) -> Data {
         if String(data: data, encoding: .utf8)?.contains("BEGIN CERTIFICATE") == true {
             return data
         }
