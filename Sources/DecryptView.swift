@@ -545,6 +545,11 @@ struct DecryptView: View {
                     }
                 }
 
+                // Pre-Get readiness: Apple ID · Store · Keys · live path for selected bid.
+                if DecryptChannel.current == .device {
+                    FairPlayPreGetReadinessStrip()
+                }
+
                 if c.searching {
                     HStack(spacing: 10) {
                         ProgressView().tint(TetherlessPalette.accent)

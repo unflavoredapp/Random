@@ -630,6 +630,9 @@ struct AccountHomeView: View {
                 // Always-visible FairPlay keys status (not buried under FairPlay advanced).
                 AccountFairPlayKeysSection()
 
+                // Device smoke path before filing decrypt failures.
+                FairPlaySmokeChecklistSection()
+
                 // Settings root (was LIBRARY / DEVICE → Settings push).
                 IPadnSettingsRootSections(statusMessage: $settingsStatus)
 
