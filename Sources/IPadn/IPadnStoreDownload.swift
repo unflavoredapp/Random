@@ -82,7 +82,7 @@ enum IPadnStoreDownload {
         let sinfN = IPadnIPAPackager.countSinfs(inIPA: destination)
         guard sinfN > 0 else {
             throw IPadnToolError.message(
-                "FairPlay licenses did not land in the Store IPA (0 .sinf). Retry Get."
+                "FairPlay licenses did not land in the Store IPA (0 .sinf). Turn off Airplane Mode, then retry Get."
             )
         }
         onProgress?("Embedded \(asset.sinfs.count) FairPlay license(s) · IPA has \(sinfN) .sinf…")

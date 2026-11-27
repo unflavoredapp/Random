@@ -393,6 +393,7 @@ final class IPadnDownloadManager: NSObject, ObservableObject {
             tasks[id] = nil
             if let file = jobs.first(where: { $0.id == id })?.fileURL {
                 try? FileManager.default.removeItem(at: file)
+                try? FileManager.default.removeItem(at: IPadnIPAPackager.sinfSidecarURL(forIPA: file))
             }
             try? FileManager.default.removeItem(at: IPadnDownloadStorage.resumeURL(id))
             resumeData[id] = nil
