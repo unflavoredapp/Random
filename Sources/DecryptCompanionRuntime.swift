@@ -218,26 +218,29 @@ enum DecryptCompanionRuntime {
             log("Stamped live install path: (none readable yet)")
         }
         // Host stamp can be missing (App Group stripped / bid mismatch). Rediscover on-device.
+        // Never accept a foreign/stale path — bid (stamp or Info.plist) must match expectedBid.
         if liveURL == nil, !expectedBid.isEmpty {
             let known = ((man?["hostLiveInstallPath"] as? String)
                 ?? (snap["hostLiveInstallPath"] as? String))?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if let known, !known.isEmpty {
                 let knownURL = URL(fileURLWithPath: known)
-                // Trust host-stamped Bundle/Application paths even when fileExists lies.
-                if FairPlayDecrypt.isLiveAppStoreInstall(knownURL) {
-                    liveURL = knownURL
-                    log("Using host-stamped live path (sandbox may hide fileExists): \(known)")
+                if let accepted = Self.acceptRediscoveredLiveURL(knownURL, expectedBid: expectedBid) {
+                    liveURL = accepted
+                    log("Using host-stamped live path (sandbox may hide fileExists): \(accepted.path)")
+                } else {
+                    log("Ignoring host-stamped path (bid mismatch or not a .app): \(known)")
                 }
             }
             if liveURL == nil,
                let found = FairPlayDecrypt.installedAppURL(
                 bundleID: expectedBid,
                 knownPath: (known?.isEmpty == false) ? known : nil
-               ), FairPlayDecrypt.isLiveAppStoreInstall(found) {
-                liveURL = found
-                log("Rediscovered live App Store install for \(expectedBid): \(found.path)")
-                DecryptCompanionHandoff.publishLiveInstallPath(found.path, bundleID: expectedBid)
+               ),
+               let accepted = Self.acceptRediscoveredLiveURL(found, expectedBid: expectedBid) {
+                liveURL = accepted
+                log("Rediscovered live App Store install for \(expectedBid): \(accepted.path)")
+                DecryptCompanionHandoff.publishLiveInstallPath(accepted.path, bundleID: expectedBid)
             }
         }
 
@@ -443,6 +446,42 @@ enum DecryptCompanionRuntime {
         return outIPA
     }
 
+    // MARK: - Live path rediscovery
+
+    /// Accept a rediscovered/stamped path only when it looks like a Store `.app` and
+    /// does not contradict `expectedBid` (stamp Info.plist when readable).
+    private static func acceptRediscoveredLiveURL(_ url: URL, expectedBid: String) -> URL? {
+        let want = expectedBid.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidate = url.resolvingSymlinksInPath().standardizedFileURL
+        guard FairPlayDecrypt.isLiveAppStoreInstall(candidate) else { return nil }
+        // Prefer a real *.app — bare UUID containers are not FairPlay roots.
+        if candidate.pathExtension != "app" {
+            var walk = candidate
+            var found: URL?
+            while walk.path != "/" {
+                if walk.pathExtension == "app" { found = walk; break }
+                walk = walk.deletingLastPathComponent()
+            }
+            if found == nil,
+               let kids = try? FileManager.default.contentsOfDirectory(
+                at: candidate, includingPropertiesForKeys: nil
+               ) {
+                found = kids.first(where: { $0.pathExtension == "app" })
+            }
+            guard let app = found else { return nil }
+            candidate = app
+        }
+        if !want.isEmpty,
+           let info = NSDictionary(contentsOf: candidate.appendingPathComponent("Info.plist")) as? [String: Any],
+           let liveBid = (info["CFBundleIdentifier"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+           !liveBid.isEmpty,
+           !DecryptCompanionHandoff.bundleIDsMatch(liveBid, want) {
+            return nil
+        }
+        return candidate
+    }
+
     // MARK: - Embedded metadata
 
     private static func embeddedAppVersion(at app: URL) -> String? {
@@ -565,6 +604,21 @@ enum DecryptCompanionRuntime {
     ) throws {
         guard !report.entries.isEmpty else {
             throw DecryptError("DRM verify found no Mach-Os in \(stage).")
+        }
+        // Sparse EmbeddedPayload + sandbox-hidden live main must not ship as success.
+        if let app {
+            let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist")) as? [String: Any]
+            let exeName = (info?["CFBundleExecutable"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !exeName.isEmpty {
+                let mainURL = app.appendingPathComponent(exeName)
+                var isDir: ObjCBool = false
+                if !FileManager.default.fileExists(atPath: mainURL.path, isDirectory: &isDir) || isDir.boolValue {
+                    throw DecryptError(
+                        "Decrypt export missing main executable \(exeName) in \(stage). Live FairPlay likely skipped the main binary — re-run Get with the app installed from the App Store."
+                    )
+                }
+            }
         }
         if partial {
             let mainNames: Set<String> = {

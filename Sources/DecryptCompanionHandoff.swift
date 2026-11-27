@@ -140,12 +140,12 @@ enum DecryptCompanionHandoff {
     /// Clear stamps that don’t belong to `bundleID` before packaging a new companion target.
     /// Keeps a matching encrypted-IPA or live-install stamp so EncryptedSource.ipa can still bundle.
     ///
-    /// When `bundleID` is still empty (Search stub / thin IPA), do **not** wipe stamps —
-    /// packaging recovers CFBundleIdentifier from EncryptedSource / live Info.plist /
-    /// iTunesMetadata. Clearing here caused Tubi-style “Couldn't determine bundle ID”.
+    /// When `bundleID` is still empty, clear the prior **live** stamp so a new Get cannot
+    /// FairPlay the previous app. Keep EncryptedIPA stamps for packaging recovery.
     static func beginTargetWorkflow(bundleID: String) {
         let bid = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         if bid.isEmpty {
+            clearLiveInstallPath()
             persistTargetStamp(fromCurrentKeys(preferredBundleID: ""))
             return
         }
@@ -328,7 +328,17 @@ enum DecryptCompanionHandoff {
 
     /// Companion: after on-device FairPlay can't finish (ENOMEM…), ask host to decrypt on the API host.
     static func requestServerFallback(reason: String) {
-        let snap = readHostSnapshot(fromManifest: nil)
+        // Free certs strip App Group — always merge EmbeddedPayload/manifest.plist.
+        let manifest: [String: Any]? = {
+            let embed = Bundle.main.bundleURL.appendingPathComponent("EmbeddedPayload", isDirectory: true)
+            let url = embed.appendingPathComponent("manifest.plist")
+            guard let data = try? Data(contentsOf: url),
+                  let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+                return nil
+            }
+            return plist
+        }()
+        let snap = readHostSnapshot(fromManifest: manifest)
         let url = ((snap["hostStoreURL"] as? String) ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !url.isEmpty else { return }
         let req = ServerFallbackRequest(
@@ -660,9 +670,24 @@ enum DecryptCompanionHandoff {
                     out[key] = v
                     continue
                 }
-                if key == "hostLiveInstallPath" || key == "bundleID" {
+                if key == "hostLiveInstallPath" || key == "bundleID" || key == "hostStoreURL"
+                    || key == "hostStoreVersion" || key == "hostStoreDisplayName" {
                     let cur = (out[key] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                    if cur.isEmpty { out[key] = v }
+                    let incoming = "\(v)".trimmingCharacters(in: .whitespacesAndNewlines)
+                    // Prefer manifest when App Group is empty OR when bids disagree (stale snap).
+                    if cur.isEmpty {
+                        out[key] = v
+                    } else if key == "bundleID" || key == "hostLiveInstallPath",
+                              let manBid = (manifest["bundleID"] as? String)?
+                                .trimmingCharacters(in: .whitespacesAndNewlines),
+                              let snapBid = (out["bundleID"] as? String)?
+                                .trimmingCharacters(in: .whitespacesAndNewlines),
+                              !manBid.isEmpty, !snapBid.isEmpty,
+                              !bundleIDsMatch(manBid, snapBid) {
+                        out[key] = v
+                    } else if key == "hostStoreURL", cur.isEmpty, !incoming.isEmpty {
+                        out[key] = v
+                    }
                 }
             }
         }
@@ -689,14 +714,27 @@ enum DecryptCompanionHandoff {
         let expected = expectedBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
 
         func acceptLiveURL(_ url: URL, stampedBid: String) -> URL? {
-            let resolved = url.resolvingSymlinksInPath().standardizedFileURL
-            let path = resolved.path
-            // Companion sandbox often lies about fileExists for other apps' Store
-            // containers — fairplayd can still mremap. Trust host-stamped
-            // /var/containers/Bundle/Application paths even when fileExists is false.
+            var resolved = url.resolvingSymlinksInPath().standardizedFileURL
             let looksLive = FairPlayDecrypt.isLiveAppStoreInstall(resolved)
-            let exists = FileManager.default.fileExists(atPath: path)
+            let exists = FileManager.default.fileExists(atPath: resolved.path)
             guard exists || looksLive else { return nil }
+            // Prefer a real *.app — bare UUID containers are not FairPlay roots.
+            if resolved.pathExtension != "app" {
+                var walk = resolved
+                var found: URL?
+                while walk.path != "/" {
+                    if walk.pathExtension == "app" { found = walk; break }
+                    walk = walk.deletingLastPathComponent()
+                }
+                if found == nil,
+                   let kids = try? FileManager.default.contentsOfDirectory(
+                    at: resolved, includingPropertiesForKeys: nil
+                   ) {
+                    found = kids.first(where: { $0.pathExtension == "app" })
+                }
+                guard let app = found else { return nil }
+                resolved = app
+            }
             if !expected.isEmpty {
                 if !stampedBid.isEmpty, !bundleIDsMatch(stampedBid, expected) {
                     return nil

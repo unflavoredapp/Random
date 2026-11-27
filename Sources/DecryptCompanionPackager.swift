@@ -580,18 +580,18 @@ enum DecryptCompanionPackager {
             }
             let known = (knownBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !known.isEmpty { return known }
+            // Prefer encrypted-IPA stamp / IPA peek over a prior live stamp (avoids wrong-app bid).
             if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID, !stamped.isEmpty {
                 return stamped
             }
-            if let stamped = DecryptCompanionHandoff.readLiveInstallPath()?.bundleID, !stamped.isEmpty {
-                return stamped
+            if hasEncryptedSource, let fromIPA = IPadnIPAPackager.bundleID(fromIPA: bundledIPA) {
+                return fromIPA
             }
             if let stamp = DecryptCompanionHandoff.readTargetStamp(), !stamp.bundleID.isEmpty {
                 return stamp.bundleID
             }
-            // Last resort: peek bundled EncryptedSource.ipa (Info.plist / iTunesMetadata).
-            if hasEncryptedSource, let fromIPA = IPadnIPAPackager.bundleID(fromIPA: bundledIPA) {
-                return fromIPA
+            if let stamped = DecryptCompanionHandoff.readLiveInstallPath()?.bundleID, !stamped.isEmpty {
+                return stamped
             }
             return ""
         }()
@@ -684,16 +684,27 @@ enum DecryptCompanionPackager {
             progress?("Advanced FairPlay · \(fpOpts.sourceMode.title) · retries \(fpOpts.retryRounds)")
         }
         // Host readiness only — never passwords / PET / store session JSON.
+        // Apply snapshot first, then force this run's bid + live path so a stale
+        // App Group snap cannot overwrite the target we just packaged.
+        let packagedLivePath = (meta["hostLiveInstallPath"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         for (k, v) in DecryptCompanionHandoff.hostSnapshot() {
             meta[k] = v
+        }
+        meta["bundleID"] = embeddedBundleID
+        if !packagedLivePath.isEmpty {
+            meta["hostLiveInstallPath"] = packagedLivePath
+        } else if let stamped = DecryptCompanionHandoff.readLiveInstallPath(matchingBundleID: embeddedBundleID) {
+            meta["hostLiveInstallPath"] = stamped.path
         }
         DecryptCompanionHandoff.publishHostSnapshot()
         // Never serialize FairPlay key blobs / passwords into the companion.
         DecryptCompanionHandoff.stripForbiddenSecrets(&meta)
         meta["secrets"] = false
-        if let data = try? PropertyListSerialization.data(fromPropertyList: meta, format: .xml, options: 0) {
-            try? data.write(to: embedRoot.appendingPathComponent("manifest.plist"))
-        }
+        let manifestURL = embedRoot.appendingPathComponent("manifest.plist")
+        let data = try PropertyListSerialization.data(fromPropertyList: meta, format: .xml, options: 0)
+        try data.write(to: manifestURL, options: .atomic)
+        progress?("Wrote EmbeddedPayload/manifest.plist for \(embeddedBundleID)")
         return name
     }
 

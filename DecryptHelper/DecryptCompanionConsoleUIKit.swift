@@ -177,6 +177,10 @@ final class DecryptCompanionConsoleViewController: UIViewController {
             } catch {
                 let text = error.localizedDescription
                 companion.markFailed(text)
+                if Self.shouldBounceToServer(text) {
+                    companion.appendLog("On-device FairPlay failed — opening AppAssassin to finish on backup server…")
+                    DecryptCompanionHandoff.requestServerFallback(reason: text)
+                }
                 presentFailureAlert(text)
             }
         }
@@ -237,8 +241,25 @@ final class DecryptCompanionConsoleViewController: UIViewController {
                 AppStoreDecryptGuide.openSystemSettings()
             })
         }
+        if Self.shouldBounceToServer(text) {
+            alert.addAction(UIAlertAction(title: "Use backup server", style: .default) { _ in
+                DecryptCompanionHandoff.requestServerFallback(reason: text)
+            })
+        }
         alert.addAction(UIAlertAction(title: "OK", style: .cancel))
         present(alert, animated: true)
+    }
+
+    private static func shouldBounceToServer(_ text: String) -> Bool {
+        let t = text.lowercased()
+        return t.contains("enomem")
+            || t.contains("not enough memory")
+            || t.contains("mremap")
+            || t.contains("out of memory")
+            || t.contains("jetsam")
+            || t.contains("phone worker")
+            || t.contains("unfairplay")
+            || t.contains("bounce to")
     }
 
     private static func loadTargetIcon() -> UIImage? {
