@@ -76,19 +76,24 @@ enum DecryptCompanionRuntime {
         let embedInfo = NSDictionary(
             contentsOf: src.appendingPathComponent("Info.plist")
         ) as? [String: Any]
-        let bid = (embedInfo?["CFBundleIdentifier"] as? String)
+        let bid = ((embedInfo?["CFBundleIdentifier"] as? String)
             ?? (man?["bundleID"] as? String)
             ?? (snap["bundleID"] as? String)
-            ?? ""
-        if !bid.isEmpty {
-            ctrl.appendLog("Target · \(bid)")
-        }
+            ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let live = ((man?["hostLiveInstallPath"] as? String)
             ?? (snap["hostLiveInstallPath"] as? String))?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        if !live.isEmpty {
-            ctrl.appendLog("Preflight live · \(live)")
-        } else {
+        ctrl.setBreadcrumb(
+            bid: bid.isEmpty ? nil : bid,
+            livePath: live.isEmpty ? nil : live,
+            appGroup: DecryptCompanionHandoff.appGroupAvailable,
+            exportNote: DecryptCompanionHandoff.appGroupAvailable
+                ? "Export · pending (App Group → host)"
+                : "Export · pending (Share-only — free cert)",
+            logMirror: true
+        )
+        if live.isEmpty {
             ctrl.appendLog("Preflight live · (not stamped — re-Get after App Store install)")
         }
         if let n = man?["encryptedMachOs"] as? Int ?? (man?["encryptedMachOs"] as? NSNumber)?.intValue {
@@ -209,6 +214,7 @@ enum DecryptCompanionRuntime {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !expectedBid.isEmpty {
             log("Target bid · \(expectedBid)")
+            DecryptCompanionController.shared.setBreadcrumb(bid: expectedBid)
         } else {
             log("Target bid · (missing from EmbeddedPayload / manifest)")
         }
@@ -218,6 +224,7 @@ enum DecryptCompanionRuntime {
         )
         if let liveURL {
             log("Stamped live install path: \(liveURL.path)")
+            DecryptCompanionController.shared.setBreadcrumb(livePath: liveURL.path)
         } else {
             log("Stamped live install path: (none readable yet)")
         }
@@ -232,6 +239,7 @@ enum DecryptCompanionRuntime {
                 if let accepted = Self.acceptRediscoveredLiveURL(knownURL, expectedBid: expectedBid) {
                     liveURL = accepted
                     log("Using host-stamped live path (sandbox may hide fileExists): \(accepted.path)")
+                    DecryptCompanionController.shared.setBreadcrumb(livePath: accepted.path)
                 } else {
                     log("Ignoring host-stamped path (bid mismatch or not a .app): \(known)")
                 }
@@ -245,6 +253,7 @@ enum DecryptCompanionRuntime {
                 liveURL = accepted
                 log("Rediscovered live App Store install for \(expectedBid): \(accepted.path)")
                 DecryptCompanionHandoff.publishLiveInstallPath(accepted.path, bundleID: expectedBid)
+                DecryptCompanionController.shared.setBreadcrumb(livePath: accepted.path)
             }
         }
 
@@ -258,6 +267,12 @@ enum DecryptCompanionRuntime {
         }
         let readRoot = liveURL
         log("Live install path: \(liveURL.path)")
+        DecryptCompanionController.shared.setBreadcrumb(
+            bid: expectedBid.isEmpty ? nil : expectedBid,
+            livePath: liveURL.path,
+            appGroup: DecryptCompanionHandoff.appGroupAvailable,
+            logMirror: true
+        )
 
         // Live installs often refuse cryptid probes — still proceed; fairplayd mremaps.
         var before = try FairPlayDecrypt.verifyApp(at: readRoot)
@@ -450,7 +465,20 @@ enum DecryptCompanionRuntime {
         )
         DecryptCompanionController.shared.exportSentToHost = published
         if published {
+            log("Export · App Group → host (appassassin://decrypt-export)")
+            DecryptCompanionController.shared.setBreadcrumb(
+                appGroup: true,
+                exportNote: "Export · App Group → host ✓",
+                logMirror: true
+            )
             DecryptCompanionHandoff.openHostForClearIPAImport()
+        } else {
+            log("Export · App Group unavailable — use Share sheet (Open in AppAssassin)")
+            DecryptCompanionController.shared.setBreadcrumb(
+                appGroup: false,
+                exportNote: "Export · Share-only (App Group unavailable)",
+                logMirror: true
+            )
         }
         // Advanced: optionally drop the durable encrypted IPA after a clear export.
         if !fpOpts.keepEncryptedIPA {
