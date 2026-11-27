@@ -18,15 +18,13 @@ function sendHtml(res, { build = "" } = {}) {
 <meta name="color-scheme" content="dark"/>
 <meta name="theme-color" content="#0a0c12"/>
 <title>FastDecrypt</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"/>
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
-<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Manrope:wght@400;600;700&display=swap" rel="stylesheet"/>
 <style>
 :root{
   --bg0:#07090f;--bg1:#121826;--ink:#eef2ff;--mut:#9aa6bf;
   --acc:#ff9a1f;--acc2:#ffc46b;--line:rgba(255,255,255,.1);--ok:#3dd68c;--bad:#ff6b6b;
-  --font-display:"Bricolage Grotesque",system-ui,sans-serif;
-  --font-body:Manrope,system-ui,sans-serif;
+  /* Local-only fonts — Google Fonts blocked/slow in some in-app browsers. */
+  --font-display:"Avenir Next Condensed","Avenir Next",ui-rounded,"Segoe UI",system-ui,sans-serif;
+  --font-body:"Avenir Next","Segoe UI",system-ui,sans-serif;
 }
 *{box-sizing:border-box}
 html,body{margin:0;min-height:100%}

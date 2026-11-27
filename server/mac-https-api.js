@@ -504,22 +504,53 @@ async function handle(req, res) {
     return;
   }
 
-  // Public tokenized IPA download (bot stages >4 GB files here).
+  // Public tokenized IPA download (bot stages large files here).
+  // Supports Range so mobile browsers can resume multi-GB transfers.
   const dlMatch = /^\/d\/([a-f0-9]+)$/i.exec(p);
-  if (dlMatch && req.method === "GET") {
+  if (dlMatch && (req.method === "GET" || req.method === "HEAD")) {
     publicDl.cleanExpired();
     const entry = publicDl.getEntry(dlMatch[1]);
     if (!entry || !fs.existsSync(entry.file)) {
       return fail(res, 404, "Download expired — paste the App Store link again.");
     }
     const st = fs.statSync(entry.file);
-    res.writeHead(200, {
+    const total = st.size;
+    const fileName = String(entry.fileName || "App.ipa").replace(/"/g, "");
+    const baseHeaders = {
       "Content-Type": "application/octet-stream",
-      "Content-Length": st.size,
-      "Content-Disposition": `attachment; filename="${String(entry.fileName || "App.ipa").replace(/"/g, "")}"`,
+      "Accept-Ranges": "bytes",
+      "Content-Disposition": `attachment; filename="${fileName}"`,
       "Cache-Control": "private, max-age=60",
       "Access-Control-Allow-Origin": "*",
-    });
+      "X-Content-Type-Options": "nosniff",
+    };
+    const range = String(req.headers.range || "");
+    const rm = /^bytes=(\d*)-(\d*)$/i.exec(range);
+    if (rm && req.method === "GET") {
+      let start = rm[1] === "" ? 0 : parseInt(rm[1], 10);
+      let end = rm[2] === "" ? total - 1 : parseInt(rm[2], 10);
+      if (
+        Number.isNaN(start) ||
+        Number.isNaN(end) ||
+        start < 0 ||
+        end < start ||
+        start >= total
+      ) {
+        res.writeHead(416, { ...baseHeaders, "Content-Range": `bytes */${total}` });
+        return res.end();
+      }
+      end = Math.min(end, total - 1);
+      const len = end - start + 1;
+      res.writeHead(206, {
+        ...baseHeaders,
+        "Content-Length": len,
+        "Content-Range": `bytes ${start}-${end}/${total}`,
+      });
+      fs.createReadStream(entry.file, { start, end }).pipe(res);
+      return;
+    }
+    res.writeHead(200, { ...baseHeaders, "Content-Length": total });
+    if (req.method === "HEAD") return res.end();
     fs.createReadStream(entry.file).pipe(res);
     return;
   }
