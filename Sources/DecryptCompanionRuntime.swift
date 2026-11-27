@@ -16,8 +16,13 @@ import ZIPFoundation
 import SwiftUI
 #endif
 
-@MainActor
 enum DecryptCompanionRuntime {
+    /// Hop UI updates onto the main actor. FairPlay / copyTree must stay off MainActor
+    /// or the console freezes on the last bootstrap line (e.g. "Preflight · largest crypt").
+    private static func ui(_ work: @MainActor @escaping () -> Void) {
+        Task { @MainActor in work() }
+    }
+
     /// True when Info.plist says we're the companion role, or EmbeddedPayload exists.
     static var isCompanionProcess: Bool {
         if Bundle.main.object(forInfoDictionaryKey: "TLCompanionRole") as? Bool == true {
@@ -49,6 +54,7 @@ enum DecryptCompanionRuntime {
     }
 
     /// Paint the console immediately on launch (name, icon, Starting…) before FairPlay work.
+    @MainActor
     static func bootstrapCompanionUI() {
         let ctrl = DecryptCompanionController.shared
         let mode = (Bundle.main.object(forInfoDictionaryKey: DecryptCompanionIdentity.helperModeKey) as? String)
@@ -124,16 +130,23 @@ enum DecryptCompanionRuntime {
     /// FairPlayed `embeddedExport` + fail-closed DRM audit of the entire IPA:
     /// pre-scan cryptids → decrypt → verify copied tree → zip → verifyIPA.
     /// When Mac-only routing is on, bounce straight to the host Mac decrypt API.
+    /// Runs off the main actor so the console keeps painting during long remmaps.
     static func runEmbeddedDecrypt(progress: ((String) -> Void)? = nil) async throws -> URL {
+        try await Task.detached(priority: .userInitiated) {
+            try Self.runEmbeddedDecryptBody(progress: progress)
+        }.value
+    }
+
+    private static func runEmbeddedDecryptBody(progress: ((String) -> Void)? = nil) throws -> URL {
         let fm = FileManager.default
         let log: (String) -> Void = { line in
             progress?(line)
-            DecryptCompanionController.shared.appendLog(line)
+            ui { DecryptCompanionController.shared.appendLog(line) }
         }
 
         if DecryptMacRouting.macOnly {
             log("Server-only decrypt — skipping on-device companion FairPlay, opening Decrypt site URL…")
-            DecryptCompanionController.shared.statusTitle = "Decrypting on server…"
+            ui { DecryptCompanionController.shared.statusTitle = "Decrypting on server…" }
             DecryptCompanionHandoff.requestServerFallback(reason: "mac-only")
             throw DecryptError("Finishing decrypt on Decrypt site URL (Linux VPS / server).")
         }
@@ -169,13 +182,15 @@ enum DecryptCompanionRuntime {
         let icon = Self.loadEmbeddedAppIcon(at: src)
             ?? TetherlessBrand.appIconImage()
         // Refresh identity without wiping bootstrap logs (clearLog: false).
-        DecryptCompanionController.shared.present(
-            name: name,
-            version: version,
-            iconImage: icon,
-            clearLog: false
-        )
-        DecryptCompanionController.shared.statusTitle = "Decrypting…"
+        ui {
+            DecryptCompanionController.shared.present(
+                name: name,
+                version: version,
+                iconImage: icon,
+                clearLog: false
+            )
+            DecryptCompanionController.shared.statusTitle = "Decrypting…"
+        }
         log("Found embedded app: \(name)")
         let man = NSDictionary(contentsOf: embeddedPayloadRoot.appendingPathComponent("manifest.plist")) as? [String: Any]
         let snap = DecryptCompanionHandoff.readHostSnapshot(fromManifest: man)
@@ -198,17 +213,19 @@ enum DecryptCompanionRuntime {
         if fpOpts.sourceMode != .liveInstall {
             fpOpts.sourceMode = .embeddedPayload
         }
-        fpOpts.forceSerialDecrypt = true
+        // Ignore host "force serial" default — with ample free RAM dual-worker frameworks
+        // cut wall time; Jetsam.shouldForceSerial still serializes large secondaries.
+        fpOpts.forceSerialDecrypt = FairPlayJetsam.isTight(forCryptsize: 48 * 1024 * 1024)
         fpOpts.preferPartialOnLowRAM = true
         fpOpts.requireAllFrameworks = false
         let remmapPolicy = FairPlayDecrypt.applyDecryptPolicyForCurrentOS()
 #if DECRYPT_HELPER
         fpOpts.bounceLargeCryptToServer = false
         // Helper contract: stream-only, no key blobs, subordinate installed process.
-        log("policy=serial+partialOK+stream · FairPlay=EmbeddedPayload · remmap=\(remmapPolicy)")
+        log("policy=\(fpOpts.forceSerialDecrypt ? "serial" : "parallel2")+partialOK+stream · FairPlay=EmbeddedPayload · remmap=\(remmapPolicy)")
 #else
         // Fat host-shell companion may honor Advanced “bounce large crypt to server”.
-        log("policy=serial+partialOK · bounceLargeCrypt=\(fpOpts.bounceLargeCryptToServer) · remmap=\(remmapPolicy)")
+        log("policy=\(fpOpts.forceSerialDecrypt ? "serial" : "parallel2")+partialOK · bounceLargeCrypt=\(fpOpts.bounceLargeCryptToServer) · remmap=\(remmapPolicy)")
 #endif
         log(FairPlayJetsam.memorySummary(prefix: "preflight"))
         let snapBid = (snap["bundleID"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -219,7 +236,7 @@ enum DecryptCompanionRuntime {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if !expectedBid.isEmpty {
             log("Target bid · \(expectedBid)")
-            DecryptCompanionController.shared.setBreadcrumb(bid: expectedBid)
+            ui { DecryptCompanionController.shared.setBreadcrumb(bid: expectedBid) }
         } else {
             log("Target bid · (missing from EmbeddedPayload / manifest)")
         }
@@ -230,7 +247,7 @@ enum DecryptCompanionRuntime {
         )
         if let liveURL {
             log("Stamped live install path (hint): \(liveURL.path)")
-            DecryptCompanionController.shared.setBreadcrumb(livePath: liveURL.path)
+            ui { DecryptCompanionController.shared.setBreadcrumb(livePath: liveURL.path) }
         } else {
             log("Stamped live install path: (none — OK; FairPlay reads EmbeddedPayload)")
         }
@@ -243,7 +260,7 @@ enum DecryptCompanionRuntime {
                 if let accepted = Self.acceptRediscoveredLiveURL(knownURL, expectedBid: expectedBid) {
                     liveURL = accepted
                     log("Host-stamped live path (hint): \(accepted.path)")
-                    DecryptCompanionController.shared.setBreadcrumb(livePath: accepted.path)
+                    ui { DecryptCompanionController.shared.setBreadcrumb(livePath: accepted.path) }
                 }
             }
             if liveURL == nil,
@@ -255,7 +272,7 @@ enum DecryptCompanionRuntime {
                 liveURL = accepted
                 log("Rediscovered live App Store install (hint): \(accepted.path)")
                 DecryptCompanionHandoff.publishLiveInstallPath(accepted.path, bundleID: expectedBid)
-                DecryptCompanionController.shared.setBreadcrumb(livePath: accepted.path)
+                ui { DecryptCompanionController.shared.setBreadcrumb(livePath: accepted.path) }
             }
         }
 
@@ -273,12 +290,16 @@ enum DecryptCompanionRuntime {
             log("Advanced FairPlay · source=EmbeddedPayload (FairPlayed) · retries=\(fpOpts.retryRounds)")
             log("FairPlay read root · EmbeddedPayload: \(src.path)")
         }
-        DecryptCompanionController.shared.setBreadcrumb(
-            bid: expectedBid.isEmpty ? nil : expectedBid,
-            livePath: liveURL?.path,
-            appGroup: DecryptCompanionHandoff.appGroupAvailable,
-            logMirror: true
-        )
+        let breadcrumbBid = expectedBid
+        let breadcrumbLive = liveURL?.path
+        ui {
+            DecryptCompanionController.shared.setBreadcrumb(
+                bid: breadcrumbBid.isEmpty ? nil : breadcrumbBid,
+                livePath: breadcrumbLive,
+                appGroup: DecryptCompanionHandoff.appGroupAvailable,
+                logMirror: true
+            )
+        }
 
         // FairPlayed: fairplayd opens <dir>/SC_Info/<exe>.sinf next to the remmap input.
         // Missing licenses here surface as mremap EPERM and used to look like “keys”.
@@ -311,16 +332,27 @@ enum DecryptCompanionRuntime {
 
         log("Copying app bundle…")
         // Seed export resources from EmbeddedPayload; FairPlay overwrites clear Mach-Os into dest.
-        try copyTree(from: src, to: destApp)
+        try copyTree(from: src, to: destApp, progress: log)
 
         let verbose = fpOpts.verboseConsole
         let progressBridge: @Sendable (String) -> Void = { msg in
-            // Lean console by default; verbose advanced mode surfaces retries / SINF / paths.
+            // Surface heartbeat lines so the console doesn't look stuck during long remmaps.
             let keep = verbose
                 || msg.hasPrefix("[DECRYPTED]")
                 || msg.hasPrefix("[plain]")
                 || msg.hasPrefix("[FAILED]")
-                || (msg.hasPrefix("Decrypting ") && msg.contains("Mach-O file"))
+                || msg.hasPrefix("[soft-fail]")
+                || msg.hasPrefix("Decrypting ")
+                || msg.hasPrefix("Discover")
+                || msg.hasPrefix("Located ")
+                || msg.hasPrefix("Main executable")
+                || msg.hasPrefix("Frameworks")
+                || msg.hasPrefix("PlugIns")
+                || msg.hasPrefix("Full IPA")
+                || msg.hasPrefix("Serial-")
+                || msg.hasPrefix("Fast-decrypt")
+                || msg.hasPrefix("FairPlay workers")
+                || msg.hasPrefix("FairPlay remmap")
                 || msg.localizedCaseInsensitiveContains("retry")
                 || msg.localizedCaseInsensitiveContains("staged")
                 || msg.localizedCaseInsensitiveContains("jetsam")
@@ -332,25 +364,26 @@ enum DecryptCompanionRuntime {
                 || msg.localizedCaseInsensitiveContains("stream")
                 || msg.localizedCaseInsensitiveContains("lean")
                 || msg.localizedCaseInsensitiveContains("enomem")
-                || msg.localizedCaseInsensitiveContains("soft-fail")
-                || msg.localizedCaseInsensitiveContains("partial")
                 || msg.localizedCaseInsensitiveContains("rss")
                 || msg.localizedCaseInsensitiveContains("freed")
                 || msg.localizedCaseInsensitiveContains("embeddedpayload")
                 || msg.localizedCaseInsensitiveContains("fairplay read root")
+                || msg.localizedCaseInsensitiveContains("pre-main")
+                || msg.localizedCaseInsensitiveContains("workers")
             if keep {
                 progress?(msg)
-                Task { @MainActor in DecryptCompanionController.shared.appendLog(msg) }
+                ui { DecryptCompanionController.shared.appendLog(msg) }
             }
         }
         func runDecrypt(from root: URL) throws -> FairPlayDecryptReport {
             FairPlayJetsam.purgeTransientMemory()
             log(FairPlayJetsam.memorySummary(prefix: "pre-mremap"))
             log("Streaming FairPlay page capture from \(root == src ? "EmbeddedPayload" : "live install")…")
+            // Keep discovery / per-file heartbeats visible even when verbose is off.
             return try FairPlayDecrypt.decryptMachOs(
                 readingFrom: root,
                 writingTo: destApp,
-                quietConsole: !verbose,
+                quietConsole: false,
                 options: fpOpts,
                 progress: progressBridge
             )
@@ -448,7 +481,7 @@ enum DecryptCompanionRuntime {
             log("PARTIAL OK — main clear, \(report.softFailed.count) soft-fail / \(report.failed.count) leftover (Tetherless-style).")
         }
 
-        DecryptCompanionController.shared.statusTitle = "Done — saving automatically…"
+        ui { DecryptCompanionController.shared.statusTitle = "Done — saving automatically…" }
         let afterCopy = try FairPlayDecrypt.verifyApp(at: destApp)
         // Tetherless-style: main clear + leftover frameworks → PARTIAL, never Media & Purchases red herring.
         var partialOK = report.isPartial
@@ -500,7 +533,7 @@ enum DecryptCompanionRuntime {
             // Refresh console tile so the finished state shows the stamped icon.
             if let stamped = UIImage(contentsOfFile: destApp.appendingPathComponent("AppIcon60x60@3x.png").path)
                 ?? UIImage(contentsOfFile: destApp.appendingPathComponent("AppIcon.png").path) {
-                DecryptCompanionController.shared.iconImage = stamped
+                ui { DecryptCompanionController.shared.iconImage = stamped }
             }
         }
 
@@ -522,9 +555,13 @@ enum DecryptCompanionRuntime {
         let ipaVerify = try FairPlayDecrypt.verifyIPA(at: outIPA)
         try assertDecryptAcceptable(ipaVerify, stage: "packaged IPA", partial: partialOK, app: destApp)
 
-        DecryptCompanionController.shared.verifySummary = ipaVerify.summary
-        DecryptCompanionController.shared.markFinished(url: outIPA, name: name)
-        DecryptCompanionController.shared.statusTitle = partialOK ? "Done (PARTIAL)" : "Done"
+        let finishedPartial = partialOK
+        let verifySummary = ipaVerify.summary
+        ui {
+            DecryptCompanionController.shared.verifySummary = verifySummary
+            DecryptCompanionController.shared.markFinished(url: outIPA, name: name)
+            DecryptCompanionController.shared.statusTitle = finishedPartial ? "Done (PARTIAL)" : "Done"
+        }
         log("Wrote \(safeName)\(tag).ipa.")
 
         let info = NSDictionary(contentsOf: src.appendingPathComponent("Info.plist")) as? [String: Any]
@@ -537,22 +574,26 @@ enum DecryptCompanionRuntime {
             version: version,
             verifySummary: ipaVerify.summary
         )
-        DecryptCompanionController.shared.exportSentToHost = published
+        ui { DecryptCompanionController.shared.exportSentToHost = published }
         if published {
             log("Export · App Group → host (appassassin://decrypt-export)")
-            DecryptCompanionController.shared.setBreadcrumb(
-                appGroup: true,
-                exportNote: "Export · App Group → host ✓",
-                logMirror: true
-            )
+            ui {
+                DecryptCompanionController.shared.setBreadcrumb(
+                    appGroup: true,
+                    exportNote: "Export · App Group → host ✓",
+                    logMirror: true
+                )
+            }
             DecryptCompanionHandoff.openHostForClearIPAImport()
         } else {
             log("Export · App Group unavailable — use Share sheet (Open in AppAssassin)")
-            DecryptCompanionController.shared.setBreadcrumb(
-                appGroup: false,
-                exportNote: "Export · Share-only (App Group unavailable)",
-                logMirror: true
-            )
+            ui {
+                DecryptCompanionController.shared.setBreadcrumb(
+                    appGroup: false,
+                    exportNote: "Export · Share-only (App Group unavailable)",
+                    logMirror: true
+                )
+            }
         }
         // Advanced: optionally drop the durable encrypted IPA after a clear export.
         if !fpOpts.keepEncryptedIPA {
@@ -797,7 +838,11 @@ enum DecryptCompanionRuntime {
         "sinf", "supf", "supp", "supx", "sisv",
     ]
 
-    private static func copyTree(from src: URL, to destApp: URL) throws {
+    private static func copyTree(
+        from src: URL,
+        to destApp: URL,
+        progress: ((String) -> Void)? = nil
+    ) throws {
         let fm = FileManager.default
         var failures: [String] = []
         var skippedLicenses = 0
@@ -843,12 +888,18 @@ enum DecryptCompanionRuntime {
                     try? fm.removeItem(at: out)
                     try fm.copyItem(at: item, to: out)
                     copied += 1
+                    if copied == 1 || copied % 250 == 0 {
+                        progress?("Copying app bundle… \(copied) file(s)")
+                    }
                 } catch {
                     // Fallback when copyItem EPERMs on readable files.
                     do {
                         let data = try Data(contentsOf: item, options: [.mappedIfSafe])
                         try data.write(to: out, options: .atomic)
                         copied += 1
+                        if copied == 1 || copied % 250 == 0 {
+                            progress?("Copying app bundle… \(copied) file(s)")
+                        }
                     } catch {
                         failures.append(rel)
                     }
@@ -856,10 +907,9 @@ enum DecryptCompanionRuntime {
             }
         }
         if skippedLicenses > 0 {
-            DecryptCompanionController.shared.appendLog(
-                "Skipped \(skippedLicenses) FairPlay license path(s) during export copy (cleared IPA)."
-            )
+            progress?("Skipped \(skippedLicenses) FairPlay license path(s) during export copy (cleared IPA).")
         }
+        progress?("Copied \(copied) file(s) into export Payload.")
         if copied == 0 {
             throw DecryptError("Companion copy produced no files from EmbeddedPayload.")
         }
