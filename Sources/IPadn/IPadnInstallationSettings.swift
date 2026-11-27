@@ -217,7 +217,7 @@ struct IPadnInstallationSettingsView: View {
         } header: {
             Text("Apple ID (7-day)")
         } footer: {
-            Text("SideSign method: list portal Development certs, reuse if this iPhone still holds the private key, otherwise revoke the free-tier slot and CSR a fresh 7-day cert. Trust under Settings › General › VPN & Device Management after the first companion install.")
+            Text("SideSign Apple ID login talks to Developer Portal only (GrandSlam / xcode.auth) — your Store login stays as-is. Flow: list Development certs → reuse if this iPhone still holds the private key → otherwise revoke the free-tier slot and CSR a fresh 7-day cert. Trust under Settings › General › VPN & Device Management after the first companion install.")
         }
 
         Section {
@@ -346,8 +346,8 @@ struct IPadnInstallationSettingsView: View {
                     } catch {
                         if round == 3 {
                             issue = "Couldn't create a free 7-day certificate after clearing the Developer Portal slot (1200)."
-                                + "\n\nImport a custom .p12 + mobileprovision below — companion signing will fall back to that cert. Or wait a minute, Sign Out/In under Account, and tap Create again."
-                            certStatus = "Free Apple ID cert blocked — import a custom certificate."
+                                + "\n\nStore login is unchanged. Import a custom .p12 + mobileprovision below — companion signing will fall back to that cert. Or wait a minute, finish Developer Portal Allow under Certificate (not Store Sign Out), and tap Create again."
+                            certStatus = "Free Apple ID cert blocked — Store still signed in; import a custom certificate or retry Portal Allow."
                             return
                         }
                     }

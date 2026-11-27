@@ -22,7 +22,8 @@ final class GSAAuthClient: ObservableObject {
     /// Personally Entitled Token — MZFinance authenticate accepts this as `password` after HSA2.
     private let petApp = "com.apple.gs.idms.pet"
     /// SideInstaller / SideStore working Xcode version string for GSA + 2FA.
-    private let xcodeVersion = "15.3 (15E204a)"
+    /// SideSign / AltSign portal clients use 14.2 — keeps free Development CSR on the same path.
+    private let xcodeVersion = "14.2 (14C18)"
     private let session: URLSession = {
         let config = URLSessionConfiguration.ephemeral
         // GrandSlam sometimes redirects to HTML error pages; never follow those.
