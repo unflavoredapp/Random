@@ -1136,7 +1136,8 @@ enum FairPlayDecrypt {
     /// - FairPlayed `exportInstalledApp`: `fp_decrypt_file(install/rel, payload/rel)` —
     ///   fairplayd resolves `<dir of binary>/SC_Info/<exe>.sinf` on the **input** path.
     /// - foulplay `main.c`: remaps with the slice’s native `cryptid` (our `FP_MODE_NATIVE` first).
-    /// Companion FairPlayed path feeds EmbeddedPayload as `in_path`; live install is an optional heal.
+    /// Companion FairPlayed path feeds the **live Store install** as `in_path`
+    /// (EmbeddedPayload / EncryptedSource are export seed only — never FairPlay read roots).
     private static func decryptOne(
         file: URL,
         sourceApp: URL,

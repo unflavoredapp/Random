@@ -718,9 +718,17 @@ enum DecryptCompanionPackager {
         if let preferred, isLiveAppStoreInstall(preferred) {
             return preferred.resolvingSymlinksInPath().standardizedFileURL
         }
+        // Nudge Installed when Native is selected — Installer/KeyGate usually refreshed
+        // already; this covers packaging paths that skip the async gate refresh.
+        DeviceLibrary.shared.refreshIfStale()
         let known = DeviceLibrary.shared.apps.first {
             $0.bundleID.caseInsensitiveCompare(bundleID) == .orderedSame
         }?.installPath
+        // Prefer a stamped matching path before LS/MI (sandbox may hide fileExists).
+        if let stamped = DecryptCompanionHandoff.readLiveInstallPath(matchingBundleID: bundleID),
+           isLiveAppStoreInstall(URL(fileURLWithPath: stamped.path)) {
+            return URL(fileURLWithPath: stamped.path).resolvingSymlinksInPath().standardizedFileURL
+        }
         guard let live = FairPlayDecrypt.installedAppURL(bundleID: bundleID, knownPath: known),
               isLiveAppStoreInstall(live) else {
             return nil

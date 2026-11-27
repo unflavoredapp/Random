@@ -49,19 +49,14 @@ struct TetherlessApp: App {
                     .onOpenURL { url in
                         let scheme = url.scheme?.lowercased() ?? ""
                         // Custom schemes are handled by RootView; only ingest real files here.
+                        // Companion → host clear-IPA / server-fallback (appassassin + tetherless).
+                        if DecryptCompanionHandoff.handleIncomingHostDeepLink(url) {
+                            AppNav.shared.goSearch()
+                            return
+                        }
                         if scheme == "appassassin" || scheme == "tetherless" || scheme == "airshare" || scheme == "msign"
                             || scheme == "sideloader" || scheme == "fastdecryptbot"
                             || scheme == "appassassin-decrypt" || scheme == "tetherless-decrypt" {
-                            if scheme == "appassassin" || scheme == "tetherless",
-                               ["decrypt-export", "decrypt-import", "export"].contains(url.host?.lowercased() ?? "") {
-                                _ = DecryptCompanionHandoff.consumePendingClearIPAExport()
-                                AppNav.shared.goSearch()
-                            }
-                            if scheme == "appassassin" || scheme == "tetherless",
-                               ["decrypt-server", "server-decrypt", "server"].contains(url.host?.lowercased() ?? "") {
-                                _ = DecryptCompanionHandoff.consumePendingServerFallback()
-                                AppNav.shared.goSearch()
-                            }
                             return
                         }
                         // Shared / Open-in IPA from companion → treat as clear decrypt import.
