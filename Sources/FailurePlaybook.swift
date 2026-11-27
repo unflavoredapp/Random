@@ -121,13 +121,16 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-missing-scinfo",
             title: "EmbeddedPayload missing SC_Info licenses",
-            summary: "Companion remmaps without .sinf beside the binaries — remmap EPERM looks like keys. Delete FastDecryptBot, re-run Get from a Store IPA download so SC_Info is packaged into EmbeddedPayload.",
+            summary: "Store IPA / EmbeddedPayload shipped without .sinf. Delete the old Completed job + FastDecryptBot, re-run Get — progress must show “IPA has N .sinf” before companion opens.",
             matches: [
                 "has no sc_info",
                 "no sc_info/.sinf",
                 "no .sinf",
                 "licenses are packaged",
                 "embeddedpayload has mach-os but no sc_info",
+                "did not land in the store ipa",
+                "ipa has n .sinf",
+                "songlist sinfs",
             ],
             actionTitle: "Open Search",
             action: .openPair

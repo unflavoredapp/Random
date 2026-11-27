@@ -656,7 +656,11 @@ final class DeviceDecryptService: ObservableObject {
             if let installed = await resolveInstalledAppURL(bundleID: app.bundleID) {
                 publishDecryptProgress("Embedding installed \(app.name) into companion…")
                 do {
-                    try await decryptFromInstalledPath(installed, displayName: app.name)
+                    try await decryptFromInstalledPath(
+                        installed,
+                        displayName: app.name,
+                        knownBundleID: app.bundleID
+                    )
                     return
                 } catch {
                     let text = error.localizedDescription
@@ -685,11 +689,21 @@ final class DeviceDecryptService: ObservableObject {
     /// Companion embed from a live install — no in-app FairPlay. Prefer Store IPA → companion.
     private func decryptFromInstalledPath(
         _ installed: URL,
-        displayName: String
+        displayName: String,
+        knownBundleID: String? = nil
     ) async throws {
         let info = NSDictionary(contentsOf: installed.appendingPathComponent("Info.plist")) as? [String: Any]
         var bid = (info?["CFBundleIdentifier"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if bid.isEmpty {
+            bid = (knownBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if bid.isEmpty {
+            bid = (DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID
+                ?? DecryptCompanionHandoff.readTargetStamp()?.bundleID
+                ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         if bid.isEmpty {
             let path = installed.resolvingSymlinksInPath().standardizedFileURL.path
             bid = DeviceLibrary.shared.apps.first {
@@ -702,7 +716,7 @@ final class DeviceDecryptService: ObservableObject {
         }
         guard !bid.isEmpty else {
             throw DecryptError(
-                "Couldn't determine bundle ID for \(displayName). Pair Native + refresh Installed, then retry."
+                "Couldn't determine bundle ID for \(displayName). Re-run Get from Search (Store IPA), or Pair Native + refresh Installed, then retry."
             )
         }
         _ = try await FairPlayKeyGate.confirmReadyForCompanion(
@@ -890,7 +904,11 @@ final class DeviceDecryptService: ObservableObject {
                 )
                 publishDecryptProgress(error.localizedDescription)
                 try FairPlayKeyGate.requireReady()
-                try await decryptFromInstalledPath(installed, displayName: app.name)
+                try await decryptFromInstalledPath(
+                    installed,
+                    displayName: app.name,
+                    knownBundleID: bid
+                )
             }
         } catch {
             let text = error.localizedDescription
@@ -1010,7 +1028,11 @@ final class DeviceDecryptService: ObservableObject {
                 )
                 publishDecryptProgress(detail)
                 try FairPlayKeyGate.requireReady()
-                try await decryptFromInstalledPath(installed, displayName: displayName)
+                try await decryptFromInstalledPath(
+                    installed,
+                    displayName: displayName,
+                    knownBundleID: bundleID
+                )
                 AppleIDStore.shared.clearStoreVerificationIfSessionUsable()
                 return
             }

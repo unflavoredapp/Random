@@ -373,11 +373,24 @@ enum DecryptCompanionPackager {
         try fm.createDirectory(at: extract, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: extract) }
 
+        let ipaSinfN = IPadnIPAPackager.countSinfs(inIPA: ipa)
+        progress?("Store IPA licenses · \(ipaSinfN) .sinf in archive")
+        if ipaSinfN == 0 {
+            throw DecryptError(
+                "Store IPA has no SC_Info/.sinf licenses. Delete the Completed Crunchyroll job, re-run Get so songList sinfs are injected, then retry."
+            )
+        }
         try fm.unzipItem(at: ipa, to: extract)
         let payload = extract.appendingPathComponent("Payload", isDirectory: true)
         guard let srcApp = try fm.contentsOfDirectory(at: payload, includingPropertiesForKeys: nil)
             .first(where: { $0.pathExtension == "app" }) else {
             throw DecryptError("No Payload/*.app in the encrypted IPA to embed.")
+        }
+        // ZIPFoundation unzip can drop update-mode entries — re-extract SC_Info from the IPA zip.
+        let unzippedSinfs = Self.countSinfs(under: srcApp)
+        if unzippedSinfs == 0 {
+            progress?("Unzip left 0 .sinf — extracting SC_Info entries from IPA zip…")
+            try Self.extractSCInfoEntries(fromIPA: ipa, intoApp: srcApp, progress: progress)
         }
         // Free Apple ID certs strip App Groups — host Documents stamps are invisible to the
         // companion (Roblox/CARROT/TestFlight EPERM screenshots). Always embed the IPA.
@@ -545,13 +558,37 @@ enum DecryptCompanionPackager {
 
         // FairPlayed: remmap reads SC_Info next to EmbeddedPayload binaries. Shipping a
         // companion without licenses produces mremap EPERM that looks like “keys missing”.
-        let sinfCount = Self.countSinfs(under: dest)
+        var sinfCount = Self.countSinfs(under: dest)
+        if sinfCount == 0 {
+            // Last chance: copy readable SC_Info from the live Store install (keys screen can see it).
+            var bidHint = (knownBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if bidHint.isEmpty {
+                let destInfo = NSDictionary(contentsOf: dest.appendingPathComponent("Info.plist")) as? [String: Any]
+                bidHint = (destInfo?["CFBundleIdentifier"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            }
+            if let live = Self.resolveLiveInstallURL(
+                bundleID: bidHint,
+                preferring: liveInstall ? srcApp : nil
+            ), !liveInstall || live.standardizedFileURL != srcApp.standardizedFileURL {
+                progress?("Seeding SC_Info from live install \(live.lastPathComponent)…")
+                try? Self.copySCInfoTrees(from: live, to: dest, progress: progress)
+                var stagedLive = FairPlayDecrypt.replicateSinfs(in: dest)
+                if let bins = try? FairPlayDecrypt.collectMachOsForCompanion(under: dest) {
+                    stagedLive += FairPlayDecrypt.stageSinfsForEncryptedBinaries(bins, in: dest)
+                }
+                if stagedLive > 0 {
+                    progress?("Staged \(stagedLive) SINF license(s) from live install…")
+                }
+                sinfCount = Self.countSinfs(under: dest)
+            }
+        }
         progress?("EmbeddedPayload SC_Info · \(sinfCount) .sinf file(s)")
         if sinfCount == 0 {
             throw DecryptError(
                 "EmbeddedPayload has Mach-Os but no SC_Info/.sinf licenses for \(name). "
-                    + "Re-run Get from a Store IPA download (not live-install-only embed) so FairPlay "
-                    + "licenses are packaged beside the binaries — otherwise remmap EPERM looks like a keys failure."
+                    + "Delete the old Completed download, re-run Get so songList sinfs are injected into the Store IPA "
+                    + "(progress should show “IPA has N .sinf”), then open FastDecryptBot again."
             )
         }
 
@@ -963,6 +1000,79 @@ enum DecryptCompanionPackager {
             n += 1
         }
         return n
+    }
+
+    /// Pull `SC_Info/**` (and any loose `.sinf`) out of the IPA zip into an unzipped `.app`.
+    /// Used when ZIPFoundation `unzipItem` drops licenses that were added via Archive `.update`.
+    private static func extractSCInfoEntries(
+        fromIPA ipa: URL,
+        intoApp app: URL,
+        progress: ((String) -> Void)?
+    ) throws {
+        guard let archive = try? Archive(url: ipa, accessMode: .read) else {
+            throw DecryptError("Couldn't reopen Store IPA to extract SC_Info.")
+        }
+        let fm = FileManager.default
+        let appName = app.lastPathComponent
+        let prefix = "Payload/\(appName)/"
+        var wrote = 0
+        for entry in archive {
+            let path = IPadnIPAPackager.normalizeIPAEntryPath(entry.path)
+            guard path.hasPrefix(prefix) else { continue }
+            let rel = String(path.dropFirst(prefix.count))
+            let lower = rel.lowercased()
+            let isSinf = lower.hasSuffix(".sinf")
+            let isSCInfo = lower == "sc_info" || lower.hasPrefix("sc_info/")
+                || lower.contains("/sc_info/")
+            guard isSinf || isSCInfo else { continue }
+            if path.contains("/Watch/") { continue }
+            guard let dest = FairPlayDecrypt.secureChildURL(root: app, relative: rel)
+                ?? (isSafeRelativeEmbedPath(rel)
+                    ? FairPlayDecrypt.appendingRelativePath(root: app, relative: rel)
+                    : nil) else { continue }
+            if entry.type == .directory {
+                try? fm.createDirectory(at: dest, withIntermediateDirectories: true)
+                continue
+            }
+            try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? fm.removeItem(at: dest)
+            var data = Data()
+            _ = try archive.extract(entry) { data.append($0) }
+            try data.write(to: dest, options: .atomic)
+            if isSinf { wrote += 1 }
+        }
+        progress?("Extracted \(wrote) .sinf from IPA zip into \(appName)")
+        guard wrote > 0 else {
+            throw DecryptError(
+                "Store IPA archive lists licenses but none could be extracted into EmbeddedPayload. Retry Get."
+            )
+        }
+    }
+
+    /// Copy every `SC_Info` directory tree from one app root into another.
+    private static func copySCInfoTrees(from src: URL, to dest: URL, progress: ((String) -> Void)?) throws {
+        let fm = FileManager.default
+        var copied = 0
+        guard let en = fm.enumerator(
+            at: src,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        for case let dir as URL in en where dir.lastPathComponent == "SC_Info" {
+            guard let rel = relativePath(dir, under: src),
+                  let out = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) else { continue }
+            do {
+                try? fm.removeItem(at: out)
+                try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try fm.copyItem(at: dir, to: out)
+                copied += 1
+            } catch {
+                progress?("SC_Info seed failed for \(rel): \(error.localizedDescription)")
+            }
+        }
+        if copied > 0 {
+            progress?("SC_Info: seeded \(copied) tree(s) from live install")
+        }
     }
 
     /// Best target icon → `TargetIcon.png` on the companion shell (identity pack).
