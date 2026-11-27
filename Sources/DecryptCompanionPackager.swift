@@ -420,6 +420,8 @@ enum DecryptCompanionPackager {
     }
 
     /// Slim-embed a live `/Bundle/Application/…/*.app` install into EmbeddedPayload.
+    /// Prefer a stamped Store IPA when available — live installs often refuse SC_Info
+    /// reads from a sideloaded host, and FairPlayed remmap needs SC_Info beside binaries.
     @discardableResult
     private static func embedInstalledApp(
         from installedApp: URL,
@@ -432,27 +434,34 @@ enum DecryptCompanionPackager {
               isDir.boolValue else {
             throw DecryptError("Installed app path missing: \(installedApp.lastPathComponent).")
         }
-        // Optionally bundle EncryptedSource.ipa for packaging/audit (same bid only) —
-        // FairPlay remaps from EmbeddedPayload; EncryptedSource is packaging/audit only.
         let installedInfo = NSDictionary(
             contentsOf: installedApp.appendingPathComponent("Info.plist")
         ) as? [String: Any]
         let installedBid = (installedInfo?["CFBundleIdentifier"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
             ?? (knownBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // Prefer IPA → EmbeddedPayload (readable SC_Info). Live slim-embed often ships
+        // Mach-Os without licenses → companion remmap EPERM that looks like “keys”.
         if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath(
             matchingBundleID: installedBid.isEmpty ? nil : installedBid
         ) {
             let src = URL(fileURLWithPath: stamped.path)
             if FileManager.default.fileExists(atPath: src.path) {
-                do {
-                    try Self.bundleEncryptedSourceIPA(src, into: companionApp, progress: progress)
-                } catch {
-                    progress?("Stamped EncryptedSource.ipa skipped: \(error.localizedDescription)")
-                }
+                progress?(
+                    "Live install embed → switching to stamped Store IPA for EmbeddedPayload + SC_Info…"
+                )
+                return try embedEncryptedApp(
+                    from: src,
+                    into: companionApp,
+                    knownBundleID: installedBid.isEmpty ? knownBundleID : installedBid,
+                    progress: progress
+                )
             }
         } else if !installedBid.isEmpty {
-            progress?("No target-matched encrypted IPA stamp for \(installedBid) — EmbeddedPayload only.")
+            progress?(
+                "No stamped Store IPA for \(installedBid) — slim-embedding live install (SC_Info may be unreadable)."
+            )
         }
         return try stageEmbeddedPayload(
             from: installedApp,
@@ -534,6 +543,18 @@ enum DecryptCompanionPackager {
             progress?("Staged \(staged) SINF license(s) on EmbeddedPayload…")
         }
 
+        // FairPlayed: remmap reads SC_Info next to EmbeddedPayload binaries. Shipping a
+        // companion without licenses produces mremap EPERM that looks like “keys missing”.
+        let sinfCount = Self.countSinfs(under: dest)
+        progress?("EmbeddedPayload SC_Info · \(sinfCount) .sinf file(s)")
+        if sinfCount == 0 {
+            throw DecryptError(
+                "EmbeddedPayload has Mach-Os but no SC_Info/.sinf licenses for \(name). "
+                    + "Re-run Get from a Store IPA download (not live-install-only embed) so FairPlay "
+                    + "licenses are packaged beside the binaries — otherwise remmap EPERM looks like a keys failure."
+            )
+        }
+
         // Audit the copied EmbeddedPayload (safe — not the live install container).
         let slimAudit = try FairPlayDecrypt.verifyApp(at: dest)
         progress?(
@@ -544,19 +565,18 @@ enum DecryptCompanionPackager {
             && ((try? fm.attributesOfItem(atPath: bundledIPA.path)[.size] as? Int64) ?? 0) > 1_000_000
 
         if slimAudit.entries.isEmpty {
-            // Live FairPlay reads the Store install — empty slim embed is OK when we have a
-            // live stamp (sandbox often hides foreign FairPlay Mach-Os during packaging).
-            if liveInstall || hasEncryptedSource {
-                progress?(
-                    "EmbeddedPayload has no Mach-Os — FairPlay will mremap the live App Store install (not EncryptedSource)."
+            // Cannot remmap without Mach-Os in EmbeddedPayload (live open often EPERM).
+            if hasEncryptedSource {
+                throw DecryptError(
+                    "EmbeddedPayload has no Mach-Os after slim embed. EncryptedSource.ipa is present — "
+                        + "re-run Get so the Store IPA is unpacked into EmbeddedPayload (not live-install-only)."
                 )
-            } else {
-                throw DecryptError("No Mach-Os in \(name).app — cannot build companion EmbeddedPayload.")
             }
+            throw DecryptError("No Mach-Os in \(name).app — cannot build companion EmbeddedPayload.")
         }
         if let expected = sourceEncrypted, slimAudit.encrypted < expected {
             progress?(
-                "Slim embed has \(slimAudit.encrypted)/\(expected) encrypted Mach-Os — FairPlay reads the live install for the rest."
+                "Slim embed has \(slimAudit.encrypted)/\(expected) encrypted Mach-Os — re-Get from full Store IPA if remmap EPERM."
             )
         }
         if let expectedCount = sourceMachOCount, slimAudit.entries.count < expectedCount {
@@ -860,19 +880,19 @@ enum DecryptCompanionPackager {
             let hasSource = fm.fileExists(atPath: encryptedSource.path)
             let live = isLiveAppStoreInstall(src)
             let sample = skipped.prefix(4).joined(separator: ", ")
-            if live {
-                progress?(
-                    "Slim embed copied 0 Mach-Os from \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))") — FairPlay will mremap the live App Store install."
-                )
-            } else if hasSource {
-                progress?(
-                    "Slim embed copied 0 Mach-Os\(sample.isEmpty ? "" : " (skipped: \(sample))") — packaging continues with EncryptedSource.ipa (FairPlay still needs live install)."
-                )
-            } else {
+            if hasSource {
                 throw DecryptError(
-                    "Slim embed copied 0 Mach-Os from \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))"). Install the app from the App Store (same Apple ID) so FairPlay has a live path, then retry Get."
+                    "Slim embed copied 0 Mach-Os\(sample.isEmpty ? "" : " (skipped: \(sample))") but EncryptedSource.ipa is present — unpack the Store IPA into EmbeddedPayload instead of a live-only embed."
                 )
             }
+            if live {
+                throw DecryptError(
+                    "Slim embed copied 0 Mach-Os from live \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))"). Re-run Get so a Store IPA is downloaded and embedded with SC_Info."
+                )
+            }
+            throw DecryptError(
+                "Slim embed copied 0 Mach-Os from \(src.lastPathComponent)\(sample.isEmpty ? "" : " (skipped: \(sample))"). Retry Get from Search so the Store IPA fills EmbeddedPayload."
+            )
         }
 
         // Copy every SC_Info directory tree (main + nested) — report completeness.
@@ -927,6 +947,22 @@ enum DecryptCompanionPackager {
     /// `dest` is EmbeddedPayload/<Name>/ → companion .app is two levels up.
     private static func companionAppRoot(fromEmbeddedDest dest: URL) -> URL {
         dest.deletingLastPathComponent().deletingLastPathComponent()
+    }
+
+    /// Count `.sinf` licenses under an EmbeddedPayload app tree (main + nested).
+    private static func countSinfs(under root: URL) -> Int {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var n = 0
+        for case let url as URL in en where url.pathExtension.lowercased() == "sinf" {
+            if url.path.contains("/Watch/") { continue }
+            n += 1
+        }
+        return n
     }
 
     /// Best target icon → `TargetIcon.png` on the companion shell (identity pack).

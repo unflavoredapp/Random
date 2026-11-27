@@ -119,9 +119,23 @@ enum FailurePlaybook {
             action: .openPair
         ),
         FailurePlay(
+            id: "fairplay-missing-scinfo",
+            title: "EmbeddedPayload missing SC_Info licenses",
+            summary: "Companion remmaps without .sinf beside the binaries — remmap EPERM looks like keys. Delete FastDecryptBot, re-run Get from a Store IPA download so SC_Info is packaged into EmbeddedPayload.",
+            matches: [
+                "has no sc_info",
+                "no sc_info/.sinf",
+                "no .sinf",
+                "licenses are packaged",
+                "embeddedpayload has mach-os but no sc_info",
+            ],
+            actionTitle: "Open Search",
+            action: .openPair
+        ),
+        FailurePlay(
             id: "fairplay-eperm",
             title: "FairPlay license / Media & Purchases",
-            summary: "fairplayd returned license EPERM after open. Confirm Store login + Media & Purchases for the owning Apple ID, enable Developer Mode, re-run Get, then open FastDecryptBot again.",
+            summary: "fairplayd returned remmap EPERM (license / SC_Info / keys). Confirm Store login + Media & Purchases, enable Developer Mode, delete FastDecryptBot, re-run Get from a Store IPA, then open again.",
             matches: [
                 "eperm",
                 "operation not permitted",
@@ -130,6 +144,7 @@ enum FailurePlaybook {
                 "never encryptedsource",
                 "-42004",
                 "-42110",
+                "remmap eperm",
             ],
             actionTitle: "Capture FairPlay keys",
             action: .acknowledgeFairPlay

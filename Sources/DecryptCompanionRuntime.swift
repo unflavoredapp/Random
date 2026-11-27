@@ -280,6 +280,16 @@ enum DecryptCompanionRuntime {
             logMirror: true
         )
 
+        // FairPlayed: fairplayd opens <dir>/SC_Info/<exe>.sinf next to the remmap input.
+        // Missing licenses here surface as mremap EPERM and used to look like “keys”.
+        let sinfN = Self.countEmbeddedSinfs(under: src)
+        log("EmbeddedPayload SC_Info · \(sinfN) .sinf")
+        if sinfN == 0, readRoot == src {
+            throw DecryptError(
+                "EmbeddedPayload has no SC_Info/.sinf for \(name). Delete FastDecryptBot, re-run Get from a Store IPA download so licenses are packaged beside the Mach-Os, then open the companion again."
+            )
+        }
+
         var before = try FairPlayDecrypt.verifyApp(at: readRoot)
         if before.entries.isEmpty, readRoot != src {
             let embedAudit = try FairPlayDecrypt.verifyApp(at: src)
@@ -354,7 +364,7 @@ enum DecryptCompanionRuntime {
         }
 
         let licenseHint =
-            "FairPlay license/keys EPERM for \(name). Confirm Store login + Media & Purchases for the owning Apple ID, enable Developer Mode, delete FastDecryptBot, re-run Get, then open it again. \(AppStoreDecryptGuide.failureHint)"
+            "FairPlay remmap EPERM for \(name) (license / SC_Info / keys). Confirm Store login + Media & Purchases for the owning Apple ID, enable Developer Mode, delete FastDecryptBot, re-run Get from a Store IPA (so SC_Info is embedded), then open it again. \(AppStoreDecryptGuide.failureHint)"
         let sandboxHint =
             "FairPlay could not open the Mach-O (sandbox). FastDecryptBot must remmap from its own EmbeddedPayload — delete it, re-run Get so Mach-Os + SC_Info are embedded, enable Developer Mode, then open the companion again."
 
@@ -560,6 +570,22 @@ enum DecryptCompanionRuntime {
         if let short, !short.isEmpty { return short }
         if let build, !build.isEmpty { return build }
         return nil
+    }
+
+    /// Count `.sinf` files under EmbeddedPayload (FairPlayed license material).
+    private static func countEmbeddedSinfs(under root: URL) -> Int {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var n = 0
+        for case let url as URL in en where url.pathExtension.lowercased() == "sinf" {
+            if url.path.contains("/Watch/") { continue }
+            n += 1
+        }
+        return n
     }
 
     /// Best-effort icon from EmbeddedPayload (PNGs copied at package time).
