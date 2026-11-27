@@ -665,7 +665,11 @@ enum FairPlayDecrypt {
         var encryptedBins: [URL] = []
         var encCount = 0
         if !liveSource {
-            for url in binaries {
+            detail?("Probing \(binaries.count) Mach-O cryptid(s)…")
+            for (i, url) in binaries.enumerated() {
+                if i > 0, i % 20 == 0 {
+                    detail?("Probing cryptids… \(i)/\(binaries.count)")
+                }
                 if let n = withTimeout(seconds: 0.6, work: {
                     Int(url.path.withCString { fp_count_encrypted_slices($0) })
                 }), n > 0 {
@@ -1838,7 +1842,14 @@ enum FairPlayDecrypt {
                 defer { gate.signal() }
                 pauseIfMemoryPressure(progress: nil)
                 let r = role(of: file, under: sourceApp, app: sourceApp)
-                let budget: TimeInterval = (r == .framework || r == .appex) ? 90 : 60
+                // Tiny helpers get a short leash; large frameworks keep the longer window.
+                let crypt = FairPlayJetsam.largestCryptsize(of: file.path)
+                let budget: TimeInterval = {
+                    if crypt <= 0 { return 20 }
+                    if crypt < 2 * 1024 * 1024 { return 30 }
+                    if crypt < 12 * 1024 * 1024 { return 60 }
+                    return (r == .framework || r == .appex) ? 90 : 60
+                }()
                 let outcome = decryptOneWithTimeout(
                     file: file, sourceApp: sourceApp, destApp: destApp,
                     index: indexBase + offset, total: total, role: r, timeout: budget

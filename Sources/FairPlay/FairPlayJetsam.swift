@@ -90,8 +90,12 @@ enum FairPlayJetsam {
     }
 
     /// Brief pause + purge when the process is near Jetsam.
+    /// Skip artificial sleeps when free RAM is ample (common on modern phones with 2+ GB free).
     static func pauseIfMemoryPressure(progress: ((String) -> Void)?) {
         let avail = availableMemory
+        if avail > 512 * 1024 * 1024 {
+            return
+        }
         if avail > 0 && avail < minAvailableBytes {
             progress?("\(memorySummary(prefix: "Low memory")) — reclaiming before next Mach-O…")
             purgeTransientMemory()
