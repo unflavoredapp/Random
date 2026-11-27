@@ -895,6 +895,14 @@ final class DeviceDecryptService: ObservableObject {
                 )
             } catch {
                 if error is FairPlayKeyGateError { throw error }
+                let detail = error.localizedDescription
+                let lower = detail.lowercased()
+                if lower.contains("sc_info")
+                    || lower.contains(".sinf")
+                    || lower.contains("fairplay license")
+                    || lower.contains("songlist") {
+                    throw error
+                }
                 guard !bid.isEmpty,
                       let installed = await resolveInstalledAppURL(bundleID: bid) else {
                     throw error
@@ -902,7 +910,7 @@ final class DeviceDecryptService: ObservableObject {
                 publishDecryptProgress(
                     "Store package unavailable — embedding installed \(app.name) into companion…"
                 )
-                publishDecryptProgress(error.localizedDescription)
+                publishDecryptProgress(detail)
                 try FairPlayKeyGate.requireReady()
                 try await decryptFromInstalledPath(
                     installed,
@@ -1018,6 +1026,13 @@ final class DeviceDecryptService: ObservableObject {
             if lower.contains("capture fairplay keys")
                 || lower.contains("before companion decrypt")
                 || lower.contains("media & purchases") {
+                throw error
+            }
+            // Missing FairPlay licenses — do not fall back to live embed (also 0 .sinf).
+            if lower.contains("sc_info")
+                || lower.contains(".sinf")
+                || lower.contains("fairplay license")
+                || lower.contains("songlist") {
                 throw error
             }
             // Installed companion embed only — no remint / backend IPA fallback.
@@ -1215,11 +1230,20 @@ final class DeviceDecryptService: ObservableObject {
             }
             markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
         } catch {
+            let text = error.localizedDescription
+            let lower = text.lowercased()
+            // Missing SC_Info / licenses — live embed will also ship 0 .sinf. Fail closed.
+            if lower.contains("sc_info")
+                || lower.contains(".sinf")
+                || lower.contains("fairplay license")
+                || lower.contains("songlist") {
+                throw DecryptError(text)
+            }
             // Last resort: try live-install embed if IPA packaging failed for another reason.
             if let live = await resolveInstalledAppURL(bundleID: resolvedBid),
                FairPlayDecrypt.isLiveAppStoreInstall(live) {
                 publishDecryptProgress(
-                    "IPA companion failed (\(error.localizedDescription)) — trying live-install embed…"
+                    "IPA companion failed (\(text)) — trying live-install embed…"
                 )
                 do {
                     let companionID = try await DecryptCompanionInstaller.installAndOpen(
@@ -1237,7 +1261,7 @@ final class DeviceDecryptService: ObservableObject {
                 }
             }
             throw DecryptError(
-                "Couldn't install the companion with this IPA (\(error.localizedDescription)). Create a 7-day Apple ID certificate under Account › Settings › Installation › Certificate, trust it under Settings › General › VPN & Device Management, then retry. Encrypted IPA kept at \(retained.path)."
+                "Couldn't install the companion with this IPA (\(text)). Create a 7-day Apple ID certificate under Account › Settings › Installation › Certificate, trust it under Settings › General › VPN & Device Management, then retry. Encrypted IPA kept at \(retained.path)."
             )
         }
     }

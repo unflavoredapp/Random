@@ -73,6 +73,70 @@ enum IPadnIPAPackager {
         return n
     }
 
+    /// Sidecar next to the IPA so embed can re-apply songList licenses if the zip drops them.
+    static func sinfSidecarURL(forIPA ipa: URL) -> URL {
+        URL(fileURLWithPath: ipa.path + ".sinfs")
+    }
+
+    static func writeSinfSidecar(_ sinfs: [Data], nextTo ipa: URL) {
+        guard !sinfs.isEmpty else { return }
+        let payload: [[String: Any]] = sinfs.enumerated().map { idx, data in
+            ["id": idx, "sinf": data]
+        }
+        guard let data = try? PropertyListSerialization.data(
+            fromPropertyList: payload, format: .binary, options: 0
+        ) else { return }
+        try? data.write(to: sinfSidecarURL(forIPA: ipa), options: .atomic)
+    }
+
+    static func readSinfSidecar(nextTo ipa: URL) -> [Data] {
+        let url = sinfSidecarURL(forIPA: ipa)
+        guard let data = try? Data(contentsOf: url),
+              let rows = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [[String: Any]]
+        else { return [] }
+        var out: [Data] = []
+        for row in rows {
+            if let d = row["sinf"] as? Data, !d.isEmpty {
+                out.append(d)
+            } else if let d = row["sinf"] as? NSData, d.length > 0 {
+                out.append(d as Data)
+            }
+        }
+        return out
+    }
+
+    /// Write songList sinfs into an unzipped `.app` tree (SC_Info beside the main executable).
+    static func applySinfs(_ sinfs: [Data], toApp app: URL) throws {
+        guard !sinfs.isEmpty else { return }
+        let fm = FileManager.default
+        let info = NSDictionary(contentsOf: app.appendingPathComponent("Info.plist")) as? [String: Any]
+        let exe = (info?["CFBundleExecutable"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let man = app.appendingPathComponent("SC_Info/Manifest.plist")
+        if let plist = NSDictionary(contentsOf: man) as? [String: Any],
+           let paths = plist["SinfPaths"] as? [String], !paths.isEmpty {
+            let n = min(paths.count, sinfs.count)
+            for i in 0..<n {
+                let rel = paths[i].trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                let dest = app.appendingPathComponent(rel)
+                try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try sinfs[i].write(to: dest, options: .atomic)
+            }
+            if sinfs.count == 1, let first = paths.first {
+                let dest = app.appendingPathComponent(first.trimmingCharacters(in: CharacterSet(charactersIn: "/")))
+                try fm.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try sinfs[0].write(to: dest, options: .atomic)
+            }
+            return
+        }
+        guard !exe.isEmpty else {
+            throw IPadnToolError.message("Could not locate app executable for FairPlay license apply.")
+        }
+        let sc = app.appendingPathComponent("SC_Info", isDirectory: true)
+        try fm.createDirectory(at: sc, withIntermediateDirectories: true)
+        try sinfs[0].write(to: sc.appendingPathComponent("\(exe).sinf"), options: .atomic)
+    }
+
     static func writeMetadata(_ meta: [String: Any], email: String, intoIPA ipa: URL) throws {
         var m = meta
         m["apple-id"] = email
@@ -100,15 +164,18 @@ enum IPadnIPAPackager {
             // Fall through to unzip path when update-mode inject fails.
             try injectSinfsViaUnzip(sinfs, intoIPA: ipa)
             guard countSinfs(inIPA: ipa) > 0 else { throw error }
+            writeSinfSidecar(sinfs, nextTo: ipa)
             return
         }
-        if countSinfs(inIPA: ipa) > 0 { return }
-        try injectSinfsViaUnzip(sinfs, intoIPA: ipa)
+        if countSinfs(inIPA: ipa) == 0 {
+            try injectSinfsViaUnzip(sinfs, intoIPA: ipa)
+        }
         guard countSinfs(inIPA: ipa) > 0 else {
             throw IPadnToolError.message(
                 "FairPlay licenses did not stick in the Store IPA (0 .sinf after inject). Retry Get."
             )
         }
+        writeSinfSidecar(sinfs, nextTo: ipa)
     }
 
     private static func injectSinfsUpdating(_ sinfs: [Data], intoIPA ipa: URL) throws {

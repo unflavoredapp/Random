@@ -121,7 +121,7 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-missing-scinfo",
             title: "EmbeddedPayload missing SC_Info licenses",
-            summary: "Store IPA / EmbeddedPayload shipped without .sinf. Delete the old Completed job + FastDecryptBot, re-run Get — progress must show “IPA has N .sinf” before companion opens.",
+            summary: "Store IPA / EmbeddedPayload shipped without .sinf. Turn off Airplane Mode, delete the Failed job + FastDecryptBot, re-run Get — progress must show “IPA has N .sinf” before companion opens.",
             matches: [
                 "has no sc_info",
                 "no sc_info/.sinf",
@@ -131,6 +131,8 @@ enum FailurePlaybook {
                 "did not land in the store ipa",
                 "ipa has n .sinf",
                 "songlist sinfs",
+                "airplane mode",
+                "sidecar",
             ],
             actionTitle: "Open Search",
             action: .openPair

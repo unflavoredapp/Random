@@ -373,11 +373,18 @@ enum DecryptCompanionPackager {
         try fm.createDirectory(at: extract, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: extract) }
 
-        let ipaSinfN = IPadnIPAPackager.countSinfs(inIPA: ipa)
-        progress?("Store IPA licenses · \(ipaSinfN) .sinf in archive")
-        if ipaSinfN == 0 {
+        var ipaSinfN = IPadnIPAPackager.countSinfs(inIPA: ipa)
+        let sidecar = IPadnIPAPackager.readSinfSidecar(nextTo: ipa)
+        progress?("Store IPA licenses · \(ipaSinfN) .sinf in archive"
+            + (sidecar.isEmpty ? "" : " · \(sidecar.count) sidecar"))
+        if ipaSinfN == 0, !sidecar.isEmpty {
+            progress?("Re-injecting \(sidecar.count) sidecar FairPlay license(s) into Store IPA…")
+            try IPadnIPAPackager.injectSinfs(sidecar, intoIPA: ipa)
+            ipaSinfN = IPadnIPAPackager.countSinfs(inIPA: ipa)
+        }
+        if ipaSinfN == 0, sidecar.isEmpty {
             throw DecryptError(
-                "Store IPA has no SC_Info/.sinf licenses. Delete the Completed Crunchyroll job, re-run Get so songList sinfs are injected, then retry."
+                "Store IPA has no SC_Info/.sinf licenses. Delete the Failed/Completed job, turn off Airplane Mode, re-run Get so songList sinfs are injected, then retry."
             )
         }
         try fm.unzipItem(at: ipa, to: extract)
@@ -386,11 +393,25 @@ enum DecryptCompanionPackager {
             .first(where: { $0.pathExtension == "app" }) else {
             throw DecryptError("No Payload/*.app in the encrypted IPA to embed.")
         }
-        // ZIPFoundation unzip can drop update-mode entries — re-extract SC_Info from the IPA zip.
-        let unzippedSinfs = Self.countSinfs(under: srcApp)
-        if unzippedSinfs == 0 {
-            progress?("Unzip left 0 .sinf — extracting SC_Info entries from IPA zip…")
-            try Self.extractSCInfoEntries(fromIPA: ipa, intoApp: srcApp, progress: progress)
+        // ZIPFoundation unzip can drop update-mode entries — re-extract / apply sidecar.
+        if Self.countSinfs(under: srcApp) == 0 {
+            if ipaSinfN > 0 {
+                progress?("Unzip left 0 .sinf — extracting SC_Info entries from IPA zip…")
+                do {
+                    try Self.extractSCInfoEntries(fromIPA: ipa, intoApp: srcApp, progress: progress)
+                } catch {
+                    progress?("IPA zip extract failed (\(error.localizedDescription)) — trying sidecar…")
+                }
+            }
+            if Self.countSinfs(under: srcApp) == 0, !sidecar.isEmpty {
+                progress?("Applying \(sidecar.count) sidecar FairPlay license(s) to unzipped app…")
+                try IPadnIPAPackager.applySinfs(sidecar, toApp: srcApp)
+            }
+            if Self.countSinfs(under: srcApp) == 0 {
+                throw DecryptError(
+                    "Store IPA licenses could not be staged into EmbeddedPayload. Delete the job, turn off Airplane Mode, and re-run Get."
+                )
+            }
         }
         // Free Apple ID certs strip App Groups — host Documents stamps are invisible to the
         // companion (Roblox/CARROT/TestFlight EPERM screenshots). Always embed the IPA.
@@ -559,8 +580,39 @@ enum DecryptCompanionPackager {
         // FairPlayed: remmap reads SC_Info next to EmbeddedPayload binaries. Shipping a
         // companion without licenses produces mremap EPERM that looks like “keys missing”.
         var sinfCount = Self.countSinfs(under: dest)
+        // Slim copy sometimes skips SC_Info even when src has licenses — force file-by-file.
+        if sinfCount == 0, Self.countSinfs(under: srcApp) > 0 {
+            progress?("Slim SC_Info copy missed licenses — forcing .sinf file copy…")
+            try? Self.forceCopySinfs(from: srcApp, to: dest, progress: progress)
+            sinfCount = Self.countSinfs(under: dest)
+        }
         if sinfCount == 0 {
-            // Last chance: copy readable SC_Info from the live Store install (keys screen can see it).
+            // Sidecar next to stamped / bundled Store IPA.
+            let companionRoot = dest.deletingLastPathComponent().deletingLastPathComponent()
+            let sidecarCandidates: [URL] = {
+                var urls: [URL] = []
+                if let stamped = DecryptCompanionHandoff.readEncryptedIPAPath(
+                    matchingBundleID: (knownBundleID ?? "").isEmpty ? nil : knownBundleID
+                ) {
+                    urls.append(URL(fileURLWithPath: stamped.path))
+                }
+                let bundled = companionRoot.appendingPathComponent(DecryptCompanionHandoff.bundledEncryptedIPAName)
+                if FileManager.default.fileExists(atPath: bundled.path) {
+                    urls.append(bundled)
+                }
+                return urls
+            }()
+            for ipaURL in sidecarCandidates {
+                let blobs = IPadnIPAPackager.readSinfSidecar(nextTo: ipaURL)
+                guard !blobs.isEmpty else { continue }
+                progress?("Applying \(blobs.count) sidecar FairPlay license(s) onto EmbeddedPayload…")
+                try? IPadnIPAPackager.applySinfs(blobs, toApp: dest)
+                sinfCount = Self.countSinfs(under: dest)
+                if sinfCount > 0 { break }
+            }
+        }
+        if sinfCount == 0 {
+            // Last chance: copy readable SC_Info from the live Store install.
             var bidHint = (knownBundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if bidHint.isEmpty {
                 let destInfo = NSDictionary(contentsOf: dest.appendingPathComponent("Info.plist")) as? [String: Any]
@@ -570,9 +622,10 @@ enum DecryptCompanionPackager {
             if let live = Self.resolveLiveInstallURL(
                 bundleID: bidHint,
                 preferring: liveInstall ? srcApp : nil
-            ), !liveInstall || live.standardizedFileURL != srcApp.standardizedFileURL {
+            ) {
                 progress?("Seeding SC_Info from live install \(live.lastPathComponent)…")
                 try? Self.copySCInfoTrees(from: live, to: dest, progress: progress)
+                try? Self.forceCopySinfs(from: live, to: dest, progress: progress)
                 var stagedLive = FairPlayDecrypt.replicateSinfs(in: dest)
                 if let bins = try? FairPlayDecrypt.collectMachOsForCompanion(under: dest) {
                     stagedLive += FairPlayDecrypt.stageSinfsForEncryptedBinaries(bins, in: dest)
@@ -587,8 +640,8 @@ enum DecryptCompanionPackager {
         if sinfCount == 0 {
             throw DecryptError(
                 "EmbeddedPayload has Mach-Os but no SC_Info/.sinf licenses for \(name). "
-                    + "Delete the old Completed download, re-run Get so songList sinfs are injected into the Store IPA "
-                    + "(progress should show “IPA has N .sinf”), then open FastDecryptBot again."
+                    + "Delete the Failed job, turn off Airplane Mode, re-run Get so progress shows "
+                    + "“IPA has N .sinf”, then retry — do not open FastDecryptBot until N > 0."
             )
         }
 
@@ -944,7 +997,12 @@ enum DecryptCompanionPackager {
                     progress?("SC_Info path unresolvable under \(src.lastPathComponent)")
                     continue
                 }
-                guard let out = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) else {
+                let out: URL
+                if let secured = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) {
+                    out = secured
+                } else if isSafeRelativeEmbedPath(rel) {
+                    out = FairPlayDecrypt.appendingRelativePath(root: dest, relative: rel)
+                } else {
                     scFailed.append(rel)
                     progress?("SC_Info rejected unsafe path: \(rel)")
                     continue
@@ -955,8 +1013,16 @@ enum DecryptCompanionPackager {
                     try fm.copyItem(at: dir, to: out)
                     scCopied += 1
                 } catch {
-                    scFailed.append(rel)
-                    progress?("SC_Info copy failed for \(rel): \(error.localizedDescription)")
+                    // Directory copyItem often EPERM on live installs — copy .sinf files by Data.
+                    progress?("SC_Info tree copy failed for \(rel) — trying file-by-file…")
+                    let before = countSinfs(under: dest)
+                    try? forceCopySinfs(from: src, to: dest, progress: nil)
+                    if countSinfs(under: dest) > before {
+                        scCopied += 1
+                    } else {
+                        scFailed.append(rel)
+                        progress?("SC_Info copy failed for \(rel): \(error.localizedDescription)")
+                    }
                 }
             }
         }
@@ -965,6 +1031,9 @@ enum DecryptCompanionPackager {
                 "SC_Info: \(scCopied)/\(scDiscovered) copied"
                     + (scFailed.isEmpty ? "" : ", \(scFailed.count) failed")
             )
+        }
+        if countSinfs(under: dest) == 0, countSinfs(under: src) > 0 {
+            try? forceCopySinfs(from: src, to: dest, progress: progress)
         }
         // Main executable license material — diagnostic only (don’t abort on nested misses).
         if let main = FairPlayDecrypt.mainExecutableForEmbed(in: src) {
@@ -1059,8 +1128,15 @@ enum DecryptCompanionPackager {
             options: [.skipsHiddenFiles]
         ) else { return }
         for case let dir as URL in en where dir.lastPathComponent == "SC_Info" {
-            guard let rel = relativePath(dir, under: src),
-                  let out = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) else { continue }
+            guard let rel = relativePath(dir, under: src) else { continue }
+            let out: URL
+            if let secured = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) {
+                out = secured
+            } else if isSafeRelativeEmbedPath(rel) {
+                out = FairPlayDecrypt.appendingRelativePath(root: dest, relative: rel)
+            } else {
+                continue
+            }
             do {
                 try? fm.removeItem(at: out)
                 try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -1072,6 +1148,45 @@ enum DecryptCompanionPackager {
         }
         if copied > 0 {
             progress?("SC_Info: seeded \(copied) tree(s) from live install")
+        }
+    }
+
+    /// Read each `.sinf` as Data and write into `dest` — survives copyItem EPERM on live installs.
+    private static func forceCopySinfs(
+        from src: URL,
+        to dest: URL,
+        progress: ((String) -> Void)?
+    ) throws {
+        let fm = FileManager.default
+        guard let en = fm.enumerator(
+            at: src,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return }
+        var wrote = 0
+        for case let url as URL in en where url.pathExtension.lowercased() == "sinf" {
+            if url.path.contains("/Watch/") { continue }
+            guard let rel = relativePath(url, under: src) else { continue }
+            let out: URL
+            if let secured = FairPlayDecrypt.secureChildURL(root: dest, relative: rel) {
+                out = secured
+            } else if isSafeRelativeEmbedPath(rel) {
+                out = FairPlayDecrypt.appendingRelativePath(root: dest, relative: rel)
+            } else {
+                continue
+            }
+            do {
+                let data = try Data(contentsOf: url, options: [.mappedIfSafe])
+                guard !data.isEmpty else { continue }
+                try fm.createDirectory(at: out.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try data.write(to: out, options: .atomic)
+                wrote += 1
+            } catch {
+                progress?("Force .sinf copy failed for \(rel): \(error.localizedDescription)")
+            }
+        }
+        if wrote > 0 {
+            progress?("Force-copied \(wrote) .sinf file(s)")
         }
     }
 

@@ -535,11 +535,18 @@ enum DecryptCompanionHandoff {
             return dest
         }
         try? fm.removeItem(at: dest)
+        let srcSidecar = IPadnIPAPackager.sinfSidecarURL(forIPA: source)
+        let destSidecar = IPadnIPAPackager.sinfSidecarURL(forIPA: dest)
+        try? fm.removeItem(at: destSidecar)
         do {
             try fm.copyItem(at: source, to: dest)
         } catch {
             // Same-volume move is fine when copy fails (e.g. already in our temp dir).
             try fm.moveItem(at: source, to: dest)
+        }
+        // Keep songList licenses beside the retained IPA for embed re-apply.
+        if fm.fileExists(atPath: srcSidecar.path) {
+            try? fm.copyItem(at: srcSidecar, to: destSidecar)
         }
         publishEncryptedIPAPath(dest.path, bundleID: bid)
         return dest
