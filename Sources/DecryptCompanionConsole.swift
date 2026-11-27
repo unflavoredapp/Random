@@ -30,8 +30,24 @@ final class DecryptCompanionController: ObservableObject {
     @Published var verifySummary = ""
     /// True when the clear IPA was copied into the App Group for the host to import.
     @Published var exportSentToHost = false
+    /// Console breadcrumb: resolved target bid (never empty once known).
+    @Published var breadcrumbBid = ""
+    /// Console breadcrumb: stamped / rediscovered live Store `.app` path.
+    @Published var breadcrumbLivePath = ""
+    /// Console breadcrumb: App Group available for host handoff.
+    @Published var breadcrumbAppGroup = false
+    /// Console breadcrumb: export outcome (`pending` / App Group → host / Share-only).
+    @Published var breadcrumbExport = "Export · pending"
 
     private init() {}
+
+    /// Compact multi-line breadcrumb for UIKit / SwiftUI strip.
+    var breadcrumbText: String {
+        let bid = breadcrumbBid.isEmpty ? "(bid unknown)" : breadcrumbBid
+        let live = breadcrumbLivePath.isEmpty ? "(no live path yet)" : breadcrumbLivePath
+        let group = breadcrumbAppGroup ? "App Group · available" : "App Group · unavailable (Share-only)"
+        return "bid · \(bid)\nlive · \(live)\n\(group)\n\(breadcrumbExport)"
+    }
 
     func present(
         name: String,
@@ -50,8 +66,41 @@ final class DecryptCompanionController: ObservableObject {
         finishedURL = nil
         verifySummary = ""
         exportSentToHost = false
+        breadcrumbBid = ""
+        breadcrumbLivePath = ""
+        breadcrumbAppGroup = DecryptCompanionHandoff.appGroupAvailable
+        breadcrumbExport = "Export · pending"
         statusTitle = "Decrypting…"
         isPresented = true
+    }
+
+    /// Update breadcrumb fields and optionally mirror a one-line summary into the log.
+    func setBreadcrumb(
+        bid: String? = nil,
+        livePath: String? = nil,
+        appGroup: Bool? = nil,
+        exportNote: String? = nil,
+        logMirror: Bool = false
+    ) {
+        if let bid {
+            let trimmed = bid.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { breadcrumbBid = trimmed }
+        }
+        if let livePath {
+            let trimmed = livePath.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { breadcrumbLivePath = trimmed }
+        }
+        if let appGroup { breadcrumbAppGroup = appGroup }
+        if let exportNote {
+            let trimmed = exportNote.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { breadcrumbExport = trimmed }
+        }
+        if logMirror {
+            appendLog("── breadcrumb ──")
+            for line in breadcrumbText.split(separator: "\n", omittingEmptySubsequences: false) {
+                appendLog(String(line))
+            }
+        }
     }
 
     func appendLog(_ line: String) {
@@ -140,6 +189,9 @@ struct DecryptCompanionConsole: View {
                 appCard
                     .padding(.horizontal, 16)
                     .padding(.top, 8)
+                breadcrumbCard
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
                 statusPill
                     .padding(.horizontal, 16)
                     .padding(.top, 14)
@@ -277,6 +329,26 @@ struct DecryptCompanionConsole: View {
                     .font(.title2)
                     .foregroundStyle(.white.opacity(0.45))
             }
+    }
+
+    private var breadcrumbCard: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Breadcrumb")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.white.opacity(0.45))
+            Text(companion.breadcrumbText)
+                .font(.system(size: 11, weight: .regular, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.78))
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(.white.opacity(0.10), lineWidth: 0.5)
+        )
     }
 
     private var statusPill: some View {
