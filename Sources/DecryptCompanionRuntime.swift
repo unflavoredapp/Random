@@ -450,9 +450,37 @@ enum DecryptCompanionRuntime {
 
         DecryptCompanionController.shared.statusTitle = "Done — saving automatically…"
         let afterCopy = try FairPlayDecrypt.verifyApp(at: destApp)
-        try assertDecryptAcceptable(afterCopy, stage: "copied Payload", partial: report.isPartial, app: destApp)
+        // Tetherless-style: main clear + leftover frameworks → PARTIAL, never Media & Purchases red herring.
+        var partialOK = report.isPartial
+        if !partialOK, !fpOpts.requireAllFrameworks, afterCopy.encrypted > 0 {
+            let mainClear = afterCopy.entries.contains { entry in
+                guard !entry.isEncrypted else { return false }
+                let base = URL(fileURLWithPath: entry.path).lastPathComponent
+                return base == name || entry.path == name
+                    || (!entry.path.contains(".framework/")
+                        && !entry.path.contains(".appex/")
+                        && !entry.path.hasPrefix("Watch/")
+                        && !entry.isUnknown)
+            }
+            // Prefer Info.plist executable name when present.
+            let exeClear: Bool = {
+                let info = NSDictionary(contentsOf: destApp.appendingPathComponent("Info.plist")) as? [String: Any]
+                let exe = (info?["CFBundleExecutable"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                guard !exe.isEmpty else { return mainClear }
+                return afterCopy.entries.contains { entry in
+                    URL(fileURLWithPath: entry.path).lastPathComponent == exe && !entry.isEncrypted && !entry.isUnknown
+                }
+            }()
+            if exeClear || mainClear {
+                partialOK = true
+                report.isPartial = true
+                log("Main clear — packaging PARTIAL (\(afterCopy.encrypted) leftover Mach-O(s) still encrypted).")
+            }
+        }
+        try assertDecryptAcceptable(afterCopy, stage: "copied Payload", partial: partialOK, app: destApp)
 
-        let tag = report.isPartial ? "-PARTIAL" : "-decrypted"
+        let tag = partialOK ? "-PARTIAL" : "-decrypted"
         log("Packaging \(name)\(tag).ipa…")
         try stripLicenseArtifacts(in: destApp)
 
@@ -483,11 +511,11 @@ enum DecryptCompanionRuntime {
         log(FairPlayJetsam.memorySummary(prefix: "post-zip"))
 
         let ipaVerify = try FairPlayDecrypt.verifyIPA(at: outIPA)
-        try assertDecryptAcceptable(ipaVerify, stage: "packaged IPA", partial: report.isPartial, app: destApp)
+        try assertDecryptAcceptable(ipaVerify, stage: "packaged IPA", partial: partialOK, app: destApp)
 
         DecryptCompanionController.shared.verifySummary = ipaVerify.summary
         DecryptCompanionController.shared.markFinished(url: outIPA, name: name)
-        DecryptCompanionController.shared.statusTitle = report.isPartial ? "Done (PARTIAL)" : "Done"
+        DecryptCompanionController.shared.statusTitle = partialOK ? "Done (PARTIAL)" : "Done"
         log("Wrote \(safeName)\(tag).ipa.")
 
         let info = NSDictionary(contentsOf: src.appendingPathComponent("Info.plist")) as? [String: Any]
@@ -792,7 +820,8 @@ enum DecryptCompanionRuntime {
                 skippedLicenses += 1
                 continue
             }
-            let out = destApp.appendingPathComponent(rel)
+            // Split on `/` — never `appendingPathComponent("Frameworks/Foo/…")` (single-component trap).
+            let out = FairPlayDecrypt.appendingRelativePath(root: destApp, relative: rel)
             if vals?.isDirectory == true {
                 do {
                     try fm.createDirectory(at: out, withIntermediateDirectories: true)

@@ -1000,7 +1000,7 @@ enum FairPlayDecrypt {
         guard !stillEncrypted.isEmpty else {
             // Also clear soft-failed entries that verify says are now clear.
             report.softFailed = report.softFailed.filter { rel in
-                let url = probeRoot.appendingPathComponent(rel)
+                let url = appendingRelativePath(root: probeRoot, relative: rel)
                 return url.path.withCString { fp_has_encrypted_slice($0) } == 1
             }
             return
@@ -1017,7 +1017,7 @@ enum FairPlayDecrypt {
             }
             // Re-stage licenses before each round — IPA trees can lose SC_Info mid-pass.
             if !isLiveAppStoreInstall(sourceApp) {
-                let bins = stillEncrypted.map { sourceApp.appendingPathComponent($0) }
+                let bins = stillEncrypted.map { appendingRelativePath(root: sourceApp, relative: $0) }
                 let restaged = stageSinfsForEncryptedBinaries(bins, in: sourceApp)
                 if restaged > 0 {
                     progress?("Re-staged \(restaged) SINF(s) before retry \(round + 1)…")
@@ -1028,7 +1028,7 @@ enum FairPlayDecrypt {
             var recovered: [String] = []
             var skipOOM: [String] = []
             for (i, rel) in stillEncrypted.enumerated() {
-                let file = sourceApp.appendingPathComponent(rel)
+                let file = appendingRelativePath(root: sourceApp, relative: rel)
                 guard FileManager.default.fileExists(atPath: file.path) else { continue }
                 let r = role(of: file, under: sourceApp, app: sourceApp)
                 let outcome = decryptOneWithTimeout(
@@ -1870,7 +1870,10 @@ enum FairPlayDecrypt {
         let stagingApp = stagingRoot.appendingPathComponent("Staging.app", isDirectory: true)
         let writeRoot = inPlace ? destApp : stagingApp
         let rel = relativePath(file, under: sourceApp)
-        let finalURL = destApp.appendingPathComponent(rel)
+        // Must split on `/` — `appendingPathComponent("Frameworks/Foo.framework/Foo")` treats
+        // the whole string as one component, so promote never finds nested staging outputs and
+        // destApp keeps the encrypted copyTree seed (main works only because rel has no `/`).
+        let finalURL = appendingRelativePath(root: destApp, relative: rel)
         let sem = DispatchSemaphore(value: 0)
 
         DispatchQueue.global(qos: .userInitiated).async {
@@ -1898,7 +1901,7 @@ enum FairPlayDecrypt {
 
                 var didPromote = false
                 if !inPlace {
-                    let staged = stagingApp.appendingPathComponent(rel)
+                    let staged = appendingRelativePath(root: stagingApp, relative: rel)
                     if fm.fileExists(atPath: staged.path) {
                         try fm.createDirectory(
                             at: finalURL.deletingLastPathComponent(),
@@ -1907,6 +1910,18 @@ enum FairPlayDecrypt {
                         try? fm.removeItem(at: finalURL)
                         try fm.moveItem(at: staged, to: finalURL)
                         didPromote = true
+                    } else if localReport.decrypted.contains(rel) || localReport.plain.contains(rel) {
+                        // Decrypt claimed success but staging path was wrong — don't green-wash.
+                        localReport.decrypted.removeAll { $0 == rel }
+                        localReport.plain.removeAll { $0 == rel }
+                        if role == .main {
+                            throw FairPlayDecryptError.mainExecutableFailed(
+                                "Decrypted main binary missing from staging promote path (\(rel))."
+                            )
+                        }
+                        if !localReport.softFailed.contains(rel) {
+                            localReport.softFailed.append(rel)
+                        }
                     }
                 }
 
@@ -2107,7 +2122,7 @@ enum FairPlayDecrypt {
             let rel = item.path.hasPrefix(prefix)
                 ? String(item.path.dropFirst(prefix.count))
                 : item.lastPathComponent
-            let out = destApp.appendingPathComponent(rel)
+            let out = appendingRelativePath(root: destApp, relative: rel)
             if vals?.isDirectory == true {
                 try? fm.createDirectory(at: out, withIntermediateDirectories: true)
                 continue
@@ -2219,7 +2234,10 @@ enum FairPlayDecrypt {
             let vals = try? item.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey])
             if vals?.isDirectory == true {
                 let rel = relativePath(item, under: source)
-                try? fm.createDirectory(at: dest.appendingPathComponent(rel), withIntermediateDirectories: true)
+                try? fm.createDirectory(
+                    at: appendingRelativePath(root: dest, relative: rel),
+                    withIntermediateDirectories: true
+                )
                 continue
             }
             if vals?.isSymbolicLink == true { continue }
@@ -2235,7 +2253,7 @@ enum FairPlayDecrypt {
                 progress?("Copying resources… \(copied) ok · \(skipped) skipped · \(seen) seen (\(elapsed)s)")
             }
 
-            let target = dest.appendingPathComponent(rel)
+            let target = appendingRelativePath(root: dest, relative: rel)
             if fm.fileExists(atPath: target.path) { continue }
             try? fm.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
 
