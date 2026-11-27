@@ -33,6 +33,11 @@ enum DecryptCompanionInstaller {
                 progress?("Recovered bundle ID from Store IPA: \(bid)")
             }
         }
+        guard !bid.isEmpty else {
+            throw DecryptError(
+                "Couldn't determine bundle ID for \(displayName). Re-run Get so Store IPA Info.plist / iTunesMetadata includes CFBundleIdentifier."
+            )
+        }
         DecryptCompanionHandoff.beginTargetWorkflow(bundleID: bid)
         // Re-stamp the encrypted IPA temp URL so FairPlay / companion can capture it.
         if FileManager.default.fileExists(atPath: encryptedIPA.path) {
@@ -40,23 +45,21 @@ enum DecryptCompanionInstaller {
             progress?("Stamped encrypted IPA for FairPlay: \(encryptedIPA.path)")
         }
         // fairplayd needs the live Store install — always report the path (or absence).
-        if !bid.isEmpty {
-            if let live = await FairPlayKeyGate.resolveLiveInstallURL(bundleID: bid, progress: progress) {
-                DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
-                progress?("Live install path: \(live.path)")
-            } else {
-                progress?("Live install path: (none) for \(bid)")
-            }
+        if let live = await FairPlayKeyGate.resolveLiveInstallURL(bundleID: bid, progress: progress) {
+            DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
+            progress?("Live install path: \(live.path)")
+        } else {
+            progress?("Live install path: (none) for \(bid)")
         }
         return try await installAndOpen(
             displayName: displayName,
-            targetBundleID: bid.isEmpty ? nil : bid,
+            targetBundleID: bid,
             progress: progress
         ) { bundleID, progress in
             try DecryptCompanionPackager.buildCompanionIPA(
                 embedding: encryptedIPA,
                 bundleID: bundleID,
-                targetBundleID: bid.isEmpty ? nil : bid,
+                targetBundleID: bid,
                 progress: progress
             )
         }
@@ -70,21 +73,38 @@ enum DecryptCompanionInstaller {
         progress: ((String) -> Void)? = nil
     ) async throws -> String {
         let info = NSDictionary(contentsOf: installedApp.appendingPathComponent("Info.plist")) as? [String: Any]
-        let bid = (info?["CFBundleIdentifier"] as? String)?
+        var bid = (info?["CFBundleIdentifier"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        DecryptCompanionHandoff.beginTargetWorkflow(bundleID: bid)
-        if !bid.isEmpty {
-            DecryptCompanionHandoff.publishLiveInstallPath(installedApp.path, bundleID: bid)
+        if bid.isEmpty {
+            bid = (DecryptCompanionHandoff.readEncryptedIPAPath()?.bundleID
+                ?? DecryptCompanionHandoff.readTargetStamp()?.bundleID
+                ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
+        if bid.isEmpty {
+            let path = installedApp.resolvingSymlinksInPath().standardizedFileURL.path
+            bid = DeviceLibrary.shared.apps.first {
+                ($0.installPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                    .caseInsensitiveCompare(path) == .orderedSame
+                    || path.hasPrefix(($0.installPath ?? "") + "/")
+            }?.bundleID.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        guard !bid.isEmpty else {
+            throw DecryptError(
+                "Couldn't determine bundle ID for live install \(displayName). Pair Native + refresh Installed, or re-run Get with a Store IPA that includes Info.plist."
+            )
+        }
+        DecryptCompanionHandoff.beginTargetWorkflow(bundleID: bid)
+        DecryptCompanionHandoff.publishLiveInstallPath(installedApp.path, bundleID: bid)
         return try await installAndOpen(
             displayName: displayName,
-            targetBundleID: bid.isEmpty ? nil : bid,
+            targetBundleID: bid,
             progress: progress
         ) { bundleID, progress in
             try DecryptCompanionPackager.buildCompanionIPA(
                 embeddingInstalledApp: installedApp,
                 bundleID: bundleID,
-                targetBundleID: bid.isEmpty ? nil : bid,
+                targetBundleID: bid,
                 progress: progress
             )
         }

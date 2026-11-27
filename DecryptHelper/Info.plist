@@ -39,5 +39,11 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<!-- canOpenURL probes for host clear-IPA / server-fallback deep links -->
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>appassassin</string>
+		<string>tetherless</string>
+	</array>
 </dict>
 </plist>

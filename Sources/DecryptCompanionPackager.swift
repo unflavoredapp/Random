@@ -272,6 +272,7 @@ enum DecryptCompanionPackager {
                 "CFBundleURLName": "bot.fastdecrypt.decrypt",
                 "CFBundleURLSchemes": [companionURLScheme, "appassassin-decrypt", "tetherless-decrypt"]
             ]],
+            "LSApplicationQueriesSchemes": ["appassassin", "tetherless"],
             // Marker so runtime knows this install is the companion role.
             "TLCompanionRole": true,
             "TLCompanionHostBundle": host.bundleIdentifier ?? TetherlessBrand.bundleID,

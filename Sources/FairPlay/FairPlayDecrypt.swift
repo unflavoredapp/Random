@@ -1984,10 +1984,11 @@ enum FairPlayDecrypt {
         if !own.isEmpty, p == own || p.hasPrefix(own.hasSuffix("/") ? own : own + "/") {
             return false
         }
+        // Require Bundle Application (or AppTranslocation) — bare `/var/containers/`
+        // also matches Data / shared group paths that are not FairPlay roots.
+        if p.contains("/Containers/Data/") { return false }
         return p.contains("/Bundle/Application/")
             || p.contains("/Containers/Bundle/")
-            || p.contains("/private/var/containers/")
-            || p.contains("/var/containers/")
             || p.contains("/AppTranslocation/")
     }
 

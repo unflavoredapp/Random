@@ -14,6 +14,8 @@ enum FairPlayKeyGateError: LocalizedError {
     case needsLiveInstall(bundleID: String, name: String)
     /// App may be installed, but LaunchServices/installd path is invisible without Native.
     case cannotSeeLiveInstall(bundleID: String, name: String)
+    /// Live-install gate cannot run without a target bid — packaging would stamp the wrong app.
+    case missingBundleID(name: String)
 
     var errorDescription: String? {
         switch self {
@@ -31,6 +33,10 @@ enum FairPlayKeyGateError: LocalizedError {
         case .cannotSeeLiveInstall(let bid, let name):
             let label = name.isEmpty ? bid : name
             return "\(label) may already be installed, but this sideloaded build can’t see its live App Store path yet. Open Pair → connect Native, pull-to-refresh Installed, then retry Get — LaunchServices alone often returns no path on free/dev certs."
+        case .missingBundleID(let name):
+            let label = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let who = label.isEmpty ? "this app" : label
+            return "Couldn't determine bundle ID for \(who). Re-run Get / Search so Store IPA Info.plist (or iTunesMetadata) includes CFBundleIdentifier before FastDecryptBot."
         }
     }
 }
@@ -167,20 +173,26 @@ enum FairPlayKeyGate {
         try requireReady(email: email.isEmpty ? nil : email)
 
         let bid = (bundleID ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-        if requireLiveInstallForCompanion, !bid.isEmpty {
+        let name = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if requireLiveInstallForCompanion {
+            // Never skip the live-install gate — empty bid would package/FairPlay the wrong app.
+            guard !bid.isEmpty else {
+                progress?("Missing bundle ID — cannot verify live App Store install…")
+                throw FairPlayKeyGateError.missingBundleID(name: name)
+            }
             progress?("Checking live App Store install for \(bid)…")
             if let live = await resolveLiveInstallURL(bundleID: bid, progress: progress) {
                 DecryptCompanionHandoff.publishLiveInstallPath(live.path, bundleID: bid)
                 progress?("Live install path: \(live.path)")
             } else {
-                let name = (displayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
                 let inLibrary = DeviceLibrary.shared.apps.contains {
                     $0.bundleID.caseInsensitiveCompare(bid) == .orderedSame
                 }
                 let paired = DevicePairingStore.hasSavedPairing
                 let native = NativeInstaller.isSelected
-                // Installed-but-invisible (free cert / no Path) — don't claim "not installed".
-                if inLibrary || !paired || !native || DeviceLibrary.shared.apps.isEmpty {
+                // Prefer Pair when Native/pairing is available — DeviceLibrary browse can miss
+                // Path even when the Store app is installed (false "not installed").
+                if inLibrary || paired || native || DeviceLibrary.shared.apps.isEmpty {
                     progress?(
                         "Live install path: (none visible) — Pair Native + refresh Installed, then retry Get…"
                     )

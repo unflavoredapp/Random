@@ -688,10 +688,25 @@ final class DeviceDecryptService: ObservableObject {
         displayName: String
     ) async throws {
         let info = NSDictionary(contentsOf: installed.appendingPathComponent("Info.plist")) as? [String: Any]
-        let bid = (info?["CFBundleIdentifier"] as? String)?
+        var bid = (info?["CFBundleIdentifier"] as? String)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if bid.isEmpty {
+            let path = installed.resolvingSymlinksInPath().standardizedFileURL.path
+            bid = DeviceLibrary.shared.apps.first {
+                let known = ($0.installPath ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                return !known.isEmpty && (
+                    known.caseInsensitiveCompare(path) == .orderedSame
+                        || path.hasPrefix(known + "/")
+                )
+            }?.bundleID.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        }
+        guard !bid.isEmpty else {
+            throw DecryptError(
+                "Couldn't determine bundle ID for \(displayName). Pair Native + refresh Installed, then retry."
+            )
+        }
         _ = try await FairPlayKeyGate.confirmReadyForCompanion(
-            bundleID: bid.isEmpty ? nil : bid,
+            bundleID: bid,
             displayName: displayName
         ) { [weak self] msg in
             self?.publishDecryptProgress(msg)
@@ -829,10 +844,13 @@ final class DeviceDecryptService: ObservableObject {
             guard AppleIDStore.shared.isSignedIn else {
                 throw DecryptError("Sign in under Account with the Apple ID that owns this app.")
             }
-            // Gate Media & Purchases (+ live install when bid known) *before* Store
-            // purchase/download so missing ack / invisible path never looks like a CDN outage.
+            // Gate Media & Purchases + live install *before* Store purchase/download so
+            // missing ack / invisible path never looks like a CDN outage.
+            guard !bid.isEmpty else {
+                throw DecryptError("Missing bundle ID — search again or paste an App Store link.")
+            }
             _ = try await FairPlayKeyGate.confirmReadyForCompanion(
-                bundleID: bid.isEmpty ? nil : bid,
+                bundleID: bid,
                 displayName: app.name
             ) { [weak self] msg in
                 self?.publishDecryptProgress(msg)
@@ -1107,10 +1125,15 @@ final class DeviceDecryptService: ObservableObject {
         let resolvedBid = (bundleID?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap {
             $0.isEmpty ? nil : $0
         } ?? Self.bundleIDFromStoreIPA(ipa) ?? ""
+        guard !resolvedBid.isEmpty else {
+            throw DecryptError(
+                "Couldn't determine bundle ID for \(displayName). Re-run Get so Store IPA Info.plist / iTunesMetadata includes CFBundleIdentifier."
+            )
+        }
 
         // Host gate with bid so live App Store install is required before FastDecryptBot.
         _ = try await FairPlayKeyGate.confirmReadyForCompanion(
-            bundleID: resolvedBid.isEmpty ? nil : resolvedBid,
+            bundleID: resolvedBid,
             displayName: displayName
         ) { [weak self] msg in
             self?.publishDecryptProgress(msg)
@@ -1172,8 +1195,8 @@ final class DeviceDecryptService: ObservableObject {
             markCompanionHandoff(displayName: displayName, companionBundleID: companionID)
         } catch {
             // Last resort: try live-install embed if IPA packaging failed for another reason.
-            if !resolvedBid.isEmpty,
-               let live = await resolveInstalledAppURL(bundleID: resolvedBid) {
+            if let live = await resolveInstalledAppURL(bundleID: resolvedBid),
+               FairPlayDecrypt.isLiveAppStoreInstall(live) {
                 publishDecryptProgress(
                     "IPA companion failed (\(error.localizedDescription)) — trying live-install embed…"
                 )
@@ -1229,7 +1252,11 @@ final class DeviceDecryptService: ObservableObject {
         if let url = await FairPlayKeyGate.resolveLiveInstallURL(bundleID: bundleID) {
             return url
         }
-        return FairPlayDecrypt.installedAppURL(bundleID: bundleID)
+        guard let url = FairPlayDecrypt.installedAppURL(bundleID: bundleID),
+              FairPlayDecrypt.isLiveAppStoreInstall(url) else {
+            return nil
+        }
+        return url
     }
 
     private func finishSuccess(url: URL, name: String) {

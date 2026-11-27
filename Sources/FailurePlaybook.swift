@@ -110,11 +110,10 @@ enum FailurePlaybook {
             summary: "Companion hit EPERM without a usable live Store path. Install this app from the App Store (same Apple ID), re-run Get, then open FastDecryptBot again.",
             matches: [
                 "eperm",
-                "embeddedpayload",
-                "no live install",
+                "operation not permitted",
                 "stamped ipa",
                 "live path is stamped",
-                "operation not permitted",
+                "never encryptedsource",
             ],
             actionTitle: "Open App Store",
             action: .openAppStore
@@ -136,11 +135,13 @@ enum FailurePlaybook {
         FailurePlay(
             id: "fairplay-bundle-id",
             title: "Missing bundle ID / Info.plist",
-            summary: "Companion packaging couldn’t read CFBundleIdentifier from the Store IPA or live install. Install the app from the App Store (same Apple ID), then retry Get so the ticket / IPA stamp the bundle ID.",
+            summary: "Get / packaging couldn’t recover CFBundleIdentifier from the Store IPA or live install. Re-run Search Get so Info.plist / iTunesMetadata stamp the bid, then retry.",
             matches: [
                 "couldn't determine bundle id",
                 "couldn’t determine bundle id",
                 "include info.plist",
+                "missing bundle id",
+                "itunesmetadata",
                 "missing bundle id on store ipa",
             ],
             actionTitle: "Open App Store",

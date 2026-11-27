@@ -373,9 +373,19 @@ enum DecryptCompanionRuntime {
                 "Full IPA decrypt left \(report.softFailed.count) Mach-O(s) uncleared: \(names)\(report.softFailed.count > 6 ? "…" : ""). \(AppStoreDecryptGuide.failureHint)"
             )
         }
-        if before.encrypted > 0 && decN == 0 {
+        // Live cryptid probes are often -1 (before.encrypted == 0) — also use stamped
+        // EmbeddedPayload counts and soft/hard fail lists so we don't ship an empty "success".
+        let stampedEncrypted = (man?["encryptedMachOs"] as? Int)
+            ?? (man?["encryptedMachOs"] as? NSNumber)?.intValue
+            ?? 0
+        if (before.encrypted > 0 || stampedEncrypted > 0) && decN == 0 {
             throw FairPlayDecryptError.stillEncrypted(
-                "DRM was present (\(before.encrypted) encrypted) but nothing was decrypted. \(AppStoreDecryptGuide.failureHint)"
+                "DRM was present (\(max(before.encrypted, stampedEncrypted)) encrypted) but nothing was decrypted. \(AppStoreDecryptGuide.failureHint)"
+            )
+        }
+        if decN == 0, report.plain.isEmpty, (!report.softFailed.isEmpty || !report.failed.isEmpty) {
+            throw FairPlayDecryptError.stillEncrypted(
+                "FairPlay produced no clear Mach-Os (\(report.softFailed.count) soft-fail, \(report.failed.count) failed). \(AppStoreDecryptGuide.failureHint)"
             )
         }
         if report.isPartial {
