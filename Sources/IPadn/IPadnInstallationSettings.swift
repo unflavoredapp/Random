@@ -186,8 +186,8 @@ struct IPadnInstallationSettingsView: View {
                     HStack {
                         Label(
                             linkedAppleIDCert == nil
-                                ? "Create 7-day Apple ID certificate"
-                                : "Refresh Apple ID certificate",
+                                ? "Capture 7-day cert (SideSign)"
+                                : "Refresh SideSign development cert",
                             systemImage: "apple.logo"
                         )
                         if ensuringAppleIDCert { Spacer(); ProgressView() }
@@ -217,7 +217,7 @@ struct IPadnInstallationSettingsView: View {
         } header: {
             Text("Apple ID (7-day)")
         } footer: {
-            Text("Free development certificates last 7 days. Trust the Apple ID under Settings › General › VPN & Device Management after the first companion install.")
+            Text("SideSign method: list portal Development certs, reuse if this iPhone still holds the private key, otherwise revoke the free-tier slot and CSR a fresh 7-day cert. Trust under Settings › General › VPN & Device Management after the first companion install.")
         }
 
         Section {
@@ -309,9 +309,9 @@ struct IPadnInstallationSettingsView: View {
         // still-valid cert just because Create was tapped after a portal glitch.
         let force = linkedAppleIDCert != nil || afterPortalCode
         do {
-            certStatus = "Talking to Developer Portal…"
+            certStatus = "SideSign: talking to Developer Portal…"
             let cert = try await FreeAppleIDSigning.ensureDevelopmentCertificate(forceRefresh: force)
-            certStatus = "Ready: \(cert.name)"
+            certStatus = "SideSign ready: \(cert.name)"
             showPortalTwoFactor = false
         } catch AppleAuthError.needsTwoFactor {
             certStatus = "Allow the Developer Portal prompt, then enter the code."

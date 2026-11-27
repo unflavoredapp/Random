@@ -135,7 +135,7 @@ enum DecryptCompanionInstaller {
             progress?("1/7 · \(msg)")
         }
 
-        progress?("2/7 · Preparing signing certificate (Apple ID, then custom)…")
+        progress?("2/7 · Capturing SideSign development certificate (Apple ID, then custom)…")
         let material = try await resolveCompanionSigningMaterial(progress: progress)
 
         let bundleID = try DecryptCompanionPackager.companionBundleID(forProvision: material.provision)
@@ -319,15 +319,16 @@ enum DecryptCompanionInstaller {
         var appleIDError: String?
         FreeAppleIDSigning.preferAppleIDSigningMethodIfPossible()
         do {
+            progress?("SideSign: list → reuse or replace Development cert…")
             _ = try await FreeAppleIDSigning.ensureDevelopmentCertificate()
             CertificateStore.shared.activatePreferredCertificate(forSigningMethod: "appleid")
             if let material = try? CertificateStore.shared.activeMaterial() {
-                progress?("Using Apple ID certificate: \(material.name)")
+                progress?("Using SideSign Apple ID certificate: \(material.name)")
                 return material
             }
         } catch {
             appleIDError = error.localizedDescription
-            progress?("Apple ID cert unavailable — trying custom certificate…")
+            progress?("SideSign Apple ID cert unavailable — trying custom certificate…")
         }
 
         CertificateStore.shared.activatePreferredCertificate(forSigningMethod: "saved")
