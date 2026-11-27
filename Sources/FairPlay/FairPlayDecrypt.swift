@@ -634,19 +634,25 @@ enum FairPlayDecrypt {
             if staged > 0 { detail?("Staged \(staged) Manifest SINF license(s)…") }
         }
 
-        // Tetherless-style: only fail-closed on every Mach-O when the user opts in
-        // (`requireAllFrameworks`). Otherwise main is required; frameworks soft-fail → PARTIAL.
+        // Discover vs require are separate:
+        // - EmbeddedPayload / IPA: always full Mach-O sweep so PackageProduct frameworks
+        //   aren't left as encrypted seed copies (DuckDuckGo: 41 decrypted + 40 never tried).
+        // - Live install: keep limited discovery (full sweep can hang).
+        // - requireAllFrameworks: fail-closed on every Mach-O; otherwise soft-fail → PARTIAL.
         let liveSource = isLiveAppStoreInstall(effectiveSource)
         var fullIPACoverage = options.requireAllFrameworks
         report.fullIPACoverage = fullIPACoverage
+        let discoverAll = !liveSource || fullIPACoverage
         detail?(
             fullIPACoverage
                 ? "Full Mach-O coverage (require all frameworks)…"
-                : "Main-required decrypt (frameworks soft-fail → PARTIAL if needed)…"
+                : discoverAll
+                    ? "Discover all embed/IPA Mach-Os (main required; frameworks soft-fail → PARTIAL)…"
+                    : "Main-required decrypt (live install · limited discovery)…"
         )
         let binaries = try collectMachOs(
             under: effectiveSource,
-            fullIPACoverage: fullIPACoverage,
+            fullIPACoverage: discoverAll,
             progress: detail
         )
         guard !binaries.isEmpty else {
