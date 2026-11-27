@@ -576,11 +576,9 @@ enum FairPlayDecrypt {
         var effectiveSource = sourceApp
         let srcStd = sourceApp.resolvingSymlinksInPath().standardizedFileURL
         let dstStd = destApp.resolvingSymlinksInPath().standardizedFileURL
+        let ownBundle = isUnderOwnAppBundle(srcStd)
         if !isLiveAppStoreInstall(sourceApp), srcStd != dstStd {
-            let bundleRoot = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
-            let underOwnBundle = srcStd.path == bundleRoot
-                || srcStd.path.hasPrefix(bundleRoot.hasSuffix("/") ? bundleRoot : bundleRoot + "/")
-            if underOwnBundle {
+            if ownBundle {
                 detail?("Keeping FairPlay read root in companion EmbeddedPayload (fairplayd SC_Info)…")
                 // Seed export tree for resources; Mach-Os still remapped from embed in_path.
                 try? ensureExportTreeHasBinaries(from: sourceApp, into: destApp, progress: detail)
@@ -592,11 +590,23 @@ enum FairPlayDecrypt {
             }
         }
 
-        // FairPlayed embed_ipa.sh: installd normally copies the main .sinf onto every
-        // SinfReplicationPaths entry. Never write into a live App Store install container —
-        // SC_Info reads/writes there hung decrypt on “Decrypting Mach-Os…”.
+        // FairPlayed embed_ipa.sh stages SINFs at package time. The installed companion
+        // bundle is read-only — do not try to write SC_Info into EmbeddedPayload here.
+        // Live installs: never mutate. Missing licenses → remmap EPERM (looks like keys).
         if isLiveAppStoreInstall(effectiveSource) {
             detail?("Using live install licenses (no SINF staging)…")
+        } else if ownBundle || isUnderOwnAppBundle(effectiveSource) {
+            let n = countSinfs(under: effectiveSource)
+            detail?(
+                n > 0
+                    ? "EmbeddedPayload licenses present (\(n) .sinf) — packaged at Get time…"
+                    : "WARNING: EmbeddedPayload has no .sinf — remmap will EPERM. Re-Get from Store IPA."
+            )
+            if n == 0 {
+                throw FairPlayDecryptError.missingLicense(
+                    "EmbeddedPayload has no SC_Info/.sinf beside the binaries. Delete FastDecryptBot, re-run Get from a Store IPA download, then open the companion again."
+                )
+            }
         } else {
             let staged = replicateSinfs(in: effectiveSource)
             report.sinfsReplicated = staged
@@ -672,9 +682,8 @@ enum FairPlayDecrypt {
             }
         }
 
-        // buddy3 `stage_folder_sinfs`: copy root .sinf next to every encrypted Mach-O
-        // (`…/SC_Info/<exe>.sinf`) so fairplayd can resolve licenses without a live install.
-        if !liveSource {
+        // buddy3 `stage_folder_sinfs` only on writable trees (never installed EmbeddedPayload).
+        if !liveSource, !isUnderOwnAppBundle(effectiveSource) {
             let stageTargets = encryptedBins.isEmpty ? binaries : encryptedBins
             let perBinary = stageSinfsForEncryptedBinaries(stageTargets, in: effectiveSource)
             report.sinfsReplicated += perBinary
@@ -855,6 +864,28 @@ enum FairPlayDecrypt {
     }
 
     // MARK: - SINF replication / verify_ipa
+
+    /// True when `url` lives under this process’s installed `.app` bundle (read-only).
+    static func isUnderOwnAppBundle(_ url: URL) -> Bool {
+        let root = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path
+        let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+        return path == root || path.hasPrefix(root.hasSuffix("/") ? root : root + "/")
+    }
+
+    /// Count `.sinf` licenses under an app tree (main + nested; skip Watch).
+    static func countSinfs(under root: URL) -> Int {
+        guard let en = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var n = 0
+        for case let url as URL in en where url.pathExtension.lowercased() == "sinf" {
+            if url.path.contains("/Watch/") { continue }
+            n += 1
+        }
+        return n
+    }
 
     /// Copy the root `.sinf` onto every `SinfReplicationPaths` entry from `SC_Info/Manifest.plist`
     /// (same behavior as FairPlayed `embed_ipa.sh`). Returns how many files were staged.

@@ -1153,7 +1153,7 @@ final class DeviceDecryptService: ObservableObject {
             publishDecryptProgress("Encrypted IPA is in App Group (companion-readable).")
         } else {
             publishDecryptProgress(
-                "App Group unavailable (common on free Apple ID certs) — live install path must still be stamped for FairPlay. Delete any old FastDecryptBot app before Get so the new package is installed."
+                "App Group unavailable (common on free Apple ID certs) — Store IPA is embedded into FastDecryptBot for FairPlay SC_Info. Delete any old FastDecryptBot before Get."
             )
         }
         if fpOpts.pathDiagnostics {
@@ -1166,8 +1166,7 @@ final class DeviceDecryptService: ObservableObject {
         publishDecryptProgress("Building FastDecryptBot companion for \(label)…")
         _ = await DeviceLibrary.shared.refreshAwaiting()
 
-        // FairPlay mremap only from the live App Store install — EncryptedSource is packaging
-        // only. Prefer re-stamp; never wipe a matching gate stamp on a transient nil resolve.
+        // FairPlay remmaps from EmbeddedPayload (SC_Info from Store IPA). Live path is optional.
         if !resolvedBid.isEmpty {
             if let live = await resolveInstalledAppURL(bundleID: resolvedBid),
                FairPlayDecrypt.isLiveAppStoreInstall(live) {
