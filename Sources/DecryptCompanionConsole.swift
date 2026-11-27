@@ -113,6 +113,14 @@ final class DecryptCompanionController: ObservableObject {
         }
         // Don't clobber a finished status with mid-run log chatter.
         if done { return }
+        // Breadcrumb mirror lines stay in the log / strip — never replace statusTitle.
+        if trimmed.hasPrefix("── breadcrumb")
+            || trimmed.hasPrefix("bid ·")
+            || trimmed.hasPrefix("live ·")
+            || trimmed.hasPrefix("App Group ·")
+            || trimmed.hasPrefix("Export ·") {
+            return
+        }
         if trimmed.hasPrefix("[DECRYPTED]") || trimmed.hasPrefix("[plain]") || trimmed.hasPrefix("[FAILED]") {
             statusTitle = "Decrypting…"
         } else if trimmed.localizedCaseInsensitiveContains("DRM audit")
