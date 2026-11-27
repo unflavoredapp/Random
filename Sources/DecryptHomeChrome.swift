@@ -45,7 +45,7 @@ struct DecryptHeroBlock: View {
             Text("Get a DRM-free app")
                 .font(.title2.weight(.bold))
                 .foregroundStyle(.white)
-            Text("Sign in under Account (add each country’s Apple ID you use). Search shows listings from every linked storefront — free apps or anything those IDs already purchased. Tetherless downloads and decrypts on-device. No Mac. No jailbreak.")
+            Text("Sign in under Account (add each country’s Apple ID you use — e.g. a Russia ID for RU apps). In Search, pick the account or region; Get uses that Apple ID to download and decrypt. No Mac. No jailbreak.")
                 .font(.callout)
                 .foregroundStyle(.white.opacity(0.72))
                 .multilineTextAlignment(.center)
@@ -85,12 +85,13 @@ struct DecryptSignedInCard: View {
                         Menu {
                             ForEach(store.accounts) { account in
                                 Button {
-                                    store.selectAccount(id: account.id)
+                                    store.selectAccountForSearch(id: account.id)
                                 } label: {
+                                    let title = store.accountPickerLabel(for: account)
                                     if store.activeAccountID == account.id {
-                                        Label(account.email, systemImage: "checkmark")
+                                        Label(title, systemImage: "checkmark")
                                     } else {
-                                        Text(account.email)
+                                        Text(title)
                                     }
                                 }
                             }

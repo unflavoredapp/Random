@@ -330,21 +330,25 @@ struct IPadnAccountMenuButton: View {
     var body: some View {
         Menu {
             if store.isSignedIn {
-                Section("Apple Account") {
+                Section("Download account") {
                     ForEach(store.accounts) { account in
                         Button {
-                            store.selectAccount(id: account.id)
+                            store.selectAccountForSearch(id: account.id)
                         } label: {
+                            let title = store.accountPickerLabel(for: account)
                             if store.activeAccountID == account.id {
-                                Label(account.email, systemImage: "checkmark.circle.fill")
+                                Label(title, systemImage: "checkmark.circle.fill")
                             } else {
-                                Label(account.email, systemImage: "person.crop.circle")
+                                Label(title, systemImage: "person.crop.circle")
                             }
                         }
                     }
                 }
                 Button("Account", systemImage: "person.crop.circle") {
                     AppNav.shared.goAccount()
+                }
+                Button("Add account", systemImage: "person.crop.circle.badge.plus") {
+                    AppNav.shared.goStoreLogin()
                 }
                 Button("Sign Out", systemImage: "rectangle.portrait.and.arrow.right", role: .destructive) {
                     store.signOut()
@@ -368,9 +372,15 @@ struct IPadnAccountMenuButton: View {
                             : AnyShapeStyle(Color.white.opacity(0.12))
                     )
                 if store.isSignedIn {
-                    Text(String(store.email.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
-                        .font(.system(size: 14, weight: .semibold, design: .rounded))
-                        .foregroundStyle(.white)
+                    if let code = store.activeStorefrontCountryCode() {
+                        Text(StorefrontCountry.label(forCode: code))
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .foregroundStyle(.white)
+                    } else {
+                        Text(String(store.email.trimmingCharacters(in: .whitespaces).prefix(1)).uppercased())
+                            .font(.system(size: 14, weight: .semibold, design: .rounded))
+                            .foregroundStyle(.white)
+                    }
                 } else {
                     Image(systemName: "person.fill")
                         .font(.system(size: 14))
@@ -380,7 +390,55 @@ struct IPadnAccountMenuButton: View {
             .frame(width: 32, height: 32)
             .frame(minWidth: 44, minHeight: 44)
         }
-        .accessibilityLabel("Switch or manage Apple ID")
+        .accessibilityLabel("Switch download account by storefront")
+    }
+}
+
+/// Filter-row menu: pick which signed-in Apple ID (and storefront) Search / Get uses.
+struct IPadnAccountFilterChip: View {
+    @ObservedObject private var store = AppleIDStore.shared
+
+    private var chipTitle: String {
+        if let code = store.activeStorefrontCountryCode() {
+            return StorefrontCountry.label(forCode: code)
+        }
+        if store.isSignedIn {
+            let mail = store.email
+            if mail.count <= 12 { return mail }
+            return String(mail.prefix(10)) + "…"
+        }
+        return "Account"
+    }
+
+    var body: some View {
+        Menu {
+            if store.accounts.isEmpty {
+                Button("Sign in — Apple Account", systemImage: "person.crop.circle.badge.plus") {
+                    AppNav.shared.goStoreLogin()
+                }
+            } else {
+                Section("Use this account to decrypt") {
+                    ForEach(store.accounts) { account in
+                        Button {
+                            store.selectAccountForSearch(id: account.id)
+                        } label: {
+                            let title = store.accountPickerLabel(for: account)
+                            if store.activeAccountID == account.id {
+                                Label(title, systemImage: "checkmark.circle.fill")
+                            } else {
+                                Text(title)
+                            }
+                        }
+                    }
+                }
+                Button("Add account", systemImage: "plus") {
+                    AppNav.shared.goStoreLogin()
+                }
+            }
+        } label: {
+            IPadnFilterChip(title: chipTitle, symbol: "person.crop.circle")
+        }
+        .accessibilityLabel("Choose Apple ID account for search and decrypt")
     }
 }
 

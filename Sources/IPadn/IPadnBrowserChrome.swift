@@ -20,9 +20,22 @@ final class IPadnBrowserModel: ObservableObject {
     @Published var error: String?
     @Published var status = ""
 
+    /// Store regions offered in Search. Includes RU so a Russia Apple ID can be
+    /// selected for lookup + decrypt alongside the usual storefronts.
     static let countries = [
-        "US", "CN", "HK", "TW", "JP", "GB", "SG", "CA", "AU", "KR", "DE", "FR", "IN", "BR", "MX"
+        "US", "RU", "CN", "HK", "TW", "JP", "GB", "SG", "CA", "AU", "KR",
+        "DE", "FR", "IN", "BR", "MX", "TR", "UA", "PL", "IT", "ES", "NL", "SE"
     ]
+
+    /// Regions for the Search picker: linked storefronts first, then the full list.
+    static func countriesForPicker(linked: [String]) -> [String] {
+        var out: [String] = []
+        var seen = Set<String>()
+        for code in linked.map({ $0.uppercased() }) + countries {
+            if seen.insert(code).inserted { out.append(code) }
+        }
+        return out
+    }
 
     func persistContext() {
         UserDefaults.standard.set(country, forKey: IPadnOptional.countryKey)
@@ -41,7 +54,10 @@ final class IPadnBrowserModel: ObservableObject {
         status = "Searching…"
         defer { searching = false }
         do {
-            let accountCountry = AppleIDStore.shared.linkedStorefrontCountryCodes().first?.uppercased()
+            let accountCountry = (
+                AppleIDStore.shared.activeStorefrontCountryCode()
+                    ?? AppleIDStore.shared.linkedStorefrontCountryCodes().first
+            )?.uppercased()
             let ctx = IPadnStoreContext(country: country, platform: platform)
             let apps = try await IPadnStoreClient.search(
                 q,
