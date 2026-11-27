@@ -5,6 +5,7 @@
 //  PurchasedView / AccountsView (GPL-2.0). Downloads live in IPadnDownloadsView.
 //
 
+import IDeviceSwift
 import SwiftUI
 
 // MARK: - Purchased
