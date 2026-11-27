@@ -13,9 +13,13 @@ import SwiftUI
 /// Canonical product brand for AppAssassin (site, ASCII mark, user-agent helpers).
 nonisolated enum TetherlessBrand {
     static let name = "AppAssassin"
-    static let siteHost = "fastdecrypt.ai"
-    static let siteURL = URL(string: "https://fastdecrypt.ai")!
-    static let siteDisplay = "https://fastdecrypt.ai"
+    /// Marketing / XPC product home (hand-rolled service: software.decrypt.xpc).
+    static let decryptSoftwareHost = "decrypt.software"
+    static let decryptSoftwareURL = URL(string: "https://decrypt.software")!
+    static let decryptSoftwareXPCService = "software.decrypt.xpc"
+    static let siteHost = "decrypt.software"
+    static let siteURL = URL(string: "https://decrypt.software")!
+    static let siteDisplay = "https://decrypt.software"
     /// Home-screen / signing bundle id (lowercase reverse-DNS).
     static let bundleID = "bot.fastdecrypt.ai"
     static let appGroup = "group.bot.fastdecrypt.ai"
@@ -38,7 +42,8 @@ nonisolated enum TetherlessBrand {
     }
 
     /// One-line stamp for file headers / logs.
-    static let stamp = "Brand: AppAssassin · https://fastdecrypt.ai"
+    static let stamp = "Brand: AppAssassin · https://decrypt.software"
+    static let xpcStamp = "Brand: decrypt.software · XPC \(decryptSoftwareXPCService)"
 
     static func printBanner() {
         print(asciiBanner)

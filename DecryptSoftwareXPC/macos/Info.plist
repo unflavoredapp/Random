@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>software.decrypt.xpc</string>
+	<key>CFBundleName</key>
+	<string>decrypt.software</string>
+	<key>CFBundleDisplayName</key>
+	<string>decrypt.software</string>
+	<key>CFBundlePackageType</key>
+	<string>XPC!</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>CFBundleExecutable</key>
+	<string>software.decrypt.xpc</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<!-- Hand-rolled XPC service for decrypt.software -->
+	<key>XPCService</key>
+	<dict>
+		<key>ServiceType</key>
+		<string>Application</string>
+		<key>JoinExistingSession</key>
+		<true/>
+		<key>RunLoopType</key>
+		<string>dispatch_main</string>
+	</dict>
+	<key>DSBrand</key>
+	<string>decrypt.software</string>
+	<key>DSSite</key>
+	<string>https://decrypt.software</string>
+</dict>
+</plist>

@@ -605,10 +605,25 @@ private struct FairPlayAdvancedSettingsSection: View {
         Section {
             DecryptBackendsStatusRow()
             FairPlayDecryptHostField()
+            VStack(alignment: .leading, spacing: 4) {
+                Text(DecryptSoftwareXPC.brand)
+                    .font(.subheadline.weight(.semibold))
+                Text("XPC · \(DecryptSoftwareXPC.serviceName)")
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.secondary)
+                Text(
+                    DecryptSoftwareXPCClient.isAvailable
+                        ? "Mac helper reachable"
+                        : "Mac hand-rolled XPC — build DecryptSoftwareXPC on macOS; iPhone uses companion"
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.vertical, 2)
         } header: {
             Text("Server · FairPlay host")
         } footer: {
-            Text("MacDuty: zsh ~/tetherless/server/mac-ssh.sh api → paste the printed Mac API URL here (Save Mac API). Dead trycloudflare hosts are cleared on Refresh. Leave empty only if you want tetherless.dev instead of Mac unfairplay. No jailbreak or TrollStore.")
+            Text("decrypt.software XPC (\(DecryptSoftwareXPC.serviceName)) is the Mac privilege boundary. On device, FairPlay still runs in FastDecryptBot. MacDuty: zsh ~/tetherless/server/mac-ssh.sh api → paste the printed Mac API URL here.")
         }
 
         Section {
@@ -764,7 +779,7 @@ struct IPadnSettingsRootSections: View {
                             Text(TetherlessBrand.name).font(.headline)
                             Text(appVersion).font(.subheadline).foregroundStyle(.secondary)
                         }
-                        Text("Search, download, sign, and install — branded at fastdecrypt.ai.")
+                        Text("Search, download, sign, and install — branded at decrypt.software.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -788,7 +803,7 @@ struct IPadnSettingsRootSections: View {
 
             Toggle("Check for updates automatically", isOn: $appUpdateCheck)
 
-            Link("fastdecrypt.ai", destination: TetherlessBrand.siteURL)
+            Link("decrypt.software", destination: TetherlessBrand.siteURL)
             if let url = URL(string: "https://github.com/mengangs/ipadn") {
                 Link("Open-source Store login (GPL-2.0)", destination: url)
             }
