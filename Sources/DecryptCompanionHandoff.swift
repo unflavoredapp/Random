@@ -554,7 +554,7 @@ enum DecryptCompanionHandoff {
     }
 
     /// `foo.ipa` → `foo.ipa.sinfs` (songList license sidecar). Shared with host IPadn inject.
-    static func sinfSidecarURL(forIPA ipa: URL) -> URL {
+    nonisolated static func sinfSidecarURL(forIPA ipa: URL) -> URL {
         URL(fileURLWithPath: ipa.path + ".sinfs")
     }
 
