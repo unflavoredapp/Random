@@ -82,7 +82,7 @@ enum FairPlayFailureClass: String {
         case .io:
             return "Couldn't read or write the encrypted binary. Re-download the IPA and retry."
         case .sandboxOpen:
-            return "Couldn't open the Mach-O for FairPlay (sandbox open EPERM). Use EmbeddedPayload inside FastDecryptBot (iOS 17.4+ · Developer Mode) — live Store binaries usually aren't openable from a sideloaded helper. Delete FastDecryptBot, re-run Get, enable Developer Mode, then open the companion again."
+            return "Couldn't open the Mach-O for FairPlay (sandbox open EPERM). Use EmbeddedPayload inside FastDecryptBot (iOS 16+ · Developer Mode) — live Store binaries usually aren't openable from a sideloaded helper. Delete FastDecryptBot, re-run Get, enable Developer Mode, then open the companion again."
         case .other, .none:
             return AppStoreDecryptGuide.failureHint
         }
@@ -180,23 +180,23 @@ private enum FairPlayBinaryRole {
 
 enum FairPlayDecrypt {
 
-    // MARK: - OS remmap policy (Tetherless-style 17.4+)
+    // MARK: - OS remmap policy (iOS 16+)
 
     /// Apply remmap attempt order for this device.
-    /// iOS 27+: FairPlayed cid2-first. iOS 17.4–26: native/foulplay-first, cid2 last.
+    /// iOS 27+: FairPlayed cid2-first. iOS 16–26: native/foulplay-first, cid2 last.
     @discardableResult
     static func applyDecryptPolicyForCurrentOS() -> String {
         let policy: Int32
         if #available(iOS 27.0, *) {
             policy = Int32(FP_DECRYPT_POLICY_FAIRPLAYED_27)
         } else {
-            policy = Int32(FP_DECRYPT_POLICY_LEGACY_174)
+            policy = Int32(FP_DECRYPT_POLICY_LEGACY_16)
         }
         fp_set_decrypt_policy(policy)
         if let cName = fp_decrypt_policy_name(policy) {
             return String(cString: cName)
         }
-        return policy == FP_DECRYPT_POLICY_LEGACY_174 ? "legacy-17.4" : "fairplayed-27"
+        return policy == FP_DECRYPT_POLICY_LEGACY_16 ? "legacy-16" : "fairplayed-27"
     }
 
     // MARK: - Path resolution

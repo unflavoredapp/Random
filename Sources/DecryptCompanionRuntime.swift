@@ -187,7 +187,7 @@ enum DecryptCompanionRuntime {
             log("FairPlay Apple ID · \(email)")
         }
 
-        // EmbeddedPayload remmap (Tetherless-style iOS 17.4+ / FairPlayed on 27+):
+        // EmbeddedPayload remmap (iOS 16+ native-first / FairPlayed cid2-first on 27+):
         // fairplayd reads SC_Info next to those binaries. Live Store Mach-Os often
         // open(2) EPERM from a sideloaded helper; tmp EncryptedSource unpacks sit in
         // data containers fairplayd cannot read. Never use those as FairPlay in_path.

@@ -338,7 +338,7 @@ struct FairPlaySmokeChecklistSection: View {
         } header: {
             Text("FairPlay smoke checklist")
         } footer: {
-            Text("On-device FairPlay (iOS 17.4+ · Developer Mode) remaps from EmbeddedPayload inside FastDecryptBot. Live path is optional. Confirm keys, then Get. Native pairing stays iOS 27+.")
+            Text("On-device FairPlay (iOS 16+ · Developer Mode) remaps from EmbeddedPayload inside FastDecryptBot. Live path is optional. Confirm keys, then Get. Native pairing stays iOS 27+.")
         }
         .onAppear {
             keys.refreshFromAck()
